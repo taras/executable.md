@@ -2,22 +2,23 @@
 
 ## XMD execution foundation
 
-XMD already supplies component expansion, root document props, prompt capture,
-agent selection, named sessions, collection iteration, scoped permission
-policies, and scope-owned process and agent teardown. Every component invocation
-owns a resource scope: projected content keeps its caller's bindings but its
-live effects — daemons, `persist` resources, watchers — belong to the invocation
-and stop before it cleans up its own, on success, failure, and cancellation
-alike (#203). Its durable execution
-layer also assigns deterministic execution identities, journals effects, and
-observes completion, failure, or cancellation. Replay restores a recorded
-outcome without re-executing it, and a run that failed is still a complete
-record: replaying it restores the output and the failure alike. Replay
-determinism means the journal does not lose the execution chain — replaying
-arrives at the same state, where execution can resume.
+XMD already supplies component expansion, root and component props, prompt
+capture, agent selection, named sessions, collection iteration, scoped
+permission policies, and scope-owned process and agent teardown. Every component
+invocation owns a resource scope: projected content keeps its caller's bindings
+but its live effects — daemons, `persist` resources, watchers — belong to the
+invocation and stop before it cleans up its own, on success, failure, and
+cancellation alike (#203). Its durable execution layer assigns deterministic
+expansion identities, journals effects, and observes completion, failure, or
+cancellation. Replay restores a recorded outcome without re-executing it, and a
+document execution that failed is still a complete record: replaying it restores
+the output and the failure alike. Replay determinism means the journal does not
+lose the execution chain — replaying arrives at the same state, where execution
+can continue.
 
-Those capabilities remain internal execution machinery. The low-level journal
-is not the user-facing artifact ledger of an implementation workflow.
+Under `xmd workflow` those records are also retained and addressable. That is
+the difference between an execution journal and a run someone can come back to,
+and it exists now (#291, #365).
 
 ## How a name resolves
 
@@ -50,8 +51,8 @@ they are installed rather than the first time a document writes the name. Two
 registrations for one name and kind at the same scope are a configuration error
 naming both origins; installation order is not a resolution mechanism. This is
 the general rule that all engine state is scoped to the operation that owns it:
-created inside the run it describes, provided contextually, and torn down with
-it. There is no module-scoped registry for this workflow to reach.
+created inside the operation it describes, provided contextually, and torn down
+with it. There is no module-scoped registry for this workflow to reach.
 
 ## How an error is decided
 
@@ -60,9 +61,9 @@ structure and read where an error is raised:
 
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
-| `print` | is printed into the document; the run continues | the root; `<PrintErrors>` |
-| `output` | fails the run; `<PrintErrors>` can print instead | every `<Output>` region |
-| `throw` | fails the run, and no printing boundary replaces it | documentation; value roots |
+| `print` | is printed into the document; execution continues | the root; `<PrintErrors>` |
+| `output` | fails the document execution; `<PrintErrors>` can print instead | every `<Output>` region |
+| `throw` | fails the document execution, and no printing boundary replaces it | documentation; value roots |
 
 A failing region keeps what it had already rendered: that text reaches the
 output stream, and nothing after the failure does.
@@ -79,9 +80,9 @@ document handle a failure instead of ending on it; both are defined and unbuilt.
 
 **Missing: printing an `output` decision.** The `output` row above is the
 settled contract, and the engine does not meet it yet — an outer
-`<PrintErrors>` around a region that failed under `output` ends the run instead
-of printing, whether the failure arose in the region itself or in content
-projected into it ([issue
+`<PrintErrors>` around a region that failed under `output` ends the document
+execution instead of printing, whether the failure arose in the region itself or
+in content projected into it ([issue
 #327](https://github.com/taras/executable.md/issues/327)). Nothing in this
 workflow writes `<PrintErrors>`, so no stage depends on it today; a stage that
 wanted to survive a failed region would.
@@ -92,8 +93,9 @@ wanted to survive a failed region would.
 these names and a repository file never stands in for it:
 
 1. `<If>` with an optional nested `<Else>`, and `<Loop>` with `<Break>`, provide
-   visible bounded control flow. `<Loop>` requires `max`, opens no binding
-   scope, and completes normally when it reaches that bound.
+   visible bounded control flow. `<If>` selects its branch by JavaScript
+   truthiness. `<Loop>` requires `max`, opens no binding scope, and completes
+   normally when it reaches that bound.
 2. `<Answers>` and `<Answer>` supply elicitation responses from the document.
    `<Answers>` installs a provider around its body and answers from its
    matchers; it reads them as elements before they expand, which is why a
@@ -120,12 +122,13 @@ reserved names, so a repository component may override each one:
 6. `<File>` reads or writes UTF-8 text relative to `Env.cwd`. Self-closing it
    reads and renders the file's exact content, and `as` captures that text.
    Written with content it expands its children, atomically replaces the target,
-   and renders nothing at all — no output, no path, no write handle. Everything
-   it touches stays inside `Env.cwd`, checked lexically before any filesystem
-   call and again against resolved symlinks immediately before the write. That
-   is traversal confinement, not a security sandbox: containment that does not
-   depend on observed filesystem state is [issue
-   #227](https://github.com/taras/executable.md/issues/227).
+   and renders nothing at all — no output, no path, no write handle. Every
+   operation goes through the contextual `API.Files` provider, and there is no
+   host default: the four CLI entrypoints install the host provider, which
+   confines document paths to `Env.cwd` while the host namespace is stable
+   ([#227](https://github.com/taras/executable.md/issues/227)). The
+   transaction-bound provider that resolves the same paths inside a run-owned
+   Workspace is that issue's second layer and is unbuilt.
 7. `<Parse>` renders its children, decodes the result as JSON, validates it
    against a draft-07 schema supplied as captured text or as a structured
    value, and binds the validated value through `as`. `<SafeParse>` performs
@@ -152,10 +155,12 @@ reserved names, so a repository component may override each one:
    made through the Elicitation Api: `xmd run` composes WebForm as its current
    provider, and changing the provider changes no Markdown. Only the validated
    answer is journaled, keyed by a fingerprint of the compiled schema and the
-   rendered message, so a resumed run restores it rather than asking twice and
-   refuses an answer recorded against a different question.
+   rendered message, so a resumed execution restores it rather than asking twice
+   and refuses an answer recorded against a different question.
 9. `<TempDir>` establishes a fresh contextual working directory for its content
-   and removes it when the content finishes, fails, or is cancelled.
+   and removes it when the content finishes, fails, or is cancelled. It is the
+   shipped shape of a lexical working directory; under a workflow run that role
+   belongs to `<Repository>`, `<Worktree>`, and `<Dir>`.
 
 **Registered agent components** are defaults on the same terms.
 `installAgentComponents()` registers them for the installing scope, and a
@@ -171,88 +176,135 @@ repository `Prompt.md` or `Agent.ts` outranks them:
     selects the planner and implementor from validated root props rather than
     literals. Each prompt is one durable operation whose record carries its
     identity, input, agent and session, terminal status, text, and structured
-    failure.
+    failure. `<Agent.AddDir>` is *not* among them; it belongs to the workflow
+    Agent boundary below.
 
-**One asymmetry to know.** An expression prop reads a **bare** binding, while
-text and content interpolation read the **namespace**: `agent={planner}` and
-`{props.instructions}` are both correct today, and `agent={props.planner}` fails
-with `props is not defined`. Removing that split is [issue
-#305](https://github.com/taras/executable.md/issues/305), which will let
-expression props read `props.name` and migrate these documents.
+**Props are namespaced.** A declared prop is read as `props.name` in text, in
+executable-block content, in eval blocks, and in expression props alike:
+`agent={props.planner}` and `{props.instructions}` are both correct, and
+declaring `planner` creates no bare `{planner}` binding
+([#305](https://github.com/taras/executable.md/issues/305), shipped). Authored
+bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` — stay bare,
+which is why `worktree={worktree}` passes a bound path down.
+
+**Content projects at any depth.** `<Content />` is substituted wherever a
+component body writes it, including nested inside another invocation such as a
+`<Prompt>` ([#328](https://github.com/taras/executable.md/issues/328), fixed).
+The stages here still take their material as declared props rather than as
+projected content, because a stage's inputs are part of its contract and a
+schema validates them; projection is available where a caller genuinely writes
+prose into a component.
 
 The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
-`UserCheckpoint` therefore uses shipped syntax throughout. `Implementation` does
-not: its loop body invokes `<Commit>`, `<PullRequest>`, and `<Issue>`, which
-resolve to nothing, so that stage cannot expand.
+`UserCheckpoint` therefore uses shipped syntax throughout, except for the
+`<Agent.AddDir>` registration `Discovery` and `Planning` need to give their
+agents the checkout. `UserCheckpoint` registers nothing, because it assesses
+supplied material rather than a repository. `Implementation` has no such
+exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
+`<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
 
 ## What the workflow still needs
 
-`<Workflow>` organizes existing XMD behavior into an authored process. It
-correlates captures and deterministic effects, presents durable replay as one
-run reaching the state a later stage resumes from, and derives the run outcome
-from XMD's execution result. None of it exists yet ([issue
-#289](https://github.com/taras/executable.md/issues/289)).
+The missing capability is not one component. It is the retained-Workspace
+implementation umbrella, [#218](https://github.com/taras/executable.md/issues/218),
+whose dependency order this workflow consumes in the same sequence.
 
-The component adds the product behavior that XMD does not supply:
+**1. Retention and one filesystem vertical slice.**
 
-- create or resolve a stable run identity without exposing a `runId` prop;
-- resolve `base` once to a pinned source revision;
-- install run identity and pinned source revision through a contextual Run API;
-- restore a stage's declared inputs by stable component and loop-iteration
-  identity;
-- record artifact versions, environmental effects, and stop reasons;
-- reconcile external effects with the run identity; and
-- persist the artifact ledger when `historyRef` selects a sidecar location
-  (#291).
+| Capability | Issue | Status |
+| --- | --- | --- |
+| open and look up one WorkflowRun database; append and replay the filtered journal | #291 | closed |
+| commit a Workspace mutation, its logical root, and the journal result atomically | #365 | closed |
+| foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | open — the next critical slice |
+| `status`, `list`, `history`, suspension, cancellation, deletion, single-executor ownership | #367 | open |
+| versioned history checkpoints and compatible forks | #368 | open |
 
-Descendants consume this context internally. Authors access the run identity
-through the API only when workflow logic genuinely needs it. Every workflow has
-an execution-local run manifest; `historyRef` makes that record durable outside
-the executing process.
+`xmd workflow start` is what makes this document a workflow rather than a script:
+it creates the run, gives it one implicit root Workspace, streams rendered output
+in the foreground, and returns when the execution completes, suspends, fails, is
+cancelled, or is interrupted. `resume` selects only by run ID and reuses the
+retained definition and props — a document path locates a definition and never
+selects a previous run.
 
-The remaining contracts are missing on the same terms:
+**2. Repository and deterministic Git composition.**
 
-1. `<Stage>` selects one stage, restores its declared inputs, publishes its
-   outputs, and stops cleanly at the stage boundary
-   ([#298](https://github.com/taras/executable.md/issues/298)). Cross-process
-   continuation is its problem rather than `<Elicit>`'s: elicitation answers a
-   question inside one run and does not resume a stopped one.
-2. `<Sandbox>` enforces filesystem, environment, process, network, and durable
-   effect capabilities as a boundary that can be relied on
-   ([#302](https://github.com/taras/executable.md/issues/302)). `<File>` and
-   `<Glob>` confine traversal today, but confinement that survives concurrent
-   filesystem mutation is [issue
-   #227](https://github.com/taras/executable.md/issues/227).
-3. `<Worktree>` reconciles a workspace from the run's pinned source revision,
-   sets `Env.cwd` while rendering its children, and cleans up safely
-   ([#293](https://github.com/taras/executable.md/issues/293)). This workflow
-   keeps discovery, implementor planning, implementation, and review in that
-   same workspace. `Env.cwd` itself is implemented, and so is the lifetime rule
-   it composes with: a process a stage starts stops before the invocation that
-   established the directory cleans up (#203). What is missing is the workspace
-   that establishes it and the retention rules that survive failure.
-4. `<Commit>` validates exact changes and owns Git metadata writes
-   ([#294](https://github.com/taras/executable.md/issues/294)).
-5. `<PullRequest>` ([#295](https://github.com/taras/executable.md/issues/295))
-   and `<Issue>` ([#296](https://github.com/taras/executable.md/issues/296))
-   reconcile durable GitHub effects idempotently, over the shared
-   reconciliation described by
-   [#297](https://github.com/taras/executable.md/issues/297).
-6. Replay across replaced ephemeral environments, so a recorded effect is never
-   restored under a directory the current run did not create ([issue
-   #218](https://github.com/taras/executable.md/issues/218)).
-7. Default-on rejection of secrets before a journal event or a sidecar Git
-   object becomes durable ([issue
-   #199](https://github.com/taras/executable.md/issues/199)). The pre-persistence
-   guard and the offline scanner are built; the execution policy, its default-on
-   wiring, and the CLI opt-out and warning are not.
+| Capability | Issue | Status |
+| --- | --- | --- |
+| `<Repository>` and `<Worktree>` as named Workspace composition, with lexical cwd | #293 | open |
+| `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | open |
+| shared external forge-effect reconciliation | #297 | open |
+| explicit `<Git.Push>` | #370 | open |
+| `<PullRequest>` over an explicitly pushed head | #295 | open |
+| provenance-linked deferred `<Issue>` | #296 | open |
+
+Names are stable component identity, not magic configuration lookup: a
+Repository's locator and base are ordinary root props or expressions. The first
+local provider is expected to use native Git, because it gives the most faithful
+checkout, worktree, and object-cache behavior; a browser provider may implement
+the same contract differently, and may emulate named worktrees as separate
+retained checkouts, without changing what a document writes (#293, #410). Initial
+checkout speed is provider-owned acceleration — a host-local mirror or object
+cache may change how fast a clone is, never what the run records or how it
+replays.
+
+`<Git.Commit>` is a Workspace-local durable effect and joins #365's transaction
+boundary. What it journals is reconciliation evidence — repository and worktree
+identity, branch, commit SHA, parent SHAs, tree SHA, staged paths, message
+evidence — not raw Git object contents. Replaying a completed commit creates no
+second commit; resuming after uncertain completion reconciles against retained
+Workspace Git state, accepts a matching commit, treats missing retained state as
+corruption, and fails on incompatible state without an implicit reset, rebase, or
+merge.
+
+`<Git.Push>` stays separate from both `<Git.Commit>` and `<PullRequest>` because
+a remote ref cannot join the local transaction. It is an external effect that
+observes remote state and adopts, performs, or fails — never force-pushes, never
+resolves divergence implicitly. `<PullRequest>` depends on that explicit pushed
+head rather than performing a hidden push.
+
+**3. Agent authority and constrained execution.**
+
+| Capability | Issue | Status |
+| --- | --- | --- |
+| provider-correct filesystem containment | #227 | open — `API.Files` and the host provider are built |
+| mandatory read-only workflow Agents and `<Agent.AddDir>` | #302 | open |
+| preflight and expand constrained Agent-generated XMD | #369 | open; public component name undecided |
+| transactional Worker Shell | #363 | open; containment and transaction POCs complete |
+
+The read-only ceiling is the host's, not the document's, which is why no
+`<Sandbox>` appears anywhere in this workflow. An implementor that cannot write
+returns XMD instead, and a constrained evaluator parses the complete fragment,
+resolves an allowlist to pinned component identities supplied by the trusted
+parent definition, refuses everything outside that set — including eval and exec
+blocks, imports, native execution, and arbitrary JavaScript expressions — and
+only then expands what it admitted. The allowlist is authority, not prompting
+guidance: generated source cannot grant itself push, pull-request, or secret
+access by naming a component. The exact filtered generated source is retained, so
+replay expands the same fragment without asking the Agent again.
+
+**4. Compose and certify.**
+
+| Capability | Issue | Status |
+| --- | --- | --- |
+| namespaced document props | #305 | closed |
+| synchronize this living target with settled contracts | #292 | this change |
+| prove the shipped planning-document logic | #290 | open |
+| compose the supervised workflow | #301 | open |
+| resume from explicit durable signals | #300 | open |
+| default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
+| certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
 
 `<Discovery>`, `<Planning>`, `<Implementation>`, and `<UserCheckpoint>` are
-authored Markdown components, not runtime primitives. `<UserCheckpoint>`
-combines an agent prompt, conditional control flow, and `<Elicit>` to determine
-whether a material choice requires the user and to obtain the user's answer
-when it does. It is the one of the four that declares `returns`: a gate has to
-bind a validated boolean, not prose a caller would have to interpret.
+authored Markdown components, not runtime primitives. `<UserCheckpoint>` combines
+an agent prompt, conditional control flow, and `<Elicit>` to determine whether a
+material choice requires the user and to obtain the user's answer when it does.
+It is the one of the four that declares `returns`: a gate has to bind a validated
+boolean, not prose a caller would have to interpret.
+
+Two authoring features sit deliberately outside this path.
+[#412](https://github.com/taras/executable.md/issues/412) document targets and
+[#416](https://github.com/taras/executable.md/issues/416) `<Call>` are useful, and
+nothing here requires them; pulling either in is a separate decision.
 
 Where a primitive is still missing, the manual exercise replaces it with an
 explicit user-run step and records the replacement as evidence for prioritizing

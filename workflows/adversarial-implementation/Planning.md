@@ -1,5 +1,5 @@
 ---
-required: [handoff, handoffCheckpoint, instructions, planner, implementor]
+required: [handoff, handoffCheckpoint, instructions, planner, implementor, worktree]
 
 props:
   handoff: { type: string }
@@ -14,6 +14,7 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
+  worktree: { type: string }
 
 returns:
   plan: { type: string }
@@ -45,6 +46,10 @@ The implementor and planner are equally capable of analysis. The implementor
 tests the handoff's theory; the planner tests the resulting plan. Evidence
 resolves factual disagreement, while the user resolves material choices.
 
+Both agents are read-only here, and that is not a restriction this stage has to
+impose: planning produces a plan, not a change. What the stage does have to do
+is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
+
 ## Target shape
 
 <Capture as="verdictSchema" select="code[lang=json]">
@@ -63,36 +68,12 @@ resolves factual disagreement, while the user resolves material choices.
 ```
 </Capture>
 
-<Loop name="planning" max={5}>
-  <Prompt
-    agent={implementor}
-    session="implementor"
-    as="plan"
-    throwOnError
-  >
-    Repository instructions:
+<Agent name={props.implementor}>
+  <Session name="implementor">
+    <Agent.AddDir path={props.worktree} />
 
-    {props.instructions}
-
-    Planner handoff:
-
-    {props.handoff}
-
-    User involvement record:
-
-    {props.handoffCheckpoint.assessment}
-    User response: {props.handoffCheckpoint.response}
-    Rationale: {props.handoffCheckpoint.rationale}
-
-    Investigate the current working directory. Confirm, refute, or amend the
-    implementation theory with evidence. Do not modify the repository. Return a
-    concrete implementation plan with the evidence, validation, effects, and
-    pull-request boundaries described by this workflow.
-  </Prompt>
-
-  <Agent name={planner}>
-    <Session name="planner">
-      <Prompt as="verdictCandidate" throwOnError>
+    <Loop name="planning" max={5}>
+      <Prompt as="plan" throwOnError>
         Repository instructions:
 
         {props.instructions}
@@ -107,104 +88,132 @@ resolves factual disagreement, while the user resolves material choices.
         User response: {props.handoffCheckpoint.response}
         Rationale: {props.handoffCheckpoint.rationale}
 
-        Implementation plan:
+        Investigate the registered checkout. Confirm, refute, or amend the
+        implementation theory with evidence. You cannot modify anything, and
+        this stage produces no change. Return a concrete implementation plan
+        with the evidence, validation, effects, and pull-request boundaries
+        described by this workflow.
+      </Prompt>
+
+      <Agent name={props.planner}>
+        <Session name="planner">
+          <Agent.AddDir path={props.worktree} />
+
+          <Prompt as="verdictCandidate" throwOnError>
+            Repository instructions:
+
+            {props.instructions}
+
+            Planner handoff:
+
+            {props.handoff}
+
+            User involvement record:
+
+            {props.handoffCheckpoint.assessment}
+            User response: {props.handoffCheckpoint.response}
+            Rationale: {props.handoffCheckpoint.rationale}
+
+            Implementation plan:
+
+            {plan}
+
+            Result contract:
+
+            {verdictSchema}
+
+            Review the plan against the handoff, recorded user response, and
+            repository evidence. Include a focused revision prompt on failure.
+            Return only JSON matching the supplied result contract.
+          </Prompt>
+
+          <Loop max={2}>
+            <SafeParse schema={verdictSchema} as="parsedVerdict">
+              {verdictCandidate}
+            </SafeParse>
+
+            <If condition={parsedVerdict.ok}>
+              <Break />
+              <Else>
+                <Prompt as="verdictCandidate" throwOnError>
+                  Correct your previous response without changing its meaning.
+                  Do not use tools or perform additional analysis.
+
+                  Previous response:
+
+                  {verdictCandidate}
+
+                  Validation errors:
+
+                  <Each in={parsedVerdict.errors} let="error">
+                  - {error.instancePath}: {error.message}
+                  </Each>
+
+                  Result contract:
+
+                  {verdictSchema}
+
+                  Return only corrected JSON.
+                </Prompt>
+              </Else>
+            </If>
+          </Loop>
+
+          <Parse schema={verdictSchema} as="verdict">
+            {verdictCandidate}
+          </Parse>
+        </Session>
+      </Agent>
+
+      <Capture as="checkpointMaterial">
+        ## Implementation plan
 
         {plan}
 
-        Result contract:
+        ## Planner review
 
-        {verdictSchema}
+        Passed: {verdict.passed}
 
-        Review the plan against the handoff, recorded user response, and
-        repository evidence. Include a focused revision prompt on failure.
-        Return only JSON matching the supplied result contract.
-      </Prompt>
+        {verdict.review}
 
-      <Loop max={2}>
-        <SafeParse schema={verdictSchema} as="parsedVerdict">
-          {verdictCandidate}
-        </SafeParse>
+        Revision prompt:
 
-        <If condition={parsedVerdict.ok}>
+        {verdict.revisionPrompt}
+      </Capture>
+      <UserCheckpoint
+        purpose="resolve the plan review"
+        agent={props.planner}
+        material={checkpointMaterial}
+        as="planCheckpoint"
+      />
+      <If condition={planCheckpoint.proceed}>
+        <If condition={verdict.passed}>
           <Break />
           <Else>
-            <Prompt as="verdictCandidate" throwOnError>
-              Correct your previous response without changing its meaning.
-              Do not use tools or perform additional analysis.
+            <Prompt>
+              Revise the implementation plan using this review:
 
-              Previous response:
+              {verdict.review}
 
-              {verdictCandidate}
+              Focused revision prompt:
 
-              Validation errors:
+              {verdict.revisionPrompt}
 
-              <Each in={parsedVerdict.errors} let="error">
-              - {error.instancePath}: {error.message}
-              </Each>
+              User involvement record:
 
-              Result contract:
-
-              {verdictSchema}
-
-              Return only corrected JSON.
+              {planCheckpoint.assessment}
+              User response: {planCheckpoint.response}
+              Rationale: {planCheckpoint.rationale}
             </Prompt>
           </Else>
         </If>
-      </Loop>
-
-      <Parse schema={verdictSchema} as="verdict">
-        {verdictCandidate}
-      </Parse>
-    </Session>
-  </Agent>
-
-  <Capture as="checkpointMaterial">
-    ## Implementation plan
-
-    {plan}
-
-    ## Planner review
-
-    Passed: {verdict.passed}
-
-    {verdict.review}
-
-    Revision prompt:
-
-    {verdict.revisionPrompt}
-  </Capture>
-  <UserCheckpoint
-    purpose="resolve the plan review"
-    agent={planner}
-    material={checkpointMaterial}
-    as="planCheckpoint"
-  />
-  <If condition={planCheckpoint.proceed}>
-    <If condition={verdict.passed}>
-      <Break />
-      <Else>
-        <Prompt agent={implementor} session="implementor">
-          Revise the implementation plan using this review:
-
-          {verdict.review}
-
-          Focused revision prompt:
-
-          {verdict.revisionPrompt}
-
-          User involvement record:
-
-          {planCheckpoint.assessment}
-          User response: {planCheckpoint.response}
-          Rationale: {planCheckpoint.rationale}
-        </Prompt>
-      </Else>
-    </If>
-    <Else>
-      <Break />
-    </Else>
-  </If>
-</Loop>
+        <Else>
+          <Break />
+        </Else>
+      </If>
+    </Loop>
+  </Session>
+</Agent>
 
 <Return value={{
   plan: plan,
@@ -213,6 +222,23 @@ resolves factual disagreement, while the user resolves material choices.
   revisionPrompt: verdict.revisionPrompt,
   decision: planCheckpoint
 }} />
+
+## Two agents, two sessions, one checkout
+
+The implementor's `<Agent>` and `<Session>` wrap the whole loop, so the plan
+prompt and the revision prompt reach the same conversation without repeating
+`agent` and `session` props on each one. The planner's `<Agent>` nests inside
+for the review and gives that session its own registration; leaving it restores
+the implementor's for the revision turn.
+
+`<Agent.AddDir>` registers a read-only Workspace path with its enclosing Agent
+session (#302). Registration is what grants an agent access — the lexical cwd the
+enclosing `<Worktree>` established governs where XMD's own file operations
+resolve and registers nothing. Both agents read the same checkout because both
+are reasoning about the same revision, and neither can write to it under
+`xmd workflow`. `<Agent.AddDir>` does not exist yet, and its exact placement
+relative to `<Session>` is #302's to settle; everything else in this body runs
+today.
 
 ## The stage returns its control state
 
@@ -243,8 +269,8 @@ Only the first pair advances.
 The loop is bounded and records why it stopped. `<Loop>` journals every
 iteration it enters and one terminal record whose outcome is `break` — a passing
 verdict or a declined checkpoint — `exhausted`, or `error`, and it refuses a
-replay whose stored outcome or iteration count disagrees with what this run
-reached. `<Loop>` opens no binding scope, so `plan`, `verdict`, and
+replay whose stored outcome or iteration count disagrees with what this
+execution reached. `<Loop>` opens no binding scope, so `plan`, `verdict`, and
 `planCheckpoint` hold their final values where `<Return>` reads them.
 
 The user's decision outranks the verdict. The outer `<If>` reads
@@ -274,14 +300,15 @@ unresolved product decision recorded against
 [issue #290](https://github.com/taras/executable.md/issues/290), whose
 acceptance pins the behavior. This synchronization slice does not choose it.
 
-The surrounding workflow will record every `plan`, `verdict`, and
-`planCheckpoint` as an artifact version under its loop-iteration identity. That
-artifact ledger does not exist yet (#291), and neither does a `cancelled` loop
-outcome — workflow-level cancellation and stop reasons belong to `<Workflow>`
-(#289). The component does not create handoff files either way.
+Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
+is one durable operation, each `<Elicit>` answer is journaled against its
+question fingerprint, and under `xmd workflow` those filtered events are retained
+with the run and readable through `xmd workflow history` (#291 closed, #367
+open). There is no `cancelled` loop outcome — run-level cancellation and stop
+reasons are retained run state rather than loop state. The component creates no
+handoff files either way.
 
-`agent={implementor}` and `<Agent name={planner}>` read the bare binding, which
-is the expression-prop spelling current main supports, while the prompt bodies
-interpolate `{props.instructions}` and `{props.handoff}`; #305 unifies the two.
-
-Everything in this component's body runs today.
+Props are namespaced throughout: `agent={props.implementor}` and
+`{props.instructions}` use one spelling in an expression prop and in text (#305).
+`plan`, `verdict`, `verdictSchema`, `checkpointMaterial`, and `planCheckpoint`
+are authored bindings and stay bare.

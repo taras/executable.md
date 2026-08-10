@@ -1,86 +1,141 @@
----
-props:
-  base:
-    type: string
-    default: main
----
-
 # Runtime and Isolation
 
-The workflow's run owns its worktree, artifact ledger, processes, and
-deterministic effects. It pins the source revision before creating the
-worktree. A worktree isolates Git state from the user's checkout but is not a
-security boundary.
+The command selects the environment; the document describes the procedure.
+`xmd run` uses the caller's current environment and promises no restoration.
+`xmd workflow start` creates a workflow run with one retained root Workspace,
+and that Workspace supplies the filesystem, repository, process, and
+working-directory capabilities every stage uses (#366, unbuilt).
 
-`<Workflow>` (#289), `<Sandbox>` (#302), and `<Worktree>` (#293) do not exist
-yet. The contextual working directory they depend on does: `Env.cwd` is
-implemented and already inherited by `<File>`, `<Glob>`, exec blocks, and
-daemons (#222), and `<TempDir>` already establishes one for its content (#216).
+The same declarative components work in both. Durability comes from the host,
+not from a second spelling of `<File>` or `<Git.Commit>`.
 
 ## Target shape
 
-<Workflow base={base} historyRef="refs/xmd/runs">
-  <Sandbox
-    readable={["repository"]}
-    writable={["workspace"]}
-    environment="declared"
-    processes="declared"
-    agentNetwork="deny"
-    deterministicEffects={["git-objects", "github"]}
-  >
-    <Worktree retain="on-dirty-or-failure">
-      <Content />
-    </Worktree>
-  </Sandbox>
-</Workflow>
+```sh
+xmd workflow start \
+  --props-request="…" \
+  --props-repository=https://github.com/acme/project.git \
+  --props-base=main \
+  workflows/adversarial-implementation/start.md
+```
 
-## Manual exercise
+<Repository name="project" url={props.repository} base={props.base}>
+  <Worktree name="implementation" branch={props.branch} as="worktree">
+    <Content />
+  </Worktree>
+</Repository>
 
-- Resolve `base` to a pinned source revision before planner discovery and
-  record it in the artifact ledger.
-- Create a disposable worktree from that pinned revision before discovery.
-- Keep handoffs and user decisions as restored artifact versions rather than
-  transfer files within the worktree.
-- Let `<Worktree>` set `Env.cwd` while it renders every child.
-- Give the planner read and search access.
-- Restrict implementor writes to worktree files.
-- Do not give the implementor write access to shared Git metadata.
-- Deny agent network access for the first deliberately limited feature.
-- Let explicit user-run commands perform commits, issues, and pull requests.
-- Stop all processes when a stage ends.
-- Retain a dirty worktree after failure or cancellation and report its path and
-  recovery state.
+Root props supply the locator and the base. A repository name is stable
+component identity inside the Workspace, never a key into hidden configuration,
+and `xmd workflow start` uses the same generated `--props-*` arguments as
+`xmd run`.
 
-An enforceable sandbox becomes mandatory before implementation runs
-unattended. The manual exercise uses the narrowest host sandbox and permission
-policy already available.
+## What the run owns
 
-`<Workflow>` will record an artifact version when a stage or loop iteration
-completes, and a terminal record on success, failure, and cancellation, then
-restore a resumed stage's declared inputs. Authors do not repeat observed
-artifact paths or generate transfer files in an explicit checkpoint.
+The workflow run owns its Workspace, its repositories and worktrees, its Agent
+sessions, and its filtered journal. Nothing required lives only in an Agent
+transcript, a host path, a provider handle, or a branch name.
 
-`<Loop>` already records part of that: it journals every iteration it enters
-and one terminal record whose outcome is `break`, `exhausted`, or `error`, and
-it refuses a replay whose stored outcome or iteration count disagrees with what
-this run reached. There is no `cancelled` loop outcome, and no stage-stop
-record — workflow-level cancellation and stop reasons belong to `<Workflow>`
-and `<Stage>`, which do not exist yet.
+- `<Repository>` authorizes the locator, resolves the base once, pins that
+  commit, and creates the named primary checkout. Resolution happens once;
+  replay does not re-query a moving branch (#293).
+- `<Worktree>` adds a named linked checkout on its own branch inside that
+  Repository. Its identity is Repository identity plus name, independent of any
+  attachment-specific absolute path.
+- Both install contextual cwd while rendering their children and bind their
+  Workspace-relative path through `as`.
+- `<Dir>` changes cwd and nothing else.
+
+A worktree isolates Git state from the user's checkout. It is composition and
+isolation, not a security boundary.
+
+## The Agent ceiling is the host's, not the document's
+
+Workflow Agents are mandatorily read-only, enforced in three places: the
+provider permission bridge allows only read and search operations, the provider
+runs in its native read-only sandbox, and registered Workspace paths are
+presented as read-only filesystem views. `<ApproveAll>`, repository `.codex` or
+`.claude` configuration, and prompt content cannot raise that ceiling, and a
+provider that cannot enforce it fails before Prompt execution (#302).
+
+There is therefore no `<Sandbox>` component in this workflow, and no document
+prop that grants an Agent write access. Earlier drafts of this document declared
+readable roots, writable roots, environment, process, and network policy as
+markup; that authority moved to the host, where a document cannot widen it.
+
+Directory access is explicit:
+
+<Agent name={props.planner}>
+  <Agent.AddDir path={props.worktree} />
+  <Prompt>Review the change.</Prompt>
+</Agent>
+
+Registrations are ordered, may occur between prompts, and have no special first
+directory. Lexical `<Dir>` does not register anything with an Agent.
+
+Native Agent processes inspect disposable read-only materializations of the
+current logical Workspace root. Those views have no write-back path and may be
+discarded and recreated. An Agent proposes changes by returning XMD, which a
+constrained evaluator preflights and expands as ordinary durable effects
+against the authoritative Workspace (#369).
+
+Agent network access is denied for this workflow, which is why a review prompt
+must render everything the reviewer has to judge rather than pointing at it.
+
+## Interruption, suspension, and cancellation
+
+Three outcomes are distinct, and none of them is a failure of the document:
+
+- **Suspension.** A checkpoint that reaches a person records its pending
+  request and the Workspace frontier, releases the executor, and returns with a
+  run ID and stop reason on standard error. `resume` continues when the answer
+  is available.
+- **Interruption.** Losing the executor outside an authored wait, including
+  Ctrl-C, leaves the run `interrupted` and resumable at the journal frontier.
+- **Cancellation.** `xmd workflow cancel <run-id>` asks an active executor to
+  stop and makes the run terminal. It retains the journal and Workspace for
+  inspection and does not undo completed local or external effects.
+
+An uncaught failure escaping the root is terminal too. Reusing that run's ID
+replays the retained failure rather than silently retrying it; a corrected
+document starts a new run.
+
+All of that is #366 for start/resume and #367 for status, list, history,
+cancellation, and deletion. Neither is built.
+
+## Cleanup follows the invocation
+
+Resources clean up with their execution. Agent sessions, processes, and streams
+stop before their enclosing scope closes, and content a caller projects keeps
+the caller's bindings while its live effects belong to the invocation that
+projected it and stop before that invocation cleans up its own (#203, shipped).
+That ordering is what makes a workspace safe to tear down: a process a stage
+started stops before the directory it ran in goes away.
+
+Scope cleanup releases live attachments. It does not delete run-owned state:
+every run status is retained until an explicit `xmd workflow delete`, and
+deletion never claims to undo a push, a pull request, or an issue (#367).
 
 ## Loop interruption
 
 An automated iteration stops on the first applicable signal:
 
 1. The iteration reaches its defined completion.
-2. A configured file is created or updated in a configured directory.
+2. A durable signal the run is waiting on arrives.
 3. The user provides runtime input.
 
-None of that arbitration is implemented ([issue
-#300](https://github.com/taras/executable.md/issues/300)). Signal 3 has a
-shipped in-run form: `<Elicit>` asks a person a schema-validated question
-during execution, and under `xmd run` the WebForm provider answers it in a
-browser. What remains missing is cross-process continuation — stopping at a
-stage boundary and resuming in a later invocation — which `<Stage>` owns rather
-than `<Elicit>` (#298). The Effection inspector remains out-of-band
-meta-control for exceptional inspection and intervention, not the routine
-decision protocol.
+Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
+question during execution, and under `xmd run` the WebForm provider answers it
+in a browser. Under `xmd workflow` the same question becomes a durable
+suspension. Arbitration between signals is not implemented
+([#300](https://github.com/taras/executable.md/issues/300)), and premature
+watcher semantics are deliberately excluded from it.
+
+`<Loop>` already records part of this: it journals every iteration it enters and
+one terminal record whose outcome is `break`, `exhausted`, or `error`, and it
+refuses a replay whose stored outcome or iteration count disagrees with what
+this execution reached. There is no `cancelled` loop outcome — run-level
+cancellation and stop reasons are retained run state, not loop state.
+
+The Effection inspector remains out-of-band meta-control for exceptional
+inspection and intervention, not the routine decision protocol.

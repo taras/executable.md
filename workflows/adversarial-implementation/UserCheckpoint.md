@@ -83,7 +83,7 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
 ```
 </Capture>
 
-<Agent name={agent}>
+<Agent name={props.agent}>
   <Session name="user-checkpoint">
     <Prompt as="candidate" throwOnError>
       Determine whether the user must be involved to {props.purpose}.
@@ -180,12 +180,17 @@ because no decision was found.
 the choice itself. The caller passes the complete material to assess as the
 `material` prop rather than asking the agent to locate or read it.
 
-**Missing: projecting the material as content.** `material` would read better as
-`<Content />` — the caller writing the material as children — but `<Content />`
-is substituted only at a body's top level or directly inside `<Output>`, never
-nested inside a `<Prompt>` where this component needs it
-([issue #328](https://github.com/taras/executable.md/issues/328)). A prop
-interpolates anywhere, so that is what this component takes until #328 lands.
+This checkpoint registers no directory with its agent. It assesses supplied
+material and needs no repository access, so no `<Agent.AddDir>` appears here —
+a read-only agent with nothing registered is the narrowest thing this workflow
+can ask for.
+
+`material` could equally be projected content: `<Content />` is substituted
+wherever a body writes it, including nested inside a `<Prompt>`
+([#328](https://github.com/taras/executable.md/issues/328), fixed). It stays a
+declared prop because a stage's inputs are part of its contract and the schema
+validates them, and because every caller here already holds the material as a
+binding rather than writing it as prose.
 
 `<Elicit>` asks without choosing how. It requires `schema` and `as`, compiles
 the schema before its content expands, renders that content as the request
@@ -197,16 +202,19 @@ built-in verb. Where the asking happens is the host's decision, made through the
 Elicitation Api: `xmd run` composes WebForm as its current provider, so this
 checkpoint opens a loopback browser form under the CLI. Only the validated
 answer is journaled, keyed by a fingerprint of the compiled schema and the
-rendered message, so a resumed run restores the answer instead of asking twice
-and refuses a recorded answer whose question does not match. A document that
-already knows the answer — a test, a demo, a non-interactive region — wraps this
-component in an `<Answers>` region and supplies it with `<Answer>` matchers,
+rendered message, so a resumed execution restores the answer instead of asking
+twice and refuses a recorded answer whose question does not match. A document
+that already knows the answer — a test, a demo, a non-interactive region — wraps
+this component in an `<Answers>` region and supplies it with `<Answer>` matchers,
 which changes who answers without changing this file.
 
-What `<Elicit>` does not solve is stopping between processes. It answers a
-question inside one run; selecting and resuming a stopped stage in a later
-invocation is cross-process continuation, which belongs to `<Stage>` and
-`<Workflow>` (#298, #289) and does not exist yet.
+Under `xmd workflow` the same question becomes a durable wait. The elicitation
+records its pending request and the Workspace frontier, the executor is
+released, and `xmd workflow resume <run-id>` continues once the answer is
+available — the process, the Workspace attachment, and the agent processes need
+not stay alive in between. That lifecycle is #366 for start and resume and #367
+for suspension and ownership, and neither is built. Under `xmd run` the question
+is answered inside one document execution or not at all.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
 repair turn explicitly. It absorbs JSON syntax and schema-validation failures
@@ -218,8 +226,9 @@ from continuing after the bounded repair loop with malformed output. The schema
 is ordinary captured document content rather than a registry entry or
 `<Prompt schema>` prop.
 
-`<Agent name={agent}>` reads the bare binding because that is the expression-
-prop spelling current main supports, while `{props.purpose}` in the prompt body
-is text interpolation; #305 unifies the two.
+Props are namespaced: `<Agent name={props.agent}>` and `{props.purpose}` use the
+same spelling, in an expression prop and in text (#305). The bare bindings here —
+`assessmentSchema`, `candidate`, `parsed`, `assessment`, `decision` — are
+authored captures and parses, which stay bare.
 
 This component runs today.
