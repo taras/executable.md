@@ -1019,7 +1019,12 @@ It qualifies only while every one of these holds:
   it;
 - establishment and transfer occur only through the canonical module's
   `establishJournalProvenance()` and `preserveJournalProvenance()`, one fresh
-  witness per stream, with duplicate establishment refused; and
+  witness per stream, with duplicate establishment refused;
+- transfer happens only at a trusted wrapping site — one installed before any
+  code the journal's content could influence, delegating to the exact stream it
+  was handed. A document execution's journal passes through two: the secret
+  filter and the execution-owned target-admission wrapper. Each transfers only
+  what its source already had, so an unproven journal stays unproven; and
 - it retains no execution, lifecycle, journal content or provider state.
 
 The exception exists because the exact-object, anti-forgery and loaded-copy

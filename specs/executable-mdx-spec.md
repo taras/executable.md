@@ -2770,7 +2770,15 @@ composable policy is for. The check therefore lives inside the journal the
 execution hands to `durableRun`: it reads the retained history once, owns the
 retained snapshot every later phase observes, validates the recorded selection
 and the required root-import structure against it, and passes that same snapshot
-on. It runs ahead of public guard policy, of any retained event reaching execution,
+on. It is also a trusted journal-provenance wrapping site. Provenance is not
+transitive, so a wrapper is unproven unless its wrapping site carries the source
+witness onto it, and a run whose journal is unproven is refused by a Workspace
+provider before any transaction. This wrapper qualifies — core installs it
+before any document code exists and it delegates every append to the exact
+stream it was handed — and it transfers only the witness that source already
+has, establishing none.
+
+It runs ahead of public guard policy, of any retained event reaching execution,
 of a retained terminal result being reused, of authored work, and of any append.
 The snapshot it owns covers **every** event that participates in admission,
 indexing, or terminal reuse — a recorded completion as much as a recorded effect

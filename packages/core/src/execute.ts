@@ -17,6 +17,7 @@ import {
   durableRun,
   createDurableOperation,
   ephemeral,
+  preserveJournalProvenance,
   retainEvents,
   StaleInputError,
   type CoroutineId,
@@ -597,13 +598,22 @@ function describeSelection(selection: SelectionOutcome): string {
  * It also owns the retained snapshot. The events it validates are the events it
  * returns, so the identity and settlement it decided on are what every later
  * phase observes rather than a second reading of the backend's own objects.
+ *
+ * It is a trusted wrapping site, and says so explicitly. Journal provenance is
+ * not transitive: a wrapper is unproven unless a wrapping site carries its
+ * source's witness onto it, and a run whose journal is unproven is refused by a
+ * Workspace provider before any transaction. This wrapper qualifies because
+ * core installs it before any document code exists and it delegates every
+ * append to the exact stream it was handed. What it transfers is only the
+ * witness that exact source already has — it establishes none, so an unproven
+ * source stays unproven and a wrapper somebody else built gains nothing.
  */
 function guardedJournal(
   stream: DurableStream,
   root: RootDocumentSource,
   coroutineId: CoroutineId,
 ): DurableStream {
-  return {
+  const admitting: DurableStream = {
     *readAll(): Operation<DurableEvent[]> {
       const retained = retainEvents(yield* stream.readAll());
       admitRootHistory(retained, root, coroutineId);
@@ -611,6 +621,7 @@ function guardedJournal(
     },
     append: (event: DurableEvent) => stream.append(event),
   };
+  return preserveJournalProvenance(stream, admitting);
 }
 
 /**

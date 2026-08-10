@@ -746,6 +746,13 @@ transfers only the witness already associated with the exact source: an
 unproven source leaves the target unproven, and nesting trusted wrappers
 carries the same witness through each one.
 
+A wrapping site is trusted when it is installed before any code the journal's
+own content could influence, and delegates to the exact stream it was handed.
+`@executablemd/core` has two, and a document execution's journal passes through
+both: the secret filter, and the execution-owned wrapper that admits a run's
+recorded target before replay. Each transfers only what its source already had,
+so an unproven journal stays unproven through both.
+
 ---
 
 ## Long-running workflows

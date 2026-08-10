@@ -22,14 +22,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { StaleInputError } from "@executablemd/durable-streams";
-import { ReplayGuard } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  defaultLiveDurableOperationCoordinator,
+  establishJournalProvenance,
+  guardDurableStream,
+  ReplayGuard,
+} from "@executablemd/durable-streams";
+import type {
+  JournalProvenance,
+  LiveDurableOperationCoordinator,
+} from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream, Yield } from "@executablemd/durable-streams";
 import { createApi } from "@effectionx/context-api";
 import { API, useHostFiles } from "@executablemd/runtime";
 
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import { execute } from "../src/execute.ts";
+import { execute, Execution } from "../src/execute.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { getExpansion } from "../src/expansion.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -2042,5 +2052,158 @@ describe("Tier TX — guards observe a copy, not the retained history", () => {
     });
     expect(observed).toContain("__root__");
     expectAlphaOnly(outcome);
+  });
+});
+
+/**
+ * Tier TX — the witness survives every wrapper a run puts on its journal.
+ *
+ * Journal provenance is deliberately non-transitive (#425): a wrapper is
+ * unproven unless a trusted wrapping site carries its source's witness onto it,
+ * and a run whose journal is unproven is refused by a Workspace provider before
+ * any transaction. Core puts two wrappers on the journal a host supplies — the
+ * secret filter, and the execution-owned target-admission gate — so both have
+ * to be explicit about it or a live coordinator receives nothing.
+ *
+ * Recorded before the fix, at the exact head:
+ *
+ * ```json
+ * {"filtered":true,"identityGate":false,"identityGateMissing":true}
+ * ```
+ *
+ * These exercise `execute()` rather than the wrapper in isolation, because what
+ * is being measured is what reaches live coordination after every wrapper.
+ */
+describe("Tier TX — journal provenance across the admission gate", () => {
+  /** What a live durable operation's coordinator was handed. */
+  interface Coordinated {
+    witnesses: (JournalProvenance | undefined)[];
+  }
+
+  /**
+   * A coordinator that records the provenance it is handed.
+   *
+   * Installed on a durable operation raised from inside a real document
+   * execution, so what it sees is what core's journal — after secret filtering
+   * and target admission — actually delivers to live coordination.
+   */
+  function witnessing(seen: Coordinated): LiveDurableOperationCoordinator {
+    return {
+      *run(execute, publish, activateFailure, journalProvenance) {
+        seen.witnesses.push(journalProvenance);
+        return yield* defaultLiveDurableOperationCoordinator.run(
+          execute,
+          publish,
+          activateFailure,
+          journalProvenance,
+        );
+      },
+    };
+  }
+
+  /** Raise one coordinated durable operation inside the document's own run. */
+  function* useWitnessProbe(seen: Coordinated): Operation<void> {
+    yield* Execution.around({
+      *document([props], next) {
+        yield createDurableOperation<Json>(
+          { type: "probe", name: "provenance" },
+          // deno-lint-ignore require-yield
+          function* () {
+            return "probed";
+          },
+          { coordinator: witnessing(seen) },
+        );
+        return yield* next(props);
+      },
+    });
+  }
+
+  const LIVE = [
+    "# Title",
+    "",
+    "## Alpha",
+    "",
+    "alpha content",
+    "",
+    "## Beta",
+    "",
+    "beta content",
+    "",
+  ].join("\n");
+
+  /** Run `source` against `stream`, reporting what coordination witnessed. */
+  function* observing(
+    stream: DurableStream,
+    source: RootDocumentSource,
+    settings: { secretDetection?: boolean } = {},
+  ): Operation<Coordinated> {
+    const seen: Coordinated = { witnesses: [] };
+    yield* scoped(function* () {
+      yield* useWitnessProbe(seen);
+      yield* collect(yield* execute({ ...source, stream, ...settings }));
+    });
+    return seen;
+  }
+
+  it("TX78: an untargeted run delivers the selected journal's exact witness", function* () {
+    const stream = new InMemoryStream();
+    const witness = establishJournalProvenance(stream);
+    const seen = yield* observing(stream, inlineSource(LIVE));
+    expect(seen.witnesses.length).toBeGreaterThan(0);
+    for (const observed of seen.witnesses) {
+      expect(observed).toBe(witness);
+    }
+  });
+
+  it("TX79: a targeted run delivers the same exact witness", function* () {
+    const stream = new InMemoryStream();
+    const witness = establishJournalProvenance(stream);
+    const seen = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
+    expect(seen.witnesses.length).toBeGreaterThan(0);
+    for (const observed of seen.witnesses) {
+      expect(observed).toBe(witness);
+    }
+  });
+
+  it("TX80: secret detection disabled delivers the same exact witness", function* () {
+    const stream = new InMemoryStream();
+    const witness = establishJournalProvenance(stream);
+    const seen = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }), {
+      secretDetection: false,
+    });
+    expect(seen.witnesses.length).toBeGreaterThan(0);
+    for (const observed of seen.witnesses) {
+      expect(observed).toBe(witness);
+    }
+  });
+
+  it("TX81: an unproven journal stays unproven through both wrappers", function* () {
+    const stream = new InMemoryStream();
+    const seen = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
+    expect(seen.witnesses.length).toBeGreaterThan(0);
+    for (const observed of seen.witnesses) {
+      expect(observed).toBe(undefined);
+    }
+  });
+
+  it("TX82: an ordinary wrapper of a proven journal is not promoted", function* () {
+    const backend = new InMemoryStream();
+    establishJournalProvenance(backend);
+    // A wrapper nobody trusted: generic guarding, not a wrapping site.
+    const ordinary = guardDurableStream(backend, function* () {});
+    const seen = yield* observing(ordinary, inlineSource(LIVE, { target: "Alpha" }));
+    expect(seen.witnesses.length).toBeGreaterThan(0);
+    for (const observed of seen.witnesses) {
+      expect(observed).toBe(undefined);
+    }
+  });
+
+  it("TX83: replay reaches no live coordination at all", function* () {
+    const stream = new InMemoryStream();
+    establishJournalProvenance(stream);
+    yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
+
+    const replayed = yield* observing(stream, inlineSource(LIVE, { target: "Alpha" }));
+    expect(replayed.witnesses).toEqual([]);
   });
 });

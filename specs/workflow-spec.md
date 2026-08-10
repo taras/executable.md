@@ -482,8 +482,10 @@ capturing the root. The Deno provider binds an adapter-private proof operation
 to one exact WorkflowRun handle through module-private executor identity. It
 establishes the canonical durable-stream module's journal provenance for that
 run's journal and retains that exact witness. The generic pre-persistence guard
-preserves nothing; the trusted secret-filter wrapping site preserves the
-witness explicitly, including through nested trusted wrappers. The provider
+preserves nothing. Two trusted wrapping sites preserve the witness explicitly,
+and a run's journal passes through both: the secret filter, and the
+execution-owned target-admission wrapper core installs before any document code
+exists. Nesting them carries the same witness through each. The provider
 receives the invocation's exact executor identity and journal provenance from
 its execution-owned capability and validates them before it opens the
 caller-owned transaction. It refuses a foreign executor, foreign or absent
