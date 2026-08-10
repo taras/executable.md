@@ -690,10 +690,12 @@ BEGIN
 COMMIT
 ```
 
-A crash commits all three or none. A killed host runs no cleanup, so its
-transaction stays open and SQLite recovery exposes neither the mutation, the
-root, the pointer change nor the result; another connection never sees them
-while that host is alive either. Nested child effects finish before the
+A crash commits all three or none. Nothing runs after a killed host dies — no
+cleanup, no commit, no rollback — so the operating system closes its connection
+and releases its locks, and the next connection recovers the database to the
+last committed state, exposing neither the mutation, the root, the pointer
+change nor the result. Another connection never sees them while that
+transaction is uncommitted either. Nested child effects finish before the
 parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary.
 

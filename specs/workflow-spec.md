@@ -509,13 +509,17 @@ That identity fences later coordinators, executors and appends. An already
 active durability failure takes precedence. Cancellation at any phase publishes
 nothing.
 
-Losing the host is not one of those phases. A killed process runs no cleanup,
-so its caller-owned transaction stays open and SQLite's recovery decides the
-outcome. The mutation, the immutable root, the current-root pointer and the
-routed journal row are all written inside that transaction, and none of them is
-exposed afterwards. While the process is alive, another connection sees only
-the last committed state, so a crash publishes nothing that was not already
-visible before it.
+Losing the host is not one of those phases. Nothing runs after the process
+dies: no cleanup, no commit, no rollback. The operating system closes the
+connection and releases the locks it held, and the next connection to open the
+database recovers it. The mutation, the immutable root, the current-root
+pointer and the routed journal row have all been written inside the
+caller-owned transaction by then; recovery exposes the last committed state and
+none of them.
+
+A second connection sees that same last committed state for as long as the
+writer's transaction is uncommitted, so a crash publishes nothing that was not
+already visible before it.
 
 A later process therefore opens the last committed state and nothing else: the
 same live filesystem, the same current root, the same retained roots, manifest

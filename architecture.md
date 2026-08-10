@@ -551,13 +551,18 @@ first infrastructure failure by identity; the default coordinator does not use
 it and keeps its existing behavior.
 
 Losing the host is not one of those outcomes, because nothing runs to handle
-it. A killed process leaves its transaction open, and SQLite's own recovery
-decides what the database holds next: the mutation, the immutable root, the
-current-root pointer and the routed event are all written by then, and none of
-them survives. While that process is alive another connection sees only the
-last committed state, so the boundary is the same one every other reader
-observes rather than a second rule for crashes. What a later process finds is
-that committed state — the filesystem, the current root, the retained roots and
+it. No cleanup, commit or rollback happens after the process dies: the
+operating system closes its connection and releases the locks it held, and the
+interrupted transaction is left for the next connection to recover. The
+mutation, the immutable root, the current-root pointer and the routed event
+have all been written by then, and recovery exposes the last committed state
+and none of them.
+
+That is the same boundary every other reader already observes rather than a
+second rule for crashes. A second connection sees the last committed state for
+as long as the writer's transaction is uncommitted, so a crash publishes
+nothing that was not visible before it. What a later process finds is that
+committed state — the filesystem, the current root, the retained roots and
 references, and the ordered journal with its event identities and root
 associations — from which it performs no recorded effect again and can
 materialize any retained root.
