@@ -186,35 +186,45 @@ feedback, decisions, branches, and pull requests do not belong to whichever
 agent happened to create them. The document captures or resolves those assets
 deterministically and passes required content into agent prompts explicitly.
 
-`<File>` and `<Glob>` already perform such operations. `<Workflow>` (#289),
-`<Worktree>` (#293), and `<PullRequest>` (#295) describe the rest and are not
-built. Together they cover the work that should not depend on model judgment:
+`<File>` and `<Glob>` already perform such operations. The command supplies the
+rest: `xmd workflow start` creates a workflow run with one retained Workspace
+(#366), and named `<Repository>` and `<Worktree>` composition (#293),
+deterministic local Git effects (#294), explicit `<Git.Push>` (#370),
+`<PullRequest>` (#295), and `<Issue>` (#296) describe the effects inside it. None
+of them is built. Together they cover the work that should not depend on model
+judgment:
 
-- record artifact versions of handoffs, plans, reviews, and decisions;
-- create or resolve a named workspace, branch, file, or pull request only when
-  that environmental asset is needed;
+- retain each handoff, plan, review, and decision as a filtered journal event
+  bound to the Workspace root current when it was written;
+- create or resolve a named repository, worktree, branch, file, or pull request
+  only when that environmental asset is needed;
 - establish the working directory inherited by child operations;
-- read and write exact artifact content;
+- read and write exact content through the contextual filesystem boundary;
 - return paths, commit identities, pull-request numbers, and URLs as workflow
   data;
-- reconcile existing state when an execution resumes; and
+- reconcile existing external state when an execution resumes; and
 - record the inputs, observed state, effects, and outputs of each operation.
 
-Agent calls analyze evidence and propose changes. Deterministic components apply
-approved environmental changes and provide exact required content to the next
-call. Generated files are optional exports rather than the handoff protocol.
-This removes manual copying between agent-owned transcripts, plan files, and
-working directories.
+Agent calls analyze evidence and propose changes; they do not perform them. Under
+a workflow run an Agent is read-only, and a proposal reaches the Workspace as
+generated XMD that a constrained evaluator preflights and expands as ordinary
+durable effects (#302, #369). Deterministic components apply approved
+environmental changes and provide exact required content to the next call.
+Generated files are optional exports rather than the handoff protocol. This
+removes manual copying between agent-owned transcripts, plan files, and working
+directories.
 
-That run state is scoped to the operation that owns it: created inside the run
-it describes, provided contextually, and torn down with it. Nothing accumulates
-runs in a module-scoped registry, so concurrent runs cannot observe each other.
+Live run state is scoped to the operation that owns it: created inside the
+operation it describes, provided contextually, and torn down with it. Nothing
+accumulates runs in a module-scoped registry, so concurrent runs cannot observe
+each other. What outlives the process is retained deliberately, in the run's own
+store, addressed by a public run ID.
 
 Resources clean up with their enclosing execution by default. Agent sessions,
-processes, streams, and other ongoing effects always stop. An execution may
-explicitly retain a workspace for inspection. A failed or cancelled execution
-also retains a workspace when cleanup would discard uncommitted or unpushed
-changes, and reports the path, branch, and reason that recovery is required.
+processes, streams, and other ongoing effects always stop. Cleanup releases live
+attachments without deleting run-owned state: every run status is retained until
+an explicit deletion, so a failed or cancelled execution keeps its checkouts and
+its journal, and reports the path, branch, and reason that recovery is required.
 Durable published results such as commits, issues, and pull requests remain
 addressable after scoped resources close.
 

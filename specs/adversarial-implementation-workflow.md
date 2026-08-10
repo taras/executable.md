@@ -10,12 +10,16 @@ described in the present tense, and a capability that does not exist yet says
 so with the issue that would supply it. Sections marked as not implemented
 define what must be built, not what the runtime does today.
 
-The compact workflow map and its stage-level details live in
-[the adversarial implementation workflow directory](../workflows/adversarial-implementation/start.md).
-
 The executable sketch is organized around a compact
 [entry document](../workflows/adversarial-implementation/start.md), with stage and
-runtime details in adjacent Markdown files.
+runtime details in adjacent Markdown files. `architecture.md` and the
+[workflow Workspace specification](./workflow-workspace-spec.md) own the
+implementation invariants and the observable `xmd workflow` contract; this
+document owns the roles, the authority boundaries, and the review and deferral
+contracts the workflow is built to satisfy.
+
+The dependency map is [#218](https://github.com/taras/executable.md/issues/218),
+which orders every capability this target still needs.
 
 ## Purpose
 
@@ -29,7 +33,8 @@ useful opposition:
 - The planner interviews the user, constructs a theory of implementation, and
   challenges plans and implementations.
 - The implementor investigates the repository, validates the planner's theory,
-  and proposes a concrete implementation plan.
+  proposes a concrete implementation plan, and then proposes the change itself
+  as executable source rather than performing it.
 - The user makes final decisions about behavior, scope, architecture, risk,
   sequencing, and lasting constraints.
 
@@ -75,9 +80,17 @@ after the checkpoint.
 
 A checkpoint that found no material choice produces an explicit `proceed: true`
 recording why, so a transition never advances because a decision was missing.
-What remains missing is stopping *at* the boundary — halting cleanly where the
-user answered so a later invocation resumes there, with a recorded stop reason —
-which is `<Stage>` (#298) over `<Workflow>` (#289).
+
+Stopping *at* the boundary is a durable suspension rather than a construct. A
+checkpoint that reaches a person records its pending request and the Workspace
+frontier, releases the executor, and reports the run ID and stop reason;
+`xmd workflow resume` continues there once the answer is available. Neither the
+process nor the Agent sessions need to stay alive in between. That lifecycle is
+#366 for foreground start and resume and #367 for suspension, ownership, and
+stop-reason inspection, and neither is built. `<Stage>` is not the answer: it was
+rejected as architecture, because the root document is the workflow and a durable
+run may continue through several document executions without inventing
+subdivisions between them (#298, closed).
 
 ## Smallest complete path
 
@@ -88,7 +101,8 @@ User and planner discuss the change
   → Planner reviews the plan
   → Implementor revises or the user resolves remaining decisions
   → User authorizes the shared plan
-  → Implementor changes the repository
+  → Implementor proposes the change as XMD; XMD performs it
+  → XMD stages, commits, and pushes, then opens the pull request
   → Planner reviews the pull request
   → Review and revision repeat until the change is accepted
 
@@ -96,34 +110,50 @@ Implementation does not begin merely because the planner produced a handoff.
 The handoff is a theory for the implementor to test, not an implementation plan
 to follow unquestioningly.
 
-### Initial execution model
+The implementor never writes to the repository itself. Agents are read-only
+under a workflow run, so the change reaches the Workspace as constrained
+generated XMD, and staging, committing, pushing, and pull-request creation are
+separate deterministic effects the document performs. **Agents inspect; XMD
+mutates.**
 
-The first exercise runs one stage at a time under user control. Each stage reads
-declared inputs, publishes explicit results, and returns. The user inspects the
-result and manually starts the next stage.
+### Two execution environments
 
-This manual boundary lets the exercise test the interview, handoff, plan,
-review, decision, and revision contracts without first implementing a resident
-process, file watcher, suspension protocol, or resumable resource scope.
+The command selects the environment; the document describes the procedure.
 
-The automated form treats script execution as a loop. An iteration stops on the
-first applicable signal in this priority order:
+`xmd run` executes against the caller's current environment and promises no
+restoration. `xmd workflow start` creates a workflow run with one implicit root
+Workspace that supplies the filesystem, repository, process, and
+working-directory capabilities the stages use, retains the filtered journal, and
+returns when execution completes, suspends, fails, is cancelled, or is
+interrupted. `xmd workflow resume <run-id>` continues from the journal frontier
+under the retained definition and props. The same declarative components work in
+both; durability comes from the host rather than from a second spelling of
+`<File>` or `<Git.Commit>` (#366, unbuilt).
+
+Until that command exists, the first exercise runs one stage at a time under
+user control in one document execution and one existing working directory. The
+user inspects each result and manually starts the next stage. That manual
+boundary lets the exercise test the interview, handoff, plan, review, decision,
+and revision contracts before the retained lifecycle exists.
+
+The automated form treats execution as a loop. An iteration stops on the first
+applicable signal in this priority order:
 
 1. The iteration reaches its defined completion.
-2. A configured file is created or updated in a configured directory.
+2. A durable signal the run is waiting on arrives.
 3. The user provides direct input.
 
-Stop arbitration is not implemented (#300). The manual exercise records where
-each signal would have been used without detecting or prioritizing them.
+Stop arbitration is not implemented (#300), and premature watcher semantics are
+deliberately excluded from it. The manual exercise records where each signal
+would have been used without detecting or prioritizing them.
 
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
-question during execution and binds the validated answer, and `xmd run`
-composes the WebForm provider so that question opens a loopback browser form.
-What remains missing is cross-process continuation: stopping at a stage
-boundary and resuming in a later invocation. That belongs to `<Stage>` and
-`<Workflow>` (#298, #289), so the user still supplies decisions between manually
-invoked stages whenever a stage boundary — rather than a question inside one
-run — is what stopped the work.
+question during execution and binds the validated answer, and `xmd run` composes
+the WebForm provider so that question opens a loopback browser form. Under
+`xmd workflow` the same question becomes a durable suspension that releases the
+executor and resumes later. Until start and resume exist, the user still
+supplies decisions between manually invoked stages whenever the work stopped at a
+boundary rather than at a question inside one document execution.
 
 ### Runtime intervention
 
@@ -202,11 +232,22 @@ instructions, specifications, and observable validation. A failed review returns
 a focused prompt that the implementor can apply directly.
 
 A pull-request review needs the pull request's complete current state, and the
-planner cannot fetch it: the supervised exercise denies agent network access. So
-the review prompt renders every category the handle resolves — existing reviews,
-comments, and check results — rather than a subset, and names the revision under
-review: the diff at the head identity against the base. A verdict describes that
-head alone, and a moved head requires a fresh review.
+planner cannot fetch it: agent network access is denied. Whatever the prompt does
+not render is invisible to the review. The prompt therefore names the revision
+under review — the change at the head identity against the base — and renders the
+source that performed it, the implementor's report, and the pull request's
+identity. A verdict describes that head alone, and a moved head requires a fresh
+review.
+
+`<PullRequest>`'s creation result is deliberately minimal: stable provider
+identity, number, URL, state, head SHA and base SHA (#295). Existing reviews,
+comments and check results are separate reads rather than fields on a creation
+result that would otherwise claim to stay fresh against a remote that keeps
+changing. **That read is not defined by any open issue.** The requirement it must
+satisfy is unchanged: the reviewer receives every existing review with its body,
+every comment, and every check result, iterated rather than stringified — a
+review that cannot see a failing check or an existing objection is not
+adversarial, it is uninformed.
 
 The user's checkpoint carries the same evidence. An existing objection reaches
 the person approving the change in its own words, not only as the planner
@@ -286,12 +327,12 @@ differently as a result.
 
 `Discovery` runs its prompt in documentation and renders only the captured
 result. A failed prompt is raised there — `throwOnError` is what raises it — and
-`throw` ends the run.
+`throw` ends the document execution.
 
 `InstructionFiles` is the other way round: its `<Each>` and `<File>` reads *are*
 its `<Output>` region. `<File>` prints its own failures rather than propagating
 them, so an unreadable instruction file becomes a printed error and the region's
-`output` mode never decides anything. The run continues, and what stops the
+`output` mode never decides anything. Execution continues, and what stops the
 caller from proceeding on nothing is the binding rule: `as` refuses a body
 holding a printed error, so `instructions` stays unbound and the error surfaces
 at the invocation rather than inside the text a prompt would quote.
@@ -318,8 +359,8 @@ failure is always explicit — a bounded repair turn the document shows, not
 recovery the engine performs on the author's behalf.
 
 Printing an `output` decision is settled contract that the engine has not built
-yet: an outer `<PrintErrors>` currently ends the run instead (#327). No stage
-depends on it today.
+yet: an outer `<PrintErrors>` currently ends the document execution instead
+(#327). No stage depends on it today.
 
 `throwOnError` on a `<Prompt>` is required for the same reason: without it a
 failed prompt records its failure and returns its text, raising nothing for the
@@ -344,24 +385,46 @@ shipped:
   path, no write handle. It is used for source changes, explicit exports, or
   external tools that require a path, not as the default agent handoff.
 
-Two are not implemented:
+The rest are not implemented, and they are explicit composition rather than one
+implicit workspace:
 
-- `<Worktree>` creates or resolves a workspace and sets `Env.cwd` while
-  rendering its children (#293). The contextual working directory it would
-  establish is itself shipped and already inherited by files, globs, processes,
-  and agents.
-- `<PullRequest>` creates or resolves the pull request for a branch and returns
-  a structured handle: number, URL, head and base identities, state, reviews,
-  comments, and checks (#295).
+- `<Repository>` authorizes a Git locator, resolves an optional base once, pins
+  that commit, and creates the named primary checkout inside the run's Workspace.
+  `<Worktree>` adds a named linked checkout on its own branch. Both install
+  contextual cwd while rendering their children and bind their Workspace-relative
+  path through `as` (#293). Names are stable component identity, not lookup keys
+  into hidden configuration: a locator and a base are ordinary root props or
+  expressions. Two repositories are two `<Repository>` elements, and no
+  transaction spans them.
+- `<Dir>` is lexical cwd and nothing else. Making a directory readable by an
+  Agent is `<Agent.AddDir>` (#302), a separate operation on purpose.
+- `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` operate on the
+  contextual checkout as Workspace-local durable effects (#294). `<Git.Push>` is
+  explicit and separate (#370), and `<PullRequest>` requires that pushed head
+  rather than performing a hidden push (#295).
+- `<Issue>` reconciles an approved deferred finding (#296), over the shared
+  external reconciliation of #297.
 
 Each environmental operation declares its inputs and preconditions, reconciles
-existing state, returns a structured handle, and records its observed effects. A
-handle is a structure, never a string standing in for one: `<PullRequest>`
-resolves a number, URL, head and base identities, state, reviews, comments, and
-checks, and a stage that declared any of that as text would fail its own return
-validation after the effect had already happened.
-Rerunning a pull-request operation resolves the existing pull request rather
-than creating a duplicate (#297).
+existing state, returns a structured result, and records its observed effects. A
+result is a structure, never a string standing in for one: `<PullRequest>`
+resolves stable provider identity, number, URL, state, head SHA and base SHA, and
+a stage that declared any of that as text would fail its own return validation
+after the effect had already happened. Rerunning a pull-request operation
+resolves the existing pull request rather than creating a duplicate, through the
+effect's natural key as well as its stable identity (#297).
+
+`<Git.Commit>` journals reconciliation evidence — repository and worktree
+identity, branch, commit and parent SHAs, tree SHA, staged paths, message
+evidence — rather than Git object contents. Replaying a completed commit creates
+no second commit, and replaying a completed push performs no remote mutation.
+The first local provider is expected to use native Git for the most faithful
+checkout, worktree and object-cache behavior; a browser provider may implement
+the same contract differently, including emulating named worktrees as separate
+retained checkouts, without changing what a document writes (#293, #410).
+Initial checkout speed is provider-owned acceleration: a host-local mirror or
+object cache may change how fast a clone is, never what the run records or how it
+replays.
 
 Nested agent prompts receive required handoffs, plans, reviews, decisions,
 commit identities, and pull-request metadata as exact content. Repository
@@ -369,103 +432,146 @@ evidence remains available through paths and read tools for selective
 investigation. The workflow does not depend on a user copying output between
 agent transcripts or asking an agent to locate and read another agent's file.
 
-### The artifact ledger
+### Retained run state
 
-The artifact ledger is not implemented (#291). This section defines what
-`<Workflow>` must provide.
+Retention exists. A workflow run owns one SQLite database holding its filtered
+journal and effect results, versioned Workspace roots and content, Repository and
+Worktree metadata, and Agent-session mappings, and it is found by public run ID
+alone (#291, closed). Every Workspace-local expansion publishes its mutation, the
+resulting logical Workspace root, and its filtered journal result in one
+transaction — all three commit or none does (#365, closed). Alongside the journal
+the run retains its immutable identity, one of six statuses, a nullable stop
+reason, replaceable retrieval metadata, and one document-execution record per
+start and per resume.
 
-Handoffs, plans, reviews, user decisions, and execution events live in sidecar
-Git history rooted at `refs/xmd/runs`. They are Git objects in the same
-repository, but they do not appear in the source tree or the history of the
-main source branch.
+There is no sidecar Git history. Earlier revisions of this document put artifact
+versions in Git objects under `refs/xmd/runs`; run state lives in the run's own
+database instead, which is why a run survives independently of any repository it
+touched and why deleting a run never claims to undo a push.
 
-Each run records the pinned source revision it investigated along with its
-artifact contents and provenance. The sidecar ref keeps the objects reachable,
-and the workflow pushes and fetches it explicitly because ordinary branch
-refspecs do not imply transport of custom refs.
+Co-location does not make arbitrary filesystem content journal or training data.
+Journal events reach storage already filtered by the pre-persistence secret gate,
+and storage adds no second policy: a rejected gate leaves nothing behind. Making
+that gate default-on for execution, with its CLI opt-out and warning, is #199.
 
-Captured results become artifact versions keyed by stable component and
-loop-iteration identity. Resuming a named run restores those values and renders
-required content directly into later prompts. A generated file is an optional
-export, not canonical run state. Reading such a file does not inherently save
-tokens because its contents still enter model context.
+`JournalProvenance` is what makes retained history evidence rather than merely
+storage. It is a non-operational, equality-only witness that a live publication
+stream descends from the exact journal backend a provider selected for one
+workflow run. It grants no append, read, execution, publication, or reconciliation
+capability, and it is meaningful only because the provider retains the witness it
+established and later requires exact equality. The generic pre-persistence guard
+preserves nothing; the trusted secret-filter wrapping site preserves provenance
+explicitly, so a filtered journal — including one wrapped more than once — still
+carries the witness its source carried. Another run's journal, an in-memory
+stream, a copied property, an ordinary guard, or a look-alike is refused before
+any mutation or publication. For a review workflow that is the difference between
+"the history says the pull request was created" and "this history is the one this
+run wrote."
 
-`<Workflow>` creates or resolves a run identity and installs it through a
-contextual Run API (#289). Worktrees, decisions, pull requests, and issues
-consume that identity internally. The workflow author does not pass it through
-component props; the API exposes it only when authoring logic genuinely needs
-the identity. That state is created inside the operation that owns it and torn
-down with it — there is no module-scoped registry and no library object that
-accumulates runs.
+Every committed journal event references the logical Workspace root current when
+it was written, and only committed event boundaries are checkpoints — which is
+what makes an event selectable for a compatible history fork later (#368).
 
-Ledger entries are automatic. A completed stage, a completed loop iteration,
-and a terminal success, failure, or cancellation record the observed props,
-artifact versions, decisions, effects, outcome, and stop reason. Authors do not
-repeat those paths in an explicit checkpoint.
+Most of what a stage produces is already journaled. `<Loop>` records every
+iteration it enters and one terminal `break`, `exhausted`, or `error` outcome,
+and refuses a replay whose stored outcome or iteration count disagrees with what
+this execution reached — there is no `cancelled` loop outcome, because run-level
+cancellation and stop reasons are retained run state rather than loop state. Each
+`<Prompt>` is one durable operation carrying its identity, input, agent and
+session, terminal status, text, and structured failure. `<Elicit>` journals its
+validated answer keyed by a fingerprint of the compiled schema and the rendered
+message, and refuses a recorded answer whose question does not match.
 
-The execution journal already holds part of that material. `<Loop>` records
-every iteration it enters and one terminal record whose outcome is `break`,
-`exhausted`, or `error`, and refuses a replay whose stored outcome or iteration
-count disagrees with what this run reached — there is no `cancelled` outcome
-and no stage-stop record. Each `<Prompt>` is one durable operation carrying its
-identity, input, agent and session, terminal status, text, and structured
-failure. `<Elicit>` journals only its validated answer, keyed by a fingerprint
-of the compiled schema and the rendered message, and refuses a recorded answer
-whose question does not match the one this run computed. What is missing is one
-run identity correlating those records, artifact versions above them, and
-persistence outside the executing process.
+`xmd workflow history` is how a person reads that back: stable public event IDs
+with each event's operation, source location, normalized evaluated arguments,
+result or normalized error, Workspace version, and forkability reason. It is
+read-only — it attaches no Workspace, Agent, or external provider and cannot
+advance a run — and it exposes no value the security policy has not already seen.
+That surface, with `status`, `list`, cancellation and deletion, is #367 and is
+unbuilt.
 
-Replay is what makes a resumed stage possible: a run that failed is still a
-complete record, and replaying it restores the output and the failure without
-re-executing anything. Replay arrives at the same state, where execution can
-resume; it is not itself the continuation.
+**Still missing: who answered.** The journal records the validated decision, the
+question fingerprint, and the document execution it belongs to. It does not
+record the actor identity behind an elicitation response, so a decision is
+attributable to a run and an expansion but not to a person. No open issue owns
+that yet.
 
-The first exercise creates and reads this history with ordinary Git commands.
-It does not require an Executable.md component for artifact storage. Content is
-screened for credentials and other data that must not become durable before it
-is written to the history; that screening becomes a default-on execution policy
-under #199.
+Replay is what makes a resumed stage possible: a document execution that failed
+is still a complete record, and replaying it restores the output and the failure
+without re-executing anything. Completed durable effects restore their recorded
+results; ephemeral operations run again only to rebuild live structure. Replay
+never asks current state to prove a past effect, and a completed root result
+returns without expanding the document or attaching any provider — so replaying a
+finished run does not reclone, recommit, or repush. Missing or corrupt
+authoritative Workspace state fails explicitly rather than being silently
+recreated.
+
+Prompts therefore receive their content from restored values rather than from a
+file an agent was asked to locate and read. A generated file is an optional
+export, not canonical run state, and reading one does not inherently save tokens
+because its contents still enter model context.
+
+### Agent authority and generated XMD
+
+Under `xmd workflow` an Agent is mandatorily read-only. Enforcement has three
+layers: the provider permission bridge allows only read and search operations,
+the provider runs in its native read-only sandbox, and registered Workspace paths
+are presented as read-only filesystem views. `<ApproveAll>`, repository `.codex`
+or `.claude` configuration, and prompt content cannot exceed that host ceiling,
+and a provider that cannot enforce it fails before Prompt execution (#302).
+
+The ceiling is therefore the host's, not the document's. There is no `<Sandbox>`
+component and no document prop that grants an Agent write access; earlier
+revisions of this document declared readable roots, writable roots, environment,
+process, and network policy as markup, and that authority moved to where a
+document cannot widen it. What the document still declares is *access*:
+`<Agent.AddDir>` registers a read-only Workspace path with its enclosing Agent
+session, in document order, with no special first directory.
+
+An Agent that cannot write proposes changes instead. It returns an XMD fragment,
+and a constrained evaluator parses the complete fragment before its first effect,
+resolves an allowlist to pinned component identities supplied by the trusted
+parent definition, refuses everything outside that set — eval and exec blocks,
+imports, native execution, arbitrary JavaScript expressions — and only then
+expands what it admitted (#369). Rejected syntax produces no partial effect. The
+allowlist is authority rather than prompting guidance: generated source cannot
+grant itself push, pull-request, or secret access by naming a component. The exact
+filtered generated source is retained, so replay expands the same fragment without
+asking the Agent again, and a reviewer and the user read the literal source that
+performed the change.
+
+Every file the workflow writes is consequently an ordinary durable XMD effect
+with its own expansion identity, journal result, and Workspace transaction —
+never a side effect of an agent process.
+
+Agent network access is denied, which is why a review prompt must render
+everything the reviewer has to judge rather than pointing at it.
 
 ### Experiment isolation
 
-The run resolves and records its pinned source revision, then creates the
-worktree before discovery. Planner discovery, handoff validation, implementor
-planning, implementation, and review use the same pinned filesystem even if the
-base branch moves.
+The run pins its Repository base once and composes named checkouts from it.
+Planner discovery, handoff validation, implementor planning, implementation, and
+review use the same pinned revision even if the base branch moves, and replay
+does not re-query a moving branch.
 
-A worktree isolates experimental Git state from the user's current checkout,
-but it is not a security boundary. A supervised manual exercise combines that
-disposable worktree, the narrowest available agent permission policy, a
-deliberately limited task, and explicit user approval before durable or remote
-effects.
+A worktree isolates experimental Git state from the user's current checkout. It
+is composition and isolation, not a security boundary — the security boundary is
+the host's Agent ceiling and the Workspace the document's file operations resolve
+inside.
 
-`<Worktree>` (#293) and `<Sandbox>` (#302) are not implemented. `<File>` and
-`<Glob>` confine traversal to `Env.cwd` today, but that guarantee is about
-traversal rather than about the filesystem being stable: a directory that is
-real when it is read could be replaced afterwards. Containment that does not
-depend on observed filesystem state is issue #227, and an unattended loop is
-bound to its resolution.
+`<Repository>` and `<Worktree>` (#293) and `<Agent.AddDir>` (#302) are not
+implemented. `API.Files` and its host provider are: every document file operation
+routes through that provider, which confines document paths to `Env.cwd` while the
+host namespace is stable. That claim is about traversal rather than about the
+filesystem being stable — a directory that is real when it is read could be
+replaced afterwards — and the transaction-bound provider that resolves the same
+paths inside a run-owned Workspace, where a document path never becomes a host
+path at all, is #227's second layer and is unbuilt.
 
-An unattended implementation loop requires an enforceable sandbox boundary. Its
-policy declares:
-
-- readable and writable roots;
-- inherited working directory;
-- available environment variables and secrets;
-- process and command capabilities;
-- network destinations and operations; and
-- which deterministic components may perform durable Git or GitHub effects.
-
-The planner normally receives repository read and search access. The
-implementor receives write access only to the workflow-owned worktree.
-Deterministic components receive narrow capabilities for sidecar Git history,
-worktree metadata, commits, issues, and pull requests rather than passing those
-capabilities through an agent prompt. The implementor does not require write
-access to the repository's shared Git metadata.
-
-The sandbox owns the processes it starts and closes them with its execution
-scope. Retaining a worktree preserves filesystem evidence after the processes
-stop; it does not preserve running effects or broaden their permissions.
+Scope cleanup releases live attachments; it does not delete run-owned state.
+Every run status is retained until an explicit `xmd workflow delete`, which
+reports what it removed and never claims to rewind a push, a pull request, or an
+issue (#367).
 
 ### Cleanup and recovery
 
@@ -482,13 +588,14 @@ invocation returns. That ordering is what makes `<Worktree>` safe to build: a
 process a stage starts stops before the workspace it ran in is removed, so
 cleanup cannot pull the ground out from under a running effect.
 
-An execution may explicitly retain its workspace for inspection. A failed or
-cancelled execution also retains a worktree when removing it would discard
-uncommitted or unpushed changes. The execution reports the retained path, branch,
-state, and recovery reason.
+Cleanup releases live attachments; it does not delete the run's Workspace. Every
+run status is retained by default, so a failed, cancelled, or interrupted run
+keeps its checkouts and its journal for inspection and for an eligible history
+fork. Deletion or explicit cleanup reports retained dirty, unpushed, or
+conflicting work and never discards it implicitly (#293, #367).
 
 Durable published effects such as commits, issues, and pull requests remain
-after temporary execution resources close.
+after temporary execution resources close, and no deletion claims to undo them.
 
 ## Reviewable pull-request chains
 
@@ -570,21 +677,20 @@ managing implementation mechanics and focus on the design of the workflow.
 ## First exercise
 
 The first exercise uses this workflow to design its own initial automation.
-The user triggers each stage manually within a named run. `<Workflow>` restores
-captured values and renders required content directly into later prompts.
-Generated artifacts do not appear in the repository or worktree unless the
-user explicitly exports them.
+The user triggers each stage manually. Required content is rendered directly into
+later prompts from restored values, and generated artifacts do not appear in a
+checkout unless the user explicitly exports them.
 
-Until `<Workflow>` and `<Stage>` exist, the exercise runs in one process and
-one existing working directory. The document logic — instruction discovery,
+Until `xmd workflow start` exists, the exercise runs in one document execution
+and one existing working directory. The document logic — instruction discovery,
 the planner interview, plan convergence, the bounded repair turns, and the user
 gate — is executable on shipped syntax today; what is not yet executable is the
-workflow spine around it.
+retained environment around it and the durable environmental effects inside it.
 
 The exercise succeeds when:
 
-1. Each manually invoked stage declares its props, records named artifact
-   versions, and returns.
+1. Each manually invoked stage declares its props, publishes explicit results,
+   and returns.
 2. The planner completes the technical interview and produces an implementor
    handoff.
 3. The user validates the handoff.
@@ -593,18 +699,20 @@ The exercise succeeds when:
 5. The planner returns a verdict with evidence, a focused revision prompt on
    failure, and explicit user decisions when needed.
 6. The loop reaches a user-authorized shared plan before implementation.
-7. The run creates the workflow-owned worktree from its pinned source revision
-   before discovery; implementation changes only that worktree and records
-   validation evidence.
-8. The planner reviews the resulting pull request, and implementation and
+7. The run composes a named Repository and Worktree from its pinned base before
+   discovery; the change reaches that worktree as admitted generated XMD rather
+   than as agent writes, and validation evidence is recorded.
+8. `<Git.Add>`, `<Git.Commit>`, and an explicit `<Git.Push>` precede
+   `<PullRequest>`, and none of them is implied by another.
+9. The planner reviews the resulting pull request, and implementation and
    review repeat when the verdict fails.
-9. The user decides whether to accept the completed change.
-10. The participants record every hidden-state dependency or optional file
+10. The user decides whether to accept the completed change.
+11. The participants record every hidden-state dependency or optional file
     export encountered during the exercise.
-11. The completed artifact versions remain reachable through sidecar Git history
-   without appearing in the main source tree.
-12. Those observations determine the smallest useful runtime implementation
-   rather than a speculative complete orchestration system.
+12. The run's filtered journal, Workspace roots, and effect results remain
+    readable through the retained run rather than through any repository ref.
+13. Those observations determine the smallest useful runtime implementation
+    rather than a speculative complete orchestration system.
 
 ## Technical questions
 
@@ -650,33 +758,63 @@ shipped behavior. They are recorded because the answers constrain what remains.
    processes, daemons, and agents without any of them being handed a path.
 8. **What happens to a stage whose agent returns unusable output?** The stage
    fails. Documentation runs under the `throw` error mode and an `<Output>`
-   region under `output`, so the final `<Parse>` ends the run rather than
-   binding malformed data; a failing region keeps only what it had already
-   rendered.
+   region under `output`, so the final `<Parse>` ends the document execution
+   rather than binding malformed data; a failing region keeps only what it had
+   already rendered.
+9. **How does a document read a prop?** Under the `props` namespace, in
+   expression props and in text alike: `agent={props.planner}` and
+   `{props.instructions}`. Declaring a prop creates no bare binding (#305).
+   Authored bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` —
+   stay bare.
+10. **Where may a component body project its caller's content?** Anywhere it
+    writes `<Content />`, including nested inside another invocation such as a
+    `<Prompt>` (#328). The stages here still take their material as declared
+    props, because a stage's inputs are part of its contract and a schema
+    validates them.
+11. **Where does a stage's durable environment live?** In the workflow run's own
+    retained store, addressed by public run ID: filtered journal and effect
+    results, versioned Workspace roots and content, Repository and Worktree
+    metadata, Agent-session mappings (#291). One Workspace-local expansion
+    publishes its mutation, logical root, and journal result in a single
+    transaction (#365).
+12. **Which construct owns a stage boundary?** None. The root document is the
+    workflow, and a durable run continues across document executions through
+    suspension and `resume` rather than through a `<Stage>` construct (#298,
+    closed as superseded).
 
 ### Open
 
 The exercise must resolve enough of these to implement one vertical slice:
 
-1. How does `<Worktree>` choose an idempotent identity, branch name, location,
-   and cleanup policy from the pinned source revision the run already recorded
-   (#293)?
-2. Which permission policies distinguish planner investigation from implementor
-   modification (#302)?
-3. What state makes environmental operations safe to repeat or resume after
-   interruption, including an effect recorded inside an ephemeral environment
-   the current run did not create (#218)?
-4. Which pull-request and issue operations belong in the first local experiment
-   and which can follow after plan convergence works (#295, #296, #297)?
-5. Which host sandbox can enforce the first experiment's filesystem, process,
-   environment, and network policy, given that traversal confinement alone does
-   not survive concurrent filesystem mutation (#227)?
-6. How does a later invocation select and resume the same workflow run and
-   stage without hidden transcript state (#298)?
-7. What does a planning loop that reaches `max` without a passing verdict do —
+1. How does `<Worktree>` choose an idempotent identity, branch name, and cleanup
+   policy from the Repository base the run already pinned, and what does a
+   provider without native worktree semantics present instead (#293)?
+2. What does a read-only Agent receive, and how is the ceiling proven for each
+   provider before a Prompt runs (#302)?
+3. What is the public spelling and response schema of the constrained
+   generated-XMD evaluator, and which components does the first allowlist admit
+   (#369)?
+4. What state makes external effects safe to repeat or resume after
+   interruption, and how does a revision iteration reach the *same* pull request
+   rather than a second one — expansion identity alone cannot answer it, so the
+   effect's natural key has to, and a head that deliberately advanced on the same
+   branch must be distinguishable from a conflicting one (#295, #297)?
+5. Which forge read returns a pull request's existing reviews, comments, and
+   check results to a network-denied reviewer? `<PullRequest>`'s creation result
+   is deliberately minimal, and no open issue owns that read.
+6. Which containment does the transaction-bound Files provider give a document
+   path inside a run-owned Workspace, and what still needs the host provider's
+   weaker traversal claim (#227)?
+7. How does a later invocation select and resume the same workflow run without
+   hidden transcript state, and which durable signals may schedule that
+   resumption (#366, #300)?
+8. What does a planning loop that reaches `max` without a passing verdict do —
    return the failing plan, fail the stage, or return to the user (#290)? An
    exhausted loop is not a failure and produces no diagnostic, so the answer is
    the document's policy to state, and it is not stated yet.
+9. What records who answered an elicitation? The journal retains the validated
+   decision and its question fingerprint but no actor identity, so a decision is
+   attributable to a run and an expansion but not to a person. No issue owns it.
 
 The first implementation need not answer every question. It establishes one
 observable, testable path and leaves explicit follow-up issues for the rest.

@@ -1,56 +1,154 @@
-# Artifacts and Structured Results
+# Retained Run State and Structured Results
 
 Every consequential input, result, decision, and durable effect is explicit
 workflow data. Agent session history may assist reasoning but is not the only
 record of a decision.
 
-## The artifact ledger
+## What the run retains
 
-The artifact ledger is not implemented. This section describes what
-`<Workflow>` must do once it exists (#291).
+The retained store exists. A workflow run owns one SQLite database that is the
+physical retention boundary for logically separate data
+([#291](https://github.com/taras/executable.md/issues/291), closed):
 
-Artifact versions live in Git objects reachable from `refs/xmd/runs` — sidecar
-Git history. They remain in the repository without appearing in the main source
-tree or source history. Each run records the pinned source revision it
-investigated.
+```text
+WorkflowRun SQLite
+├── filtered journal events and effect results
+├── versioned Workspace roots and content
+├── Repository and Worktree metadata
+└── Agent-session mappings
+```
 
-<Workflow historyRef="refs/xmd/runs">
-  <Content />
-</Workflow>
+Alongside the journal the run retains its immutable identity — run ID, workflow
+definition, definition base, normalized props — one of six statuses, a nullable
+stop reason, replaceable retrieval metadata, and one document-execution record
+per start and per resume. A run is found by its public run ID alone: discovery
+is arithmetic on that ID and no second registry can disagree with what is
+stored. Damaged or incompatible storage is described and left exactly as found;
+nothing migrates, truncates, or replaces it.
 
-The first exercise uses ordinary Git commands to create, update, push, and
-fetch this history. Objects must remain reachable through a ref. Content is
-screened for credentials and other data that must not become durable — the
-default-on execution policy for that screening is #199.
+There is no sidecar Git history. Earlier drafts of this document put artifact
+versions in Git objects under `refs/xmd/runs`; run state lives in the run's own
+database instead, which is why a run survives a repository the workflow never
+pushed to.
 
-`<Workflow>` derives the ledger's entries from the execution record. It records
-the pinned source revision, component and loop-iteration identity, named
-captures, props, file effects, agent results, user decisions, Git and GitHub
-effects, outcome, and stop reason. Each captured result becomes an immutable
-artifact version with a content hash. It appends when a stage or loop iteration
-completes and writes a terminal record when execution succeeds, fails, or is
-cancelled.
+## One expansion, one effect, one transaction
 
-Part of that identity already exists in the execution journal. `<Loop>` records
-every iteration it enters and one terminal `break`, `exhausted`, or `error`
-outcome, and refuses a replay that disagrees with what this run reached. Each
-`<Prompt>` is one durable operation carrying its identity, input, agent and
-session, terminal status, text, and structured failure, and `<Elicit>`
-journals its validated answer keyed by a fingerprint of the compiled schema
-and the rendered message. Those are execution records rather than the artifact
-ledger: what is missing is one run identity that correlates them, artifact
-versions on top of them, and persistence outside the process.
+Every Workspace-local expansion publishes atomically
+([#365](https://github.com/taras/executable.md/issues/365), closed):
 
-When a later stage resumes the same run, `<Workflow>` restores its declared
-inputs from those recorded values. Required workflow context is rendered
-directly into the next prompt. The agent is not asked to locate or read a
-generated handoff file, so prompt construction does not depend on tool use,
-working directory, permissions, or mutable filesystem content.
+```text
+BEGIN
+  apply the filesystem, Git or metadata mutation
+  publish the resulting logical Workspace root
+  append the filtered journal result
+COMMIT
+```
 
-Persisting a generated file does not itself reduce model tokens: reading the
-file adds its content to context and normally adds tool-call overhead. Files
-remain useful as explicit user exports or when an external tool requires a
-path, but they are derived views rather than canonical run state.
+All three commit or none does. A host killed mid-effect publishes nothing: the
+next connection recovers the last committed state, from which no recorded effect
+is performed again. Nested effects finish their transactions before their
+parent's effect begins.
+
+That boundary is what a stage's writes actually get. A `<File>` the constrained
+evaluator expands, a `<Git.Add>`, and a `<Git.Commit>` are each one expansion,
+one effect, and one transaction — never a bundle the enclosing commit rolls back
+together.
+
+External effects cannot join it. `<Prompt>`, `<Git.Push>`, `<PullRequest>`, and
+`<Issue>` derive a stable identity from the workflow run and the expansion, ask
+the provider to perform or reconcile that identity, and then append one local
+result transaction. Replay adopts proven compatible completion, performs proven
+absence, and refuses conflict or permanent ambiguity rather than duplicating an
+effect whose completion is unknown (#297).
+
+## The journal is evidence, and the evidence is witnessed
+
+Journal events reach storage already filtered, through the pre-persistence
+secret gate. Storage adds no second policy: a rejected gate leaves nothing
+behind, and a record is retained exactly as the protocol produced it and parsed
+back through the matching reader. Making that gate default-on for execution, with
+its CLI opt-out and warning, is
+[#199](https://github.com/taras/executable.md/issues/199).
+
+Filtering is also where a subtle authority question lives, and it is answered
+explicitly. `JournalProvenance` is a non-operational, equality-only witness that
+a live publication stream descends from the exact journal backend a provider
+selected for one workflow run. It grants no append, read, execution, publication,
+or reconciliation capability; it is meaningful only because the provider retains
+the witness it established and later requires exact equality. The generic
+pre-persistence guard preserves nothing, while the trusted secret-filter wrapping
+site preserves provenance explicitly — so a filtered journal, including one
+wrapped more than once, still carries the witness its source carried. An
+in-memory stream, another run's journal, a copied property, an ordinary guard, or
+a look-alike is refused before any mutation or publication.
+
+For this workflow that is the difference between "the history says the pull
+request was created" and "this history is the one this run wrote."
+
+Every committed journal event also references the logical Workspace root current
+when it was written. Only committed event boundaries are checkpoints, which is
+what makes an event selectable for a history fork later (#368).
+
+## Reading the history
+
+`xmd workflow history <run-id>` exposes stable public event IDs with each
+event's operation, source location, normalized evaluated arguments, result or
+normalized error, Workspace version, and forkability reason:
+
+```text
+EVENT  OPERATION     ARGUMENTS                        RESULT      WORKSPACE  FORKABLE
+E14    File          path="docs/notes.md"             completed   V7         yes
+E15    Agent.Prompt  prompt=<filtered>                <summary>   V7         no: provider has no checkpoint
+E16    Git.Add       paths=["docs/notes.md"]          completed   V8         yes
+E17    Git.Commit    message="Document the workflow"  6f21a9…     V9         yes
+```
+
+Values come from the retained journal after its security filter, so history
+exposes nothing the policy has not already seen, and it never reconstructs a
+filtered value from the Workspace or the provider. `status`, `list`, and
+`history` are read-only: they attach no Workspace, Agent, or external provider,
+and cannot advance a run. That surface is
+[#367](https://github.com/taras/executable.md/issues/367) and is unbuilt.
+
+Part of what it will read is already journaled. `<Loop>` records every iteration
+it enters and one terminal `break`, `exhausted`, or `error` outcome, and refuses
+a replay that disagrees with what this execution reached. Each `<Prompt>` is one
+durable operation carrying its identity, input, agent and session, terminal
+status, text, and structured failure. `<Elicit>` journals its validated answer
+keyed by a fingerprint of the compiled schema and the rendered message, so a
+resumed execution restores the answer instead of asking twice and refuses one
+recorded against a different question.
+
+**Still missing: who answered.** The journal records the validated decision, the
+question fingerprint, and the document execution it belongs to. It does not
+record the actor identity behind an elicitation response, so a decision is
+attributable to a run and an expansion but not to a person. No open issue owns
+that yet.
+
+## Replay restores; it does not re-perform
+
+Replay rehydrates the Effection tree. A completed durable effect restores its
+recorded result without executing again; ephemeral operations run again only to
+rebuild live structure — attach the Workspace, enter lexical working-directory
+scopes, attach providers, re-register Agent directories.
+
+The Workspace stores the current frontier; the journal stores the execution that
+reached it. Replay never asks current state to prove a past effect: a file
+written and later deleted is absent at the frontier while both completed effects
+still restore in order. Nothing infers completion from a filesystem guard.
+
+A completed root result returns without expanding the document and without
+attaching a Workspace, an Agent, or an external provider — which is why replaying
+a finished run does not reclone, recommit, or repush. Missing or corrupt
+authoritative Workspace state fails explicitly instead of being silently
+recreated.
+
+Prompts therefore receive their content from restored values rather than from a
+file an agent was asked to locate and read. Persisting a generated handoff file
+does not reduce model tokens either: reading it adds its content to context and
+normally adds tool-call overhead. Files remain useful as explicit exports or when
+an external tool requires a path; they are derived views, not canonical run
+state.
 
 ## Structured results
 
@@ -88,13 +186,13 @@ else renders nothing — not an error, a value with no destination.
 Nothing partial. A text component's `<Output>` region runs under the `output`
 error mode and everything outside it under `throw`. A value component has no such
 split — it renders nothing, so `<Output>` inside one is a structural error — and
-its whole body runs fail-fast. Either way an undecided error fails the run rather
-than producing a result the caller would bind, and a value component that fails
-binds nothing at all: there is no half-validated return. A failing `<Output>`
-region keeps only the text it had already rendered, and that text reaches the
-output stream; nothing after the failure does. A failed run is still a complete
-record — replay restores its output and its failure without re-executing
-anything.
+its whole body runs fail-fast. Either way an undecided error fails the document
+execution rather than producing a result the caller would bind, and a value
+component that fails binds nothing at all: there is no half-validated return. A
+failing `<Output>` region keeps only the text it had already rendered, and that
+text reaches the output stream; nothing after the failure does. A failed document
+execution is still a complete record — replay restores its output and its failure
+without re-executing anything.
 
 ### Logical result contracts
 
@@ -126,9 +224,14 @@ declares.
 - `PlannerVerdict` — `passed`, `review`, `revisionPrompt`
   ([`Planning`](./Planning.md)). Evidence and any user question live inside the
   `review` prose; they are not separate fields.
-- `ImplementationResult` — `changedFiles`, `commitMessage`, `report`
-  ([`Implementation`](./Implementation.md)). Validation and newly discovered
-  scope are reported inside `report`.
+- `ImplementationProposal` — `changes`, `title`, `commitMessage`, `report`
+  ([`Implementation`](./Implementation.md)). `changes` is the XMD fragment the
+  read-only implementor returns for the constrained evaluator; `title` is the
+  pull request's; validation and newly discovered scope are reported inside
+  `report`. There is no separate
+  `changedFiles` list: the fragment already says what it writes, and a second
+  copy is one no schema could hold in agreement with the first. The authoritative
+  set of paths is what `<Git.Add>` staged and `<Git.Commit>` journaled.
 - `PullRequestVerdict` — `passed`, `review`, `revisionPrompt`, and `findings`,
   each finding carrying `disposition`, `title`, `description`, and `evidence`
   ([`Implementation`](./Implementation.md)).
@@ -144,15 +247,12 @@ than text a caller would have to interpret.
   they resolved internally, alongside their prose and their parsed verdict's
   fields. A stage that resolved a user decision cannot return prose alone: its
   caller has nothing to branch on, and the authority the checkpoint exercised
-  would be lost at the boundary. Two parts combine into it. The **decision** is `proceed`, `response`, and `rationale`, validated
-  against one schema on both paths: `<Elicit>` binds it when the assessment
-  reports a material choice, and an explicit `<Parse>` binds it when there is
-  none. `UserCheckpoint` returns those alongside the assessment fields, so one
-  value carries both the gate and the material a later prompt quotes.
-  **Missing:** the provenance that makes a decision auditable after the fact —
-  which actor answered, when, against which run and stage — belongs to the
-  artifact ledger (#291) and does not exist. Nothing in the returned value
-  identifies the person who answered.
+  would be lost at the boundary. Two parts combine into it. The **decision** is
+  `proceed`, `response`, and `rationale`, validated against one schema on both
+  paths: `<Elicit>` binds it when the assessment reports a material choice, and
+  an explicit `<Parse>` binds it when there is none. `UserCheckpoint` returns
+  those alongside the assessment fields, so one value carries both the gate and
+  the material a later prompt quotes.
 
 A stage returns those sources and nothing derived from them. `start.md` computes
 its gate as `decision.proceed && verdictPassed` where it uses it, rather than
@@ -164,23 +264,22 @@ fields tell a decline (`proceed` false) from a review that never passed
 either.
 
 Neither stage *returns* the pull-request handle, and the boundary is worth
-stating exactly. `<PullRequest>` (#295) resolves a structured handle carrying the
-number, URL, head and base identities, state, reviews, comments, and checks.
-`Implementation` **consumes all of it**, internally: the planner has no network
-access, so the stage renders every category into the review prompt and the
-checkpoint material. `start.md` never receives it — what crosses the stage
-boundary is the verdict and the decision it gates on. The artifact ledger records
-the effect and its handle independently (#291).
+stating exactly. `<PullRequest>` (#295) resolves a minimal creation result —
+stable provider identity, number, URL, state, head SHA, and base SHA.
+`Implementation` consumes it internally, together with the separately observed
+review state its prompt needs; `start.md` never receives it. What crosses the
+stage boundary is the verdict and the decision it gates on, and the filtered
+journal records the external effect independently.
 
 A return field typed `string` would be actively harmful: a conforming
-`<PullRequest>` would perform its durable effects and only then fail the stage's
+`<PullRequest>` would perform its external effect and only then fail the stage's
 return validation. If a later caller needs the handle, it is declared with #295's
 object schema.
 
 Prompt output used for control flow is JSON parsed against captured draft-07
 JSON Schema content. `<SafeParse>` exposes the candidate and normalized errors
 for a visible, bounded correction turn; a final `<Parse>` prevents invalid data
-from reaching control flow or deterministic effects. Prose capture remains
+from reaching control flow or a durable effect. Prose capture remains
 acceptable when no later transition depends on internal fields — which is
 exactly the line between the first group above and the second.
 
