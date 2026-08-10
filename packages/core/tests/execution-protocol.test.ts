@@ -279,6 +279,8 @@ describe("Tier EP — the execution protocol", () => {
     let refusal: unknown;
     const expanded: string[] = [];
     let outer: ExecutionRequest | undefined;
+    const nested = new InMemoryStream();
+    const outer_ = new InMemoryStream();
     let depth = 0;
 
     const output = yield* scoped(function* () {
@@ -294,21 +296,29 @@ describe("Tier EP — the execution protocol", () => {
             return;
           }
           // The nested invocation, handing its own terminal the caller's request.
-          refusal = yield* raised(next(outer!));
+          const captured = outer;
+          expect(captured).toBeDefined();
+          refusal = captured === undefined ? undefined : yield* raised(next(captured));
           yield* next(request);
         },
       });
       return yield* collect(
-        yield* execute({ ...inlineSource("<Mark />\n"), stream: new InMemoryStream() }),
+        yield* execute({ ...inlineSource("<Mark />\n\n# Outer\n"), stream: outer_ }),
       );
     });
 
     expect(refusal).toBeInstanceOf(ExecutionProtocolError);
     expect(String(refusal)).toContain("another execution issued");
     expect(refusal instanceof Error ? refusal.cause : "none").toBeUndefined();
-    // Both invocations still settled on their own requests.
+    // The outer invocation settled on its own request afterwards: its document
+    // expanded and its own journal — not the nested one — carries it. That two
+    // live invocations each run their own document is EP20's claim, proved
+    // there with barriers rather than through nesting.
+    expect(String(output)).toContain("Outer");
+    expect(String(output)).not.toContain("Nested");
+    expect(JSON.stringify(outer_.snapshot())).toContain("Outer");
+    expect(JSON.stringify(nested.snapshot())).not.toContain("Outer");
     expect(expanded).toEqual(["expanded"]);
-    expect(String(output)).toContain("expanded".slice(0, 0));
   });
 
   // EP20: two invocations, both live and both unconsumed at the moment each
