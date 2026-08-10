@@ -7785,6 +7785,8 @@ Defined in §8.1.
 | EP21 | The exported default | Calling `Execution.operations.execute` directly with a live request refuses and consumes nothing; the request still settles its own invocation |
 | EP22 | Invalid values | `null`, `undefined`, primitives, symbols, plain objects and a proxy whose traps throw each produce a fresh cause-free `ExecutionProtocolError`, with no journal read or append |
 | EP23 | Invocation context | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
+| EP24 | Settlement-owned cleanup | Installation finalizers have run exactly once before the completion is observed, on success, document failure and completion-policy failure; concurrent invocations finalize independently; a completed handle re-observed does not refinalize and still replays its output |
+| EP25 | Cancellation-owned cleanup | Halting a live handle while `Execution.document` is suspended halts the authored work and finalizes exactly once |
 | EP26 | An immutable options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events and the substituted one receives none |
 
 ### Tier SL — Own-scope context updates

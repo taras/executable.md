@@ -1050,10 +1050,15 @@ handler that delegates and then edits what it delegated changes only its own
 data. Replacing options before delegating, through `withOptions()`, remains the
 supported path.
 
-Each invocation owns a child scope. Contextual behavior an installation
-establishes is visible to the document and to its teardown, isolated from a
-concurrent invocation, and absent from the next execution in the same host
-scope.
+Each invocation owns a child scope, held by one structured owner task, and
+**settlement closes it** — on success, on failure, and on cancellation alike.
+Contextual behavior an installation establishes is visible to the document and
+to its teardown, isolated from a concurrent invocation, and absent from the next
+execution in the same host scope. The final `Result` is published only after
+that scope has finished tearing down, so a caller continuing on the completion
+continues after cleanup, and a completed handle carries no live scope. Canonical
+core constructs the one authoritative handle; it exposes the inner execution's
+replay-safe output directly rather than bridging it through a second channel.
 
 The request is the capability, and it is **one-use**. It carries a private
 reference to one invocation; a reconstructed look-alike, a superseded request, a
