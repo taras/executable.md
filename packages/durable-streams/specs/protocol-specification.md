@@ -372,7 +372,15 @@ authority to whoever holds the wrong one:
    invocation, over which middleware composes freely and from which nothing
    flows back; and
 3. **values delivered to workflow code**, a fresh mutable copy taken from the
-   authority at consumption, so replayed values stay ordinary JSON.
+   authority at consumption — for a replayed effect and for a completed run's
+   own return value alike. This is the only thing "mutable replayed value"
+   means: writing to that copy reaches neither the authority nor the next
+   replay.
+
+The authority is frozen through in every settlement shape: a success with a
+value, a `Result<void>` with none, a failure, and a cancellation, on Yield and
+Close alike. An envelope left writable is one a public observation could add a
+value to before replay reads it.
 
 Handing policy the authoritative events would let a guard rename effect A to B —
 so a workflow asking for B consumes A's result without B ever running — or

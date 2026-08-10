@@ -395,7 +395,9 @@ A replay distinguishes three things, and conflating any two of them hands author
 
 1. **The authoritative retained history.** What a consumer's own admission validated and what replay consumes. Detached from the backend and immutable to policy — its descriptions and results are frozen through, so nothing that receives it can rewrite what replay will decide.
 2. **Isolated guard observations.** What `check`, `admit`, and `decide` receive: a deep, mutable copy made per invocation. Middleware may read, annotate, and compose over it freely; nothing it writes reaches replay.
-3. **Values delivered to workflow code.** A fresh mutable copy taken from the authority at the moment of consumption. A document that resumes on a restored binding writes to it, so replayed values stay ordinary JSON.
+3. **Values delivered to workflow code.** A fresh mutable copy taken from the authority at the moment of consumption — for a replayed effect and for a completed run's own return value alike. This is the only thing "mutable replayed value" ever means: a document that resumes on a restored binding writes to its copy, and writing to it cannot reach the authority or the next replay.
+
+The authority is frozen through in **every** settlement shape — a success with a value, a `Result<void>` with none, a failure, and a cancellation, on `Yield` and `Close` alike. An envelope left writable is one a public observation could add a value to before replay reads it.
 
 Handing policy the authoritative events would let a guard rename effect A to B — so a workflow asking for B consumes A's result without B ever running — or rewrite a recorded root selection after admission accepted it.
 

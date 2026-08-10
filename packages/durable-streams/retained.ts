@@ -154,8 +154,12 @@ function detachError(error: SerializedError): SerializedError {
 function detachResult(result: Result): Result {
   const status = result.status;
   if (status === "ok") {
+    // Every successful shape, including the one that settled to nothing. A
+    // `Result<void>` carries no value to detach, but the envelope is still
+    // authority — left writable, a caller of a public observation could add one
+    // before replay reads it.
     if (!("value" in result)) {
-      return { status };
+      return Object.freeze({ status });
     }
     const value = result.value;
     return Object.freeze(value === undefined ? { status } : { status, value: sealJson(value) });

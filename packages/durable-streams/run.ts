@@ -19,7 +19,7 @@ import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
-import { observeEvent } from "./retained.ts";
+import { consumable, observeEvent } from "./retained.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
@@ -139,7 +139,12 @@ export function* durableRun<T extends WorkflowValue>(
   if (replayIndex.hasClose(coroutineId)) {
     const closeEvent = replayIndex.getClose(coroutineId)!;
     if (closeEvent.result.status === "ok") {
-      return closeEvent.result.value as T;
+      // A fresh consumer copy, exactly as a replayed Yield's result is. The
+      // retained settlement is frozen so policy cannot rewrite it; what a
+      // caller receives from a completed run is ordinary data it may hold and
+      // change, and changing it cannot reach the next replay.
+      const settled = consumable(closeEvent.result);
+      return (settled.status === "ok" ? settled.value : undefined) as T;
     } else if (closeEvent.result.status === "err") {
       throw deserializeError(closeEvent.result.error);
     } else {

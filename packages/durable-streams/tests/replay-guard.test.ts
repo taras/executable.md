@@ -22,6 +22,7 @@ import {
   type Json,
   ReplayGuard,
   ReplayIndex,
+  type Result,
   retainEvents,
   type ReplayOutcome,
   StaleInputError,
@@ -991,5 +992,137 @@ describe("replay guard — observation is isolated from replay authority", () =>
     expect(seen).toEqual(["A"]);
     expect(outcome.value).toBe("A-result");
     expect(outcome.ran).toBe(false);
+  });
+});
+
+/**
+ * Every Result shape is authority; every consumer value is a copy.
+ *
+ * The distinction has to hold for all four settlements, not only the one that
+ * carries data. A `Result<void>` left writable is an envelope a public
+ * observation could add a value to before replay reads it, and a completed run
+ * that hands back the retained value itself gives a caller a frozen object
+ * where the live run gave ordinary JSON.
+ */
+describe("replay authority — every settlement, and its consumer copy", () => {
+  function completed(value: Json): DurableEvent[] {
+    return [{ type: "close", coroutineId: "root", result: { status: "ok", value } }];
+  }
+
+  function reading(events: DurableEvent[], appended: DurableEvent[]): DurableStream {
+    return {
+      // deno-lint-ignore require-yield
+      *readAll(): Operation<DurableEvent[]> {
+        return events;
+      },
+      // deno-lint-ignore require-yield
+      *append(event: DurableEvent): Operation<void> {
+        appended.push(event);
+      },
+    };
+  }
+
+  function* replayCompleted(
+    events: DurableEvent[],
+    appended: DurableEvent[],
+    ran: { live: boolean },
+  ): Operation<Json | void> {
+    return yield* durableRun(
+      function* () {
+        ran.live = true;
+        return "live" as Json;
+      },
+      { stream: reading(events, appended) },
+    );
+  }
+
+  it("a completed run hands back ordinary mutable JSON", function* () {
+    const appended: DurableEvent[] = [];
+    const ran = { live: false };
+    const events = completed({ count: 1, tags: ["a"], nested: { deep: true } });
+    const value = yield* replayCompleted(events, appended, ran);
+
+    const held = value as Record<string, Json>;
+    held["count"] = 2;
+    (held["tags"] as Json[]).push("b");
+    (held["nested"] as Record<string, Json>)["deep"] = false;
+    expect(held).toEqual({ count: 2, tags: ["a", "b"], nested: { deep: false } });
+
+    // Completed replay ran nothing and wrote nothing.
+    expect(ran.live).toBe(false);
+    expect(appended).toEqual([]);
+  });
+
+  it("mutating a completed value cannot change the next replay", function* () {
+    const events = completed({ count: 1 });
+    const first = yield* replayCompleted(events, [], { live: false });
+    (first as Record<string, Json>)["count"] = 99;
+
+    const second = yield* replayCompleted(events, [], { live: false });
+    expect(second).toEqual({ count: 1 });
+  });
+
+  it("a retained ok-without-value settlement is authority", function* () {
+    const index = new ReplayIndex(
+      retainEvents([
+        {
+          type: "yield",
+          coroutineId: "root",
+          description: { type: "call", name: "work" },
+          result: { status: "ok" },
+        },
+      ]),
+    );
+    const settled = index.peekYield("root")?.result;
+    expect(settled).toEqual({ status: "ok" });
+    try {
+      Object.assign(settled as object, { value: "planted" });
+    } catch {
+      // A frozen settlement refuses outright, which is the same conclusion.
+    }
+    expect(index.peekYield("root")?.result).toEqual({ status: "ok" });
+  });
+
+  it("a retained void Close settlement is authority", function* () {
+    const index = new ReplayIndex(
+      retainEvents([{ type: "close", coroutineId: "root", result: { status: "ok" } }]),
+    );
+    const settled = index.getClose("root")?.result;
+    try {
+      Object.assign(settled as object, { value: "planted" });
+    } catch {
+      // As above.
+    }
+    expect(index.getClose("root")?.result).toEqual({ status: "ok" });
+  });
+
+  it("ok(value), ok(void), err and cancelled are all frozen through", function* () {
+    const results: Result[] = [
+      { status: "ok", value: { nested: ["a"] } },
+      { status: "ok" },
+      { status: "err", error: { message: "failed" } },
+      { status: "cancelled" },
+    ];
+    for (const result of results) {
+      const index = new ReplayIndex(
+        retainEvents([
+          {
+            type: "yield",
+            coroutineId: "root",
+            description: { type: "call", name: "work" },
+            result,
+          },
+        ]),
+      );
+      const settled = index.peekYield("root")!.result;
+      expect(Object.isFrozen(settled)).toBe(true);
+      if (settled.status === "ok" && "value" in settled && settled.value !== undefined) {
+        expect(Object.isFrozen(settled.value)).toBe(true);
+        expect(Object.isFrozen(member(settled.value, "nested"))).toBe(true);
+      }
+      if (settled.status === "err") {
+        expect(Object.isFrozen(settled.error)).toBe(true);
+      }
+    }
   });
 });
