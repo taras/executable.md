@@ -2,10 +2,12 @@
  * The two processes a crash proof needs, and neither of them is the test.
  *
  * A cancelled task, a thrown error and a closed scope all unwind. A killed
- * process does not: SQLite is left holding a transaction nobody will finish,
- * and recovery is the database's own. Proving that recovery therefore takes a
- * process the test can kill without warning, and a second one that has never
- * seen the first — which is what these two modes are.
+ * process does not: its transaction is open when the signal arrives, no
+ * application cleanup runs, and the operating system closes the connection and
+ * releases its locks. The next connection to open the database recovers that
+ * interrupted transaction to the last committed state. Proving that therefore
+ * takes a process the test can kill without warning, and a second one that has
+ * never seen the first — which is what these two modes are.
  *
  * ```sh
  * deno run -A workspace-crash-child.ts crash <root> <run-id>

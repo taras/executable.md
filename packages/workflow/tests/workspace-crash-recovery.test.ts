@@ -3,10 +3,13 @@
  *
  * The rest of the atomic Workspace suite ends its transactions in this
  * process: it commits, fails, or is cancelled, and Effection tears the scope
- * down. None of that is a crash. A crash leaves an open SQLite transaction
- * with no one to roll it back, and whether the mutation, the immutable root,
- * the current-root pointer and the routed journal row reappear afterwards is
- * decided by SQLite's recovery rather than by any code here.
+ * down. None of that is a crash. At the kill point the transaction is open;
+ * `SIGKILL` then runs no application cleanup at all, so nothing commits and
+ * nothing rolls back. The operating system closes the connection and releases
+ * its locks, and the next connection to open the database recovers the
+ * interrupted transaction to the last committed state. Whether the mutation,
+ * the immutable root, the current-root pointer and the routed journal row
+ * reappear is decided there rather than by any code here.
  *
  * So the proofs below are made of real processes. One is killed with SIGKILL
  * while it holds all four of those writes uncommitted; another, which has

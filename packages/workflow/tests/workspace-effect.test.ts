@@ -80,10 +80,11 @@ function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 
 /**
- * Every name that would mean a host reached the shared coordination surface.
+ * Storage and adapter type names that mean a host reached this surface.
  *
- * Storage and runtime implementation types, the adapter's private transaction
- * identities, runtime detection, and process globals.
+ * Distinctive enough to be read as text. Runtime globals are not here — `Bun`
+ * is inside `Bundle` and `Deno` inside `Denominator`, so those are recognized
+ * as identifiers instead.
  */
 const FORBIDDEN = [
   "DatabaseSync",
@@ -100,10 +101,34 @@ const FORBIDDEN = [
   "WorkflowRunTransactionToken",
   "ConnectionGeneration",
   "TransactionIdentity",
+];
+
+/**
+ * The names this repository gives a runtime-specific entry point.
+ *
+ * Code Rule 12 puts host behavior behind runtime-named modules —
+ * `packages/cli/src/{deno,node,bun,compiled}.ts` are the CLI's — so the name of
+ * the module is what says a host owns it. `deno` is not the only one, and an
+ * adapter rule that knows only `deno` is a rule about the adapter someone
+ * happened to write first.
+ */
+const RUNTIMES = ["deno", "node", "bun", "compiled", "cloudflare", "workerd"];
+
+/**
+ * Globals only one host provides.
+ *
+ * `crypto`, `TextEncoder` and the rest of the cross-runtime Web surface are
+ * not here: naming a standard is not naming a host.
+ */
+const HOST_GLOBALS = [
+  "process",
   "Deno",
   "Bun",
+  "Buffer",
   "globalThis",
   "navigator",
+  "__dirname",
+  "__filename",
 ];
 
 /**
@@ -112,14 +137,24 @@ const FORBIDDEN = [
  * Named by shape rather than one at a time: a list of the host modules anyone
  * thought of is a list of the ones that had already been noticed, and the
  * import that crosses this boundary next is the one nobody wrote down.
+ *
+ * Segments are compared whole. `nodes/`, `bundle.ts` and `vendors/` contain a
+ * runtime's name without being one, and rejecting them would make the rule
+ * about spelling rather than about hosts.
  */
 function hostModule(specifier: string): boolean {
+  if (/^(node|bun|deno|cloudflare|workerd):/.test(specifier)) {
+    return true;
+  }
+  if (specifier === "@effectionx/process") {
+    return true;
+  }
+  const segments = specifier.split("/");
+  const last = segments[segments.length - 1].replace(/\.[cm]?[jt]sx?$/, "");
   return (
-    /^(node|bun|deno|cloudflare):/.test(specifier) ||
-    specifier.includes("/deno/") ||
-    specifier.endsWith("/deno.ts") ||
-    specifier.includes("vendor/") ||
-    specifier === "@effectionx/process"
+    segments.includes("vendor") ||
+    segments.some((segment) => RUNTIMES.includes(segment)) ||
+    RUNTIMES.includes(last)
   );
 }
 
@@ -237,9 +272,79 @@ function moduleSpecifiers(source: string): string[] {
   return found;
 }
 
+/**
+ * Host globals this source actually reads.
+ *
+ * A reference, not an occurrence: `preprocessor` is not `process`, `foo.process`
+ * names a property of something else, and `{ process: 1 }` declares a key. Only
+ * a parse can tell a use of the global from a word that contains its name.
+ */
+function hostGlobals(source: string): string[] {
+  const parsed = ts.createSourceFile(
+    "scanned.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const found: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && names(node)) {
+      if (!found.includes(node.text)) {
+        found.push(node.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(parsed);
+  return found;
+}
+
+/** Whether this identifier reads the binding it spells, rather than labelling something. */
+function names(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (parent === undefined) {
+    return true;
+  }
+  if (ts.isPropertyAccessExpression(parent)) {
+    return parent.name !== node;
+  }
+  if (ts.isQualifiedName(parent)) {
+    return parent.right !== node;
+  }
+  if (
+    ts.isPropertyAssignment(parent) ||
+    ts.isPropertySignature(parent) ||
+    ts.isPropertyDeclaration(parent) ||
+    ts.isMethodDeclaration(parent) ||
+    ts.isMethodSignature(parent) ||
+    ts.isVariableDeclaration(parent) ||
+    ts.isParameter(parent) ||
+    ts.isBindingElement(parent) ||
+    ts.isFunctionDeclaration(parent) ||
+    ts.isClassDeclaration(parent) ||
+    ts.isInterfaceDeclaration(parent) ||
+    ts.isTypeAliasDeclaration(parent) ||
+    ts.isImportSpecifier(parent) ||
+    ts.isExportSpecifier(parent) ||
+    ts.isImportClause(parent) ||
+    ts.isNamespaceImport(parent)
+  ) {
+    return parent.name !== node;
+  }
+  return true;
+}
+
 function forbiddenNames(source: string): string[] {
   const scanned = code(source);
   const crossings = FORBIDDEN.filter((name) => scanned.includes(name));
+  for (const global of hostGlobals(source)) {
+    if (!crossings.includes(global)) {
+      crossings.push(global);
+    }
+  }
   for (const specifier of moduleSpecifiers(source)) {
     const refused = specifier === COMPUTED || hostModule(specifier);
     if (refused && !crossings.includes(specifier)) {
@@ -371,6 +476,42 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames(`const note = "node:crypto";`)).toEqual([]);
     expect(forbiddenNames('const note = `import "node:crypto"`;')).toEqual([]);
     expect(forbiddenNames(`const note = 'export { x } from "node:os"';`)).toEqual([]);
+    expect(forbiddenNames(`const hint = 'import from "@executablemd/workflow/deno"';`)).toEqual([]);
+
+    // A host global is a crossing wherever the module came from.
+    expect(forbiddenNames("const pid = process.pid;")).toEqual(["process"]);
+    expect(forbiddenNames("export const p = process;")).toEqual(["process"]);
+    expect(forbiddenNames("const { env } = process;")).toEqual(["process"]);
+    expect(forbiddenNames("const home = Deno.cwd();")).toEqual(["Deno"]);
+    expect(forbiddenNames("const v = Bun.version;")).toEqual(["Bun"]);
+    expect(forbiddenNames("const b = Buffer.from([]);")).toEqual(["Buffer"]);
+    expect(forbiddenNames("const here = __dirname;")).toEqual(["__dirname"]);
+    expect(forbiddenNames("type F = Deno.FsFile;")).toEqual(["Deno"]);
+
+    // Every runtime this repository names an entry point after, not only the
+    // one whose adapter exists today.
+    expect(forbiddenNames(`import "./node.ts";`)).toEqual(["./node.ts"]);
+    expect(forbiddenNames(`import "./bun.ts";`)).toEqual(["./bun.ts"]);
+    expect(forbiddenNames(`import "./compiled.ts";`)).toEqual(["./compiled.ts"]);
+    expect(forbiddenNames(`import "../src/node/journal.ts";`)).toEqual(["../src/node/journal.ts"]);
+    expect(forbiddenNames(`import "../src/cloudflare/storage.ts";`)).toEqual([
+      "../src/cloudflare/storage.ts",
+    ]);
+    expect(forbiddenNames(`import "../../vendor/store/mod.ts";`)).toEqual([
+      "../../vendor/store/mod.ts",
+    ]);
+
+    // Positive controls: a word is not a host because a host's name is inside
+    // it, and neither is a path segment.
+    expect(forbiddenNames("const preprocessor = 1;")).toEqual([]);
+    expect(forbiddenNames("const bundle = 1;\nclass Denominator {}")).toEqual([]);
+    expect(forbiddenNames("const x = { process: 1 };\nconst y = x.process;")).toEqual([]);
+    expect(forbiddenNames("queue.process(job);")).toEqual([]);
+    expect(forbiddenNames(`import "./nodes.ts";`)).toEqual([]);
+    expect(forbiddenNames(`import "./bundle.ts";`)).toEqual([]);
+    expect(forbiddenNames(`import "../vendors/helper.ts";`)).toEqual([]);
+    expect(forbiddenNames(`import "@executablemd/runtime";`)).toEqual([]);
+    expect(forbiddenNames("const id = crypto.randomUUID();")).toEqual([]);
 
     const found = (yield* glob({
       root: REPOSITORY,
