@@ -89,6 +89,14 @@ implicit Repository inside the Workspace. Repository components may therefore
 open two or more unrelated repositories without changing definition or run
 identity.
 
+When the definition names one **document target**, that exact canonical target
+is part of it and therefore part of definition identity. A run of one section
+and a run of the whole document are different runs, as are runs of two different
+sections, so a resume is a resume only when it names the same exact target. The
+selector a caller wrote never occupies that field: identity is the resolved
+answer, so resuming re-enters the section the run actually executed rather than
+whatever the same glob would name against a later checkout.
+
 ### 3.1 Start and resume stream in the foreground
 
 Starting the same definition twice creates two runs:

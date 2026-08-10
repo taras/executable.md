@@ -13,6 +13,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { isCanonicalDocumentTarget } from "@executablemd/core";
 import {
   canonicalJson,
   conflictingFields,
@@ -310,5 +311,142 @@ describe("Tier WD — compatible reuse", () => {
         request,
       ),
     ).toEqual([]);
+  });
+});
+
+/**
+ * Every target form this suite exercises, and whether a descriptor may carry it.
+ *
+ * Canonical encoding escapes everything outside RFC 3986's unreserved set, so
+ * a heading holding `/`, `*`, `#`, `%`, or a space is retained as an escape and
+ * cannot be read back as hierarchy or operator syntax.
+ */
+const CANONICAL_TARGETS = [
+  "Release",
+  "Release/Publish",
+  "Release/Publish/Notes",
+  "Release%2FNotes",
+  "star%2A",
+  "hash%23tag",
+  "pct%25value",
+  "two%20words",
+  "%C3%9Cn%C3%AFc%C3%B8d%C3%A9",
+];
+
+const REFUSED_TARGETS = [
+  "",
+  "#Release",
+  "Release/*",
+  "**",
+  "Rel*ease",
+  "Release/**/Notes",
+  "%zz",
+  "%2f",
+  "Release/",
+  "/Release",
+  "Release//Notes",
+  "Release ",
+  " Release",
+  "Two  words",
+  "éclair",
+];
+
+describe("Tier WD — a definition's exact document target", () => {
+  it("WD18: an untargeted descriptor writes no target member at all", function* () {
+    const untargeted = parsed();
+
+    expect("targetPath" in untargeted).toBe(false);
+    expect(Object.keys(definitionToJson(untargeted) as Record<string, unknown>)).toEqual([
+      "version",
+      "kind",
+      "objectFormat",
+      "objectId",
+      "rootDocumentPath",
+    ]);
+  });
+
+  it("WD19: a targeted descriptor round-trips its exact target unchanged", function* () {
+    const targeted = parsed({ targetPath: "Release/Publish" });
+
+    expect(targeted.targetPath).toBe("Release/Publish");
+
+    const json = definitionToJson(targeted) as Record<string, unknown>;
+    expect(json["targetPath"]).toBe("Release/Publish");
+
+    const again = parseWorkflowDefinition(json);
+    expect(again.ok && again.value).toEqual(targeted);
+  });
+
+  it("WD20: every canonical target survives byte for byte", function* () {
+    for (const targetPath of CANONICAL_TARGETS) {
+      const stored = parsed({ targetPath });
+      expect({ targetPath, stored: stored.targetPath }).toEqual({ targetPath, stored: targetPath });
+
+      const again = parseWorkflowDefinition(definitionToJson(stored));
+      expect({ targetPath, ok: again.ok }).toEqual({ targetPath, ok: true });
+      expect(again.ok && again.value.targetPath).toBe(targetPath);
+    }
+  });
+
+  it("WD21: a target that is not exactly canonical is refused at its own path", function* () {
+    for (const targetPath of REFUSED_TARGETS) {
+      const error = refusal(definition({ targetPath }));
+      expect({ targetPath, path: error.path }).toEqual({ targetPath, path: "$.targetPath" });
+      expect(error.message).toContain("expected one exact canonical document target");
+      // A canonical target encodes heading text, so the diagnostic says nothing
+      // about the one it read. The empty target is skipped because every string
+      // contains it.
+      if (targetPath !== "") {
+        expect(error.message).not.toContain(targetPath);
+      }
+    }
+  });
+
+  it("WD22: a present target that is not a string is refused, absence excepted", function* () {
+    for (const value of [undefined, null, 1, true, ["Release"], { path: "Release" }]) {
+      const error = refusal(definition({ targetPath: value }));
+      expect({ value, path: error.path }).toEqual({ value, path: "$.targetPath" });
+      expect(error.message).toContain("expected a string");
+    }
+  });
+
+  it("WD23: the public core predicate answers exactly as definition parsing does", function* () {
+    for (const targetPath of CANONICAL_TARGETS) {
+      expect({ targetPath, canonical: isCanonicalDocumentTarget(targetPath) }).toEqual({
+        targetPath,
+        canonical: true,
+      });
+    }
+    for (const targetPath of REFUSED_TARGETS) {
+      expect({ targetPath, canonical: isCanonicalDocumentTarget(targetPath) }).toEqual({
+        targetPath,
+        canonical: false,
+      });
+    }
+  });
+
+  it("WD24: a run of one section is not a run of the whole document", function* () {
+    const whole = record();
+    const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
+    const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
+
+    const asking = (stored: WorkflowRunRecord, definition: GitWorkflowDefinitionV1) =>
+      conflictingFields(stored, {
+        runId: stored.runId,
+        definition,
+        base: stored.base,
+        props: stored.props,
+      });
+
+    // The same exact target is the same run.
+    expect(asking(section, section.definition)).toEqual([]);
+    expect(asking(whole, whole.definition)).toEqual([]);
+
+    // Whole-document and targeted are different runs, in both directions.
+    expect(asking(whole, section.definition)).toEqual(["definition"]);
+    expect(asking(section, whole.definition)).toEqual(["definition"]);
+
+    // So are two different sections of one document.
+    expect(asking(section, other.definition)).toEqual(["definition"]);
   });
 });

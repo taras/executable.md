@@ -146,6 +146,11 @@ export {
   asDocumentTargetError,
   DocumentTargetError,
   isDocumentTargetError,
+  // The one authority on what an exact target looks like. Exported under the
+  // fuller name because a consumer outside this package — a stored workflow
+  // definition validating the target it retained — reads it beside its own
+  // vocabulary, where "target" alone would not say target of what.
+  isCanonicalTarget as isCanonicalDocumentTarget,
   parseDocumentTargetFailure,
 } from "./src/document-targets.ts";
 export type { DocumentTargetErrorKind, DocumentTargetFailure } from "./src/document-targets.ts";

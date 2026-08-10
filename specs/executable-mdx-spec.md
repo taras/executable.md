@@ -2908,7 +2908,16 @@ class DocumentTargetError extends Error {
 function isDocumentTargetError(error: unknown): boolean;
 function asDocumentTargetError(error: unknown): DocumentTargetError | undefined;
 function parseDocumentTargetFailure(value: unknown): DocumentTargetFailure | undefined;
+function isCanonicalDocumentTarget(target: string): boolean;
 ```
+
+`isCanonicalDocumentTarget()` answers whether a fragment is an **exact**
+canonical target by the round-trip rule above: it is the one authority on that
+question, so a consumer outside this package validates a target it holds by
+asking rather than by restating the rule. A stored workflow definition uses it
+on the exact target it retained, because identity two packages define separately
+is identity they can disagree about. It takes no leading `#` — that delimiter
+belongs to a document reference, not to a target.
 
 `selector` is the fragment as it arrived. `matches` is the ambiguity list and is
 empty for every other kind; `available` is the whole catalog. The message is

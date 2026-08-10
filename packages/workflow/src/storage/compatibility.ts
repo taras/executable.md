@@ -54,6 +54,13 @@ export function conflictingFields(
  * nothing a canonical spelling would reconcile — and comparing the members
  * keeps a later variant from being admitted because it happened to serialize
  * the same way.
+ *
+ * The exact target is one of those members. A run of one section and a run of
+ * the whole document are different runs, and so are runs of two different
+ * sections: they execute different content, so reusing one run id for the other
+ * would let a resumed run continue something it never started. Absent compares
+ * equal only to absent, which is what makes whole-document and targeted
+ * definitions incompatible rather than merely unequal.
  */
 function sameDefinition(stored: WorkflowDefinition, requested: WorkflowDefinition): boolean {
   return (
@@ -61,6 +68,7 @@ function sameDefinition(stored: WorkflowDefinition, requested: WorkflowDefinitio
     stored.kind === requested.kind &&
     stored.objectFormat === requested.objectFormat &&
     stored.objectId === requested.objectId &&
-    stored.rootDocumentPath === requested.rootDocumentPath
+    stored.rootDocumentPath === requested.rootDocumentPath &&
+    stored.targetPath === requested.targetPath
   );
 }

@@ -1460,3 +1460,113 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(readFileSync(path).length).toBeGreaterThan(4096);
   });
 });
+
+describe("Tier WS — a run of one section", () => {
+  it("WS28: a stored exact target survives the process unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const targeted = definition({ targetPath: "Release/Publish%2FNotes" });
+
+    const written = yield* withStorage(root, function* () {
+      const database = yield* createRun({ definition: targeted });
+      return database.record;
+    });
+
+    expect(written.definition.targetPath).toBe("Release/Publish%2FNotes");
+
+    // A second scope reads it back out of SQLite and parses it again, so the
+    // column, the serializer, and the parser all agree about one target.
+    const restored = yield* withStorage(root, function* () {
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return found.value.record;
+    });
+
+    expect(restored.definition).toEqual(written.definition);
+    expect(restored.definition.targetPath).toBe("Release/Publish%2FNotes");
+  });
+
+  it("WS29: an untargeted run reopens with no target member at all", function* () {
+    const root = yield* useStorageRoot();
+
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const restored = yield* withStorage(root, function* () {
+      const found = yield* lookup("release-1.4");
+      if (!found.ok) {
+        throw found.error;
+      }
+      return found.value.record;
+    });
+
+    expect("targetPath" in restored.definition).toBe(false);
+  });
+
+  it("WS30: one run id cannot be reused for a different section, or for the whole document", function* () {
+    const root = yield* useStorageRoot();
+
+    const conflicts = yield* withStorage(root, function* () {
+      yield* createRun({ definition: definition({ targetPath: "Release/Publish" }) });
+
+      const attempts = [
+        { asked: "another section", definition: definition({ targetPath: "Release/Announce" }) },
+        { asked: "the whole document", definition: definition() },
+      ];
+
+      const errors: { asked: string; result: Result<WorkflowRunDatabase> }[] = [];
+      for (const attempt of attempts) {
+        errors.push({
+          asked: attempt.asked,
+          result: yield* create(request({ definition: attempt.definition })),
+        });
+      }
+      return errors;
+    });
+
+    for (const { asked, result } of conflicts) {
+      expect({ asked, ok: result.ok }).toEqual({ asked, ok: false });
+      if (result.ok) {
+        continue;
+      }
+      expect(result.error).toBeInstanceOf(WorkflowRunConflictError);
+      expect(result.error.message).toContain("definition");
+      // The section that was asked for is document content, not a field name.
+      expect(result.error.message).not.toContain("Announce");
+      expect(result.error.message).not.toContain("Publish");
+    }
+  });
+
+  it("WS31: a targeted run is found again by the request that created it", function* () {
+    const root = yield* useStorageRoot();
+    const targeted = definition({ targetPath: "Release/Publish" });
+
+    const same = yield* withStorage(root, function* () {
+      const first = yield* createRun({ definition: targeted });
+      const again = yield* create(request({ definition: targeted }));
+      if (!again.ok) {
+        throw again.error;
+      }
+      return first.record.runId === again.value.record.runId;
+    });
+
+    expect(same).toBe(true);
+  });
+
+  it("WS32: a whole-document run refuses to be reused as a targeted one", function* () {
+    const root = yield* useStorageRoot();
+
+    const result = yield* withStorage(root, function* () {
+      yield* createRun();
+      return yield* create(request({ definition: definition({ targetPath: "Release/Publish" }) }));
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBeInstanceOf(WorkflowRunConflictError);
+      expect(result.error.message).toContain("definition");
+    }
+  });
+});
