@@ -220,6 +220,9 @@ describe("Tier EP — the execution protocol", () => {
       return yield* raised(execute({ ...inlineSource(DOC), stream: journal.stream }));
     });
     expect(failure).toBeInstanceOf(ExecutionProtocolError);
+    // The look-alike itself is what is refused — not merely "nothing reached
+    // the terminal", which a silently ignored look-alike would also produce.
+    expect(String(failure)).toContain("did not issue");
     expect(journal.reads).toEqual(0);
     expect(journal.stream.snapshot()).toEqual([]);
   });
@@ -347,6 +350,50 @@ describe("Tier EP — the execution protocol", () => {
       expect(journal.stream.snapshot()).toEqual([]);
       expect(ran).toEqual(refusing === 0 ? ["admission-0"] : ["admission-0", "admission-1"]);
     }
+  });
+
+  // EP15: additive means one direction. A policy can fail a success; it cannot
+  // stand in for a failure the document already earned.
+  it("EP15: a completion policy cannot replace an existing failure", function* () {
+    const asked: string[] = [];
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => {
+            asked.push("policy");
+            return new Error("the policy's failure");
+          });
+          yield* next(request);
+        },
+      });
+      // A value root that declares `returns` and produces no <Return> fails on
+      // its own terms.
+      return yield* yield* execute({
+        ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
+        stream: new InMemoryStream(),
+      });
+    });
+
+    expect(result.ok).toBe(false);
+    const message = result.ok ? "" : result.error.message;
+    expect(message).not.toContain("the policy's failure");
+    // Not even consulted: the result was already a failure.
+    expect(asked).toEqual([]);
+  });
+
+  it("EP16: an additive failure still converts a success", function* () {
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          request.addCompletionFailure(() => new Error("the policy's failure"));
+          yield* next(request);
+        },
+      });
+      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("the policy's failure");
   });
 
   it("EP14: the obsolete ambient admission channel does not exist", function* () {
