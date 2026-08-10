@@ -332,8 +332,9 @@ nor `--eval`/`-e`.
 
 A file path given to `xmd run` is a document reference (§5.4): everything after
 its first raw `#` selects one section of the document to run. A filename that
-really contains `#` is written `%23`, and one containing a literal `%HH`
-sequence is written `%25HH`.
+really contains `#` is written `%23`, and every literal `%` is written `%25` —
+a raw `%` begins escape syntax wherever it appears, so `pct%zz.md` is refused as
+a malformed reference and written `pct%25zz.md` instead.
 
 Props are unaffected by the selection, because they are the document's. The
 frontmatter that declares them is retained by every projection, so the same

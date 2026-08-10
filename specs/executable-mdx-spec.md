@@ -2868,8 +2868,10 @@ from a level separator. An empty path, a malformed escape, a byte sequence that
 is not UTF-8, and NUL each fail with a cause-free `TypeError` whose message is
 exactly `Invalid document reference`; the input is a command-line argument, and
 echoing it back would put arbitrary bytes into a diagnostic. A filename
-containing `#` is written `%23`, and one containing a literal `%HH` sequence is
-written `%25HH`.
+containing `#` is written `%23`, and **every** literal `%` is written `%25`.
+Escape syntax begins at a `%` wherever one appears, so a filename holding a `%`
+that is not a valid escape — `pct%zz.md` — is refused as a malformed reference
+rather than read as that literal name; `pct%25zz.md` is how it is written.
 
 `formatDocumentReference()` takes a decoded path and, optionally, an
 already-canonical exact target. It encodes the path, validates the target rather
@@ -3096,8 +3098,21 @@ file again. What execution is asked for is the exact canonical target that
 inspection resolved, never the selector that resolved it. So if a wildcard names
 `Alpha` during inspection and the file is replaced such that the same wildcard
 would name `Beta`, the run fails on the absent `Alpha`; it never silently runs
-`Beta`. That refusal is reported before the host installs a service and before
-`execute()`.
+`Beta`.
+
+Where that refusal lands depends on which read discovered it, and **installing a
+provider is not using one**:
+
+- `xmd targets` never invokes the host's service installer at all.
+- A failure the preparation inspection or the value-mode inspection discovers
+  stops the run before the installer is invoked.
+- A failure only the last read discovers — the document changed after both
+  inspections — is raised by `execute()`, which runs after the installer. The
+  provider is installed by then; nothing has asked it for anything.
+
+Every one of those refusals precedes authored work. A run that cannot decide
+what to execute expands no component, starts or attaches no service, and
+performs no authored effect, whichever read discovered the failure.
 
 Diagnostics keep the core's own first line and render every target as a full
 document reference, because a reference is what a caller can act on:
@@ -3114,10 +3129,12 @@ the whole catalog under `Available targets:`, or say `The document has no
 targets.` when the catalog is empty. Every other failure keeps the printed-error
 behavior it already had.
 
-A filename containing `#` is written `%23` and one containing a literal `%HH`
-sequence is written `%25HH`. This is a deliberate change to `xmd run` path
-grammar for those two filenames, and the reason target selection can be written
-at all.
+A filename containing `#` is written `%23`, and every literal `%` is written
+`%25` — including one that is not part of a valid escape, because a raw `%`
+starts escape syntax wherever it appears. This is a deliberate change to
+`xmd run` path grammar for any filename holding either character, and the reason
+target selection can be written at all. `xmd test` is exempt and still reads its
+path literally.
 
 Tier CT — CLI document targets covers the catalog, its ordering and duplicates,
 the empty catalog's byte-empty output, discovery running nothing, every rejected
@@ -6444,12 +6461,19 @@ yield* runXmd(args, useDenoService);
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
 `execute()`. Help, inspection and agent-worker paths never install or attach a
-service. `xmd targets` is one of those inspection paths: it never invokes the
-installer, and neither does a run that refuses its target — the exact-target
-check happens before the installer is reached, so a document the run will not
-execute never gains service authority. Each adapter supplies host randomness,
-inherited environment and stdout/stderr writers to the shared service host;
-production adapters reject a non-loopback requested host before spawning.
+service. `xmd targets` is one of those inspection paths and never invokes the
+installer.
+
+A `xmd run` that refuses its document target (§5.4) may or may not have reached
+the installer: the refusal comes before it when an inspection discovered the
+failure, and after it when only execution's own read did. Either way the run
+starts no service, because **installing a provider is not using one** — the
+installer wires a provider into scope, and starting a service is a separate
+operation a refused run never performs.
+
+Each adapter supplies host randomness, inherited environment and stdout/stderr
+writers to the shared service host; production adapters reject a non-loopback
+requested host before spawning.
 
 Each entrypoint owns its own argument order; there is no shared builder for
 them to forward to. `cli.ts` still reaches the host directly for terminal and

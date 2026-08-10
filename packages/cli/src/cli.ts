@@ -533,6 +533,10 @@ function* runDocument(
 
   // Native service authority belongs only to document execution. Help,
   // document inspection, and the agent worker never enter this scope.
+  //
+  // This wires a provider into scope; it starts nothing. A run refused by the
+  // reread inside `execute()` below has passed this line and still never asks
+  // the provider for a service.
   yield* installService();
 
   const execution = yield* execute({
@@ -849,8 +853,13 @@ function* inspectCatalog(root: FileRootDocument): Operation<Result<DocumentInfo>
  * A target failure is the exception, and it is raised rather than deferred. By
  * the time a run reaches here the requested selector has already been replaced
  * by the exact target it resolved to, so a failure means the document no longer
- * offers the section this run decided on. That refusal belongs before the
- * service installer and before `execute()`, not after them.
+ * offers the section this run decided on.
+ *
+ * Raising it here refuses the run at the earliest read that can see it, which is
+ * before the host's provider installer. A document replaced later still cannot
+ * be caught here — `execute()` reads it once more and raises the same failure
+ * after the installer has run — so this is the earlier of two refusals, not the
+ * only one. Neither starts a service or expands anything.
  */
 function* readsValue(root: RootDocumentSource): Operation<boolean> {
   try {

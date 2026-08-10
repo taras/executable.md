@@ -314,13 +314,15 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     yield* ensureDir(root);
     const body = '<Test name="literal">\n\nLITERAL_MARKER\n\n</Test>\n';
     yield* writeTextFile(path.join(root, "we#ird.test.md"), body);
-    yield* writeTextFile(path.join(root, "pct%25.test.md"), body);
+    yield* writeTextFile(path.join(root, "pct%zz.test.md"), body);
 
     const hashed = yield* runCli(["test", path.join(root, "we#ird.test.md")]).join();
     expect(hashed.code).toBe(0);
     expect(hashed.stdout).toContain("LITERAL_MARKER");
 
-    const percent = yield* runCli(["test", path.join(root, "pct%25.test.md")]).join();
+    // `%zz` is not a valid escape, so `xmd run` would refuse this reference
+    // outright. `xmd test` reads it as the filename it is.
+    const percent = yield* runCli(["test", path.join(root, "pct%zz.test.md")]).join();
     expect(percent.code).toBe(0);
     expect(percent.stdout).toContain("LITERAL_MARKER");
 

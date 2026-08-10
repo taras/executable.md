@@ -15,7 +15,7 @@ import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import { API } from "@executablemd/runtime";
+import { API, Service, useHostFiles } from "@executablemd/runtime";
 import { runCli } from "@executablemd/test-support/launch";
 import { runXmd } from "../src/cli.ts";
 
@@ -167,8 +167,9 @@ function* eachRuns(dir: string, expected: readonly [string, string][]): Operatio
  * Every invocation here fails with a diagnostic and no catalog.
  *
  * Split across several cases rather than one table because each row is a
- * subprocess, and one case has to stay inside the shortest per-test budget of
- * the three runtimes.
+ * subprocess and one case has to stay inside the shortest per-test budget of
+ * the three runtimes — Bun's fixed 5s. Three invocations per case leaves the
+ * margin a loaded runner needs.
  */
 function* eachRejected(dir: string, invocations: readonly string[][]): Operation<void> {
   for (const args of invocations) {
@@ -218,39 +219,56 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     });
   });
 
-  it("CT5: xmd targets refuses a reference it cannot take on its own terms", function* () {
+  it("CT5: xmd targets refuses a fragment of its own", function* () {
+    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
+      yield* eachRejected(dir, [[], ["doc.md#Alpha"], ["doc.md#"]]);
+    });
+  });
+
+  it("CT5b2: xmd targets refuses a second argument and a separator", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
       yield* eachRejected(dir, [
-        [],
-        ["doc.md#Alpha"],
-        ["doc.md#"],
         ["doc.md", "second.md"],
         ["doc.md", "--"],
       ]);
     });
   });
 
-  it("CT5c: xmd targets refuses run and test options", function* () {
+  it("CT5c: xmd targets refuses journal and output options", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
       yield* eachRejected(dir, [
         ["doc.md", "--journal", "trace.jsonl"],
         ["doc.md", "--verbose"],
         ["doc.md", "--raw"],
-        ["doc.md", "--component-dir", "components"],
-        ["doc.md", "--no-secret-detection"],
-        ["doc.md", "--pattern", "**/*.test.md"],
       ]);
       // Rejected before inspection, so the trace it named was never created.
       expect(yield* exists(path.join(dir, "trace.jsonl"))).toBe(false);
     });
   });
 
-  it("CT5d: xmd targets refuses inline documents, properties, and agent options", function* () {
+  it("CT5c2: xmd targets refuses resolution and test options", function* () {
+    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
+      yield* eachRejected(dir, [
+        ["doc.md", "--component-dir", "components"],
+        ["doc.md", "--no-secret-detection"],
+        ["doc.md", "--pattern", "**/*.test.md"],
+      ]);
+    });
+  });
+
+  it("CT5d: xmd targets refuses inline documents and properties", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
       yield* eachRejected(dir, [
         ["-e", "# Inline"],
         ["doc.md", "--props-who", "ada"],
         ["doc.md", "--props", '{"who":"ada"}'],
+      ]);
+    });
+  });
+
+  it("CT5d2: xmd targets refuses agent options and unknown options", function* () {
+    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
+      yield* eachRejected(dir, [
         ["doc.md", "--approve-all"],
         ["doc.md", "--timeout", "5"],
         ["doc.md", "--frobnicate"],
@@ -285,6 +303,30 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
       const absent = yield* runCli(["targets", "absent.md"], { cwd: dir }).join();
       expect(absent.code).toBe(1);
       expect(absent.stdout).toBe("");
+    });
+  });
+
+  it("CT6a: a literal % is escape syntax, so its raw spelling is not a path", function* () {
+    // `%zz` is not a valid escape, and a reference is not repaired: the whole
+    // reference is refused rather than read as the literal filename.
+    const doc = ["# Percent", "", "## Alpha", "", "RAW_PCT_MARKER", ""].join("\n");
+    yield* useFixture({ "pct%zz.md": doc }, function* (dir) {
+      const encoded = yield* runCli(["targets", "pct%25zz.md"], { cwd: dir }).join();
+      expect(encoded.code).toBe(0);
+      expect(encoded.stdout).toBe("pct%25zz.md#Alpha\n");
+
+      const ran = yield* runCli(["run", "pct%25zz.md#Alpha", "--raw"], { cwd: dir }).join();
+      expect(ran.code).toBe(0);
+      expect(ran.stdout).toContain("RAW_PCT_MARKER");
+
+      const raw = yield* runCli(["targets", "pct%zz.md"], { cwd: dir }).join();
+      expect(raw.code).toBe(1);
+      expect(raw.stderr).toContain("Invalid document reference");
+      expect(raw.stdout).toBe("");
+
+      const rawRun = yield* runCli(["run", "pct%zz.md", "--raw"], { cwd: dir }).join();
+      expect(rawRun.code).toBe(1);
+      expect(rawRun.stderr).toContain("Invalid document reference");
     });
   });
 
@@ -460,29 +502,43 @@ const ExitContext = createContext<(result: { status: number }) => Operation<void
 interface InProcessRun {
   status: number;
   stderr: string;
+  /** Whether the host's provider installer ran. */
   serviceInstalled: boolean;
+  /** Whether anything asked that installed provider to start a service. */
+  serviceStarted: boolean;
+  /** How many times the run read the document itself. */
+  documentReads: number;
   reads: string[];
 }
 
 /**
  * Drive `runXmd` in this process, with one filesystem that answers differently
- * after the first read of the document.
+ * from a chosen read of the document onward.
  *
  * The command line cannot express a document that changes between the run's own
  * reads, and reproducing it with a real file would be a race. The seam is
- * therefore installed around the operation: read one returns whatever is on
- * disk, every later read returns the replacement, and every path the run
- * touches is recorded.
+ * therefore installed around the operation: reads before `replaceFrom` return
+ * whatever is on disk, that read and every later one return the replacement,
+ * and every path the run touches is recorded.
+ *
+ * `replaceFrom` picks which of the run's three reads first sees the
+ * replacement, which is what separates a refusal before provider installation
+ * from one after it. The host installer is recorded separately from the
+ * provider it installs: installing a provider is not starting a service, and
+ * this suite must be able to tell the two apart.
  */
 function* replacingRun(
   args: string[],
   documentPath: string,
   replacement: string,
+  replaceFrom: number,
+  cwd: string,
 ): Operation<InProcessRun> {
   const reads: string[] = [];
   let status = 0;
   let stderr = "";
   let serviceInstalled = false;
+  let serviceStarted = false;
   let documentReads = 0;
 
   const written = console.error;
@@ -503,7 +559,7 @@ function* replacingRun(
         reads.push(target);
         if (target === documentPath) {
           documentReads += 1;
-          if (documentReads > 1) {
+          if (documentReads >= replaceFrom) {
             return replacement;
           }
         }
@@ -511,11 +567,31 @@ function* replacingRun(
       },
     });
 
-    yield* runXmd(args, function* () {
-      serviceInstalled = true;
+    // The fixture is the working directory, so an authored relative path in
+    // the replacement resolves to a file that really exists — which is what
+    // makes "the replacement performed no authored read" a live assertion
+    // rather than one a missing file would satisfy anyway.
+    yield* API.Env.around({
+      *cwd() {
+        return cwd;
+      },
     });
 
-    return { status, stderr, serviceInstalled, reads };
+    // What a runtime entrypoint installs beside `runXmd`, so an authored
+    // `<File>` read in the replacement really does reach the recorder above.
+    yield* useHostFiles();
+
+    yield* runXmd(args, function* () {
+      serviceInstalled = true;
+      yield* Service.around({
+        *start() {
+          serviceStarted = true;
+          throw new Error("the run started a service");
+        },
+      });
+    });
+
+    return { status, stderr, serviceInstalled, serviceStarted, documentReads, reads };
   });
 }
 
@@ -539,13 +615,17 @@ describe(
   "Tier CT — exact target before execution",
   { sanitizeOps: false, sanitizeResources: false },
   () => {
-    it("CT12: a wildcard cannot resolve to one target and execute another", function* () {
+    it("CT12: a replacement seen by preparation is refused before the installer", function* () {
       yield* useFixture({ "doc.md": FIRST_BODY, "beta-input.txt": "BETA_INPUT" }, function* (dir) {
         const documentPath = path.join(dir, "doc.md");
+        // The value-mode inspection already sees the replacement, so the run
+        // never reaches the point where a provider would be installed.
         const run = yield* replacingRun(
           ["run", `${documentPath}#A*`, "--raw"],
           documentPath,
           REPLACEMENT_BODY,
+          2,
+          dir,
         );
 
         // The wildcard resolved to Alpha, so execution asked for exactly
@@ -557,11 +637,40 @@ describe(
         // Never the caller's own glob: the run stopped on the target it chose.
         expect(run.stderr).not.toContain('"A*"');
 
-        // Refused before the host could gain service authority, and before
-        // anything Aeta's body would have read.
         expect(run.serviceInstalled).toBe(false);
+        expect(run.serviceStarted).toBe(false);
         expect(run.reads.some((read) => read.includes("beta-input.txt"))).toBe(false);
         expect(yield* exists(path.join(dir, "beta-input.txt"))).toBe(true);
+      });
+    });
+
+    it("CT12a: a replacement seen only by execution is refused without starting a service", function* () {
+      yield* useFixture({ "doc.md": FIRST_BODY, "beta-input.txt": "BETA_INPUT" }, function* (dir) {
+        const documentPath = path.join(dir, "doc.md");
+        // Preparation and the value-mode inspection both see the original, so
+        // the replacement first appears on the read execution performs — after
+        // the host provider is installed. This is the interval the contract
+        // permits, and the case exists to hold what it still guarantees.
+        const run = yield* replacingRun(
+          ["run", `${documentPath}#A*`, "--raw"],
+          documentPath,
+          REPLACEMENT_BODY,
+          3,
+          dir,
+        );
+
+        expect(run.documentReads).toBe(3);
+        expect(run.status).toBe(1);
+        // Execution asked for the exact target preparation chose, not the glob.
+        expect(run.stderr).toContain('"Alpha" matches no document target.');
+        expect(run.stderr).toContain(`  ${documentPath}#Aeta`);
+        expect(run.stderr).not.toContain('"A*"');
+
+        // Provider installation happened; using it did not. `Aeta` never
+        // expanded, so nothing its body would have read was read.
+        expect(run.serviceInstalled).toBe(true);
+        expect(run.serviceStarted).toBe(false);
+        expect(run.reads.some((read) => read.includes("beta-input.txt"))).toBe(false);
       });
     });
   },

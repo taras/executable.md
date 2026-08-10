@@ -57,8 +57,9 @@ export function inlineSource(
  * fixed wording: the input is a command-line argument, and echoing it back
  * would put arbitrary bytes into a diagnostic.
  *
- * A filename containing `#` is written `%23`, and one containing a literal
- * `%HH` sequence is written `%25HH`.
+ * A filename containing `#` is written `%23`, and every literal `%` is written
+ * `%25`: escape syntax begins at a `%` wherever one appears, so a filename
+ * holding one that is not a valid escape is refused rather than read literally.
  */
 export function fileSource(reference: string): FileRootDocument {
   const fragment = reference.indexOf("#");
