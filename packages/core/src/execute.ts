@@ -17,7 +17,13 @@ import {
   durableRun,
   createDurableOperation,
   ephemeral,
+  preserveJournalProvenance,
+  retainEvents,
+  StaleInputError,
+  type CoroutineId,
+  type DurableEvent,
   type DurableStream,
+  type Yield,
 } from "@executablemd/durable-streams";
 import { exec, readTextFile, cwd } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
@@ -35,7 +41,7 @@ import type {
   ReturnsSchema,
   Segment,
 } from "./types.ts";
-import { parseJson, parseJsonObject } from "./json.ts";
+import { isJsonObject, parseJson, parseJsonObject } from "./json.ts";
 import {
   compilePropsSchema,
   compileReturnsSchema,
@@ -43,7 +49,23 @@ import {
   validateProps,
 } from "./validate.ts";
 import { useParseCompiler } from "./components/parse-schema.ts";
-import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
+import {
+  documentOutline,
+  isFunctionComponentPath,
+  parseMarkdownDefinition,
+  parseRootMarkdownDefinition,
+  resolveDocumentTarget,
+} from "./definition.ts";
+import {
+  asDocumentTargetError,
+  documentTargetError,
+  documentTargetFailure,
+  findTarget,
+  isCanonicalTarget,
+  recordedDocumentTargetFailure,
+  sameDocumentTargetFailure,
+} from "./document-targets.ts";
+import type { DocumentOutline, DocumentTargetFailure } from "./document-targets.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
@@ -129,8 +151,39 @@ export type ExecuteOptions = RootDocumentSource & ExecuteSettings;
  * implementation up again in the scope that is running now.
  */
 type DurableSelection =
-  | { kind: "repository"; path: string; content: string }
+  | { kind: "repository"; path: string; content: string; target?: string }
+  | { kind: "target-failure"; path: string; content: string; failure: TargetFailureRecord }
   | { kind: "registered"; origin: string; reserved: boolean };
+
+/**
+ * A selection that named no single section, as the journal holds it.
+ *
+ * A failed selection is an observation of the document, not an accident: the
+ * text was read, and it does not offer what was asked for. Recording it as data
+ * — rather than letting the effect fail and keeping only a serialized message —
+ * is what lets a resumed run tell "the same request, failing the same way" from
+ * "a different request the recorded run never made", and what lets the failure
+ * be rebuilt with its fields intact instead of reduced to prose.
+ *
+ * `selector` is sanitized invocation metadata. It is never identity: it does
+ * not occupy the exact-target field, and it never reaches a workflow
+ * definition.
+ */
+type TargetFailureRecord = {
+  kind: string;
+  selector: string;
+  matches: string[];
+  available: string[];
+};
+
+function targetFailureRecord(failure: DocumentTargetFailure): TargetFailureRecord {
+  return {
+    kind: failure.kind,
+    selector: failure.selector,
+    matches: [...failure.matches],
+    available: [...failure.available],
+  };
+}
 
 function* durableImportComponent(
   name: string,
@@ -145,10 +198,30 @@ function* durableImportComponent(
         // Inside the durable operation, so the journal holds the root's identity
         // and its text: a replay restores both without reading anything, whether
         // the source was a file or supplied.
+        //
+        // The selector resolves here too, against the text this operation is
+        // about to record, so the exact target the run executed is part of the
+        // record rather than something a later read has to rediscover. Only the
+        // exact target is recorded — a glob describes what the caller asked
+        // for, not what ran.
+        const path = rootSourcePath(root);
+        const content = yield* readRootSource(root);
+        if (root.target === undefined) {
+          return { kind: "repository", path, content };
+        }
+        const resolved = resolveDocumentTarget(path, content, root.target);
+        if (resolved.ok) {
+          return { kind: "repository", path, content, target: resolved.value };
+        }
+        const failure = asDocumentTargetError(resolved.error);
+        if (failure === undefined) {
+          throw resolved.error;
+        }
         return {
-          kind: "repository",
-          path: rootSourcePath(root),
-          content: yield* readRootSource(root),
+          kind: "target-failure",
+          path,
+          content,
+          failure: targetFailureRecord(failure.data),
         };
       }
 
@@ -177,6 +250,17 @@ function* durableImportComponent(
     },
   )) as DurableSelection;
 
+  // Rebuilt here rather than carried out of the durable operation, so a replayed
+  // failed selection and a live one raise the same error with the same fields.
+  // Parsed rather than trusted: the record is journal data.
+  if (selection.kind === "target-failure") {
+    const failure = recordedDocumentTargetFailure(selection.failure);
+    if (failure === undefined) {
+      throw new Error(UNREADABLE_ROOT_RECORD);
+    }
+    throw documentTargetError(failure);
+  }
+
   if (selection.kind === "registered") {
     // The function was never journaled. Find the implementation the recorded
     // origin names in the registry this run has; refusing when it is gone is
@@ -193,7 +277,7 @@ function* durableImportComponent(
     return found.definition;
   }
 
-  const { path, content } = selection;
+  const { path, content, target } = selection;
 
   // Function component: .ts file — import() the module
   if (isFunctionComponentPath(path)) {
@@ -238,12 +322,432 @@ function* durableImportComponent(
     return definition;
   }
 
-  // Markdown component: parse at runtime — deterministic from content
+  // Markdown component: parse at runtime — deterministic from content.
+  // A recorded target projects the recorded content, so a resumed run executes
+  // the same section from the same text the first run recorded, whatever the
+  // file on disk says now.
+  if (target !== undefined) {
+    return (yield* ephemeral(parseRootMarkdownDefinition(name, path, content, target))).definition;
+  }
   return yield* ephemeral(parseMarkdownDefinition(name, path, content));
 }
 
 function isFunctionComponent(value: unknown): value is FunctionComponent {
   return typeof value === "function";
+}
+
+/**
+ * What one run's selector decided: the whole document, one exact section, or a
+ * failure that named none.
+ *
+ * Selection is compared as an outcome rather than as a target string, because a
+ * failed selection is an outcome too. Without the third case a journal written
+ * by one selector that matched nothing would answer a later request for a
+ * section that does exist.
+ */
+type SelectionOutcome =
+  | { kind: "whole" }
+  | { kind: "exact"; target: string }
+  | { kind: "failed"; failure: DocumentTargetFailure };
+
+/**
+ * What the fixed diagnostic says when a recorded root import cannot be read,
+ * and all it says.
+ *
+ * Cause-free: the record is journal data, and quoting it back would put
+ * whatever it holds into a diagnostic.
+ */
+const UNREADABLE_ROOT_RECORD = "The recorded root document import cannot be read by this version.";
+
+/** The coroutine a document execution's own terminal result belongs to. */
+const ROOT_COROUTINE = "root";
+
+/**
+ * What a recorded event turned out to be.
+ *
+ * "Not the root import" and "the root import, malformed" are deliberately
+ * different answers. Collapsing them into one absent value is what would let a
+ * corrupted record fall through to the recorded terminal result, which is the
+ * failure this distinction exists to prevent.
+ */
+type RootImportRecord =
+  | { kind: "unrelated" }
+  | { kind: "malformed" }
+  | { kind: "read"; outline: DocumentOutline; selection: SelectionOutcome };
+
+const UNRELATED: RootImportRecord = { kind: "unrelated" };
+const MALFORMED: RootImportRecord = { kind: "malformed" };
+
+/**
+ * Read a value that may refuse to be read.
+ *
+ * Every value this boundary touches comes from the journal, and a journal is
+ * data: a property may be an accessor that throws, a key list may come from a
+ * Proxy that refuses, and content may be markdown whose frontmatter no parser
+ * accepts. None of those is a failure of this run — they are ways of saying the
+ * record cannot be read — so none of them may travel as an error of its own.
+ *
+ * Synchronous throughout, so nothing an Effection scope owns passes through
+ * here: this cannot swallow a cancellation or a durability failure, because
+ * neither can arise inside a synchronous parse.
+ */
+function attempt<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parse a recorded root import as a closed protocol.
+ *
+ * Two selection shapes are supported and nothing else: a repository selection
+ * with an optional canonical target, and a failed selection with an exact
+ * failure record. An unknown kind, a missing or mistyped member, an extra
+ * member, a noncanonical target, and failure data that no selection could have
+ * produced are each malformed rather than absent.
+ *
+ * A result that is not `ok` is left alone. A root import can fail for reasons
+ * that have nothing to do with selection — an unreadable file — and those
+ * recorded failures are not this protocol's to interpret.
+ */
+/**
+ * A value the journal refused to produce.
+ *
+ * Distinct from `undefined`, which is an ordinary absent value. Reading a
+ * member and finding nothing there, and reading a member that will not say what
+ * is there, are different facts about a record, and one of them is a refusal:
+ * conflating them is how "the root import will not say what it settled to"
+ * became "this is not the root import" and fell through to terminal-result
+ * reuse.
+ */
+const UNREADABLE: unique symbol = Symbol("unreadable");
+
+/** One read of journal-controlled data: its value, or a refusal. */
+function read<T>(get: () => T): T | typeof UNREADABLE {
+  try {
+    return get();
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+/** The settlements the protocol recognizes as an ordinary failed root import. */
+const SETTLED_FAILURES: readonly string[] = ["err", "cancelled"];
+
+function recordedRootImport(event: Yield): RootImportRecord {
+  // Identification first. An event that will not say what it is cannot be
+  // claimed as the root import, so it stays unrelated.
+  const description = read(() => event.description);
+  if (description === UNREADABLE) {
+    return UNRELATED;
+  }
+  const type = read(() => description.type);
+  const name = read(() => description.name);
+  if (type !== "import_component" || name !== "__root__") {
+    return UNRELATED;
+  }
+
+  // Identified. From here the event owes this protocol an answer, and every way
+  // of not giving one is malformed — except the ordinary failed settlement,
+  // which is a root import that failed for reasons selection knows nothing
+  // about.
+  const result = read(() => event.result);
+  if (result === UNREADABLE || typeof result !== "object" || result === null) {
+    return MALFORMED;
+  }
+  const status = read(() => result.status);
+  if (status !== "ok") {
+    return typeof status === "string" && SETTLED_FAILURES.includes(status) ? UNRELATED : MALFORMED;
+  }
+  const value = read(() => ("value" in result ? result.value : undefined));
+  if (value === UNREADABLE || value === undefined) {
+    return MALFORMED;
+  }
+  return attempt(() => readRootSelection(value)) ?? MALFORMED;
+}
+
+function readRootSelection(value: unknown): RootImportRecord {
+  // Parsed rather than read in place. `parseJson` walks every property once and
+  // rebuilds the record, so a trap that throws or a value that is not JSON is
+  // discovered here — and every read below is of this run's own copy rather
+  // than of an object the journal still controls.
+  const record = parseJson(value);
+  if (!isJsonObject(record)) {
+    return MALFORMED;
+  }
+  const content = record["content"];
+  const path = record["path"];
+  if (typeof content !== "string" || typeof path !== "string") {
+    return MALFORMED;
+  }
+  const kind = record["kind"];
+  const members = Object.keys(record).length;
+  // Parsing the recorded content is part of reading the record, for every
+  // shape. It is what the verification below compares against, and doing it
+  // here means a later read of the same content cannot be the first to
+  // discover that it does not parse.
+  const outline = documentOutline(path, content);
+
+  if (kind === "repository") {
+    const target = record["target"];
+    if (target === undefined) {
+      return members === 3 ? { kind: "read", outline, selection: { kind: "whole" } } : MALFORMED;
+    }
+    if (members !== 4 || typeof target !== "string" || !isCanonicalTarget(target)) {
+      return MALFORMED;
+    }
+    // The recorded content is here, so the target is verified against it rather
+    // than merely parsed: a well-formed target the recorded document does not
+    // offer describes a selection that never happened.
+    const resolved = findTarget(outline, target);
+    if (!resolved.ok || resolved.value.target !== target) {
+      return MALFORMED;
+    }
+    return { kind: "read", outline, selection: { kind: "exact", target } };
+  }
+
+  if (kind === "target-failure") {
+    const failure = recordedDocumentTargetFailure(record["failure"]);
+    if (members !== 4 || failure === undefined) {
+      return MALFORMED;
+    }
+    // Same standard for a failure: the recorded selector must fail against the
+    // recorded content in exactly the way the record claims. That verifies the
+    // catalog and the matches too, which no amount of shape checking could.
+    const rederived = findTarget(outline, failure.selector);
+    if (rederived.ok) {
+      return MALFORMED;
+    }
+    const actual = asDocumentTargetError(rederived.error);
+    if (actual === undefined || !sameDocumentTargetFailure(actual.data, failure)) {
+      return MALFORMED;
+    }
+    return { kind: "read", outline, selection: { kind: "failed", failure } };
+  }
+
+  return MALFORMED;
+}
+
+/**
+ * What this run's selector decides against the outline the journal recorded.
+ *
+ * Takes the outline the record already produced rather than the content, so
+ * this cannot be the call that discovers unparseable recorded markdown — that
+ * discovery belongs to reading the record, where it is malformed rather than an
+ * error of this run's own.
+ */
+function requestedSelection(root: RootDocumentSource, outline: DocumentOutline): SelectionOutcome {
+  if (root.target === undefined) {
+    return { kind: "whole" };
+  }
+  const found = findTarget(outline, root.target);
+  if (found.ok) {
+    return { kind: "exact", target: found.value.target };
+  }
+  const failure = asDocumentTargetError(found.error);
+  // A failure this module did not build is not a selection outcome that can be
+  // compared, so it cannot be shown compatible with anything.
+  return failure === undefined
+    ? { kind: "failed", failure: documentTargetFailure("invalid-selector", root.target, [], []) }
+    : { kind: "failed", failure: failure.data };
+}
+
+function sameSelection(recorded: SelectionOutcome, requested: SelectionOutcome): boolean {
+  if (recorded.kind === "whole" || requested.kind === "whole") {
+    return recorded.kind === requested.kind;
+  }
+  if (recorded.kind === "exact" || requested.kind === "exact") {
+    return (
+      recorded.kind === "exact" &&
+      requested.kind === "exact" &&
+      recorded.target === requested.target
+    );
+  }
+  return sameDocumentTargetFailure(recorded.failure, requested.failure);
+}
+
+function describeSelection(selection: SelectionOutcome): string {
+  switch (selection.kind) {
+    case "whole":
+      return "the whole document";
+    case "exact":
+      return `the target ${JSON.stringify(selection.target)}`;
+    case "failed":
+      return `a selector that names no single target (${selection.failure.kind})`;
+  }
+}
+
+/**
+ * The journal a document execution reads and appends through, with the
+ * definition-identity check that a resumed run must pass built into the read.
+ *
+ * **This authority is not middleware.** Exact canonical target is
+ * workflow-definition identity, and identity may not be decided by anything a
+ * document, a component, or an enclosing scope can replace. A public
+ * `ReplayGuard` handler installed further out can decline to call `next`, which
+ * is exactly what composable policy is allowed to do — and exactly why the
+ * comparison cannot live there. Here it is a step inside `readAll`, owned by
+ * the execution, reachable through no context and replaceable by nothing.
+ *
+ * It runs where a journal first becomes readable, so it is ahead of everything
+ * a wrong answer could reach: public guard policy, any retained Yield reaching
+ * execution, a retained Close being reused, authored work, and any append.
+ *
+ * It also owns the retained snapshot. The events it validates are the events it
+ * returns, so the identity and settlement it decided on are what every later
+ * phase observes rather than a second reading of the backend's own objects.
+ *
+ * It is a trusted wrapping site, and says so explicitly. Journal provenance is
+ * not transitive: a wrapper is unproven unless a wrapping site carries its
+ * source's witness onto it, and a run whose journal is unproven is refused by a
+ * Workspace provider before any transaction. This wrapper qualifies because
+ * core installs it before any document code exists and it delegates every
+ * append to the exact stream it was handed. What it transfers is only the
+ * witness that exact source already has — it establishes none, so an unproven
+ * source stays unproven and a wrapper somebody else built gains nothing.
+ */
+function guardedJournal(
+  stream: DurableStream,
+  root: RootDocumentSource,
+  coroutineId: CoroutineId,
+): DurableStream {
+  const admitting: DurableStream = {
+    *readAll(): Operation<DurableEvent[]> {
+      const retained = retainEvents(yield* stream.readAll());
+      admitRootHistory(retained, root, coroutineId);
+      return retained;
+    },
+    append: (event: DurableEvent) => stream.append(event),
+  };
+  return preserveJournalProvenance(stream, admitting);
+}
+
+/**
+ * Decide whether this run may replay the history it was handed.
+ *
+ * Synchronous and total over journal-provided values: every way the history can
+ * refuse to be read is the one fixed diagnostic, and the retained events it
+ * reads are the ones the caller keeps.
+ */
+function admitRootHistory(
+  retained: readonly DurableEvent[],
+  root: RootDocumentSource,
+  coroutineId: CoroutineId,
+): void {
+  const imports: Yield[] = [];
+  let terminal = false;
+  for (const event of retained) {
+    // The retained history has already settled every discriminator, so one that
+    // still refuses is a history this run cannot describe — not an event to
+    // skip past on the way to reusing a terminal result.
+    const kind = attempt(() => event.type);
+    if (kind === undefined) {
+      throw new Error(UNREADABLE_ROOT_RECORD);
+    }
+    if (kind === "close") {
+      // Any recorded completion at all, not only this coroutine's. A Close
+      // means some coroutine of this document execution finished, and every
+      // coroutine it has exists because the root document was imported — so a
+      // history holding one while the import that authorized it is absent
+      // describes a run that never happened, whichever coroutine the Close
+      // claims to belong to.
+      //
+      // Its result is recognized here as well as its coroutine. The retained
+      // history has already settled both, and forcing them now is what makes a
+      // refusal this run's fixed diagnostic rather than a failure surfacing
+      // later, out of some other phase's hands.
+      if (attempt(() => event.coroutineId) === undefined) {
+        throw new Error(UNREADABLE_ROOT_RECORD);
+      }
+      if (attempt(() => event.result) === undefined) {
+        throw new Error(UNREADABLE_ROOT_RECORD);
+      }
+      terminal = true;
+      continue;
+    }
+    if (event.type !== "yield") {
+      continue;
+    }
+    if (isRootImport(event)) {
+      imports.push(event);
+    }
+  }
+
+  // A journal that recorded no completion replays what it has and then
+  // continues live, so a root import it does not contain is one this run
+  // performs. A journal that recorded one is standing behind a selection: a
+  // history that recorded no import, recorded two, or recorded one belonging to
+  // some other coroutine establishes nothing for this coroutine to stand
+  // behind.
+  if (terminal) {
+    const owned = imports.filter((event) => attempt(() => event.coroutineId) === coroutineId);
+    if (imports.length !== 1 || owned.length !== 1) {
+      throw new Error(UNREADABLE_ROOT_RECORD);
+    }
+  }
+
+  for (const event of imports) {
+    admitRootSelection(event, root);
+  }
+}
+
+/** Whether a retained event is recognizably the root import. */
+function isRootImport(event: DurableEvent): boolean {
+  return (
+    attempt(
+      () =>
+        event.type === "yield" &&
+        event.description.type === "import_component" &&
+        event.description.name === "__root__",
+    ) === true
+  );
+}
+
+/**
+ * Hold a resumed run to the selection its journal recorded.
+ *
+ * Only `type` and `name` decide whether a journal entry matches, and the root
+ * import's name is the same for every selector — so without this, resuming with
+ * a different one would restore the recorded content and then project a section
+ * the recorded run never executed, or restore a recorded selection failure as
+ * the answer to a request that would have succeeded.
+ *
+ * The current selector is resolved against the *recorded* content, so what is
+ * compared is what each run decided, not what each caller typed: a different
+ * glob naming the same section replays, and so does the same failing selector,
+ * while any difference in outcome is stale input.
+ *
+ * A recorded failed selection is reproduced here, not left for later. Nothing
+ * later would reproduce it with its fields intact — `durableRun` reuses a
+ * recorded root Close before any effect is replayed, and that path restores a
+ * deserialized error — so a recorded failure is rebuilt from its structural
+ * record and raised ahead of that reuse. Either way no authored effect runs.
+ *
+ * Partial histories are held to the same rule: a recorded root import that
+ * names another section is refused before replay continues into it.
+ */
+function admitRootSelection(event: Yield, root: RootDocumentSource): void {
+  const recorded = recordedRootImport(event);
+  if (recorded.kind === "unrelated") {
+    return;
+  }
+  if (recorded.kind === "malformed") {
+    throw new Error(UNREADABLE_ROOT_RECORD);
+  }
+  const requested = requestedSelection(root, recorded.outline);
+  if (!sameSelection(recorded.selection, requested)) {
+    throw new StaleInputError(
+      `the recorded root document import ran ${describeSelection(recorded.selection)}, and ` +
+        `this run asks for ${describeSelection(requested)}. Re-run the document from the ` +
+        "start rather than resuming from a journal that recorded another selection.",
+      { coroutineId: event.coroutineId, description: event.description },
+    );
+  }
+  if (recorded.selection.kind === "failed") {
+    throw documentTargetError(recorded.selection.failure);
+  }
 }
 
 const execFactory: ModifierFactory = (_params) => (_args, _next) =>
@@ -871,8 +1375,11 @@ function* executeDocument(options: ExecuteOptions): Operation<DocumentExecution>
       // execution that owns it.
       const journal = yield* useSecretDetection(secretDetection, stream);
 
+      // The journal is wrapped before it reaches `durableRun`, so the identity
+      // check happens inside the read that every phase downstream depends on
+      // rather than in middleware anything could replace.
       const returned = yield* durableRun(() => Execution.operations.document(props), {
-        stream: journal,
+        stream: guardedJournal(journal, root, ROOT_COROUTINE),
       });
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);

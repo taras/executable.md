@@ -113,6 +113,19 @@ function positionAt(index: PositionIndex, offset: number): SourcePosition {
 }
 
 /**
+ * Where one top-level component invocation begins and ends in the scanned text.
+ *
+ * Half-open, relative to the text handed to the scanner. Internal: this is the
+ * scanner's own boundary decision, recorded so heading discovery can blank the
+ * regions this scanner owns before a Markdown parser looks at them. It is not a
+ * public authority over what a component is.
+ */
+export interface ComponentSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
  * Scan raw markdown text into segments.
  *
  * Identifies component invocations (`<PascalCase ...>`), executable code
@@ -120,8 +133,16 @@ function positionAt(index: PositionIndex, offset: number): SourcePosition {
  *
  * When `origin` is provided, component invocations carry `position` values
  * expressed in the original file's coordinates.
+ *
+ * When `spans` is provided, each top-level component invocation records its
+ * source span into it, in source order. Collecting them changes nothing about
+ * the segments produced.
  */
-export function scanSegments(text: string, origin?: SourceOrigin): Segment[] {
+export function scanSegments(
+  text: string,
+  origin?: SourceOrigin,
+  spans?: ComponentSpan[],
+): Segment[] {
   const index: PositionIndex = { origin, lineStarts: computeLineStarts(text) };
   const segments: Segment[] = [];
   let pos = 0;
@@ -184,6 +205,7 @@ export function scanSegments(text: string, origin?: SourceOrigin): Segment[] {
           pushText(segments, text.slice(textStart, pos));
         }
         segments.push(component.segment);
+        spans?.push({ start: pos, end: component.end });
         pos = component.end;
         textStart = pos;
         continue;
@@ -199,6 +221,13 @@ export function scanSegments(text: string, origin?: SourceOrigin): Segment[] {
   }
 
   return segments;
+}
+
+/** The source spans of the top-level component invocations in `text`. */
+export function scanComponentSpans(text: string): ComponentSpan[] {
+  const spans: ComponentSpan[] = [];
+  scanSegments(text, undefined, spans);
+  return spans;
 }
 
 interface FenceOpen {

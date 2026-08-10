@@ -36,6 +36,7 @@ import {
   type LiveDurableOperationCoordinator,
 } from "./live-coordinator.ts";
 import { ReplayGuard } from "./replay-guard.ts";
+import { consumable, observeEvent } from "./retained.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import type {
   CoroutineView,
@@ -133,12 +134,24 @@ function checkReplay<T>(
 
       // Description matches — now check replay guards before replaying.
       // ── REPLAY GUARD: Decide phase ──
-      const yieldEvent: Yield = {
+      // An isolated observation, like the check and admit phases: a decision is
+      // policy, and policy reads. Handing the retained description or result
+      // here would let a guard rewrite what replay is about to consume.
+      const observed = observeEvent({
         type: "yield",
         coroutineId: ctx.coroutineId,
         description: entry.description,
         result: entry.result,
-      };
+      });
+      const yieldEvent: Yield =
+        observed.type === "yield"
+          ? observed
+          : {
+              type: "yield",
+              coroutineId: ctx.coroutineId,
+              description: desc,
+              result: entry.result,
+            };
       const outcome = ReplayGuard.invoke(routine.scope, "decide", [yieldEvent]);
 
       if (outcome.outcome === "error") {
@@ -157,8 +170,11 @@ function checkReplay<T>(
       // All guards approved — consume the entry and advance cursor
       ctx.replayIndex.consumeYield(ctx.coroutineId);
 
-      // Feed stored result synchronously
-      resolve(protocolToEffection<T>(entry.result));
+      // Feed stored result synchronously, as a fresh mutable copy: the
+      // authoritative result stays frozen so policy cannot rewrite it, while a
+      // document that resumes on a restored binding still writes to what it
+      // receives.
+      resolve(protocolToEffection<T>(consumable(entry.result)));
       return { path: "replayed", teardown: (exit) => exit(VOID_OK) };
     }
 

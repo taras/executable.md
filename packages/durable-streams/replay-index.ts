@@ -5,7 +5,15 @@
  * to Close events. See spec §4.1.
  */
 
-import type { Close, CoroutineId, DurableEvent, EffectDescription, Result } from "./types.ts";
+import { retainEvents } from "./retained.ts";
+import type {
+  Close,
+  CoroutineId,
+  DurableEvent,
+  EffectDescription,
+  Result,
+  Yield,
+} from "./types.ts";
 
 export interface YieldEntry {
   description: EffectDescription;
@@ -14,6 +22,8 @@ export interface YieldEntry {
 
 export class ReplayIndex {
   private yields = new Map<CoroutineId, YieldEntry[]>();
+  /** Every retained Yield in stream order, each owning its own settled cells. */
+  private retained: Yield[] = [];
   private cursors = new Map<CoroutineId, number>();
   private closes = new Map<CoroutineId, Close>();
   /** Coroutines where replay has been disabled (run-live mode). */
@@ -21,23 +31,39 @@ export class ReplayIndex {
   /** Retained coroutine identities reached by the current definition. */
   private claimed = new Set<CoroutineId>();
 
+  /**
+   * Index a journal's events by identity, without reading what they settled to.
+   *
+   * The events are retained first — idempotently, so a caller that already
+   * produced the stable history hands the same objects on rather than a second
+   * wrapping of them, and every phase then observes one identity and one
+   * settlement per event.
+   */
   constructor(events: DurableEvent[]) {
-    for (const event of events) {
+    for (const event of retainEvents(events)) {
       if (event.type === "yield") {
         let list = this.yields.get(event.coroutineId);
         if (!list) {
           list = [];
           this.yields.set(event.coroutineId, list);
         }
-        list.push({
-          description: event.description,
-          result: event.result,
-        });
+        this.retained.push(event);
+        list.push(event);
       }
       if (event.type === "close") {
         this.closes.set(event.coroutineId, event);
       }
     }
+  }
+
+  /**
+   * Every retained Yield in stream order, as the events a check phase sees.
+   *
+   * The same objects the replay path consumes, so a guard and a later consumer
+   * observe one settled result rather than two reads of the stream.
+   */
+  retainedYields(): Yield[] {
+    return [...this.retained];
   }
 
   /**

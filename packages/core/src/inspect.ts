@@ -2,7 +2,11 @@ import type { Operation } from "effection";
 import { readTextFile } from "@executablemd/runtime";
 
 import type { ComponentOrigin, PropsSchema, ReturnsSchema } from "./types.ts";
-import { isFunctionComponentPath, parseMarkdownDefinition } from "./definition.ts";
+import {
+  isFunctionComponentPath,
+  parseMarkdownDefinition,
+  parseRootMarkdownDefinition,
+} from "./definition.ts";
 import { Component } from "./component-api.ts";
 import { selectComponent } from "./components/select.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -38,6 +42,22 @@ export interface DocumentInfo {
    * the default, so the mode — not the schema — tells the two apart.
    */
   returnMode: "text" | "value";
+
+  /**
+   * Every target the document addresses, as canonical encoded fragments without
+   * the document path or a leading `#`, in document order.
+   *
+   * Duplicates are retained: two sections that canonicalize to the same path
+   * are an ambiguity a caller can see rather than one a selector resolves
+   * arbitrarily.
+   */
+  readonly targets: readonly string[];
+
+  /**
+   * The exact canonical target the requested selector resolved to. Present only
+   * when a target was requested and resolved; it is never the caller's glob.
+   */
+  readonly target?: string;
 }
 
 /**
@@ -47,6 +67,10 @@ export interface DocumentInfo {
  * validation as execution, but never expands the document, evaluates a
  * code block, imports a body component, starts an agent, or creates a
  * journal — so describing a document is always free of its effects.
+ *
+ * Target discovery and selection happen here too. A requested selector that
+ * names no section, or several, fails as a `DocumentTargetError` — before
+ * anything is expanded, and without a journal ever existing.
  */
 export function* inspectDocument(options: InspectOptions): Operation<DocumentInfo> {
   const path = rootSourcePath(options);
@@ -58,7 +82,8 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
   // against the working directory, exactly as execution does. Supplied text
   // is already here, so describing it reads nothing.
   const content = yield* readRootSource(options);
-  const definition = yield* parseMarkdownDefinition("__root__", path, content);
+  const parsed = yield* parseRootMarkdownDefinition("__root__", path, content, options.target);
+  const { definition } = parsed;
 
   return {
     path,
@@ -66,6 +91,8 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
     props: definition.props,
     returns: definition.returns ?? TEXT_RETURN_SCHEMA,
     returnMode: definition.returns === undefined ? "text" : "value",
+    targets: parsed.targets,
+    ...(parsed.target === undefined ? {} : { target: parsed.target }),
   };
 }
 

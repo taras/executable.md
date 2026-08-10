@@ -19,6 +19,7 @@ import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
 import { EarlyReturnDivergenceError, TerminalDivergenceError } from "./errors.ts";
 import { ReplayGuard } from "./replay-guard.ts";
+import { consumable, observeEvent } from "./retained.ts";
 import { ReplayIndex } from "./replay-index.ts";
 import { deserializeError, serializeError } from "./serialize.ts";
 import type { DurableStream } from "./stream.ts";
@@ -36,12 +37,22 @@ function unalignedReplay(replayIndex: ReplayIndex, coroutineId: string) {
  * phase to gather observations (hash files, check timestamps) and cache
  * results for the decide phase.
  *
+ * The events come from the index rather than from the stream, so a guard reads
+ * the same retained result the replay path will use. Handing over the stream's
+ * own events instead would make validation and consumption two separate reads,
+ * and a source that answered differently between them could have a guard
+ * approve one result while execution used another.
+ *
  * See replay-guard-spec.md §5.5.
  */
-function* runCheckPhase(events: DurableEvent[], scope: Scope): Operation<void> {
-  for (const event of events) {
-    if (event.type === "yield") {
-      yield* ReplayGuard.invoke(scope, "check", [event]);
+function* runCheckPhase(replayIndex: ReplayIndex, scope: Scope): Operation<void> {
+  for (const event of replayIndex.retainedYields()) {
+    // An isolated observation, not the retained event. Guards compose by
+    // reading and passing along; what composition must not become is the power
+    // to edit a history the execution already validated.
+    const observed = observeEvent(event);
+    if (observed.type === "yield") {
+      yield* ReplayGuard.invoke(scope, "check", [observed]);
     }
   }
 }
@@ -104,7 +115,23 @@ export function* durableRun<T extends WorkflowValue>(
   // files, make network requests) to gather observations for the decide
   // phase. The check loop iterates all Yield events in journal order.
   // See replay-guard-spec.md §5.5.
-  yield* runCheckPhase(events, scope);
+  yield* runCheckPhase(replayIndex, scope);
+
+  // ── REPLAY GUARD: Admit phase ──
+  // The retained history has been offered in full and nothing has been reused
+  // yet. A guard that requires something of the history as a whole — that an
+  // event it validates is present, and present once — refuses here, before the
+  // recorded terminal result below can answer for history nobody validated.
+  yield* ReplayGuard.invoke(scope, "admit", [
+    {
+      coroutineId,
+      yields: replayIndex.retainedYields().flatMap((event) => {
+        const observed = observeEvent(event);
+        return observed.type === "yield" ? [observed] : [];
+      }),
+      terminal: replayIndex.hasClose(coroutineId),
+    },
+  ]);
 
   // If the root coroutine already has a Close event in the journal,
   // the workflow completed in a previous run. Return the stored result
@@ -112,7 +139,12 @@ export function* durableRun<T extends WorkflowValue>(
   if (replayIndex.hasClose(coroutineId)) {
     const closeEvent = replayIndex.getClose(coroutineId)!;
     if (closeEvent.result.status === "ok") {
-      return closeEvent.result.value as T;
+      // A fresh consumer copy, exactly as a replayed Yield's result is. The
+      // retained settlement is frozen so policy cannot rewrite it; what a
+      // caller receives from a completed run is ordinary data it may hold and
+      // change, and changing it cannot reach the next replay.
+      const settled = consumable(closeEvent.result);
+      return (settled.status === "ok" ? settled.value : undefined) as T;
     } else if (closeEvent.result.status === "err") {
       throw deserializeError(closeEvent.result.error);
     } else {

@@ -297,7 +297,103 @@ replay runs, even for children spawned during teardown.
 
 The replay index is a derived, in-memory structure built from the stream
 on startup. It provides per-coroutine cursored access to yield events
-and keyed access to close events:
+and keyed access to close events.
+
+Indexing reads each Yield's **identity** and not its result. A replay guard's
+check phase runs after the index is built and before anything is replayed, so a
+guard that would refuse an event has to get that chance before the stream is
+asked to produce what the event settled to — an eager read hands a backend that
+cannot produce a result the ability to fail past every guard, carrying its own
+error.
+
+Each retained Yield owns one cell for what it settled to, and **that cell spans
+the whole replay lifecycle**: the check phase is handed the retained Yields
+rather than the stream's own events, so a guard that validates a result and the
+replay path that later consumes it observe the same value. The stream's event is
+consulted at most once. Reading once across phases is the property that makes
+validation meaningful — with two reads, a source answering differently between
+them has a guard approve one result while execution uses another, and nothing
+downstream can detect the substitution.
+
+Both outcomes of that read are kept. The settlement is **detached**: the whole
+result tree is rebuilt from members read once each, so nothing the stream still
+owns remains reachable and a nested accessor cannot answer one thing to a guard
+and another to replay. The detached copy is not frozen through — detaching is
+the claim against the stream, while freezing would be a claim against the
+consumer, and replayed values are legitimately mutable. A read that threw is
+remembered and re-raised rather than retried, so a source cannot refuse the
+guard and then answer replay.
+
+**Every** event that participates in admission, indexing, or terminal reuse is
+retained — Close as well as Yield. A Close decides whether a coroutine has a
+terminal result to reuse, so leaving it as the backend's own object lets it
+belong to a child coroutine while one phase asks and to the root while the next
+does: the phase that admits the history sees no terminal result, and the phase
+that reuses one sees it.
+
+The discriminator is settled by the classification that chooses an event's
+retained kind, and never read from the source again. Identity — the coroutine an
+event belongs to, and a Yield's complete effect description — is settled once
+too, so no phase can be shown a different event than the phase before it. An
+event that refuses to say what it is is refused from every member.
+
+A Yield's settlement stays lazy, so a guard's check remains the first ordinary
+consumer of a recorded result.
+
+A Close's result is settled while the history is retained. A Close carries what
+a completed run hands back, and deferring that read leaves an interval — between
+the moment a consumer's own admission accepts the history and the moment
+terminal reuse consumes it — in which the backend still owns the answer and can
+replace it. Memoizing on first access closes repeated reads and leaves that
+window open.
+
+Every cell keeps both outcomes: a refusal is remembered and re-raised rather
+than retried, so retaining a history never fails and a refusal reaches whichever
+phase asks.
+
+The detached result is ordinary mutable JSON. Detaching is the claim against the
+stream; making the copy immutable would be a claim against the consumer, and
+replayed values are legitimately written to.
+
+After every retained event has been offered to `check` and before any recorded
+terminal result is reused, guards receive the retained history once through
+`admit`. A guard that requires something of the history as a whole — that an
+event it validates is present, and present once — refuses there, because a
+per-event check has nothing to object to in a journal that simply omits the
+event. Its default is a no-op.
+
+A replay distinguishes three views of one history, and conflating any two hands
+authority to whoever holds the wrong one:
+
+1. the **authoritative retained history**, which admission validated and replay
+   consumes — detached from the backend and immutable to policy, its
+   descriptions and results frozen through;
+2. **isolated guard observations**, a deep mutable copy made per guard
+   invocation, over which middleware composes freely and from which nothing
+   flows back; and
+3. **values delivered to workflow code**, a fresh mutable copy taken from the
+   authority at consumption — for a replayed effect and for a completed run's
+   own return value alike. This is the only thing "mutable replayed value"
+   means: writing to that copy reaches neither the authority nor the next
+   replay.
+
+The authority is frozen through in every settlement shape: a success with a
+value, a `Result<void>` with none, a failure, and a cancellation, on Yield and
+Close alike. An envelope left writable is one a public observation could add a
+value to before replay reads it.
+
+Handing policy the authoritative events would let a guard rename effect A to B —
+so a workflow asking for B consumes A's result without B ever running — or
+rewrite a recorded root selection after admission accepted it.
+
+Replay guards are **composable policy, not authority**. Guards compose through
+middleware, and a handler installed further out may decline to delegate — which
+is what composition is for. An invariant that must not be negotiable therefore
+does not belong in a guard. A consumer whose durable identity depends on
+validating retained history owns that validation itself, for example by wrapping
+the `DurableStream` it passes to `durableRun` so the check happens inside the
+read every later phase depends on.
+
 
 ```typescript
 class ReplayIndex {
@@ -309,10 +405,13 @@ class ReplayIndex {
   private closes = new Map<CoroutineId, Close>();
 
   constructor(events: DurableEvent[]) {
-    for (const event of events) {
+    // Retained first, idempotently: a caller that already produced the stable
+    // history hands the same objects on rather than a second wrapping of them.
+    for (const event of retainEvents(events)) {
       if (event.type === "yield") {
         const list = this.yields.get(event.coroutineId) ?? [];
-        list.push({ description: event.description, result: event.result });
+        // Identity now; the result when a consumer asks. See below.
+        list.push(event);
         this.yields.set(event.coroutineId, list);
       }
       if (event.type === "close") {
