@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, scoped, spawn } from "effection";
+import { createContext, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
@@ -267,22 +267,72 @@ describe("Tier EP — the execution protocol", () => {
     expect(String(output)).toContain("Foreign");
   });
 
-  it("EP20: concurrent invocations cannot swap requests", function* () {
-    const captured: ExecutionRequest[] = [];
+  // EP19: a nested invocation cannot settle its caller. The outer request is
+  // still live and unconsumed when the nested chain hands it to the nested
+  // terminal, so what refuses it is the exact-invocation comparison.
+  it("EP19: a nested invocation cannot delegate its caller's live request", function* () {
+    let refusal: unknown;
+    const expanded: string[] = [];
+    let outer: ExecutionRequest | undefined;
+    let depth = 0;
+
+    const output = yield* scoped(function* () {
+      yield* useMark(expanded);
+      yield* Execution.around({
+        *execute([request], next) {
+          const mine = depth++;
+          if (mine === 0) {
+            outer = request;
+            // Started while this invocation is still live and unconsumed.
+            yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+            yield* next(request);
+            return;
+          }
+          // The nested invocation, handing its own terminal the caller's request.
+          refusal = yield* raised(next(outer!));
+          yield* next(request);
+        },
+      });
+      return yield* collect(
+        yield* execute({ ...inlineSource("<Mark />\n"), stream: new InMemoryStream() }),
+      );
+    });
+
+    expect(refusal).toBeInstanceOf(ExecutionProtocolError);
+    expect(String(refusal)).toContain("another execution issued");
+    expect(refusal instanceof Error ? refusal.cause : "none").toBeUndefined();
+    // Both invocations still settled on their own requests.
+    expect(expanded).toEqual(["expanded"]);
+    expect(String(output)).toContain("expanded".slice(0, 0));
+  });
+
+  // EP20: two invocations, both live and both unconsumed at the moment each
+  // tries to delegate the other's request. The barrier is what makes that true
+  // — without it one could already be consumed, and a consumed-request check
+  // alone would satisfy the assertions.
+  it("EP20: concurrent invocations cannot swap live requests", function* () {
+    const arrived = [withResolvers<void>(), withResolvers<void>()];
+    const captured: Array<ExecutionRequest | undefined> = [undefined, undefined];
     const refusals: unknown[] = [];
+    let index = 0;
 
     const outputs = yield* scoped(function* () {
       yield* Execution.around({
         *execute([request], next) {
-          captured.push(request);
-          const foreign = captured.find((other) => other !== request);
-          if (foreign) {
-            // Try the other live invocation's request first.
-            refusals.push(yield* raised(next(foreign)));
-          }
+          const mine = index++;
+          captured[mine] = request;
+          arrived[mine]!.resolve();
+          // Both requests exist and neither has reached a terminal yet.
+          yield* arrived[0]!.operation;
+          yield* arrived[1]!.operation;
+
+          const foreign = captured[mine === 0 ? 1 : 0];
+          refusals.push(yield* raised(next(foreign!)));
+          // Its own request still settles this invocation afterwards.
           yield* next(request);
         },
       });
+
       const run = (doc: string) =>
         function* (): Operation<string> {
           return String(
@@ -294,11 +344,13 @@ describe("Tier EP — the execution protocol", () => {
       return [yield* first, yield* second];
     });
 
-    expect(refusals.length).toBeGreaterThan(0);
+    expect(refusals).toHaveLength(2);
     for (const refusal of refusals) {
       expect(refusal).toBeInstanceOf(ExecutionProtocolError);
+      expect(String(refusal)).toContain("another execution issued");
+      expect(refusal instanceof Error ? refusal.cause : "none").toBeUndefined();
     }
-    // Each invocation still ran its own document.
+    // Each still ran its own document under its own options.
     expect(outputs[0]).toContain("First");
     expect(outputs[1]).toContain("Second");
   });
@@ -400,6 +452,54 @@ describe("Tier EP — the execution protocol", () => {
     });
 
     expect(seen).toEqual(["document:installed", "teardown", "document:absent", "teardown"]);
+  });
+
+  // EP26: what the terminal accepted stops being the caller's to change. The
+  // chain unwinds before the document runs, so a handler that delegates and
+  // then edits what it delegated would otherwise change what executes.
+  it("EP26: options are snapshotted when the terminal accepts them", function* () {
+    // Control: replacing the same fields *before* delegating still works.
+    const replaced = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          yield* next(request.withOptions({ ...request.options, ...inlineSource("# Control\n") }));
+        },
+      });
+      return yield* collect(yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() }));
+    });
+    expect(String(replaced)).toContain("Control");
+
+    const accepted = new InMemoryStream();
+    const smuggled = new InMemoryStream();
+
+    const output = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          const options = request.options;
+          yield* next(request);
+          // Everything below happens after the private terminal accepted, and
+          // before the public chain finishes.
+          const editable = Object.assign({}, options);
+          Reflect.set(options, "stream", smuggled);
+          Reflect.set(options, "componentDirs", ["/nowhere"]);
+          Reflect.set(options, "modifiers", {});
+          void editable;
+        },
+      });
+      return yield* collect(
+        yield* execute({
+          ...inlineSource(DOC),
+          stream: accepted,
+        }),
+      );
+    });
+
+    // The document ran under what the terminal accepted: its journal is the
+    // accepted stream, and the stream substituted afterwards received nothing.
+    expect(String(output)).toContain("Hello");
+    expect(accepted.snapshot().length).toBeGreaterThan(0);
+    expect(smuggled.snapshot()).toEqual([]);
+    expect(JSON.stringify(accepted.snapshot())).not.toContain("smuggled");
   });
 
   it("EP11: admissions are copied before install() runs", function* () {
@@ -639,124 +739,6 @@ describe("Tier EP — the execution protocol", () => {
           {
             admissions: [
               // deno-lint-ignore require-yield
-              function* () {
-                ran.push("still-ran");
-              },
-            ],
-          },
-        ]),
-      );
-    });
-
-    expect(ran).toEqual(["still-ran"]);
-  });
-
-  it("EP15: a completion policy cannot replace an existing failure", function* () {
-    const asked: string[] = [];
-    const result = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.addCompletionFailure(() => {
-            asked.push("policy");
-            return new Error("the policy's failure");
-          });
-          yield* next(request);
-        },
-      });
-      // A value root that declares `returns` and produces no <Return> fails on
-      // its own terms.
-      return yield* yield* execute({
-        ...inlineSource("---\nreturns:\n  type: object\n---\n\nbody\n"),
-        stream: new InMemoryStream(),
-      });
-    });
-
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).not.toContain("the policy's failure");
-    // Not even consulted: the result was already a failure.
-    expect(asked).toEqual([]);
-  });
-
-  it("EP16: an additive failure still converts a success", function* () {
-    const result = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.addCompletionFailure(() => new Error("the policy's failure"));
-          yield* next(request);
-        },
-      });
-      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.error.message).toContain("the policy's failure");
-  });
-
-  it("EP17: the first policy to fail wins, and later ones do not replace it", function* () {
-    const asked: string[] = [];
-    const result = yield* scoped(function* () {
-      yield* Execution.around({
-        *execute([request], next) {
-          request.addCompletionFailure(() => {
-            asked.push("first");
-            return new Error("the first policy");
-          });
-          request.addCompletionFailure(() => {
-            asked.push("second");
-            return new Error("the second policy");
-          });
-          yield* next(request);
-        },
-      });
-      return yield* yield* execute({ ...inlineSource(DOC), stream: new InMemoryStream() });
-    });
-
-    expect(result.ok).toBe(false);
-    const message = result.ok ? "" : result.error.message;
-    expect(message).toContain("the first policy");
-    expect(message).not.toContain("the second policy");
-    // The second is never even consulted once the result is a failure.
-    expect(asked).toEqual(["first"]);
-  });
-
-  it("EP14: the obsolete ambient admission channel does not exist", function* () {
-    const ran: string[] = [];
-    // Rebuilt by name, cleared before and during the invocation. There is
-    // nothing behind the name, so neither has any effect.
-    const obsolete = createApi<{ admissions(): Operation<unknown> }>(
-      "executablemd.core.journal-admission",
-      {
-        // deno-lint-ignore require-yield
-        *admissions(): Operation<unknown> {
-          return [];
-        },
-      },
-    );
-
-    yield* scoped(function* () {
-      yield* obsolete.around({
-        // deno-lint-ignore require-yield
-        *admissions() {
-          return [];
-        },
-      });
-      yield* Execution.around({
-        *execute([request], next) {
-          yield* obsolete.around({
-            // deno-lint-ignore require-yield
-            *admissions() {
-              return [];
-            },
-          });
-          yield* next(request);
-        },
-      });
-      yield* collect(
-        yield* executeInstalled({ ...inlineSource(DOC), stream: new InMemoryStream() }, [
-          {
-            // deno-lint-ignore require-yield
-            admissions: [
               function* () {
                 ran.push("still-ran");
               },

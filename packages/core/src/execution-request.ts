@@ -22,6 +22,7 @@
  */
 
 import type { ExecuteOptions } from "./execute.ts";
+import type { Json } from "./types.ts";
 
 /**
  * A protocol violation by whoever is composed around an execution.
@@ -132,8 +133,11 @@ class CanonicalRequest implements ExecutionRequest {
     if (request.#generation !== invocation.generation) {
       throw new ExecutionProtocolError("delegated a request that a later withOptions() superseded");
     }
+    // Snapshotted before the invocation is marked consumed, so a failure to
+    // detach leaves nothing consumed either.
+    const settled = detachOptions(request.options);
     invocation.consumed = true;
-    invocation.settled = request.options;
+    invocation.settled = settled;
   }
 
   /** Whether this class built `value`, answered without trusting it. */
@@ -148,6 +152,60 @@ class CanonicalRequest implements ExecutionRequest {
       return false;
     }
   }
+}
+
+/**
+ * The options this execution runs under, detached from the caller.
+ *
+ * The chain unwinds before canonical core runs the document, so an outer
+ * handler that delegates and *then* edits what it delegated would otherwise
+ * change what executes. What the terminal accepts has to stop being the
+ * caller's to change.
+ *
+ * Structure is copied and frozen; identity is preserved where identity is the
+ * point. The stream is the operational object a provider selected and a witness
+ * is held against — cloning it would break provenance — and a modifier factory
+ * is a function whose identity a registry compares. Props are journal data, so
+ * they are copied all the way down. An absent optional setting stays absent, so
+ * the defaults it feeds are unchanged.
+ */
+function detachOptions(options: ExecuteOptions): ExecuteOptions {
+  const { props, componentDirs, modifiers, ...rest } = options;
+  return frozen({
+    ...rest,
+    ...(props === undefined ? {} : { props: detachProps(props) }),
+    ...(componentDirs === undefined ? {} : { componentDirs: frozen([...componentDirs]) }),
+    ...(modifiers === undefined ? {} : { modifiers: frozen({ ...modifiers }) }),
+  });
+}
+
+/** Frozen at runtime, unchanged to the type system. */
+function frozen<T>(value: T): T {
+  Object.freeze(value);
+  return value;
+}
+
+/**
+ * A frozen copy of one JSON object.
+ *
+ * `Object.fromEntries` rather than assignment, because a `__proto__` key
+ * assigned onto a fresh object rewrites its prototype on some runtimes instead
+ * of becoming a member.
+ */
+function detachProps(props: Record<string, Json>): Record<string, Json> {
+  return frozen(
+    Object.fromEntries(Object.entries(props).map(([key, value]) => [key, detachJson(value)])),
+  );
+}
+
+function detachJson(value: Json): Json {
+  if (Array.isArray(value)) {
+    return frozen(value.map((member) => detachJson(member)));
+  }
+  if (typeof value === "object" && value !== null) {
+    return detachProps(value);
+  }
+  return value;
 }
 
 function isCanonical(value: unknown): value is CanonicalRequest {
