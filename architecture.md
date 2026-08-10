@@ -646,6 +646,13 @@ selector while inspecting the document, then asks execution for the exact target
 that resolved — so a file replaced between the two reads fails on the target the
 run chose, rather than silently running whatever the glob would name now.
 
+The workflow definition is the second. It optionally carries that exact target,
+compares it with the rest of the descriptor, and validates it through core's own
+canonical-target predicate rather than a rule the workflow package restates —
+identity two packages define separately is identity they can disagree about. A
+run of one section, a run of another, and a run of the whole document are three
+different runs.
+
 A resumed run re-resolves the current selector against the *recorded* content
 and refuses to continue unless the outcome is the one recorded. A failed
 selection is an outcome too, and is recorded and compared as one — otherwise a
@@ -1088,7 +1095,8 @@ Status is measured against main.
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
 | `xmd targets` | prints one document's catalog as full document references, by inspection alone | built on the #412 stack |
-| targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack; the targeted workflow definition is unbuilt |
+| targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
+| targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
 | `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |

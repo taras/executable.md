@@ -16,17 +16,35 @@
  */
 
 import { Err, Ok, type Result } from "effection";
+import { isCanonicalDocumentTarget } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { WorkflowDefinitionError } from "./errors.ts";
-import { describe, parseMembers, parseStringMember, requireMemberNames } from "./members.ts";
+import {
+  describe,
+  type Members,
+  parseMembers,
+  parseStringMember,
+  requireMemberNames,
+} from "./members.ts";
 
-/** A document at a path inside one immutable Git object. */
+/**
+ * A document at a path inside one immutable Git object, optionally projected to
+ * one of its sections.
+ *
+ * `targetPath` is the *resolved exact* canonical document target, never the
+ * selector a caller wrote: two callers may spell one request differently, and a
+ * glob re-resolved against a different checkout would name a different section.
+ * Absent, it identifies the whole document — which is what a whole-document
+ * workflow is, not a legacy spelling of a targeted one.
+ */
 export interface GitWorkflowDefinitionV1 {
   readonly version: 1;
   readonly kind: "git";
   readonly objectFormat: "sha1" | "sha256";
   readonly objectId: string;
   readonly rootDocumentPath: string;
+  /** One exact canonical document target, without a leading `#`. */
+  readonly targetPath?: string;
 }
 
 /** Every descriptor this build understands. */
@@ -38,7 +56,14 @@ const OBJECT_ID_LENGTHS: Readonly<Record<GitWorkflowDefinitionV1["objectFormat"]
   sha256: 64,
 };
 
-const MEMBER_NAMES = ["version", "kind", "objectFormat", "objectId", "rootDocumentPath"];
+const MEMBER_NAMES = [
+  "version",
+  "kind",
+  "objectFormat",
+  "objectId",
+  "rootDocumentPath",
+  "targetPath",
+];
 
 function fail(reason: string, path: string): Error {
   return new WorkflowDefinitionError(reason, path);
@@ -77,6 +102,7 @@ function parseDefinition(value: unknown): WorkflowDefinition {
   }
 
   const objectFormat = parseObjectFormat(members.get("objectFormat"));
+  const targetPath = parseTargetPath(members);
 
   return {
     version: 1,
@@ -86,7 +112,37 @@ function parseDefinition(value: unknown): WorkflowDefinition {
     rootDocumentPath: parseRootDocumentPath(
       parseStringMember(members, "rootDocumentPath", "$", fail),
     ),
+    ...(targetPath === undefined ? {} : { targetPath }),
   };
+}
+
+/**
+ * The exact target this descriptor names, if it names one.
+ *
+ * Presence is the member being written at all, not its value: a descriptor that
+ * wrote `targetPath` and gave it `undefined` or `null` asked for a target and
+ * failed to say which, which is not the same as asking for the whole document.
+ *
+ * What counts as canonical is core's own predicate, not a rule restated here.
+ * Identity that two packages define separately is identity they can disagree
+ * about, and this member is compared against targets the document layer
+ * produced.
+ */
+function parseTargetPath(members: Members): string | undefined {
+  if (!members.has("targetPath")) {
+    return undefined;
+  }
+  const path = "$.targetPath";
+  const value = members.get("targetPath");
+  if (typeof value !== "string") {
+    throw fail(`expected a string, found ${describe(value)}`, path);
+  }
+  // Deliberately says nothing about the target it read: a canonical target
+  // encodes heading text, and heading text is document content.
+  if (!isCanonicalDocumentTarget(value)) {
+    throw fail("expected one exact canonical document target", path);
+  }
+  return value;
 }
 
 /**
@@ -103,6 +159,10 @@ export function definitionToJson(definition: WorkflowDefinition): Json {
     objectFormat: definition.objectFormat,
     objectId: definition.objectId,
     rootDocumentPath: definition.rootDocumentPath,
+    // Written only when there is one. An untargeted definition that stored an
+    // explicit absence would parse back as a descriptor that asked for a target
+    // and failed to name it.
+    ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
   };
 }
 

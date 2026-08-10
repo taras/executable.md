@@ -200,6 +200,7 @@ interface GitWorkflowDefinitionV1 {
   objectFormat: "sha1" | "sha256";
   objectId: string;
   rootDocumentPath: string;
+  targetPath?: string;
 }
 ```
 
@@ -209,6 +210,41 @@ an already-normalized repository-relative POSIX path: absolute paths,
 backslashes, NULs, empty paths, empty segments and `.` or `..` segments are
 refused rather than normalized, because two spellings of one path would
 otherwise be two identities.
+
+#### The document target a run is a run of
+
+`targetPath` names one **document target** (executable-MDX §5.4) inside the root
+document. Absent, the definition identifies the complete root document. Present,
+it identifies exactly one section of it, and carries no leading `#`.
+
+It is the **resolved exact canonical target**, never the selector a caller
+wrote. A glob describes what somebody asked for; two callers may spell one
+request differently, and re-resolving a glob against a different checkout can
+name a different section. Only the resolved answer is stable enough to be
+identity, which is the same routing-is-not-authority split the document layer
+makes.
+
+What counts as canonical is not restated here. A stored target has to satisfy
+the same round trip an exact document target does — `isCanonicalDocumentTarget()`
+from `@executablemd/core` is the one authority — so an empty target, an empty
+hierarchy level, a leading `#`, a raw `#`, `*` or `**` anywhere in it, a
+malformed or lowercase escape, a byte sequence that is not UTF-8, an NFD
+spelling, and leading, trailing or uncollapsed whitespace are all refused.
+Canonical escapes such as `%2A`, `%2F`, `%23` and `%25` are ordinary characters
+inside a label and remain valid.
+
+The member is closed like every other. Writing `targetPath` at all is what makes
+it present, so an explicit `undefined` or `null` is a descriptor that asked for a
+target and failed to name one — refused, rather than read as the whole document.
+A failure is reported at `$.targetPath` in fixed wording that never echoes the
+target it read, because a canonical target encodes heading text and heading text
+is document content. Serialization writes the member only when there is one, and
+stored identity is never normalized, decoded, repaired or re-encoded on the way
+through.
+
+`version` stays `1`. The five-member untargeted shape is the current
+representation of a whole-document workflow rather than a legacy format being
+preserved, so there is no second version, no version union, and no migration.
 
 Where that object can be fetched from is deliberately not identity. A locator
 and a local checkout path are **retrieval metadata** — replaceable, excluded
@@ -227,6 +263,13 @@ asking for a different run. Everything a run accumulates is excluded: status,
 stop reason, retrieval metadata, timestamps, document executions and journal
 records all change while the run stays the run it was. A conflict names the
 fields that differ and never the values behind them.
+
+The exact target is compared with the rest of the descriptor. A run of one
+section and a run of the whole document execute different content, and so do
+runs of two different sections, so reusing one run id for the other reports a
+`definition` conflict rather than finding the stored run. Absent compares equal
+only to absent. The same exact target under the same id is the same run and is
+found, which is what lets a targeted run be resumed.
 
 `lookup()` finds by id and creates nothing.
 
