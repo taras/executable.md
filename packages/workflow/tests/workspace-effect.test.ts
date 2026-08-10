@@ -222,14 +222,7 @@ const COMPUTED = "a computed module specifier";
  * the same characters can appear in a string that loads nothing. Each of those
  * is a different answer, and only a parse tells them apart.
  */
-function moduleSpecifiers(source: string): string[] {
-  const parsed = ts.createSourceFile(
-    "scanned.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+function moduleSpecifiers(file: ts.SourceFile): string[] {
   const found: string[] = [];
 
   function record(node: ts.Node | undefined): void {
@@ -268,213 +261,49 @@ function moduleSpecifiers(source: string): string[] {
     ts.forEachChild(node, visit);
   }
 
-  visit(parsed);
+  visit(file);
   return found;
 }
 
-/** Every name a binding pattern introduces, however deeply it destructures. */
-function bindingNames(name: ts.BindingName, into: Set<string>): void {
-  if (ts.isIdentifier(name)) {
-    into.add(name.text);
-    return;
-  }
-  for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
-      bindingNames(element.name, into);
-    }
-  }
-}
-
-/** Whether a declaration list binds its containing function rather than its block. */
-function hoists(list: ts.VariableDeclarationList): boolean {
-  return (list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) === 0;
-}
-
 /**
- * The `var` names a function body binds, wherever inside it they are written.
+ * The scanned source, and a checker that knows what its names mean.
  *
- * `var` belongs to the function, not to the `if` or the loop it sits in, so
- * collecting only a block's own statements would leave the binding invisible
- * from the statement that reads it. Nested functions and classes own their
- * own, and are not descended into.
+ * `noLib` and `noResolve` are the point rather than an economy: nothing
+ * outside this file is loaded, so a name resolves only to what the file itself
+ * declares. Anything left unresolved is ambient — supplied by a host at
+ * runtime — which is exactly the question being asked.
  */
-function hoistedNames(node: ts.Node, into: Set<string>): void {
-  ts.forEachChild(node, function collect(child: ts.Node): void {
-    if (ts.isFunctionLike(child) || ts.isClassLike(child)) {
-      return;
-    }
-    if (ts.isVariableDeclarationList(child) && hoists(child)) {
-      for (const declaration of child.declarations) {
-        bindingNames(declaration.name, into);
-      }
-    }
-    ts.forEachChild(child, collect);
+function parse(source: string): { file: ts.SourceFile; checker: ts.TypeChecker } {
+  const path = "/scanned.ts";
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const program = ts.createProgram({
+    rootNames: [path],
+    options: { noLib: true, noResolve: true, target: ts.ScriptTarget.Latest },
+    host: {
+      getSourceFile: (name) => (name === path ? file : undefined),
+      getDefaultLibFileName: () => "",
+      writeFile: () => {},
+      getCurrentDirectory: () => "/",
+      getCanonicalFileName: (name) => name,
+      useCaseSensitiveFileNames: () => true,
+      getNewLine: () => "\n",
+      fileExists: (name) => name === path,
+      readFile: (name) => (name === path ? source : undefined),
+    },
   });
-}
-
-/** The names one statement introduces into the scope that holds it. */
-function statementNames(node: ts.Node, into: Set<string>): void {
-  if (ts.isVariableStatement(node)) {
-    for (const declaration of node.declarationList.declarations) {
-      bindingNames(declaration.name, into);
-    }
-    return;
-  }
-  if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) {
-    if (node.name !== undefined) {
-      into.add(node.name.text);
-    }
-    return;
-  }
-  if (
-    ts.isTypeAliasDeclaration(node) ||
-    ts.isInterfaceDeclaration(node) ||
-    ts.isEnumDeclaration(node)
-  ) {
-    into.add(node.name.text);
-    return;
-  }
-  if (ts.isImportDeclaration(node) && node.importClause !== undefined) {
-    const clause = node.importClause;
-    if (clause.name !== undefined) {
-      into.add(clause.name.text);
-    }
-    if (clause.namedBindings !== undefined) {
-      if (ts.isNamespaceImport(clause.namedBindings)) {
-        into.add(clause.namedBindings.name.text);
-      } else {
-        for (const element of clause.namedBindings.elements) {
-          into.add(element.name.text);
-        }
-      }
-    }
-  }
-}
-
-/** Whether this node opens a lexical scope, and what that scope declares. */
-function scopeNames(node: ts.Node): Set<string> | undefined {
-  const names = new Set<string>();
-  if (ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node)) {
-    for (const statement of node.statements) {
-      statementNames(statement, names);
-    }
-    if (ts.isSourceFile(node)) {
-      hoistedNames(node, names);
-    }
-    return names;
-  }
-  if (ts.isCaseBlock(node)) {
-    for (const clause of node.clauses) {
-      for (const statement of clause.statements) {
-        statementNames(statement, names);
-      }
-    }
-    return names;
-  }
-  if (ts.isFunctionLike(node)) {
-    for (const parameter of node.parameters) {
-      bindingNames(parameter.name, names);
-    }
-    typeParameterNames(node.typeParameters, names);
-    if (
-      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)) &&
-      node.name !== undefined
-    ) {
-      names.add(node.name.text);
-    }
-    hoistedNames(node, names);
-    return names;
-  }
-  if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
-    typeParameterNames(node.typeParameters, names);
-    return names;
-  }
-  if (ts.isCatchClause(node)) {
-    if (node.variableDeclaration !== undefined) {
-      bindingNames(node.variableDeclaration.name, names);
-    }
-    return names;
-  }
-  if (ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node)) {
-    const initializer = node.initializer;
-    if (initializer !== undefined && ts.isVariableDeclarationList(initializer)) {
-      for (const declaration of initializer.declarations) {
-        bindingNames(declaration.name, names);
-      }
-    }
-    return names;
-  }
-  if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) {
-    if (node.name !== undefined) {
-      names.add(node.name.text);
-    }
-    typeParameterNames(node.typeParameters, names);
-    return names;
-  }
-  return undefined;
-}
-
-/** A type parameter binds its own name for the declaration that introduces it. */
-function typeParameterNames(
-  parameters: ts.NodeArray<ts.TypeParameterDeclaration> | undefined,
-  into: Set<string>,
-): void {
-  for (const parameter of parameters ?? []) {
-    into.add(parameter.name.text);
-  }
+  return { file, checker: program.getTypeChecker() };
 }
 
 /**
- * Whether this name reaches an ambient global rather than something declared.
+ * Whether this identifier refers to a binding at all.
  *
- * A parameter, import or local named `process` is not the host's `process`,
- * and the scope that declares it is the only place that is true — so the
- * answer is the enclosing scope chain, walked outward from the reference.
+ * Not a scope question — the checker answers those. This is only about
+ * positions where an identifier is a label rather than a reference: the member
+ * in `x.process`, the loop label in `break process`, the imported member in
+ * `{ Deno as portable }`, the key in `{ process: local }`. None of them reads
+ * the name they spell.
  */
-function unbound(node: ts.Identifier): boolean {
-  let scope: ts.Node | undefined = node.parent;
-  while (scope !== undefined) {
-    const declared = scopeNames(scope);
-    if (declared !== undefined && declared.has(node.text)) {
-      return false;
-    }
-    scope = scope.parent;
-  }
-  return true;
-}
-
-/**
- * Host globals this source actually reads.
- *
- * A reference, not an occurrence: `preprocessor` is not `process`, `foo.process`
- * names a property of something else, and `{ process: 1 }` declares a key. Only
- * a parse can tell a use of the global from a word that contains its name.
- */
-function hostGlobals(source: string): string[] {
-  const parsed = ts.createSourceFile(
-    "scanned.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const found: string[] = [];
-
-  function visit(node: ts.Node): void {
-    if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && names(node) && unbound(node)) {
-      if (!found.includes(node.text)) {
-        found.push(node.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(parsed);
-  return found;
-}
-
-/** Whether this identifier reads the binding it spells, rather than labelling something. */
-function names(node: ts.Identifier): boolean {
+function refers(node: ts.Identifier): boolean {
   const parent = node.parent;
   if (parent === undefined) {
     return true;
@@ -485,46 +314,63 @@ function names(node: ts.Identifier): boolean {
   if (ts.isQualifiedName(parent)) {
     return parent.right !== node;
   }
-  // `{ process: local }` and `{ Deno as portable }` name the member being
-  // taken, not a binding being read. Both sides are labels.
   if (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent)) {
     return false;
   }
   if (ts.isBindingElement(parent)) {
     return parent.name !== node && parent.propertyName !== node;
   }
-  if (
-    ts.isPropertyAssignment(parent) ||
-    ts.isPropertySignature(parent) ||
-    ts.isPropertyDeclaration(parent) ||
-    ts.isMethodDeclaration(parent) ||
-    ts.isMethodSignature(parent) ||
-    ts.isVariableDeclaration(parent) ||
-    ts.isParameter(parent) ||
-    ts.isBindingElement(parent) ||
-    ts.isFunctionDeclaration(parent) ||
-    ts.isClassDeclaration(parent) ||
-    ts.isInterfaceDeclaration(parent) ||
-    ts.isTypeAliasDeclaration(parent) ||
-    ts.isImportSpecifier(parent) ||
-    ts.isExportSpecifier(parent) ||
-    ts.isImportClause(parent) ||
-    ts.isNamespaceImport(parent)
-  ) {
+  if (ts.isPropertyAssignment(parent)) {
     return parent.name !== node;
+  }
+  if (ts.isLabeledStatement(parent)) {
+    return parent.label !== node;
+  }
+  if (ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) {
+    return parent.label !== node;
   }
   return true;
 }
 
+/**
+ * Host globals this source actually reads.
+ *
+ * A name is the host's only when nothing in this file declares it, and the
+ * checker is what knows that. Value scopes and type scopes, `var` hoisting,
+ * `import =`, `namespace`, mapped-type and `infer` type parameters, accessors
+ * and shadowing are the language's rules, not a list kept here — every one of
+ * them was a false positive while this was a list.
+ */
+function hostGlobals(parsed: { file: ts.SourceFile; checker: ts.TypeChecker }): string[] {
+  const found: string[] = [];
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && HOST_GLOBALS.includes(node.text) && refers(node)) {
+      const symbol = parsed.checker.getSymbolAtLocation(node);
+      const declared = (symbol?.declarations ?? []).some(
+        (declaration) => declaration.getSourceFile() === parsed.file,
+      );
+      if (!declared && !found.includes(node.text)) {
+        found.push(node.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(parsed.file);
+  return found;
+}
+
 function forbiddenNames(source: string): string[] {
+  const parsed = parse(source);
   const scanned = code(source);
   const crossings = FORBIDDEN.filter((name) => scanned.includes(name));
-  for (const global of hostGlobals(source)) {
+  for (const global of hostGlobals(parsed)) {
     if (!crossings.includes(global)) {
       crossings.push(global);
     }
   }
-  for (const specifier of moduleSpecifiers(source)) {
+  for (const specifier of moduleSpecifiers(parsed.file)) {
     const refused = specifier === COMPUTED || hostModule(specifier);
     if (refused && !crossings.includes(specifier)) {
       crossings.push(specifier);
@@ -701,6 +547,19 @@ describe("Tier DLC — Workspace coordination selection", () => {
       ),
     ).toEqual([]);
 
+    // The language's own resolution, not a catalogue of declaration shapes:
+    // `import =`, a namespace, a mapped-type parameter, an `infer` parameter,
+    // a statement label and an accessor member each bind or label the name
+    // without any rule about them being written here.
+    expect(forbiddenNames(`import Deno = require("./portable.ts");\nDeno.cwd();`)).toEqual([]);
+    expect(
+      forbiddenNames('namespace Deno {\n  export const cwd = () => "";\n}\nDeno.cwd();'),
+    ).toEqual([]);
+    expect(forbiddenNames("type Rename<T> = { [process in keyof T]: T[process] };")).toEqual([]);
+    expect(forbiddenNames("type Value<T> = T extends infer Buffer ? Buffer : never;")).toEqual([]);
+    expect(forbiddenNames("process: for (;;) {\n  break process;\n}")).toEqual([]);
+    expect(forbiddenNames("class Queue {\n  get process() {\n    return 1;\n  }\n}")).toEqual([]);
+
     // The same forms still end at their own boundary.
     expect(
       forbiddenNames("function read<Deno>(value: Deno): Deno { return value; }\nDeno.cwd();"),
@@ -784,7 +643,7 @@ describe("Tier DLC — Workspace coordination selection", () => {
       // A parse that failed would report every file as clean. A module whose
       // text imports something must yield a specifier, or this scan is reading
       // nothing and saying so approvingly.
-      if (/^import\s/m.test(source) && moduleSpecifiers(source).length === 0) {
+      if (/^import\s/m.test(source) && moduleSpecifiers(parse(source).file).length === 0) {
         unread.push(path);
       }
       const names = forbiddenNames(source);
