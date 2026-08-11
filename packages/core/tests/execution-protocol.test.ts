@@ -15,7 +15,10 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection";
+import { createContext, ensure, resource, scoped, spawn, suspend, withResolvers } from "effection";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
@@ -53,6 +56,19 @@ function watched(): { stream: InMemoryStream; reads: number } {
     return yield* readAll();
   };
   return watcher;
+}
+
+/** A directory holding one Markdown component, for this test only. */
+function useComponentFixture(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const dir = mkdtempSync(join(tmpdir(), "xmd-ep26-"));
+    writeFileSync(join(dir, "Accepted.md"), "ACCEPTED-COMPONENT\n");
+    try {
+      yield* provide(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 }
 
 function* raised(operation: Operation<unknown>): Operation<unknown> {
@@ -779,7 +795,6 @@ describe("Tier EP — the execution protocol", () => {
 
     const accepted = new InMemoryStream();
     const smuggled = new InMemoryStream();
-    const acceptedDirs = ["./components", "./"];
     const acceptedModifiers: Record<string, ModifierFactory> = {
       shout: (_params) => (_args, next) =>
         (function* () {
@@ -787,6 +802,41 @@ describe("Tier EP — the execution protocol", () => {
           return { ...inner, output: `SHOUTED:${inner.output}` };
         })(),
     };
+
+    // A component reachable only through the accepted directory.
+    const fixture = yield* useComponentFixture();
+    const acceptedDirs = [fixture];
+
+    const source = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    nested:",
+      "      type: object",
+      "      properties:",
+      "        value: { type: string }",
+      "      required: [value]",
+      "      additionalProperties: false",
+      "    items:",
+      "      type: array",
+      "      items: { type: string }",
+      "  required: [nested, items]",
+      "  additionalProperties: false",
+      "---",
+      "",
+      "<Accepted />",
+      "",
+      "nested={props.nested.value} items={props.items}",
+      "",
+      "```bash shout exec",
+      "echo hi",
+      "```",
+      "",
+    ].join("\n");
+
+    const nested = { value: "accepted-value" };
+    const items = ["accepted-item"];
 
     const output = yield* scoped(function* () {
       yield* Execution.around({
@@ -808,15 +858,19 @@ describe("Tier EP — the execution protocol", () => {
             Reflect.deleteProperty(modifiers, "shout");
             Reflect.set(modifiers, "shout", () => () => "REPLACED");
           }
+          // The caller's own nested values, edited after acceptance.
+          Reflect.set(nested, "value", "smuggled-value");
+          Reflect.set(items, 0, "smuggled-item");
         },
       });
 
       return yield* collect(
         yield* execute({
-          ...inlineSource(["```bash shout exec", "echo hi", "```", ""].join("\n")),
+          ...inlineSource(source),
           stream: accepted,
           componentDirs: acceptedDirs,
           modifiers: acceptedModifiers,
+          props: { nested, items },
         }),
       );
     });
@@ -827,9 +881,19 @@ describe("Tier EP — the execution protocol", () => {
     // Events went to the accepted stream, and the substituted one saw nothing.
     expect(accepted.snapshot().length).toBeGreaterThan(0);
     expect(smuggled.snapshot()).toEqual([]);
+    // The component resolved through the accepted directory, even though the
+    // caller's array was emptied after acceptance.
+    expect(String(output)).toContain("ACCEPTED-COMPONENT");
+    // Nested props: the accepted object and array, not the edited ones.
+    expect(String(output)).toContain("accepted-value");
+    expect(String(output)).not.toContain("smuggled-value");
+    expect(String(output)).toContain("accepted-item");
+    expect(String(output)).not.toContain("smuggled-item");
     // The caller's own arrays and records really were edited — the snapshot is
     // what protected the execution, not an absence of mutation.
     expect(acceptedDirs).toEqual([]);
+    expect(nested.value).toEqual("smuggled-value");
+    expect(items[0]).toEqual("smuggled-item");
     expect(Object.keys(acceptedModifiers)).toEqual(["shout"]);
   });
 
