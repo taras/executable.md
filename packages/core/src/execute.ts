@@ -25,7 +25,7 @@ import {
   type DurableStream,
   type Yield,
 } from "@executablemd/durable-streams";
-import { exec, readTextFile, cwd } from "@executablemd/runtime";
+import { exec, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
@@ -1059,6 +1059,10 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
   (function* () {
     const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
+    // Resolved here, where the block is, and handed to the Process operation
+    // explicitly: an enclosing `timeout=` has already made this its own value,
+    // and the Process Api itself defaults to nothing (spec §Config).
+    const timeout = yield* ephemeral(timeoutExec);
     const result = (yield createDurableOperation<Json>(
       {
         type: "exec",
@@ -1069,6 +1073,7 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
         const execResult = yield* exec({
           command,
           cwd: yield* cwd(),
+          timeout,
         });
         return execResult as unknown as Json;
       },

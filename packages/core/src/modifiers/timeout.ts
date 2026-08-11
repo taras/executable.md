@@ -1,64 +1,69 @@
 /**
- * The `timeout` wrapping modifier factory (spec §7.3).
+ * The `timeout` wrapping modifier factory (spec §3.3).
  *
- * Constrains a code block's execution time using timebox() from
- * @effectionx/timebox. If the block does not complete within the
- * specified duration, the factory throws an error.
+ * `timeout=<duration>` is what one block asks for: it boxes the block and, for
+ * as long as it is delegating to the rest of the chain, it is also the exec
+ * default that chain observes. Bare `timeout` asks for the run's exec default
+ * instead and declares nothing of its own; with no default configured it has
+ * named no duration at all, so it refuses rather than run unbounded under a
+ * word that promised a bound.
  *
- * timebox() returns a Timeboxed<T> discriminated union — not a thrown
- * error. The factory checks .timeout and raises explicitly.
+ * `timeout=` is neither: an explicit empty duration is a malformed one.
+ *
+ * The override lives in this middleware's own scope, so it exists only while
+ * this middleware is on the stack. Middleware outside it observes the
+ * enclosing default; the chain inside it, down to the exec terminal, observes
+ * this one. Nothing else in the modifier system knows this modifier by name —
+ * replacing the registry entry replaces all of it.
  */
 
 import { timebox } from "@effectionx/timebox";
 import { ephemeral } from "@executablemd/durable-streams";
-import { timeout as contextualTimeout } from "@executablemd/runtime";
+import { Config, parseDuration, timeoutExec } from "@executablemd/runtime";
+import { scoped } from "effection";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import type { CodeBlockResult } from "../types.ts";
 
-/**
- * Parse a duration string into milliseconds.
- *
- * Supports:
- * - `500ms` → 500
- * - `30s`   → 30000
- * - `2m`    → 120000
- * - `500`   → 500 (raw number, treated as ms)
- */
-export function parseDuration(s: string): number {
-  if (s.endsWith("ms")) {
-    return parseInt(s, 10);
-  }
-  if (s.endsWith("m")) {
-    return parseInt(s, 10) * 60_000;
-  }
-  if (s.endsWith("s")) {
-    return parseInt(s, 10) * 1_000;
-  }
-  return parseInt(s, 10);
-}
+/** What a bare `timeout` says when the run configured no exec default. */
+export const NO_EXEC_DEFAULT =
+  "`timeout` names no duration and the run configured none — write `timeout=<duration>` " +
+  "on the block, or start the run with --timeout-exec=<duration>";
 
 /**
- * Wrapping modifier that constrains block execution time.
+ * What this block is bounded by, and whether it declares that for the chain.
  *
- * Usage: `timeout=30s eval` or `timeout=500ms eval`. A block that names no
- * duration falls back to the run's contextual timeout — what
- * `xmd run --timeout` sets — rather than to a number of its own.
- *
- * The timebox() call is an Operation (yields Effect values), so it
- * must be bridged into the Workflow context via ephemeral(). The
- * inner next() call returns a CodeBlockWorkflow which is cast to
- * Operation for timebox compatibility.
+ * A declared duration is an override the inner chain must see. An inherited
+ * one is already what the chain would resolve, so it installs nothing.
  */
+function* effective(params: string | undefined): Operation<{
+  ms: number;
+  declared: boolean;
+  label: string;
+}> {
+  if (params === undefined) {
+    const inherited = yield* timeoutExec;
+    if (inherited === undefined) {
+      throw new Error(NO_EXEC_DEFAULT);
+    }
+    return { ms: inherited, declared: false, label: `${inherited}ms` };
+  }
+  return { ms: parseDuration(params, "timeout"), declared: true, label: params };
+}
+
 export const timeoutFactory: ModifierFactory = (params) => (_args, next) =>
   (function* () {
-    const ms = params ? parseDuration(params) : yield* ephemeral(contextualTimeout);
-    const declared = params || `${ms}ms`;
+    const { ms, declared, label } = yield* ephemeral(effective(params));
     const result = yield* ephemeral(
-      timebox(ms, () => next() as unknown as Operation<CodeBlockResult>),
+      scoped(function* () {
+        if (declared) {
+          yield* Config.around({ timeoutExec: () => ms }, { at: "min" });
+        }
+        return yield* timebox(ms, () => next() as unknown as Operation<CodeBlockResult>);
+      }),
     );
     if (result.timeout) {
-      throw new Error(`eval block timed out after ${declared}`);
+      throw new Error(`eval block timed out after ${label}`);
     }
     return result.value;
   })();

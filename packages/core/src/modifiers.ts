@@ -16,9 +16,7 @@ import { ephemeral } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import type { Middleware } from "@effectionx/middleware";
 import { combine } from "@effectionx/middleware";
-import { Config } from "@executablemd/runtime";
 import { Component, codeBlock } from "./component-api.ts";
-import { parseDuration } from "./modifiers/timeout.ts";
 import type { CodeBlockContext, CodeBlockResult, Modifier } from "./types.ts";
 
 /**
@@ -145,14 +143,6 @@ export function composeModifierChain(
   // Combine all middlewares into a single middleware
   const composed = combine(middlewares);
 
-  // What a block gives itself to finish in is also what it gives the
-  // operations it runs. `timeoutFactory`'s timebox starts first and stays the
-  // authority over the block; this is what stops a command, a request, or a
-  // prompt inside it from being cut off at the ambient default instead. A block
-  // that names no duration installs nothing and inherits the run's.
-  const declared = modifiers.find((modifier) => modifier.name === "timeout");
-  const declaredMs = declared?.params ? parseDuration(declared.params) : undefined;
-
   // Return a thunk that provides the code block contextually for the
   // duration of the chain, then runs the composed middleware.
   // The cast is safe because CodeBlockWorkflow yields DurableEffect
@@ -169,9 +159,6 @@ export function composeModifierChain(
           },
           { at: "min" },
         );
-        if (declaredMs !== undefined) {
-          yield* Config.around({ timeout: () => declaredMs }, { at: "min" });
-        }
         return yield* composed([], terminal) as unknown as Operation<CodeBlockResult>;
       }),
     );

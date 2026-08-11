@@ -103,16 +103,21 @@ describe("Tier AP — ACPX provider", () => {
     });
   });
 
-  it("AP3: explicit prompt timeout wins; otherwise the validated contextual timeout is forwarded", function* () {
+  /**
+   * The provider bounds a prompt by what its caller asked for and by nothing
+   * else. `Config.timeout` is the deadline for the whole run (§Config), so
+   * inheriting it here would have bounded every prompt by it.
+   */
+  it("AP3: an explicit prompt timeout is forwarded, and nothing else supplies one", function* () {
     const harness = createFakeRuntime();
     yield* scoped(function* () {
-      yield* Config.around({ timeout: () => 4_321 }, { at: "min" });
+      yield* Config.around({ timeout: () => 4_321, timeoutExec: () => 4_321 }, { at: "min" });
       yield* installProvider(harness);
       yield* collectPrompt("first", { timeout: 250 });
       yield* collectPrompt("second");
       expect(harness.turns[0]!.input.timeoutMs).toBe(250);
-      expect(harness.turns[1]!.input.timeoutMs).toBe(4_321);
-      expect(harness.createdOptions[0]!.timeoutMs).toBe(4_321);
+      expect(harness.turns[1]!.input.timeoutMs).toBe(undefined);
+      expect(harness.createdOptions[0]!.timeoutMs).toBe(undefined);
     });
   });
 

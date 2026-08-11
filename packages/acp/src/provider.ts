@@ -2,16 +2,17 @@
  * ACPX agent provider (specs/acp-client-spec.md §ACPX provider).
  *
  * The factory owns every resource it starts. The shared runtime is
- * created lazily on first use with the contextual cwd and validated
- * contextual timeout — nothing spawns at install time. Availability
+ * created lazily on first use with the contextual cwd — nothing spawns at
+ * install time, and no timeout is invented for a prompt nobody bounded.
+ * Availability
  * validation uses a disposable probe runtime per agent: ACPX 0.12.0's
  * `probeAvailability()` only updates internal health, so `doctor()` is
  * used and `report.ok` inspected explicitly; ACPX closes the probe
  * client internally on both success and failure.
  *
  * Prompt subscriptions follow a fixed sequence — resolve identity,
- * acquire the session's FIFO lock, register permission routing, resolve
- * the effective timeout, start the turn — registering unconditional
+ * acquire the session's FIFO lock, register permission routing, take the
+ * caller's timeout if it has one, start the turn — registering unconditional
  * cleanup for each resource as soon as it is acquired, and conditional
  * cancellation only once the turn exists. Provider teardown attempts
  * every remaining cancellation and every distinct handle close with an
@@ -24,7 +25,7 @@ import type { Operation, Stream } from "effection";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { Agent, timeout as contextualTimeout } from "@executablemd/core";
+import { Agent } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
@@ -157,14 +158,12 @@ export function* useAcpxProvider(
 
   function* runtimeOptions(): Operation<AcpRuntimeOptions> {
     const dir = yield* cwd();
-    const timeoutMs = yield* contextualTimeout;
     return {
       cwd: dir,
       sessionStore: store,
       agentRegistry: registry,
       permissionMode: providerOptions.permissionMode,
       nonInteractivePermissions: "deny",
-      timeoutMs,
     };
   }
 
@@ -308,7 +307,7 @@ export function* useAcpxProvider(
             });
           }
 
-          const timeoutMs = options?.timeout ?? (yield* contextualTimeout);
+          const timeoutMs = options?.timeout;
           const acp = yield* getRuntime();
           const turn = acp.startTurn({
             handle: entry.handle,

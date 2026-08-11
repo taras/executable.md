@@ -3,7 +3,7 @@
 import { ephemeral } from "@executablemd/durable-streams";
 import { unbox } from "@effectionx/scope-eval";
 import type { Operation } from "effection";
-import { cwd, startService, timeout } from "@executablemd/runtime";
+import { cwd, startService } from "@executablemd/runtime";
 import type { ModifierFactory } from "../modifiers.ts";
 import { useCodeBlock } from "../modifiers.ts";
 import { env, evalScope } from "../component-api.ts";
@@ -31,12 +31,10 @@ export const serviceFactory: ModifierFactory = (params) => (_args, _next) =>
         }
 
         const directory = yield* cwd();
-        const startupTimeout = yield* timeout;
         const attachment = yield* scope.eval(function* () {
           const serviceAttachment = yield* startService({
             command: ctx.content,
             cwd: directory,
-            startupTimeout,
           });
           return serviceAttachment.endpoint;
         });

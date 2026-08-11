@@ -1020,6 +1020,29 @@ hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
 
+## Configured timeouts
+
+Nothing has a timeout by default. Three contextual values bound three different
+things, and each has exactly one consumer:
+
+- the **run deadline** bounds one whole `xmd run`, preparation and execution
+  together, and only the outer run boundary reads it. Its expiry is
+  cancellation, so structured teardown still runs;
+- the **exec default** is what an exec block resolves and hands to the Process
+  operation, and only exec blocks and the built-in `timeout` modifier read it;
+  and
+- the **Fetch default** is what a Fetch resolves when its caller named none.
+
+An absent value is no timeout rather than a number the runtime chose, and no
+operation falls back to a value another operation owns — an exec block never
+inherits the run deadline, and a Fetch never inherits the exec default. What a
+document declares locally overrides only the default it names, for the region
+that declared it. A per-call value always outranks a configured one.
+
+Layers outside these three keep their own defaults where a subtree needs one:
+an agent prompt inherits what its enclosing provider declared, through the
+agent layer's own Api rather than through the run deadline.
+
 ## Authoritative behavior
 
 **Authoritative** behavior decides what an execution *is*: whether it runs at
@@ -1359,6 +1382,7 @@ Status is measured against main.
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
+| `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
 | transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | unbuilt; the adapter is #227's second layer, and workflow effect coordination and CLI reachability remain unbuilt |

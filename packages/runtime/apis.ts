@@ -88,7 +88,7 @@ import {
 import { exec as processExec } from "@effectionx/process";
 import { race, sleep, until } from "effection";
 import type { Operation } from "effection";
-import { timeout as contextualTimeout } from "./config.ts";
+import { timeoutFetch as contextualFetchTimeout } from "./config.ts";
 import { Files } from "./files.ts";
 import { Service } from "./service.ts";
 
@@ -373,10 +373,11 @@ export const API: {
         throw new Error("exec: command array must not be empty");
       }
 
-      const effectiveTimeout = timeout ?? (yield* contextualTimeout);
+      // No contextual fallback: what bounds an exec block is resolved where the
+      // block is, and arrives here as this option (spec §Config).
       const result = yield* withTimeout(
         `exec(${cmd})`,
-        effectiveTimeout,
+        timeout,
         processExec(cmd, {
           arguments: args,
           cwd,
@@ -480,7 +481,7 @@ export const API: {
         timeout?: number;
       },
     ): Operation<RuntimeFetchResponse> {
-      const timeout = init?.timeout ?? (yield* contextualTimeout);
+      const timeout = init?.timeout ?? (yield* contextualFetchTimeout);
       const response = yield* withTimeout(
         `fetch(${input})`,
         timeout,

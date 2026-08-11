@@ -23,6 +23,7 @@ import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
+import { AgentInternal } from "../src/agent/internal.ts";
 import { installPromptFailurePolicy } from "../src/agent/permission.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
@@ -32,6 +33,8 @@ import type { Json } from "../src/types.ts";
 interface Trace {
   prompts: string[];
   agentLookups: (string | undefined)[];
+  /** The timeout each prompt carried, in prompt order. */
+  timeouts: (number | undefined)[];
 }
 
 function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
@@ -51,6 +54,7 @@ function stubFactory(trace: Trace, fail?: boolean): AgentProviderFactory {
         // deno-lint-ignore require-yield
         *prompt([content, options]) {
           trace.prompts.push(content);
+          trace.timeouts.push(options?.timeout);
           return stubStream(content, options, fail);
         },
       },
@@ -96,13 +100,18 @@ interface RunOptions {
   fail?: boolean;
   /** Installed around the execution, as `<TestAgent>` installs it. */
   policy?: () => Operation<boolean>;
+  /**
+   * The subtree prompt default an `<AgentProvider timeout>` installs, in
+   * milliseconds — installed here the way that component installs it.
+   */
+  promptTimeout?: number;
 }
 
 function* runDoc(
   doc: string,
   options: RunOptions = {},
 ): Operation<{ output: string; result: Result<Json>; trace: Trace }> {
-  const trace: Trace = options.trace ?? { prompts: [], agentLookups: [] };
+  const trace: Trace = options.trace ?? { prompts: [], agentLookups: [], timeouts: [] };
   const dir = path.join(os.tmpdir(), `xmd-af-test-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
@@ -113,6 +122,10 @@ function* runDoc(
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
 
+    if (options.promptTimeout !== undefined) {
+      const inherited = options.promptTimeout;
+      yield* AgentInternal.around({ promptTimeout: () => inherited }, { at: "min" });
+    }
     yield* installAgentComponents({
       rootProvider: {
         factory: stubFactory(trace, options.fail),
@@ -165,7 +178,7 @@ describe("Tier AF — the engine owns props", () => {
   });
 
   it("AF3: an expression resolving to the wrong type is a schema printed error, and nothing runs", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output, result } = yield* runDoc(
       ["```js eval", "const who = 42;", "```", "", "<Prompt text={who} />", ""].join("\n"),
       { trace },
@@ -179,7 +192,7 @@ describe("Tier AF — the engine owns props", () => {
   });
 
   it("AF4: an unknown prop is rejected before the component performs anything", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output } = yield* runDoc('<AgentProvider name="stub" nope="x">body</AgentProvider>\n', {
       trace,
     });
@@ -200,7 +213,7 @@ describe("Tier AF — the engine owns `as`", () => {
   });
 
   it("AF6: an invalid `as` prevents every component effect", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output } = yield* runDoc('<Prompt text="hi" as="not an identifier" />\n', { trace });
 
     expect(output).toContain('Prop "as" on <Prompt />');
@@ -211,7 +224,7 @@ describe("Tier AF — the engine owns `as`", () => {
 
 describe("Tier AF — a prompt does nothing before its content renders", () => {
   it("AF7: a failing wrapper performs no lookup, no prompt and no journal entry", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output } = yield* runDoc("<Prompt>\n<Missing />\n</Prompt>\n", { trace });
 
     expect(output).toContain("Failed to import component Missing");
@@ -220,7 +233,7 @@ describe("Tier AF — a prompt does nothing before its content renders", () => {
   });
 
   it("AF8: an empty wrapper still overrides the text prop", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     yield* runDoc('<Prompt text="fallback"></Prompt>\n', { trace });
 
     expect(trace.prompts).toEqual([""]);
@@ -341,7 +354,7 @@ describe("Tier AF — registered defaults a document can replace", () => {
   });
 
   it("AF15: a repository Prompt contacts no provider and writes no journal entry", function* () {
-    const trace: Trace = { prompts: [], agentLookups: [] };
+    const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
     const { output } = yield* runDoc("<Prompt />\n", {
       trace,
       files: { "Prompt.md": "LOCAL PROMPT\n" },
@@ -418,5 +431,36 @@ describe("Tier AF — the scoped prompt-failure policy", () => {
     expect(output).toContain("LOCAL");
     expect(output).toContain("AFTER");
     expect(asked).toBe(0);
+  });
+});
+
+describe("Tier AF — prompt timeouts", () => {
+  it("AF21: a prompt nobody bounded carries no timeout", function* () {
+    const { trace } = yield* runDoc('<Prompt text="one" />\n');
+    expect(trace.timeouts).toEqual([undefined]);
+  });
+
+  it("AF22a: a prompt inherits the subtree default an <AgentProvider timeout> installs", function* () {
+    const { trace } = yield* runDoc('<Prompt text="one" />\n', { promptTimeout: 500 });
+    expect(trace.timeouts).toEqual([500]);
+  });
+
+  it("AF22b: a prompt's own timeout outranks the inherited one", function* () {
+    const { trace } = yield* runDoc('<Prompt text="one" timeout="250ms" />\n', {
+      promptTimeout: 500,
+    });
+    expect(trace.timeouts).toEqual([250]);
+  });
+
+  it("AF22: a prompt's own timeout is the duration it declares", function* () {
+    const { trace } = yield* runDoc('<Prompt text="one" timeout="250ms" />\n');
+    expect(trace.timeouts).toEqual([250]);
+  });
+
+  it("AF23: a malformed prompt timeout refuses instead of prompting", function* () {
+    const { result, trace } = yield* runDoc('<Prompt text="one" timeout="soon" />\n');
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.message).toContain("must be a duration");
+    expect(trace.timeouts).toEqual([]);
   });
 });

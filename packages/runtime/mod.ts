@@ -16,7 +16,7 @@
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `API.Service` — scoped attached service startup (`startService`)
- * - `Config` — shared execution config (`timeout`)
+ * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`)
  *
  * See `apis.ts` for architecture rationale.
  * See `@executablemd/runtime/test` for composable test stubs.
@@ -64,8 +64,9 @@ export type {
   ServiceAttachment,
   ServiceStartOptions,
 } from "./service.ts";
-export { Config, timeout } from "./config.ts";
+export { Config, timeout, timeoutExec, timeoutFetch } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
+export { asDuration, durationError, parseDuration } from "./duration.ts";
 export {
   asFilesFatal,
   FILES_ERROR,

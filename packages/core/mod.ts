@@ -103,7 +103,7 @@ export { Sample } from "./src/sample-api.ts";
 
 export { evalFactory } from "./src/eval-handler.ts";
 export { persistFactory } from "./src/modifiers/persist.ts";
-export { timeoutFactory, parseDuration } from "./src/modifiers/timeout.ts";
+export { timeoutFactory } from "./src/modifiers/timeout.ts";
 export { daemonFactory } from "./src/modifiers/daemon.ts";
 export { EphemeralEvalOutputError, ephemeralFactory } from "./src/modifiers/ephemeral.ts";
 export { serviceFactory } from "./src/modifiers/service.ts";
@@ -226,8 +226,10 @@ export {
   installPromptFailurePolicy,
 } from "./src/agent/permission.ts";
 
-// Shared execution config — contextual timeout (re-exported from runtime).
-export { Config, timeout } from "@executablemd/runtime";
+// Shared execution config — the run deadline and the exec and Fetch defaults,
+// plus the one duration grammar they are written in (re-exported from runtime).
+export { Config, timeout, timeoutExec, timeoutFetch } from "@executablemd/runtime";
+export { asDuration, durationError, parseDuration } from "@executablemd/runtime";
 export type { ConfigApi } from "@executablemd/runtime";
 
 // Secret detection — the offline scanner and its safe findings.

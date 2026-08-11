@@ -17,7 +17,6 @@ function flags(overrides: Partial<AgentFlags> = {}): AgentFlags {
   return {
     agentProvider: "acpx",
     defaultAgent: undefined,
-    timeout: undefined,
     approveAll: false,
     approveReads: false,
     denyAll: false,
@@ -30,7 +29,6 @@ describe("Tier AF — agent flag parsing", () => {
     expect(resolveAgentConfig(flags())).toEqual({
       permissionMode: "approve-reads",
       defaultAgent: undefined,
-      timeoutMs: undefined,
     });
   });
 
@@ -65,39 +63,4 @@ describe("Tier AF — agent flag parsing", () => {
     expect("error" in config ? undefined : config.defaultAgent).toBe("some-agent");
   });
 
-  it("AF5: a timeout is seconds converted to milliseconds without rounding", function* () {
-    const accepted: [string, number][] = [
-      ["30", 30_000],
-      ["0.5", 500],
-      ["1.25", 1_250],
-      [" 2 ", 2_000],
-    ];
-    for (const [input, expected] of accepted) {
-      const config = resolveAgentConfig(flags({ timeout: input }));
-      expect("error" in config ? config.error : config.timeoutMs).toBe(expected);
-    }
-  });
-
-  it("AF6: a timeout must be a complete positive finite number of seconds", function* () {
-    const rejected = [
-      "12seconds",
-      "30s",
-      "1e3",
-      "0x10",
-      ".5",
-      "+1",
-      "Infinity",
-      "NaN",
-      "",
-      "   ",
-      "abc",
-      "-1",
-      "0",
-    ];
-    for (const input of rejected) {
-      const config = resolveAgentConfig(flags({ timeout: input }));
-      expect("error" in config).toBe(true);
-      expect("error" in config ? config.error : "").toContain("--timeout");
-    }
-  });
 });
