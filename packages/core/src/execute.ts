@@ -1547,7 +1547,10 @@ function* runInvocation(
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
   const settled = withResolvers<Result<Json>>();
-  const state = { finished: false };
+  const state: { finished: boolean; document: Result<Json> | undefined } = {
+    finished: false,
+    document: undefined,
+  };
 
   const finish = (result: Result<Json>): void => {
     if (!state.finished) {
@@ -1558,19 +1561,24 @@ function* runInvocation(
 
   const owner = yield* spawn(function* () {
     // Whatever ends this task — completion, failure, or a cancelled handle —
-    // leaves no observer waiting on a run that is over.
+    // leaves no observer waiting on a run that is over. A document that already
+    // produced an outcome keeps it: cancelling a handle during teardown ends the
+    // run, it does not erase what the run decided.
     yield* ensure(() => {
-      finish(Err(new Error("the document execution was cancelled")));
+      finish(
+        state.document === undefined
+          ? Err(new Error("the document execution was cancelled"))
+          : reconcile(state.document, undefined),
+      );
     });
 
     let published = false;
-    let document: Result<Json> | undefined;
     try {
       yield* scoped(function* () {
         const execution = yield* invoke(options, installations);
         published = true;
         ready.resolve(execution);
-        document = yield* execution;
+        state.document = yield* execution;
       });
     } catch (error) {
       const teardown = error instanceof Error ? error : new Error(String(error));
@@ -1580,10 +1588,10 @@ function* runInvocation(
         ready.reject(fatalOf(teardown) ?? teardown);
         return;
       }
-      finish(reconcile(document, teardown));
+      finish(reconcile(state.document, teardown));
       return;
     }
-    finish(document ?? Err(new Error("the document execution did not complete")));
+    finish(reconcile(state.document, undefined));
   });
 
   const execution = yield* ready.operation;
@@ -1617,24 +1625,34 @@ function fatalOf(error: unknown): Error | undefined {
  * match on the exact object. Below that a document that already failed keeps
  * its own failure, and only a success is converted by teardown.
  */
-function reconcile(document: Result<Json> | undefined, teardown: Error): Result<Json> {
-  const fromTeardown = fatalOf(teardown);
-  const fromDocument = document && !document.ok ? fatalOf(document.error) : undefined;
+function reconcile(document: Result<Json> | undefined, teardown: Error | undefined): Result<Json> {
+  const failed = document !== undefined && !document.ok ? document.error : undefined;
 
+  // Kind first, then occurrence *within* that kind. The document's outcome
+  // happened before the invocation was torn down, so when both carry the same
+  // kind of fatal failure the document's is the one reported — by identity,
+  // because the engine's fences match the exact object rather than a rebuilt
+  // one.
   const durable =
-    durabilityFailure(teardown) ??
-    (document && !document.ok ? durabilityFailure(document.error) : undefined);
-  if (durable) {
+    (failed === undefined ? undefined : durabilityFailure(failed)) ??
+    (teardown === undefined ? undefined : durabilityFailure(teardown));
+  if (durable !== undefined) {
     return Err(durable);
   }
-  const files = fromTeardown ?? fromDocument;
-  if (files) {
+  const files =
+    (failed === undefined ? undefined : filesFatalFailure(failed)) ??
+    (teardown === undefined ? undefined : filesFatalFailure(teardown));
+  if (files !== undefined) {
     return Err(files);
   }
-  if (document && !document.ok) {
+
+  if (document !== undefined && !document.ok) {
     return document;
   }
-  return Err(teardown);
+  if (teardown !== undefined) {
+    return Err(teardown);
+  }
+  return document ?? Err(new Error("the document execution did not complete"));
 }
 
 function* invoke(
