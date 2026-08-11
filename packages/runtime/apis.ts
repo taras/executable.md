@@ -86,7 +86,7 @@ import {
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
 import { exec as processExec, Stdio } from "@effectionx/process";
-import { race, sleep, until } from "effection";
+import { race, sleep, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { timeoutFetch as contextualFetchTimeout } from "./config.ts";
 import { Files } from "./files.ts";
@@ -142,6 +142,56 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+/**
+ * Run one child to completion and report what the caller asked to keep.
+ *
+ * The child is acquired rather than collected: `Stdio` middleware sees every
+ * chunk as it arrives whatever this decides, because forwarding and retention
+ * are separate paths through the same process. Retention subscribes to the
+ * process streams and accumulates; a transient run never does, so a command
+ * that writes a gigabyte costs a gigabyte of nothing.
+ */
+function* run(options: {
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  retain: boolean;
+}): Operation<ProcessOutcome> {
+  const child = yield* processExec(options.command, {
+    arguments: options.args,
+    cwd: options.cwd,
+    env: options.env,
+  });
+
+  if (!options.retain) {
+    const status = yield* child.join();
+    return { exitCode: status.code ?? 1, stdout: undefined, stderr: undefined };
+  }
+
+  let stdout = "";
+  let stderr = "";
+  yield* spawn(function* () {
+    const subscription = yield* child.stdout;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      stdout += next.value;
+      next = yield* subscription.next();
+    }
+  });
+  yield* spawn(function* () {
+    const subscription = yield* child.stderr;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      stderr += next.value;
+      next = yield* subscription.next();
+    }
+  });
+
+  const status = yield* child.join();
+  return { exitCode: status.code ?? 1, stdout, stderr };
+}
+
 function* withTimeout<T>(
   label: string,
   timeout: number | undefined,
@@ -164,13 +214,36 @@ function* withTimeout<T>(
   ])) as T;
 }
 
+/**
+ * What a finished child process reports.
+ *
+ * `stdout` and `stderr` are the text a caller asked to be retained. A caller
+ * that asked for none gets `undefined` rather than an empty string: nothing was
+ * accumulated, and "no output" and "not retained" are different answers.
+ */
+export interface ProcessOutcome {
+  exitCode: number;
+  stdout: string | undefined;
+  stderr: string | undefined;
+}
+
+export interface ProcessExecOptions {
+  command: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  timeout?: number;
+  /**
+   * Retain the child's output in the outcome. Default `true`.
+   *
+   * Retention is the caller's explicit choice, never an inference: a run that
+   * keeps no diagnostic record asks for `false` and the text is forwarded to
+   * whatever is displaying it without ever being accumulated here.
+   */
+  retain?: boolean;
+}
+
 interface ProcessHandler {
-  exec(options: {
-    command: string[];
-    cwd?: string;
-    env?: Record<string, string>;
-    timeout?: number;
-  }): Operation<{ exitCode: number; stdout: string; stderr: string }>;
+  exec(options: ProcessExecOptions): Operation<ProcessOutcome>;
 }
 
 /**
@@ -360,13 +433,8 @@ export const API: {
    * Cancellation kills the process via Effection scope teardown.
    */
   Process: createApi("runtime.process", {
-    *exec(options: {
-      command: string[];
-      cwd?: string;
-      env?: Record<string, string>;
-      timeout?: number;
-    }): Operation<{ exitCode: number; stdout: string; stderr: string }> {
-      const { command, cwd, env, timeout } = options;
+    *exec(options: ProcessExecOptions): Operation<ProcessOutcome> {
+      const { command, cwd, env, timeout, retain = true } = options;
       const [cmd, ...args] = command;
 
       if (!cmd) {
@@ -375,21 +443,11 @@ export const API: {
 
       // No contextual fallback: what bounds an exec block is resolved where the
       // block is, and arrives here as this option (spec §Config).
-      const result = yield* withTimeout(
+      return yield* withTimeout(
         `exec(${cmd})`,
         timeout,
-        processExec(cmd, {
-          arguments: args,
-          cwd,
-          env,
-        }).join(),
+        run({ command: cmd, args, cwd, env, retain }),
       );
-
-      return {
-        exitCode: result.code ?? 1,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
     },
   }),
 
@@ -557,7 +615,25 @@ export const API: {
   Service,
 };
 
-export const exec: typeof API.Process.operations.exec = API.Process.operations.exec;
+/**
+ * Run a child process.
+ *
+ * A caller that says nothing about retention keeps the output, which is what
+ * every caller with something to read wants and what callers have always had.
+ * Asking for `retain: false` keeps the exit status alone, and the overloads say
+ * so: there is no string to read on that path, and the type refuses to pretend
+ * otherwise. Core, which decides retention per block, calls the Api operation
+ * directly and handles both.
+ */
+export function exec(
+  options: ProcessExecOptions & { retain: false },
+): Operation<{ exitCode: number; stdout: undefined; stderr: undefined }>;
+export function exec(
+  options: ProcessExecOptions & { retain?: true },
+): Operation<{ exitCode: number; stdout: string; stderr: string }>;
+export function exec(options: ProcessExecOptions): Operation<ProcessOutcome> {
+  return API.Process.operations.exec(options);
+}
 
 export const readTextFile: typeof API.Fs.operations.readTextFile = API.Fs.operations.readTextFile;
 

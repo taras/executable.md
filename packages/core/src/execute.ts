@@ -25,7 +25,8 @@ import {
   type DurableStream,
   type Yield,
 } from "@executablemd/durable-streams";
-import { exec, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
+import { API, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
+import type { ProcessOutcome } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
@@ -112,11 +113,19 @@ import {
   selectComponent,
   unresolvedMessage,
 } from "./components/select.ts";
-import type { EvalEnv } from "./types.ts";
+import type { CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import { Stdio } from "@effectionx/process";
+import {
+  declaredRouting,
+  FOREGROUND,
+  retaining,
+  silence,
+  VALUE_ROOT,
+  withRouting,
+} from "./foreground.ts";
+import { RetainProcessOutput } from "./foreground.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
@@ -139,6 +148,16 @@ export interface ExecuteSettings {
    * Enabled unless the trusted host explicitly supplies `false`.
    */
   secretDetection?: boolean;
+
+  /**
+   * Retain each foreground command's stdout and stderr in its durable record.
+   *
+   * Defaults to `true`, so a caller that hands over a durable stream keeps the
+   * record it has always had. A host that wants no diagnostic record — the CLI
+   * without `--journal` — passes `false`, and the run then keeps exit status
+   * alone and never accumulates the bytes on their way to the reader (#441).
+   */
+  retainProcessOutput?: boolean;
 }
 
 /**
@@ -1063,6 +1082,14 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
     // explicitly: an enclosing `timeout=` has already made this its own value,
     // and the Process Api itself defaults to nothing (spec §Config).
     const timeout = yield* ephemeral(timeoutExec);
+    // The block carries where its output goes: a `<Capture as>` region decided
+    // that lexically, and a modifier inside the chain may have narrowed it.
+    const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
+    const captured = selected.stdout === "capture";
+    // A journal is a record of what ran; a capture is text the document needs.
+    // Either one asks for the output, and nothing else does.
+    const retain = (yield* ephemeral(retaining())) || captured;
+
     const result = (yield createDurableOperation<Json>(
       {
         type: "exec",
@@ -1070,19 +1097,25 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
         command: command as unknown as Json,
       },
       function* (): Operation<Json> {
-        const execResult = yield* exec({
+        yield* silence(selected);
+        // The Api operation rather than the `exec` helper: retention varies per
+        // block here, so the outcome's shape is decided at runtime.
+        const execResult = yield* API.Process.operations.exec({
           command,
           cwd: yield* cwd(),
           timeout,
+          retain,
         });
         return execResult as unknown as Json;
       },
-    )) as unknown as { exitCode: number; stdout: string; stderr: string };
+    )) as unknown as ProcessOutcome;
 
     return {
-      output: result.stdout,
+      // Forwarded bytes reached the reader as they arrived; rendering the
+      // retained copy would show them a second time. Only a capture renders.
+      output: captured ? (result.stdout ?? "") : "",
       exitCode: result.exitCode,
-      stderr: result.stderr,
+      stderr: result.stderr ?? "",
     };
   })();
 
@@ -1092,7 +1125,15 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
 // so, with only the channel the author asked to hide removed.
 const silentFactory: ModifierFactory = (_params) => (_args, next) =>
   (function* () {
-    const result = yield* next(); // inner chain runs — exec journals its result
+    // Silence is a routing decision, so it is made before the child starts:
+    // neither channel is displayed. What the run retains is the host's choice
+    // and is unaffected — a journaled silent block still records its output.
+    const result = yield* ephemeral(
+      withRouting(
+        { stdout: "hidden", stderr: "hidden" },
+        () => next() as unknown as Operation<CodeBlockResult>,
+      ),
+    );
     return { ...result, output: "" };
   })();
 
@@ -1431,7 +1472,18 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     if (root.returns !== undefined) {
-      return yield* runValueRoot(root, root.returns, validatedProps, counter, streamed, rootPath);
+      // stdout belongs to the result here, so a command's stdout is displayed
+      // beside it rather than in it (#441).
+      return yield* withRouting(VALUE_ROOT, () =>
+        runValueRoot(
+          root,
+          root.returns as ReturnsSchema,
+          validatedProps,
+          counter,
+          streamed,
+          rootPath,
+        ),
+      );
     }
 
     // A root declaring top-level <Output> buffers completely (spec §5.4):
@@ -1588,6 +1640,7 @@ function* executeDocument(
     componentDirs = [...DEFAULT_COMPONENT_DIRS],
     modifiers: customModifiers = {},
     secretDetection,
+    retainProcessOutput = true,
   } = options;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
@@ -1637,16 +1690,8 @@ function* executeDocument(
         },
       });
 
-      // The discard provider is the base so an attached-service observer can
-      // authenticate and forward its own process output without unsilencing
-      // unrelated document subprocesses.
-      yield* Stdio.around(
-        {
-          *stdout() {},
-          *stderr() {},
-        },
-        { at: "min" },
-      );
+      // What this run keeps of a command, decided by the host that started it.
+      yield* RetainProcessOutput.set(retainProcessOutput);
 
       // The state this run owns: the table its printed errors record their
       // causes in, the schema compilers, and the slot its completion reads its

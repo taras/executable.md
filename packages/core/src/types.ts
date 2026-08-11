@@ -116,6 +116,14 @@ export interface CodeBlockContext {
   content: string;
   blockId: string;
   componentName?: string;
+  /**
+   * Where this block's foreground output goes, decided where the block sits.
+   *
+   * Carried by value because the structure that decides it — a `<Capture as>`
+   * region — is lexical to expansion, while the block runs inside the durable
+   * routine. The block context is what already crosses that boundary intact.
+   */
+  routing?: import("./foreground.ts").ForegroundRouting;
 }
 
 export interface CodeBlockResult {

@@ -52,6 +52,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
+import { declaredRouting, withRouting } from "./foreground.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -834,6 +835,7 @@ export function* expandSegments(
           content: interpolatedContent,
           blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
           componentName: parentMeta["componentName"] as string | undefined,
+          routing: yield* declaredRouting(),
         };
 
         try {
@@ -858,7 +860,7 @@ export function* expandSegments(
 
           if (codeResult.exitCode !== 0) {
             result.push(
-              yield* raise({
+              yield* checkedCommandFailure({
                 type: "error",
                 message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
                 source: segment.content,
@@ -901,6 +903,27 @@ export function* expandSegments(
   }
 
   return result;
+}
+
+/**
+ * Settle a foreground command's failure, which printing never excuses.
+ *
+ * A command that exited nonzero is a checked failure: where a printing boundary
+ * would ordinarily render the diagnostic and let the next block run, the run
+ * fails instead and later executable work does not start. The observation
+ * chain is unchanged — the segment passes through `raise` exactly once — and a
+ * printing boundary may still be the thing that prints it, exactly as an
+ * `<Output>` region's failure is printed today.
+ */
+function* checkedCommandFailure(segment: ErrorSegment): Operation<ErrorSegment> {
+  const mode = (yield* ErrorMode.get()) ?? "print";
+  if (mode !== "print") {
+    return yield* raise(segment);
+  }
+  return yield* scoped(function* () {
+    yield* ErrorMode.set("output");
+    return yield* raise(segment);
+  });
 }
 
 function captureError(message: string): ErrorSegment {
@@ -964,14 +987,10 @@ function* expandCapture(
     return [yield* raise(captureError('<Capture> requires an "as" prop (non-empty string).'))];
   }
 
-  const expandedChildren = yield* expandSegments(
-    segment.children,
-    parentMeta,
-    parentProps,
-    hideSet,
-    counter,
-    undefined,
-    path,
+  // The region's foreground commands write their stdout into this binding
+  // rather than to the reader; stderr stays diagnostic and is displayed (#441).
+  const expandedChildren = yield* withRouting({ stdout: "capture", stderr: "forward" }, () =>
+    expandSegments(segment.children, parentMeta, parentProps, hideSet, counter, undefined, path),
   );
 
   // The body reported these where they were created (§6.9). They are returned

@@ -638,6 +638,10 @@ function* runDocument(
       props: mode.props,
       componentDirs: componentDir,
       secretDetection,
+      // `--journal` is a request for a diagnostic record, and it is the only
+      // thing that asks a run to keep what its commands printed. Without one, a
+      // command's output reaches the reader and is never accumulated.
+      retainProcessOutput: journal !== undefined,
     },
     mode.installations ?? [],
   );
