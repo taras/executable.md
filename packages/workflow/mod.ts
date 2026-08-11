@@ -26,8 +26,17 @@
  * imports SQLite, Deno or any other host.
  */
 
-export { Git, GitRevisionError, revParse } from "./src/git.ts";
-export type { GitApi } from "./src/git.ts";
+export {
+  Git,
+  gitObjectFormat,
+  GitObjectError,
+  GitRepositoryError,
+  GitRevisionError,
+  readGitObject,
+  repositoryRoot,
+  revParse,
+} from "./src/git.ts";
+export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";

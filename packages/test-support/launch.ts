@@ -13,6 +13,20 @@ function entry(runtime: string): string {
   return join(ROOT, "packages", "cli", "src", `${runtime}.ts`);
 }
 
+/**
+ * Which entrypoint `runCli` launches.
+ *
+ * Runtime detection belongs to this package and nowhere else (Code Rule 12), so
+ * a suite whose subject differs by host — `xmd workflow`, which only the Deno
+ * entrypoints support — asks here rather than reading a global of its own.
+ */
+export function cliRuntime(): "deno" | "bun" | "node" {
+  if (Reflect.has(globalThis, "Deno")) {
+    return "deno";
+  }
+  return Reflect.has(globalThis, "Bun") ? "bun" : "node";
+}
+
 export function cliBase(): string[] {
   if (Reflect.has(globalThis, "Deno")) {
     return [process.execPath, "run", "--allow-all", entry("deno")];

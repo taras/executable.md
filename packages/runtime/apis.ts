@@ -85,7 +85,7 @@ import {
   stat as fsStat,
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
-import { exec as processExec } from "@effectionx/process";
+import { exec as processExec, Stdio } from "@effectionx/process";
 import { race, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeoutFetch as contextualFetchTimeout } from "./config.ts";
@@ -587,3 +587,20 @@ export const platform: typeof API.Env.operations.platform = API.Env.operations.p
 export const command: typeof API.Env.operations.command = API.Env.operations.command;
 
 export const compile: typeof API.Env.operations.compile = API.Env.operations.compile;
+
+/**
+ * Discard the standard output of subprocesses started in this scope.
+ *
+ * For a caller whose subprocess output is an *answer* rather than something to
+ * show: a command whose stdout is parsed and returned would otherwise also
+ * print itself into whatever the process was rendering. `stderr` is left alone,
+ * because that is where a failing command explains itself and a diagnostic is
+ * worth seeing.
+ *
+ * It lives here because reaching the process Api's stdio directly is host
+ * behavior, and modules held to the runtime-neutral boundary may not import a
+ * host process module of their own.
+ */
+export function useQuietProcessOutput(): Operation<void> {
+  return Stdio.around({ *stdout() {} });
+}

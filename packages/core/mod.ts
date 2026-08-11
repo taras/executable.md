@@ -144,11 +144,13 @@ export {
   formatDocumentReference,
   INLINE_SOURCE_PATH,
   inlineSource,
+  retainedSource,
   rootSourcePath,
 } from "./src/root-source.ts";
 export type {
   FileRootDocument,
   InlineRootDocument,
+  RetainedRootDocument,
   RootDocumentSource,
 } from "./src/root-source.ts";
 export {

@@ -11,6 +11,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { unsupportedWorkflowHost } from "./workflow.ts";
 import { useBunService } from "./bun-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
@@ -35,5 +36,5 @@ await main(function* (args) {
   // no host default: a run with no provider must fail rather than reach the
   // host by accident.
   yield* useHostFiles();
-  yield* runXmd(args, useBunService);
+  yield* runXmd(args, useBunService, unsupportedWorkflowHost);
 });

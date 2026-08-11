@@ -154,9 +154,8 @@ The `@executablemd/workflow` package owns `WorkflowRun`,
 and the Git capability. It depends on `@executablemd/core`,
 `@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
 `exec()` and `cwd()` the Git provider invokes; core never imports workflow or
-Git. The future CLI lifecycle is `xmd workflow start` and `xmd workflow resume`;
-there is no workflow CLI execution branch yet. The durable lookup that resume
-will require is the run storage below. Ordinary `xmd run` remains unchanged.
+Git. `xmd workflow start` and `xmd workflow resume` are the CLI lifecycle, and
+they resume through the run storage below. Ordinary `xmd run` remains unchanged.
 
 ## Workflow run storage
 
@@ -352,6 +351,68 @@ describe what failed without repeating retained props or journal payloads —
 including their member *names*, which can carry a credential as readily as a
 member value can.
 
+## The workflow lifecycle
+
+`xmd workflow start [--id=<run-id>] [--props-*=…] <definition>` and
+`xmd workflow resume <run-id>` are the two commands. Both run in the foreground,
+stream the document's own output to standard output, and report identity and
+outcome on standard error as two stable lines — `workflow run: <run-id>` once
+the run has been created or found, and `workflow status: <status>` once the
+execution settles. Only a completed run exits zero: failed exits 1, suspended 2,
+cancelled 3 and interrupted 130, so shell automation cannot mistake an
+incomplete workflow for a finished one. A request the command refuses — bad
+grammar, a missing run, an incompatible reuse, damaged storage, an unsupported
+host — exits 1.
+
+`start` establishes an immutable definition from Git rather than identifying a
+working-tree file. It locates the repository containing the supplied path,
+resolves `HEAD^{commit}` once because the command has no base option, reads the
+repository's object format, and stores version 1 of the descriptor with that
+format, the lowercase commit ID and the normalized repository-relative POSIX
+path. **The bytes that execute are the ones that commit holds**, so a working
+tree with uncommitted edits runs the committed document. Where the repository is
+checked out is retrieval metadata: replaceable, credential-free, excluded from
+identity, and reauthorized before it is used again. `resume` loads exactly the
+retained object through that locator and never substitutes the current `HEAD` or
+a same-named working-tree file. A missing object, missing or unreadable
+retrieval metadata, a path outside the repository, or a root that is not
+Markdown fails explicitly; none of them creates a replacement run or an empty
+definition. A workflow definition is one immutable object, so the component
+search path is empty and a repository component fails to resolve rather than
+resolving to content beside the definition in a mutable checkout.
+
+Every actual execution opens or creates the run's database, begins a
+document-execution record, installs the exact retained WorkflowRun, installs the
+service denial before the root is imported, and — for a live or partial
+execution — installs the logical working directory `/`, the transaction-bound
+Files provider and that database's Workspace effect coordinator. It executes
+against the database's own journal with the retained props and secret detection,
+then finishes the execution record and publishes the run's status. A completed
+run still replays, so its retained output and result are emitted, but it
+attaches no Workspace provider or coordinator and performs no filesystem
+mutation.
+
+A failure retains `failed` and uses a journal stop reason when a retained event
+identifies it, and a categorical host code otherwise; no exception text is
+retained beside the journal that filtered it. Graceful foreground interruption
+finishes the execution `interrupted` and exits 130. `suspended` is resumable;
+`failed` and `cancelled` are refused by `resume`, and `completed` replays under
+either command.
+
+The initial host is Deno-local. The Deno entrypoints — source and the compiled
+binary — install the local run store, beneath `~/.xmd/runs` unless
+`XMD_WORKFLOW_RUNS` names another absolute directory. Node and Bun expose the
+same grammar and refuse before creating or executing anything. The shared CLI
+module imports no SQLite, no DOFS and no runtime detection: it asks a host
+adapter to open storage and to attach a run's Workspace, and the entrypoints
+decide which adapter exists.
+
+Durable ownership and concurrent-executor enforcement belong to #367. Until it
+lands, a run left `running` because its host disappeared is treated as an
+orphaned interrupted execution by the next resume, which closes that unfinished
+execution record as `interrupted` before beginning its own. Nothing here claims
+concurrent resume is safe.
+
 ## Workflow Workspace
 
 The command selects the environment; the document describes the procedure.
@@ -480,8 +541,8 @@ commit form one boundary. The Workspace filesystem uses the pinned synchronous D
 entry points for its string and byte-array surface, so cancellation leaves no
 eager promise or stream pull able to reach the connection after transaction
 authority ends. The transaction-bound Files provider selects that operation for
-every document filesystem read, write and search; workflow lifecycle commands do
-not select it yet.
+every document filesystem read, write and search, and the workflow lifecycle
+commands install that provider.
 
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
@@ -557,8 +618,8 @@ collection is not in the production closure and is never invoked. The provider
 exposes no public history selection or fork operation at this layer. Its
 coordinator combines one mutation, immutable-root publication and one filtered
 journal result atomically, and the transaction-bound Files provider is what
-routes a document's `<File>` and `<Glob>` to it. Workflow start and resume do
-not reach it yet.
+routes a document's `<File>` and `<Glob>` to it. `xmd workflow start` and
+`xmd workflow resume` install that provider around each execution.
 
 The coordinator treats only errors produced through its private filesystem
 adapter's documented path and mutation refusals as journalable operation
@@ -1034,12 +1095,12 @@ consumed. If collision handling terminates immediately,
 receives no terminal event; restoring the compatible definition can still
 replay it.
 
-#390 provides and tests the non-delegating `useWorkflowServiceDenial()` provider.
-#366 will install it in the future `xmd workflow start` and `xmd workflow resume`
-scopes. No workflow CLI execution branch exists yet. The provider prevents a
-workflow from reaching an inherited host adapter, because a run-owned durable
-service requires stable identity and reconciliation rather than an
-execution-owned live process.
+`xmd workflow start` and `xmd workflow resume` install the non-delegating
+`useWorkflowServiceDenial()` provider inside each execution scope, before the
+root document is imported — in the same place `xmd run` installs its host
+service adapter. The provider prevents a workflow from reaching an inherited
+host adapter, because a run-owned durable service requires stable identity and
+reconciliation rather than an execution-owned live process.
 
 ## State ownership
 
@@ -1412,7 +1473,7 @@ Status is measured against main.
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
-| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
+| workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; the CLI lifecycle reaches it on the #366 stack |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
@@ -1421,16 +1482,16 @@ Status is measured against main.
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
-| transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack; CLI reachability remains unbuilt |
+| transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
-| `useWorkflowServiceDenial()` | provides and tests a non-delegating workflow service denial provider; #366 will install it in future start and resume scopes | built on main; no workflow CLI execution branch exists yet |
-| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI | defined in `specs/workflow-workspace-spec.md`, unbuilt; the lookup it resumes through is built |
-| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | defined in `specs/workflow-workspace-spec.md`, unbuilt (#218) |
+| `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
+| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; status, list, history, cancel, fork and delete are unbuilt |
+| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack; repository, process and attachment capabilities unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects route to it on the #366 stack, and workflow lifecycle reachability is unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |

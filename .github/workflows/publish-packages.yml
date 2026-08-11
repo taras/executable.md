@@ -30,7 +30,7 @@ jobs:
       - name: Validate the manifests declare this version
         run: |
           VERSION="${{ steps.resolve.outputs.value }}"
-          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/cli/deno.json packages/code-review-agent/deno.json packages/workflow/deno.json; do
+          for f in packages/durable-streams/deno.json packages/runtime/deno.json packages/core/deno.json packages/acp/deno.json packages/testing/deno.json packages/test-agent/deno.json packages/web/deno.json packages/workflow/deno.json packages/cli/deno.json packages/code-review-agent/deno.json; do
             declared="$(jq -r .version "$f")"
             if [ "$declared" != "$VERSION" ]; then
               echo "::error::$f declares $declared, not $VERSION — the tag does not match the manifests"
@@ -110,8 +110,15 @@ jobs:
       package: packages/web
       version: ${{ needs.version.outputs.value }}
 
+  workflow:
+    needs: [version, core, durable-streams, runtime]
+    uses: ./.github/workflows/publish-one.yml
+    with:
+      package: packages/workflow
+      version: ${{ needs.version.outputs.value }}
+
   cli:
-    needs: [version, acp, core, durable-streams, runtime, test-agent, testing, web]
+    needs: [version, acp, core, durable-streams, runtime, test-agent, testing, web, workflow]
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/cli
@@ -122,13 +129,6 @@ jobs:
     uses: ./.github/workflows/publish-one.yml
     with:
       package: packages/code-review-agent
-      version: ${{ needs.version.outputs.value }}
-
-  workflow:
-    needs: [version, core, durable-streams, runtime]
-    uses: ./.github/workflows/publish-one.yml
-    with:
-      package: packages/workflow
       version: ${{ needs.version.outputs.value }}
 
   jsr:

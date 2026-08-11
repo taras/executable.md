@@ -74,6 +74,7 @@
         "@executablemd/test-agent": "workspace:*",
         "@executablemd/testing": "workspace:*",
         "@executablemd/web": "workspace:*",
+        "@executablemd/workflow": "workspace:*",
         "@standard-schema/spec": "^1.0.0",
         "configliere": "^0.4.0",
         "effection": "4.1.0",
@@ -211,6 +212,7 @@
       "dependencies": {
         "@effectionx/context-api": "0.6.0",
         "@effectionx/fs": "0.3.0",
+        "@effectionx/process": "0.8.1",
         "@executablemd/core": "workspace:*",
         "@executablemd/durable-streams": "workspace:*",
         "@executablemd/runtime": "workspace:*",

@@ -1600,7 +1600,10 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/service-host.ts` | shared XMD service handshake observer and supervised host-process adapter |
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
-| `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the tested non-delegating provider for future workflow start and resume scopes (#366) |
+| `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the non-delegating provider `xmd workflow` installs in every start and resume scope |
+| `packages/cli/src/workflow.ts` | the runtime-neutral `xmd workflow` lifecycle: grammar, run opening, execution records, statuses and exit codes |
+| `packages/cli/src/workflow-definition.ts` | establishing an immutable Git definition from a working-tree path, and loading a retained one again |
+| `packages/cli/src/deno-workflow.ts` | the Deno run store and Workspace attachment; Node and Bun install the refusing host instead |
 | `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write and search |
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
@@ -8127,6 +8130,46 @@ Defined in §8.1.
 | DP28 | The complete canonical terminal | A recorded success carrying an otherwise-valid binding, inner failure data of the wrong shape or carrying an extra member, and rendered output a pre-root terminal never has are each the fixed unreadable-root diagnostic, quoting nothing the record held |
 | DP29 | Hostile after inspection | At both pre-root boundaries, a failure that answers safely while canonical core inspects it and throws afterwards is not the object the completion reports: reading the reported error repeatedly, every way, never throws; no planted text is in the result or the journal; and the bound terminal still replays without running preparation, policy, import or authored work |
 | DP30 | A mutated canonical refusal | Middleware that catches the refusal the expansion raised, installs throwing `name`, `stack` and `cause` accessors and a planted `message`, and rethrows the same object does not decide what the completion reports: the result is a fresh `DocumentProtocolError` carrying core's original reason, repeated inspection never throws, no planted text is in the result or the journal, nothing authored runs, and the bound terminal replays without policy, preparation, import or append |
+### Tier WFC — `xmd workflow start` and `xmd workflow resume`
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
+
+| # | Test | Verify |
+|---|------|--------|
+| WFC1 | Two starts | Two starts without `--id` report two different run ids and both complete |
+| WFC2 | Reuse | A compatible reuse of an explicit id addresses the same run; an incompatible one is refused, publishes no status and leaves the stored run as it was |
+| WFC3 | Properties | Generated `--props-*` arguments and their help come from the pinned definition; every property form is refused on `resume` |
+| WFC4 | Pinned bytes | An uncommitted working-tree edit does not reach the run: the committed document executes |
+| WFC5 | Resume | A resume names only a run and finds its definition through retained metadata; a document argument is refused |
+| WFC6 | Failure | A failing document exits 1 and retains `failed`; a compatible reuse replays that failure. The component search path is empty, so a component beside the definition never resolves |
+| WFC7 | Storage | A missing run and an unreadable database are reported without a status line, and the database is left byte-identical |
+| WFC8 | Grammar | A missing or unknown subcommand, a missing target, a third argument, `--id` on resume, an agent option and an inline document are each refused |
+| WFC9 | Definition | A non-Markdown root and a path outside the repository fail before a run id is reported |
+| WFC10 | `xmd run` | Ordinary `xmd run` is unchanged and still writes into the caller's own filesystem |
+
+### Tier WFI — What a run hands to canonical core
+
+| # | Test | Verify |
+|---|------|--------|
+| WFI1 | One installation, one execution | A run reaches core as exactly one `ExecutionInstallation` carrying its retained-run admission and its `prepare` hook, through exactly one execution — not an `executeInstalled()` followed by an `execute()` |
+| WFI2 | Completed replay attaches nothing | A live pass attaches the run's Workspace; a completed replay of the same journal attaches none |
+| WFI3 | Terminal resume refusal | A `failed` or `cancelled` run refuses `resume` with exit 1, and the substituted Git Api — which records every operation — is never invoked: no definition is retrieved, no Workspace attached, no executor run, no status line published, and status, stop reason, definition, props, retrieval metadata, every document-execution record and every journal entry under its own id remain structurally unchanged |
+| WFI4 | Admission controls | `completed` and `interrupted` runs are both admitted and both reach the executor; only the completed one is spared a Workspace |
+| WFI5 | Normal lifecycle-storage refusal | A refused completion record stops the run-state write from being attempted; a refused run-state write after a successful record keeps that failure; captured stderr carries no `workflow status:` line and does carry the refusal; both exit 1, and neither is relabelled `interrupted` |
+| WFI6 | Interruption lifecycle-storage refusal | Halting a live document at a barrier reaches the real interruption finalizer: a refused completion record attempts only `finish:interrupted`, a refused run state attempts both in order, neither publishes `workflow status: interrupted`, and the first refusal is reported |
+
+### Tier WFH — Workflow host boundary
+
+| # | Test | Verify |
+|---|------|--------|
+| WFH1/WFH3 | Unsupported host | Node and Bun refuse `start` and `resume` with the settled sentence, report no run id or status, and create no run store |
+| WFH2 | One grammar | Every runtime renders the same `xmd workflow` help |
+
+### Tier WFX — A killed run resumes from its frontier
+
+| # | Test | Verify |
+|---|------|--------|
+| WFX1 | SIGKILL and resume | A real `SIGKILL` part-way through leaves the run `running` with the effects that committed; the resume replays those exact events by id, performs the rest once each with no duplicate and no gap, advances the current root, and completes |
 
 ### Tier SL — Own-scope context updates
 

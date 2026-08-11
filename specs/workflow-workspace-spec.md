@@ -213,8 +213,37 @@ eligible history fork. It does not undo completed local or external effects.
 
 Only foreground execution that reaches `completed` exits zero. Suspended,
 failed, interrupted and cancelled executions have distinct nonzero outcomes so
-shell automation cannot mistake an incomplete workflow for completion. Their
-numeric assignments remain part of the CLI implementation contract.
+shell automation cannot mistake an incomplete workflow for completion:
+
+| Status | Exit |
+| --- | --- |
+| `completed` | 0 |
+| `failed` | 1 |
+| `suspended` | 2 |
+| `cancelled` | 3 |
+| `interrupted` | 130 |
+
+A request the command refuses rather than runs — bad grammar, a missing run, an
+incompatible reuse, damaged storage, an unsupported host — exits 1 and publishes
+no status line.
+
+**A status line says what was retained**, so a lifecycle write storage refused
+publishes none. What that costs the exit code depends on when it happened:
+
+- **Ordinary settlement.** The document finished and there is still an outcome
+  to return, so a refused completion record or run state exits **1**. The
+  refusal is reported; a document failure that also occurred is reported too.
+- **Signal-driven interruption.** SIGINT begins orderly teardown and the process
+  exits **130**, and a refused interruption write does not change that: by the
+  time a finalizer discovers it, the outcome the signal chose is already the
+  process's. The refusal is still reported, and no status storage rejected is
+  ever claimed — an interrupted run whose last write failed says nothing about
+  `interrupted` rather than saying something untrue about it.
+
+In both cases the first refusal is authoritative and stops what depends on it:
+a refused completion record is not followed by a run-state write. Only the
+status and a categorical host reason are retained; a storage diagnostic reaches
+the caller and is never written into the run.
 
 Management commands report their own request. `workflow cancel <id>` exits zero
 when cancellation succeeds even though the durable run status is `cancelled`.
@@ -226,6 +255,70 @@ form a provider-neutral control surface. The initial CLI exposes no remote-host
 selector. The contract nevertheless contains no public SQLite access, local
 process path or other assumption that prevents a later host from owning the
 same run lifecycle remotely.
+
+### 3.9 What is shipped
+
+The lifecycle above is the whole design, including §3.7's rule that a status
+line is published only once both of its lifecycle writes have persisted. What a
+caller can run today is `start` and `resume`:
+
+```sh
+xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
+xmd workflow resume <run-id>
+```
+
+Both stream the document's own output to standard output and report two stable
+lines on standard error — `workflow run: <run-id>` once the run has been created
+or found, and `workflow status: <status>` once the execution settles.
+
+A status line is published only after both of its lifecycle writes have
+persisted — the document execution's completion record first, then the run
+state — and interruption teardown attempts the same two writes in the same
+order. What a refusal costs the exit code is §3.7's; what it costs the *record*
+is the same everywhere: the first refusal stops the write that depends on it,
+the unpersisted status is neither published nor claimed, and a document failure
+that also occurred is still reported.
+
+A refusal after the document finished is that refusal — never a host
+interruption, and a completed or failed document is never relabelled
+`interrupted` on the way out.
+
+**A run that ended is not a run to continue.** `resume` admits `interrupted`,
+`suspended` and (as a full replay) `completed`; `failed` and `cancelled` are
+refused with exit 1 — before the definition is fetched from Git, before an
+orphaned execution is closed, before a document-execution record is begun,
+before a Workspace is attached, and before anything is appended. Reusing a
+compatible id through `start` is a separate rule: it replays a failed run's
+retained failure, and that does not make the run eligible for `resume`.
+
+- `start` takes exactly one Markdown definition path. There is no generic
+  `--prop`, no `--journal`, no inline `--eval`, no agent option and no host
+  selector. Without `--id` the host generates an opaque cryptographically random
+  identifier, so starting the same document twice makes two runs; the local
+  caller may supply any storage-valid non-empty identifier, and hashing is what
+  keeps it from becoming a path.
+- `resume` takes exactly one run id and nothing else. A document path, a
+  generated property argument and the aggregate property forms are each refused
+  rather than ignored.
+- The document filesystem (§10.1) is the capability a run has. Repository,
+  Worktree, Git, Agent, Worker Shell and native services are not: an inherited
+  `API.Service` provider is refused rather than delegated to, and
+  `temporaryDirectory` is refused rather than answered with a host directory.
+- A function-component root is not supported in this subset and fails before the
+  run executes.
+- The command exists on every runtime and the capability on one: the Deno
+  entrypoint and the compiled binary own the local run store, and Node and Bun
+  refuse before creating or executing anything.
+
+Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
+absolute directory. Where a run's database is on a host is arrangement, not
+identity (§5.2).
+
+Status, list, history, cancel, fork and delete are designed above and unbuilt.
+Concurrent-executor ownership is unbuilt: until it lands, a run left `running`
+because its host disappeared is treated as an orphaned interrupted execution by
+the next resume, which closes that unfinished execution record as `interrupted`
+before beginning its own.
 
 ## 4. Inspection commands
 
@@ -876,8 +969,9 @@ delegated without changing the document language.
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
 | provider-backed retained Workspace | document filesystem built by #366; repository, process and attachment capabilities unbuilt (#218) |
+| `xmd workflow start` / `resume` | built by #366, Deno entrypoints only |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
-| lifecycle start/resume/status/history/fork/delete | defined here; unbuilt |
+| lifecycle status/history/fork/delete | defined here; unbuilt |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
