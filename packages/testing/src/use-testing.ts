@@ -61,10 +61,9 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   // before the root Close. Flush-only: no boundary outcome, no journal entry of
   // its own.
   yield* Execution.around({
-    *document([documentProps], next) {
-      const value = yield* next(documentProps);
+    *document([request], next) {
+      yield* next(request);
       yield* flushStaged();
-      return value;
     },
   });
 

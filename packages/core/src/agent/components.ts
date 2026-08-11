@@ -24,7 +24,6 @@
 import { Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { Execution } from "../execute.ts";
-import type { DocumentResult } from "../execute.ts";
 import { registerComponents } from "../components/registration.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
@@ -135,8 +134,8 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       const teardown: TeardownSlot = {};
       if (rootProvider && !replayed) {
         yield* Execution.around({
-          *document([props], nextDocument) {
-            return yield* withRootProvider(rootProvider, teardown, () => nextDocument(props));
+          *document([request], nextDocument) {
+            yield* withRootProvider(rootProvider, teardown, () => nextDocument(request));
           },
         });
       }
@@ -166,21 +165,20 @@ interface TeardownSlot {
 function* withRootProvider(
   rootProvider: { factory: AgentProviderFactory; options: AgentProviderOptions },
   teardown: TeardownSlot,
-  body: () => Operation<DocumentResult>,
-): Operation<DocumentResult> {
-  let completed: DocumentResult | undefined;
+  body: () => Operation<void>,
+): Operation<void> {
+  let completed = false;
   try {
-    return yield* scoped(function* () {
+    yield* scoped(function* () {
       yield* rootProvider.factory(rootProvider.options);
-      completed = yield* body();
-      return completed;
+      yield* body();
+      completed = true;
     });
   } catch (error) {
-    if (completed === undefined) {
+    if (!completed) {
       throw error;
     }
     teardown.error = error instanceof Error ? error : new Error(String(error));
-    return completed;
   }
 }
 
