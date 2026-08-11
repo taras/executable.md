@@ -151,7 +151,7 @@ function errorCode(error: unknown): string | undefined {
  * the first chunks are gone. It begins here instead, on the display chain the
  * adapter calls for every chunk, installed before the child is acquired.
  */
-export function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
+function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
   let stdout = "";
   let stderr = "";
   // One decoder per channel: a code point split across chunks belongs to the
@@ -695,7 +695,13 @@ export const compile: typeof API.Env.operations.compile = API.Env.operations.com
  * It lives here because reaching the process Api's stdio directly is host
  * behavior, and modules held to the runtime-neutral boundary may not import a
  * host process module of their own.
+ *
+ * Installed at the display boundary, where the host's own writer sits: not
+ * showing something and not knowing it are different, and a caller that asked
+ * for the answer must still be given it. Anything upstream — this adapter's
+ * retention, a document's capture, a run's record — reads the bytes first and
+ * only the host is left out.
  */
 export function useQuietProcessOutput(): Operation<void> {
-  return Stdio.around({ *stdout() {} });
+  return Stdio.around({ *stdout() {} }, { at: "min" });
 }

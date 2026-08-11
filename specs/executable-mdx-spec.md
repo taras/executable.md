@@ -946,22 +946,38 @@ deno task build
 
 **Retention.** What a run keeps is the host's explicit choice, carried by
 `ExecuteSettings.retainProcessOutput` and defaulting to keeping output so an
-existing programmatic caller is unchanged. `xmd run` keeps output only with
-`--journal`.
+existing programmatic caller is unchanged. The path that starts a run states it;
+no shared runner infers it from whether a journal pathname was named.
 
 | Invocation | Live routing | Retained result |
 | --- | --- | --- |
-| `xmd run` | as the table above | exit status only |
+| `xmd run`, `xmd test` | as the table above | exit status only |
 | `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr |
+| `xmd workflow start`, `xmd workflow resume` | unchanged | exit status, stdout, and stderr |
+| programmatic `execute()` | unchanged | exit status, stdout, and stderr |
 
-Without a journal the run never builds the complete strings: the Process
-operation acquires the child and subscribes to its streams only when the caller
-asked to retain them. The one exception is a structural capture, whose buffer
-has the capture's scope. With a journal, output is teed into the record in
-addition to the routing the document chose — including for `silent` and
-captured blocks, because a display policy does not weaken an audit record.
+A workflow names no journal — it owns one — and retains, because its process
+results are part of the run's retained history: a resumed procedure reads back
+what a command printed rather than running it again to find out.
+
+Where nothing is retained the run never builds the complete strings: the Process
+operation accumulates only when the caller asked it to. The one exception is a
+structural capture, whose buffer has the capture's scope. Where output is
+retained it is kept in addition to the routing the document chose — including
+for `silent` and captured blocks, because a display policy does not weaken an
+audit record. Silencing output for the host's terminal likewise leaves the
+record intact: not showing something and not knowing it are different decisions.
 Retained output crosses the pre-persistence secret gate; output that is not
 retained is never accumulated for a scanner to inspect.
+
+**Channels.** A channel is what the child wrote it on. Where one channel is
+displayed on the other — a value root shows a command's stdout on stderr — the
+result still reports each channel as the child produced it. The origin of a
+redirected chunk is the redirecting task's own for the length of that one call:
+it is not carried in the bytes, which host middleware may copy or transform on
+the way past, and not held for the run, whose channels are forwarded
+concurrently. Each channel decodes independently, so a character split across
+two chunks survives interleaving with the other channel.
 
 **Failure.** A nonzero exit is a checked failure. The ambient printing mode may
 decide how it is reported, never that the run succeeded: later executable
@@ -7349,6 +7365,19 @@ visible warning blocks, gather into a separate error report).
 | FG10 | A same-name Context | Cannot suppress a record the host asked for |
 | FG11 | A same-name Context | Cannot make a transient run retain output |
 | FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
+| FG13 | A value root | Displays stdout on stderr and records it as stdout |
+| FG14 | A code point split across chunks | Survives interleaving with the other channel |
+| FG15 | A journaled capture | The binding and the record agree byte for byte |
+| FG16 | A real child splitting a code point | Each channel decodes its own; neither disturbs the other |
+| FG16a | `exec({ retain: true })` | Reports a real child's two channels exactly |
+| FG16b | `exec({ retain: false })` | Reports the status; keeps neither channel |
+| FG16c | Quiet subprocess output | Hidden from the host, still reported to its caller |
+| FG17 | A resumed journaled capture | Rebuilds its binding without running the child again |
+| FG18 | A redirect held up in downstream middleware | Cannot swallow a sibling's stderr |
+| FG19 | Enclosing middleware that copies the bytes | Cannot make one channel look like the other |
+| FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
+| FG21 | `xmd run --journal` | The record keeps both channels |
+| FG22 | `xmd workflow start` | Retains its process results though it names no journal |
 
 ### Tier E — End-to-end
 

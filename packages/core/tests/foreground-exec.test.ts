@@ -20,7 +20,6 @@ import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useStubFs } from "@executablemd/runtime/test";
-import { exec, retaining } from "@executablemd/runtime";
 import { FOREGROUND, VALUE_ROOT, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
 import { API } from "@executablemd/runtime";
@@ -440,34 +439,6 @@ describe("Tier FG — foreground execution", () => {
     expect(kept?.retainedStderr).toBe("diagnostic");
   });
 
-  it("FG16: the runtime helper keeps each channel's split code points apart", function* () {
-    const encoder = new TextEncoder();
-    const euro = encoder.encode("€");
-    let kept: { stdout: string; stderr: string } | undefined;
-
-    yield* scoped(function* () {
-      const retained = yield* retaining();
-      yield* Stdio.operations.stdout(euro.slice(0, 1));
-      yield* Stdio.operations.stderr(encoder.encode("x"));
-      yield* Stdio.operations.stdout(euro.slice(1));
-      kept = { stdout: retained.stdout(), stderr: retained.stderr() };
-    });
-
-    expect(kept?.stdout).toBe("€");
-    expect(kept?.stderr).toBe("x");
-  });
-
-  it("FG16a: exec({ retain: true }) reports a real child's channels exactly", function* () {
-    const result = yield* exec({
-      command: ["bash", "-c", "printf 'out-€'; printf 'err-€' >&2"],
-      retain: true,
-    });
-
-    expect(result.stdout).toBe("out-€");
-    expect(result.stderr).toBe("err-€");
-    expect(result.exitCode).toBe(0);
-  });
-
   /**
    * A journaled capture has to survive a resumed run: replay never starts the
    * child, so the binding can only come from what the record kept.
@@ -577,6 +548,50 @@ describe("Tier FG — foreground execution", () => {
     expect(seen.stderr.match(/out/g) ?? []).toHaveLength(1);
     expect(seen.stderr.match(/err/g) ?? []).toHaveLength(1);
     // And the record still says which channel each came from.
+    expect(kept?.retainedStdout).toBe("out");
+    expect(kept?.retainedStderr).toBe("err");
+  });
+
+  /**
+   * `Stdio` middleware is documented as free to capture, transform, or redirect
+   * what it forwards, so a host that hands on a copy of the bytes it was given
+   * is behaving correctly. A route that reads a chunk's origin off the payload
+   * loses it to exactly that host, and records a command's stdout as its stderr.
+   */
+  it("FG19: an enclosing middleware may copy the bytes without confusing the channels", function* () {
+    const encoder = new TextEncoder();
+    let copies = 0;
+    let kept: ForegroundOutput | undefined;
+
+    const seen = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        // Installed before the route, so every emission the route forwards —
+        // including the one it redirects — arrives here first and goes on as a
+        // plain array holding the same bytes.
+        yield* Stdio.around({
+          *stderr([bytes], next) {
+            copies += 1;
+            return yield* next(new Uint8Array(bytes));
+          },
+        });
+
+        const finished = yield* route(VALUE_ROOT, true);
+        yield* Stdio.operations.stdout(encoder.encode("out"));
+        yield* Stdio.operations.stderr(encoder.encode("err"));
+        kept = finished();
+      });
+      return seen;
+    });
+
+    // The copying middleware really did see both emissions.
+    expect(copies).toBe(2);
+    // A value root keeps its own stdout free, and each reached the reader once.
+    expect(seen.stdout).toBe("");
+    expect(seen.stderr).toContain("out");
+    expect(seen.stderr).toContain("err");
+    expect(seen.stderr.match(/out/g) ?? []).toHaveLength(1);
+    expect(seen.stderr.match(/err/g) ?? []).toHaveLength(1);
+    // And the record is still the child's own two channels.
     expect(kept?.retainedStdout).toBe("out");
     expect(kept?.retainedStderr).toBe("err");
   });

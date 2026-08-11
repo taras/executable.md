@@ -157,6 +157,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
+    path: "packages/cli/tests/workflow-retention.test.ts",
+    reason:
+      "reads what `xmd workflow start` retained from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/366",
+  },
+  {
     path: "packages/cli/tests/workflow-installation.test.ts",
     reason:
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

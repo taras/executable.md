@@ -79,21 +79,25 @@ export function withRouting<T>(
 }
 
 /**
- * stdout on its way to the channel a value root leaves free.
+ * The route whose stdout is passing through stderr on this task, if any.
  *
- * It holds the same bytes, so what a reader receives is byte-for-byte what the
- * child wrote. Carrying the origin on the emission is
- * what keeps two concurrently forwarded channels from being confused for one
- * another: only this array is somebody else's stdout, and only while it is in
- * flight.
+ * A redirect is a fact about one emission, not about the route as a whole and
+ * not about the bytes: middleware between a route and the host is entitled to
+ * capture, transform, or redirect what it forwards, so anything carried in the
+ * payload is gone the moment a legitimate handler copies it. It lives here
+ * instead, in a scope the redirecting task opens and closes around its own
+ * call. `Stdio` handlers run in the scope of whoever called the operation, so
+ * a channel forwarded by a sibling task never sees it — which is what keeps a
+ * redirect held up in downstream middleware from swallowing a sibling's stderr.
+ *
+ * The value is the route's own token rather than `true`: a context is addressed
+ * by name, and a record of what a child wrote should not be suppressible by
+ * anything that can guess the name.
  */
-class RedirectedStdout extends Uint8Array {}
-
-function redirected(bytes: Uint8Array): RedirectedStdout {
-  const marked = new RedirectedStdout(bytes.length);
-  marked.set(bytes);
-  return marked;
-}
+const Redirecting: Context<object | undefined> = createContext<object | undefined>(
+  "@executablemd/core/foreground/redirecting",
+  undefined,
+);
 
 /** What one block's output did, once it has finished. */
 export interface ForegroundOutput {
@@ -123,11 +127,11 @@ export interface ForegroundOutput {
  * decision. A value root displays its commands' stdout on the host's stderr,
  * and that redirection re-enters this Api, so the stderr handler has to tell a
  * child's own stderr from stdout passing through on its way to a free channel.
- * The origin travels with the bytes — `RedirectedStdout` is a view over the
- * very same memory, so nothing is copied and nothing is displayed differently —
- * because the two channels are forwarded by concurrent tasks: a redirect held
- * up in downstream middleware must not make a sibling's stderr look like
- * somebody else's stdout.
+ * The origin is the redirecting task's own, held in a scope this route opens
+ * around its call and never in the bytes it forwards: the two channels are
+ * forwarded by concurrent tasks, and enclosing middleware may hand on a copy of
+ * what it was given. Neither a sibling's progress nor a byte-preserving
+ * transformation can make one channel look like the other.
  *
  * Each channel decodes with its own streaming decoder, and each chunk is
  * decoded once and reused, so a code point split across chunks survives and one
@@ -141,6 +145,8 @@ export function* route(
   let captured = "";
   let retainedStdout = "";
   let retainedStderr = "";
+  // This route's own, so nothing outside it can claim one of its emissions.
+  const mine = {};
   const fromStdout = new TextDecoder();
   const fromStderr = new TextDecoder();
   const wanted = retain || selected.stdout === "capture";
@@ -162,14 +168,18 @@ export function* route(
       }
       if (selected.stdout === "diagnostic") {
         // Shown on the channel a value root leaves free. It is still the
-        // child's stdout: it was recorded as such above, and it is marked so
-        // the stderr handler below does not record it twice.
-        return yield* Stdio.operations.stderr(redirected(bytes));
+        // child's stdout: recorded as such above, and announced here for the
+        // length of this one call so the stderr handler does not record it
+        // again. The scope closes with the call, whatever it forwards.
+        return yield* scoped(function* () {
+          yield* Redirecting.set(mine);
+          return yield* Stdio.operations.stderr(bytes);
+        });
       }
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      if (retain && !(bytes instanceof RedirectedStdout)) {
+      if (retain && (yield* Redirecting.get()) !== mine) {
         retainedStderr += fromStderr.decode(bytes, { stream: true });
       }
       if (selected.stderr === "hidden") {

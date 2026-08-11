@@ -68,8 +68,6 @@ export type {
 export { Config, timeout, timeoutExec, timeoutFetch } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
 export { asDuration, durationError, parseDuration } from "./duration.ts";
-/** Retention for a caller that drives a child itself; see `exec`. */
-export { retaining } from "./apis.ts";
 export type { ProcessExecOptions, ProcessOutcome } from "./apis.ts";
 export {
   asFilesFatal,

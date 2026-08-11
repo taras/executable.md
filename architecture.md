@@ -1135,13 +1135,19 @@ another:
   stdout beside its JSON result rather than in it. Routing is visible in
   document structure, never selected by a root-level presentation declaration
   or by which runtime is executing.
-- **Retention** is what the run keeps. The host chooses it explicitly and says
-  so; nothing infers it from which stream implementation a journal happens to
-  use. A run that keeps no diagnostic record keeps the exit status alone, and
-  the transient path never accumulates the bytes on their way past — a command
-  that writes a gigabyte costs a gigabyte of nothing. A run given a journal
-  retains stdout and stderr in addition to whatever routing the document chose,
-  because a display policy does not weaken an explicit audit record.
+- **Retention** is what the run keeps. The host path that starts a run states
+  it; nothing infers it from which stream implementation a journal happens to
+  use, or from whether a pathname was named. A run that keeps no diagnostic
+  record keeps the exit status alone, and the transient path never accumulates
+  the bytes on their way past — a command that writes a gigabyte costs a
+  gigabyte of nothing. A run that retains keeps stdout and stderr in addition to
+  whatever routing the document chose, because a display policy does not weaken
+  an explicit audit record.
+- **Display suppression** is routing, not retention. A caller whose subprocess
+  output is an answer rather than something to show silences it at the display
+  boundary, where the host's own writer sits, so everything upstream — a run's
+  record, a region's capture, the adapter's own retention — still reads it.
+  Not showing something and not knowing it are different decisions.
 - **Failure** is neither. A nonzero exit is a checked failure: a printing
   boundary may decide how it is reported, never that the run succeeded anyway.
   Later executable work does not start, and the run fails without any
@@ -1151,6 +1157,22 @@ Retained output crosses the existing pre-persistence secret gate, exactly as
 any other journaled field does. Output that is never retained is never
 scanned, because there is nothing to persist and nothing was accumulated for a
 scanner to inspect.
+
+Which host paths retain is a property of the path, stated where the run starts:
+`xmd run` and `xmd test` retain when the caller asked for a diagnostic trace and
+keep nothing otherwise; a workflow retains, because it owns its journal and a
+resumed procedure reads its process results back rather than re-running the
+commands that produced them; programmatic execution retains unless its trusted
+caller selects transient execution. A shared runner never decides this from what
+it was given.
+
+A channel is classified by where the child wrote it, before any display decision
+and independently of what any middleware does to the bytes afterwards. Where one
+channel is displayed on the other — a value root shows a command's stdout beside
+its JSON result — the redirect is announced in the redirecting task's own scope
+for the length of that one call. It is not a property of the bytes, which
+middleware may legitimately copy or transform, and not a property of the run,
+whose two channels are forwarded concurrently.
 
 Forwarding, completion, cancellation and teardown belong to the executable
 block's own Effection scope. Cancelling the block stops the child and the tasks
