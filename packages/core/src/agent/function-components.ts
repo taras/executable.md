@@ -14,7 +14,6 @@
  * part of. None of them asks for anything special to make that so.
  */
 
-
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { content, hasContent } from "../component-api.ts";

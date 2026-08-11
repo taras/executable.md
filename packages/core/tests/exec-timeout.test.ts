@@ -172,9 +172,10 @@ describe("Tier XE — exec block timeouts", () => {
 
   it("XE12: a block's declaration does not leak to the block after it", function* () {
     const { timeouts } = yield* run(
-      `${block("bash timeout=250ms exec")}\n${block("bash timeout=1s exec", "again")}\n${
-        block("bash exec", "third")
-      }`,
+      `${block("bash timeout=250ms exec")}\n${block("bash timeout=1s exec", "again")}\n${block(
+        "bash exec",
+        "third",
+      )}`,
       { config: { timeoutExec: 5_000 } },
     );
     expect(timeouts).toEqual([250, 1_000, 5_000]);

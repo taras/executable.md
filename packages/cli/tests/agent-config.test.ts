@@ -62,5 +62,4 @@ describe("Tier AF — agent flag parsing", () => {
     const config = resolveAgentConfig(flags({ defaultAgent: "some-agent" }));
     expect("error" in config ? undefined : config.defaultAgent).toBe("some-agent");
   });
-
 });

@@ -45,7 +45,10 @@ function* recordExec<T>(body: () => Operation<T>): Operation<(number | undefined
  * all: an invalid configured value throws when resolved, so completing proves
  * the field was never consulted and throwing proves it was.
  */
-function* consulted(install: Operation<void>, body: Operation<unknown>): Operation<Error | undefined> {
+function* consulted(
+  install: Operation<void>,
+  body: Operation<unknown>,
+): Operation<Error | undefined> {
   return yield* scoped(function* () {
     yield* install;
     try {
@@ -90,15 +93,13 @@ describe("Tier CF — Config Api", () => {
   });
 
   it("CF2b: an omitted field inherits the enclosing value rather than clearing it", function* () {
+    yield* Config.around({ timeout: () => 1_000, timeoutExec: () => 2_000 }, { at: "min" });
     yield* scoped(function* () {
-      yield* Config.around({ timeout: () => 1_000, timeoutExec: () => 2_000 }, { at: "min" });
-      yield* scoped(function* () {
-        // Only timeoutFetch is written here; the other two are inherited.
-        yield* Config.around({ timeoutFetch: () => 3_000 }, { at: "min" });
-        expect(yield* timeout).toBe(1_000);
-        expect(yield* timeoutExec).toBe(2_000);
-        expect(yield* timeoutFetch).toBe(3_000);
-      });
+      // Only timeoutFetch is written here; the other two are inherited.
+      yield* Config.around({ timeoutFetch: () => 3_000 }, { at: "min" });
+      expect(yield* timeout).toBe(1_000);
+      expect(yield* timeoutExec).toBe(2_000);
+      expect(yield* timeoutFetch).toBe(3_000);
     });
   });
 
@@ -109,7 +110,11 @@ describe("Tier CF — Config Api", () => {
         const result = yield* scoped(function* () {
           yield* Config.around({ [field]: () => invalid }, { at: "min" });
           try {
-            yield* field === "timeout" ? timeout : field === "timeoutExec" ? timeoutExec : timeoutFetch;
+            yield* field === "timeout"
+              ? timeout
+              : field === "timeoutExec"
+                ? timeoutExec
+                : timeoutFetch;
             return undefined;
           } catch (error) {
             return error;
