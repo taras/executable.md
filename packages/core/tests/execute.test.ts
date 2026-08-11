@@ -1121,19 +1121,16 @@ describe("execute", () => {
     const goldenEventCount = stream.snapshot().length;
 
     // Replay — durable stream replays from journal
-    const secondResult = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const secondRun = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const secondResult = secondRun.value;
 
     expect(secondResult).toBe(firstResult);
     expect(secondResult).toContain("# Test");
     expect(secondResult).toContain("Hello, world!");
-    expect(secondRun.stdout).toContain("output");
+    // Replay restores the document; the command's own text is not part of it.
+    expect(secondResult).not.toContain("output");
 
     // No new events should be appended during replay
     expect(stream.snapshot().length).toBe(goldenEventCount);
@@ -1209,15 +1206,13 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const result = run.value;
 
+    // The slot's own text surrounds where the block ran; the block's output
+    // went to the reader as it ran.
     expect(result).toContain("BEFORE");
     expect(run.stdout).toContain("inside");
     expect(result).toContain("AFTER");
