@@ -47,3 +47,16 @@ export function throwWorkspaceFilesystemFailure(error: unknown): never {
 export function isJournalableWorkspaceFailure(error: unknown): error is Error {
   return error instanceof JournalableWorkspaceFailure;
 }
+
+/**
+ * The documented filesystem condition this failure is, or `undefined` for one
+ * that is not documented.
+ *
+ * The code is the only part of a DOFS failure anything above this module reads.
+ * Its message, its cause and the paths either of them names stay here, so a
+ * consumer selecting a `FilesReason` from this receives a condition rather than
+ * platform text.
+ */
+export function journalableWorkspaceCode(error: unknown): string | undefined {
+  return error instanceof JournalableWorkspaceFailure ? error.code : undefined;
+}

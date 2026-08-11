@@ -25,10 +25,7 @@ import { durableRun, type Workflow } from "@executablemd/durable-streams";
 import { main, type Operation } from "effection";
 import { WorkflowRunStorage, type WorkflowRunDatabase } from "../../mod.ts";
 import { useWorkflowRunStorage } from "../../deno.ts";
-import {
-  createWorkspaceProofEffect,
-  withWorkspaceEffects,
-} from "../../src/deno/workspace/effect.ts";
+import { createWorkspaceEffect, withWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
 import {
   setPrivateWorkspaceClock,
   transactWorkspaceRoots,
@@ -62,7 +59,7 @@ const DEFINITION = {
  */
 function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: number }) {
   return function* (): Workflow<void> {
-    yield createWorkspaceProofEffect(
+    yield createWorkspaceEffect(
       database,
       { type: "workspace-proof", name: "seed" },
       function* (filesystem) {
@@ -74,7 +71,7 @@ function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: n
         return null;
       },
     );
-    yield createWorkspaceProofEffect(
+    yield createWorkspaceEffect(
       database,
       { type: "workspace-proof", name: "revise" },
       function* (filesystem) {

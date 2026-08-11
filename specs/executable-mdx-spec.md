@@ -1601,6 +1601,10 @@ run but are absent from the diagnostic trace.
 | `packages/cli/src/{deno,node,bun,compiled}-service.ts` | runtime-named service adapters for token, environment and stdio behavior |
 | `packages/cli/src/{deno,node,bun,compiled}.ts` | Entrypoints — each installs matching `API.Env` and `API.Service` adapters, then calls `runXmd` |
 | `packages/workflow/src/service-denial.ts` | `useWorkflowServiceDenial()`, the tested non-delegating provider for future workflow start and resume scopes (#366) |
+| `packages/workflow/src/deno/workspace/files.ts` | the transaction-bound `API.Files` provider — one durable Workspace effect per document read, write and search |
+| `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
+| `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
+| `packages/workflow/src/run.ts` | `workflowInstallation()` / `retainedWorkflowInstallation()` — the `ExecutionInstallation` values a trusted host passes to `executeInstalled()`, each contributing a mandatory run-identity admission and the `prepare` hook that creates or restores the run inside the durable root |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -7750,11 +7754,19 @@ Defined in [Workflow runs](./workflow-spec.md).
 | WR6 | A moving base | A branch that moved cannot change the recorded pinned commit |
 | WR7 | Git fails | No run recorded, and the root document never expands |
 | WR8 | A later failure | A document that fails after the run was recorded does not erase it |
-| WR9 | No workflow | An execution without `useWorkflow()` invokes no process at all |
+| WR9 | No workflow | An execution without a workflow installation invokes no process at all |
+| WR20 | One installation, two executions | A host that passes the same installation value to two concurrent executions gets two runs: each journal records its own, each document reads the run its own journal records, a sibling preparing or completing changes neither, repeated reads in one execution answer with the same frozen object, and a later ordinary execution sees no workflow run at all |
 | WR10 | No workflow, inside | `getWorkflowRun()` throws inside an execution that installed none |
 | WR11 | A malformed record | Refused, and the refusal never quotes what the journal held |
 | WR12 | A slow base | Resolving one run's base does not stall a sibling execution |
 | WR13/WR14 | Seeded journals | A completed and a truncated journal written by hand restore without any live run having happened |
+| WR18 | Recorded base-resolution failure | A programmatic installation raises no evidence objection to the journal §6 describes: Git is not consulted, the root does not expand, and nothing is appended |
+| WR19 | Replaying a failed preparation | A preparation that failed before the root import left the bound pre-root terminal, and the identical execution reads that failure back: no Git, no preparation, no document policy, no root import, no expansion and no append |
+| WM1 | A non-delegating handler | A document handler that answers instead of delegating cannot fabricate a successful run: core refuses it, nothing expands, and the journal holds the canonical `workflow_run` record and one failed terminal rather than the handler's value |
+| WM2 | A substitute result | A result returned after delegating replaces neither the document nor the recorded run |
+| WM3 | Preparation precedes policy | The `workflow_run` record is already in the journal when the first public document handler runs |
+| WM4 | A relayed installation | An installation handed to canonical core as an opaque record of closures composes exactly as the constructor's own value does |
+| WM5 | Valid observation | A handler that observes and delegates still composes, and the run is unaffected |
 
 ### Tier WD — Workflow definitions and storage contracts
 
@@ -7997,6 +8009,52 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
+### Tier RR — Retained workflow-run installation
+
+Defined in [Workflow runs](./workflow-spec.md) §3.1.
+
+| # | Test | Verify |
+|---|------|--------|
+| RR1 | Exact record | The retained run is recorded verbatim; no identifier is allocated and Git is never consulted |
+| RR2/RR3 | Restoration | A truncated and a completed journal each restore the retained run without recording it again |
+| RR4 | A different run id | Refused as `StaleInputError` naming the field, never either value, and the root document does not expand |
+| RR5 | A different base or pinned commit | Refused on the same terms, naming the fields that differ |
+| RR6 | A malformed record | Refused rather than coerced, without quoting what the journal held |
+| RR7 | An unusable installation | A missing run id, base or pinned commit is refused before any document executes |
+| RR8 | A completed journal recording no run, or more than one | A terminal result whose journal holds no successful `workflow_run` record, holds one that failed, or holds two is refused before the recorded root result is handed back, and without appending anything |
+| RR9 | A completed journal recording another run | A completed journal whose record names a different run, or holds a value that does not read as a run at all, is refused on the same terms as a truncated one |
+| RR10 | Suppressed guard policy | A completed run-a journal resumed as run-b is refused beneath a `ReplayGuard` that answers check, admit or decide without delegating — nothing expands, nothing is emitted, nothing is appended |
+| RR11 | A guard from another loaded copy | The same, beneath a suppressing handler installed through an independently constructed descriptor of the guard's stable name |
+| RR12 | Valid replay under the same suppression | A completed journal that does agree still returns its recorded result with zero live execution |
+| RR13 | Policy still composes | A public guard observes the admitted history, and one that rejects it still refuses |
+| RR14 | Non-canonical records | A same-typed Yield under another name, under a child coroutine, or holding a value with an extra member establishes nothing, and none of what it held is quoted back |
+| RR15 | Failed establishment in a truncated history | A recorded `workflow_run` failure fails closed rather than replaying its planted text for a run storage already describes |
+| RR16 | What a refusal retains | Inspecting the whole error object — not only its message — finds no run id, base, pinned commit or planted description member |
+| RR17 | Suppressed or reordered `Execution` policy | A handler that hands the durable run a different stream — the package's own descriptor or one built elsewhere, registered before or after the workflow installation — cannot make another run's journal replay |
+| RR18 | One retained snapshot | A journal whose recorded value shifts between reads is settled once: identity admission, guard observation and replay are handed the same objects, and the second answer is never reached |
+| RR20 | A hostile recorded value | A value whose `ownKeys`, `getOwnPropertyDescriptor` or getter refuses, and one whose classification refuses, each become the same fixed refusal — nothing reused, executed, emitted or appended, and the whole error object carries none of the planted text |
+| RR21 | A duplicate canonical record | Two entries under the canonical run identity are refused in every settlement combination — successful+successful, successful+failed, failed+successful, failed+failed — because the record is written once and a second entry describes a second run however it ended |
+
+### Tier WF — The workflow document filesystem
+
+Defined in [Workflow runs](./workflow-spec.md) §10.
+
+| # | Test | Verify |
+|---|------|--------|
+| WF1 | Public routing | `<File>` and `<Glob>` reach the run's logical Workspace, and a host `API.Files` spy installed outside the run observes nothing for any read, write, refusal or search |
+| WF2 | Atomic write | File bytes, the current-root pointer and one filtered Yield are all visible to a second connection together, and the newest journal row names the published root |
+| WF3 | Recorded read | A read is its own durable effect whose recorded value is the content it read |
+| WF4 | Historical read | A read restores its recorded content where the current frontier holds something else |
+| WF5 | Create/delete/create | A history built through the provider-private mutation seam replays recorded results in order, performing no mutation and consulting no current file |
+| WF6 | Lexical refusal | An empty, absolute or escaping path is refused without an effect being recorded and without a host call |
+| WF7 | Rolled-back refusal | A documented refusal publishes a `rolled-back` outcome, leaves the current root unchanged and creates none of the parents the attempt would have needed |
+| WF8 | Target refusal | Replacing a directory is refused as `unchanged` before anything is attempted |
+| WF9 | Foreign journal | A file effect published into a stream that is not the run's is refused before mutation, leaving the journal and the Workspace as they were |
+| WF10 | Denied temporary directory | `<TempDir>` receives the operation-denied infrastructure failure and no host directory |
+| WF11 | The search's shape | Sorted, deduplicated, POSIX-relative regular files, on HF3's contract: neither a file symlink nor a directory symlink is a result, and a file reachable through a directory symlink is reported once, by its own path |
+| WF12 | Discarded partial mutation | A write that refuses after creating two parent directories leaves neither behind, leaves what the Workspace already held untouched, records the sanitized refusal, and does not stop the next effect from committing |
+| WF13 | Unreadable history | A recorded outcome carrying a member its variant does not have, a member of the wrong type, or a phase or reason the operation's vocabulary does not hold, is refused as exactly the cause-free `protocol` provider invariant — nothing the record held is repeated back, and no later file effect is performed |
+| WF14 | The transaction filesystem is the provider's | Contextual middleware installed from inside the document — including descriptors rebuilt for every name a filesystem seam has used — neither observes nor replaces the filesystem a Workspace transaction hands its body |
 
 ### Tier EP — The execution protocol
 

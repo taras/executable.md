@@ -2,8 +2,9 @@
 
 * **Status:** Current
 * **Scope:** `@executablemd/workflow` — associating a document execution with a
-  workflow run whose starting repository state is pinned once, and retaining
-  that run so another process can find it.
+  workflow run whose starting repository state is pinned once, retaining that
+  run so another process can find it, and giving that run's document its own
+  transactional filesystem.
 
 ---
 
@@ -19,14 +20,16 @@ commit** the first time it is created. A branch that moves afterwards does not
 change what the run started from.
 
 ```ts
-import { execute } from "@executablemd/core";
-import { useWorkflow, getWorkflowRun } from "@executablemd/workflow";
+import { executeInstalled } from "@executablemd/core/host";
+import { workflowInstallation, getWorkflowRun } from "@executablemd/workflow";
 
-yield* useWorkflow({ base: "main" });
-const execution = yield* execute({ path: "./workflow.md", stream });
+const execution = yield* executeInstalled(
+  { path: "./workflow.md", stream },
+  [workflowInstallation({ base: "main" })],
+);
 ```
 
-The package owns `WorkflowRun`, `useWorkflow()`, `getWorkflowRun()` and the Git
+The package owns `WorkflowRun`, `workflowInstallation()`, `getWorkflowRun()` and the Git
 capability. It depends on `@executablemd/core`,
 `@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
 `exec()` and `cwd()` the Git provider invokes. Core never imports workflow or
@@ -56,22 +59,162 @@ replay preserves the field values, never JavaScript object identity. It throws
 outside a document execution associated with a run, and exposes no journal, Git,
 workspace or continuation capability.
 
-## 3. Where the run is installed
+## 3. Where the run is prepared
 
-`useWorkflow({ base })` installs ordinary middleware in the scope that owns one
-document execution, and does nothing else. **Installing it creates no workflow
-run**; executing a document under it does.
+`workflowInstallation({ base })` returns an `ExecutionInstallation` — a value,
+not an installation act. **Constructing it creates no workflow run**; executing
+a document under it does. A trusted host passes it to `executeInstalled()`, and
+the installation contributes exactly two things:
 
-The value is installed in the scope that owns the document execution, so every
-descendant of the expansion reads it, output emitted after the durable run still
-sees it, and ordinary teardown takes it away. It is not readable before
-`execute()` and not readable after that execution completes, even while the
-installing scope is still alive.
+- **an admission**, which canonical core captures before any installation,
+  middleware or document code exists and applies inside its own trusted journal
+  read, on the retained snapshot every later phase consumes; and
+- **a `prepare` hook** — a `DurablePreparation`, the trusted durable
+  preparation canonical core invokes *inside the durable root*, after
+  retained-history admission and before any public `Execution.document` policy,
+  the root import and every authored effect.
 
-Concurrent runs are isolated by scope ownership: each document execution and its
-middleware installation share one child scope. A later document execution —
-including one continuing the same workflow run — gets a new child scope and a
-new installation.
+No public middleware carries workflow-run authority. `Execution.execute`,
+`Execution.document` and `ReplayGuard` handlers may observe, transform or refuse
+what they are given; none of them can suppress the preparation, complete it, or
+substitute a run for it.
+
+The run is readable through `getWorkflowRun()` for the lifetime of the document
+execution: every descendant of the expansion reads it, output emitted after the
+durable run still sees it, and ordinary teardown takes it away. It is not
+readable before the execution and not readable after it completes, even while
+the host scope is still alive.
+
+Concurrent runs are isolated by execution ownership: each execution gets its own
+slot, so a host that passes the same installation value twice runs two
+executions and neither sees the other's run.
+
+### 3.1 Installing a run that already exists
+
+A host that keeps runs in retained storage (§9) has decided what the run is
+before anything executes: `create()` answered with the run id, and the
+definition was established from a commit the host pinned. There is nothing left
+for the execution to allocate or resolve, and a run id an execution invented
+could not agree with the record storage already holds.
+
+```ts
+yield* executeInstalled(options, [retainedWorkflowInstallation({ runId, base, pinnedCommit })]);
+```
+
+This installs the same middleware in the same place and records through the same
+`workflow_run` durable operation. What differs is both ends of it. The live path
+writes exactly the value it was given: no identifier is generated and
+`Git.revParse()` is never called. And every journal state holds the record to
+that value in full — run id, base and pinned commit — rather than to the base
+alone.
+
+A journal recording a different run is refused as `StaleInputError`, naming the
+fields that differ and never their values: a run id may be caller-selected and a
+base is any revision expression, so both are external text on the same terms as
+retained props. A value installed without a run id, a base or a pinned commit
+identifies no run and is refused before any document executes.
+
+### 3.2 Where workflow-run identity is decided
+
+**Workflow-run identity is execution-owned, and it is not middleware of any
+kind.** `ReplayGuard` is composable policy by design: a handler installed
+further out may answer without delegating. So is `Execution`: a handler
+registered at the same position may rebuild the options a later one produced,
+stream included. Identity decided from either place is identity decided by
+registration order — a completed journal reached under a suppressing guard, or
+under a handler that swapped the stream back, would hand its recorded root
+result to whichever run asked.
+
+An installation therefore contributes the *requirement* rather than a wrapper.
+Its `admissions` say what a history has to satisfy; canonical core captures them
+by value before any installation, middleware or document code exists, and
+applies them inside the same trusted `readAll` that already holds a resumed run
+to its recorded root selection. No wrapping site is added, nothing is reachable
+through a context a document can rebind, and by the time any middleware runs the
+read has already happened. It runs:
+
+- before any public `ReplayGuard` check, admit or decide;
+- before a recorded root `Close` can be reused;
+- before live execution, Workspace mutation, or any append.
+
+Public `ReplayGuard` handlers still observe the history this admits and may
+still reject it. None of them can widen it.
+
+Creating the run is separated from admitting the history for the same reason.
+The installation's `prepare` hook is a `DurablePreparation` canonical core
+captures by value at the same moment, and invokes inside the durable root —
+after admission and before any public `Execution.document` policy, the root
+import and every authored effect. A handler that answers without delegating
+cannot get in front of it: by the time any document policy runs, the
+`workflow_run` record is already in the journal, and a fabricated result is
+refused by core rather than published.
+
+The wrapper is a trusted wrapping site: it is installed before any document code
+exists, delegates every append to the exact stream it was handed, and carries
+that stream's journal-provenance witness onto itself without establishing one.
+
+What a history is held to depends on the installation, and they differ in one
+thing beyond which fields must agree.
+
+`retainedWorkflowInstallation(run)` requires `runId`, `base` and `pinnedCommit` to match
+exactly, and requires the record to be *there*: a host created the run before
+anything executed, so a non-empty history carrying no successful record — none
+at all, or only one that failed — is not this run's history.
+
+`workflowInstallation({ base })` requires a recorded run's base to match, and requires
+nothing to be present. It allocates its run on first execution, and §6 records a
+base that would not resolve as a failed effect; a history whose only record is
+that failure is this run's own, and refusing it would refuse a journal this run
+wrote. Both installations refuse a history carrying more than one successful
+record, and both refuse one that cannot be read.
+
+A workflow definition may name an exact document target. That is part of what
+the run is a run *of*, not part of what identifies it: run identity stays the
+three members below, and a recorded value carrying a target as a fourth member
+is refused as a value this version cannot account for.
+
+A record identifies a run only when it is all of these at once:
+
+- a Yield owned by the root coroutine;
+- under the canonical effect type **and** the canonical effect name;
+- successfully settled;
+- holding a closed value of exactly `runId`, `base` and `pinnedCommit`, each a
+  string; and
+- in agreement with the identity the installation supplied.
+
+An empty journal is the ordinary live start and is held to nothing. Otherwise a
+history may carry **at most one** entry under the canonical run identity — the
+record is written before the root document is imported, so a second entry
+describes a second run, *however either of them settled*. Two successful
+records, a successful one beside a failed one in either order, and two failed
+ones are all refused. Under a retained installation the history must carry
+exactly one, and it must have succeeded.
+
+Malformed, carrying an extra member, written under another name, written by a
+child coroutine, and naming another run are refused under either installation,
+whether the history is truncated or completed. A single missing or failed record
+is refused under a retained installation and permitted under a programmatic one,
+for the reason above.
+
+Reading a recorded value is total. A value whose enumeration, property
+descriptors, getters or classification refuse describes no run, and becomes the
+same fixed refusal every other unreadable record becomes — it never escapes
+carrying its own text.
+
+The history admission reads is the retained history: every discriminator settled
+once, before anything is decided, and the same objects every later phase
+consumes. An event that refuses any member a decision rests on — its type, its
+coroutine, either half of its description, its settlement, or a successful
+settlement's value — is a history this run cannot describe and is refused, never
+stepped past as unrelated.
+
+A refusal is a `StaleInputError` that names the fields that differ and never
+their values, and the description it retains carries only the effect's type and
+name — so nothing about the run, and nothing the journal held, is reachable on
+the error object.
+
+`getWorkflowRun()`, the three journal states and the lifetime rules above are
+otherwise identical under either installation.
 
 ## 4. The three journal states
 
@@ -79,12 +222,12 @@ The journal decides which middleware does the work.
 
 | State | What runs | What happens |
 | --- | --- | --- |
-| **live** — no record | `Execution.document` | allocates the run id, resolves the base through `Git.revParse()`, records one immutable value, and only then imports the root |
-| **truncated** — record present, root not closed | the replay guard, then `Execution.document` | the guard restores the value; the durable operation still runs, so the journal cursor advances past its own entry |
-| **completed** — root `Close` recorded | the replay guard only | the durable run returns the stored result without invoking the workflow, so the guard's check phase is the only place the run can be restored — or a different base refused |
+| **live** — no record | the admission, then `prepare` | the admission finds nothing to hold the run to; preparation allocates the run id, resolves the base through `Git.revParse()`, records one immutable value, and only then is the root imported |
+| **truncated** — record present, root not closed | the admission, then `prepare` | the admission restores the recorded value; preparation re-enters and its durable operation restores what it already recorded, so neither the identifier nor Git is reached again and the journal cursor still advances past its own entry |
+| **completed** — root `Close` recorded | the admission only | canonical core returns the recorded result without entering the durable body, so preparation never runs and the admission is the only place the run is restored — or a disagreeing one refused |
 
-The check phase runs before the recorded root result is returned. That ordering
-is what lets a completed journal refuse a supplied base that disagrees with the
+The admission runs before the recorded root result is returned. That ordering is
+what lets a completed journal refuse a supplied base that disagrees with the
 recorded one, rather than handing back a result the caller did not ask for.
 
 Replay invokes neither run-id allocation nor `Git.revParse()`. The current value
@@ -112,9 +255,16 @@ cannot be invoked, the working directory is not a Git repository, or the base
 does not resolve to a commit.
 
 Such a failure is journaled the way every durable effect's failure is — as a
-recorded failed effect. Resuming the same journal therefore reproduces the
-failure rather than retrying Git. No `WorkflowRun` value exists in either case,
-which is what "records no workflow run" means.
+recorded failed effect, and no `WorkflowRun` value exists, which is what
+"records no workflow run" means.
+
+Preparation fails before the root import, so the durable root records the
+**bound pre-root terminal** canonical core writes at that position: a terminal
+carrying core's own binding to the exact root source and target it was about.
+Resuming that journal reports the recorded failure — it does not retry Git, does
+not re-enter preparation, does not run document policy, imports no root, expands
+nothing, and appends nothing. The workflow installation raises no objection to
+it (§3.2).
 
 ## 7. The Git capability
 
@@ -578,9 +728,9 @@ retained root from that state without the process that wrote it.
 The provider-neutral coordinator receives the failure-activation continuation
 needed for this boundary. The default live coordinator ignores it and preserves
 ordinary success/failure publication. Replay bypasses coordination, and only an
-explicit Workspace operation selects the Workspace coordinator. The Deno proof
-operation is adapter-private: public filesystem effects and workflow
-start/resume do not reach it.
+explicit Workspace operation selects the Workspace coordinator. The
+transaction-bound Files provider of §10 selects it for every document
+filesystem effect; workflow start and resume do not reach it.
 
 The private restoration materializer loads a fully validated retained root and
 rebuilds directories, files, chunks, modes, mtimes, symbolic links and hardlink
@@ -656,10 +806,73 @@ Version 1 reads and writes version 1. Unsupported versions are refused without
 the file being touched; partial version-1 initialization is corruption and is
 also left unchanged.
 
-## 10. Intentionally excluded
+## 10. The document filesystem of a run
+
+A host attaches one run's Workspace to a document execution with
+`withWorkflowWorkspace(database, operation)` from
+`@executablemd/workflow/deno`. It installs three things together, inside the
+execution rather than at an entrypoint, so they answer ahead of the host adapter
+`xmd run` installs: the run's Workspace effect coordinator, the logical working
+directory `/`, and the transaction-bound `API.Files` provider.
+
+That composed helper is the whole of what the entrypoint publishes. The three
+pieces are not installable separately, because the Files provider alone would
+resolve a document's paths against whatever working directory the surrounding
+host adapter answers with, and a host path resolved that way is what the run
+then retains in the durable effects it replays from.
+
+The filesystem a Workspace transaction hands its body is the provider's, decided
+where the provider is installed and held in its closure. It is reached through no
+context and no contextual Api, so a document cannot observe it and cannot put
+anything in front of it — a stable name is composition, and composition is not
+where authority belongs.
+
+Paths are absolute POSIX paths inside the run's own filesystem. An authored path
+is resolved by arithmetic on segments and handed to the run's DOFS filesystem;
+no host path exists anywhere in it, so containment needs no stable-namespace
+qualification. An empty path, an absolute path and a lexical escape are refused
+with the vocabulary `API.Files` already has.
+
+`readTextFile`, `writeTextFile` and `globFiles` are durable effects.
+`checkFilePath` is not: it is lexical admission, it performs no effect, and it
+appends nothing, so the write repeats the same admission from the same authored
+path. Each effect's description is derived from the current expansion, the
+operation and the resolved logical path, so one authored element is the same
+effect across replays while an element edited to name another file is a
+different one.
+
+A search answers with sorted, deduplicated, POSIX-relative regular files, which
+is the contract `API.Files` holds wherever it runs. A symbolic link is neither a
+result nor a way into the tree it names, so a file reachable through a directory
+link is reported once, under its own path.
+
+One effect is one effect transaction. The mutation, the resulting immutable root
+and the filtered journal result commit together. An ordinary filesystem refusal
+rolls its mutation savepoint back before its result is published, so a write
+that created two parent directories and was then refused leaves neither behind,
+the retained outcome describes a Workspace that is exactly what it was, the
+write reports its target as rolled back, and the next effect still commits. What
+crosses the boundary is a `FilesReason` selected from the shared vocabulary — no
+DOFS message, errno payload, SQLite text or resolved path. Everything that is
+not a documented refusal stays an infrastructure failure and fails the run.
+
+Replay restores the recorded outcome: it performs no mutation, opens no
+transaction and consults no current state, which is what lets a read answer with
+the bytes it read at the time and a create/delete/create history replay in
+order. What it restores is parsed rather than believed. A record must carry its
+variant's members and no others, each of the declared type, and a refusal's
+phase and reason must both be words the operation's vocabulary holds. Anything
+else describes no outcome, and becomes the one fixed cause-free provider
+invariant — carrying nothing the record happened to hold, and performing no
+further file effect.
+
+`temporaryDirectory` is refused with the existing operation-denied failure. A
+run has no host directory to hand out, and reaching the caller's would be the
+uncontained filesystem this boundary exists to prevent.
+
+## 11. Intentionally excluded
 
 Public `xmd workflow` lifecycle commands; lifecycle transition policy, executor
-leases and stale-owner recovery; public Workspace mutation and filesystem
-effects; public root selection, history checkpoints and forks; `<File>` integration;
-workflow-owned worktrees; and deterministic Git and GitHub effects. Retained
-roots and private restoration do not expose any of those behaviors.
+leases and stale-owner recovery; public root selection, history checkpoints and
+forks; workflow-owned worktrees; and deterministic Git and GitHub effects.
+Retained roots and private restoration do not expose any of those behaviors.

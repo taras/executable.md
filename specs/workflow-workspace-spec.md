@@ -852,9 +852,9 @@ and cannot return until the exact Result has been appended and recorded. Its
 supported filesystem calls use synchronous pinned DOFS primitives, leaving no
 asynchronous continuation after mutation teardown. It distinguishes a documented filesystem
 refusal from infrastructure failure and cancellation, and activates the durable
-fail-stop fence for infrastructure failures. This foundation is not a public
-filesystem effect: `<File>`, `API.Files`, workflow start/resume and history
-commands do not route to it in this slice.
+fail-stop fence for infrastructure failures. `<File>`, `<Glob>` and every other
+`API.Files` operation route to it through the transaction-bound Files provider.
+Workflow start, resume and the history commands do not reach it in this slice.
 
 That boundary holds across processes as well as within one. A host killed
 between the mutation and the commit publishes nothing, and a process that
@@ -875,7 +875,7 @@ delegated without changing the document language.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | defined here; unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366; repository, process and attachment capabilities unbuilt (#218) |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
 | lifecycle start/resume/status/history/fork/delete | defined here; unbuilt |
 | read-only Agent materialization | defined here; proof required |

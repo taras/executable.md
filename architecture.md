@@ -134,14 +134,24 @@ or invoking Git. The supplied base must equal the recorded base. Git is not
 consulted to compare the current value of a moving branch with the pinned
 commit.
 
+A host that has already created the run's storage record passes
+`retainedWorkflowInstallation(run)` instead, with the exact frozen value.
+Nothing is left for the execution to decide: it records that value through the
+same `workflow_run` durable operation, allocates no identifier and resolves no
+base, and every journal state — live, truncated and completed — requires the
+recorded run to agree with the supplied one in run ID, base and pinned commit. A
+journal that disagrees in any of them is not this run's journal, and the refusal
+names the fields rather than their values.
+
 `getWorkflowRun()` returns the frozen `WorkflowRun` for the current document
 execution. Every call in one live execution returns the same object. It throws
-outside a document execution associated with `useWorkflow()`, and it exposes no
-journal, Git, workspace or continuation capability. Replay preserves the field
-values, not JavaScript object identity.
+outside a document execution a workflow installation was passed to, and it
+exposes no journal, Git, workspace or continuation capability. Replay preserves
+the field values, not JavaScript object identity.
 
-The `@executablemd/workflow` package owns `WorkflowRun`, `useWorkflow()`,
-`getWorkflowRun()` and the Git capability. It depends on `@executablemd/core`,
+The `@executablemd/workflow` package owns `WorkflowRun`,
+`workflowInstallation()`, `retainedWorkflowInstallation()`, `getWorkflowRun()`
+and the Git capability. It depends on `@executablemd/core`,
 `@executablemd/durable-streams` and `@executablemd/runtime`, whose contextual
 `exec()` and `cwd()` the Git provider invokes; core never imports workflow or
 Git. The future CLI lifecycle is `xmd workflow start` and `xmd workflow resume`;
@@ -434,9 +444,9 @@ one operation does not enlist unrelated durable operations in the same scope.
 The Deno adapter establishes the canonical module's journal provenance for each
 WorkflowRun journal and retains that exact witness. The generic pre-persistence
 guard is policy-neutral and returns an unproven wrapper; the trusted
-secret-filter wrapping site preserves provenance explicitly, so a filtered
-journal — including one wrapped more than once — still carries the witness its
-source carried. Before it opens a transaction, the adapter requires both the
+secret-filter and execution-owned admission wrapping sites preserve provenance
+explicitly, so a filtered journal — including one wrapped more than once — still
+carries the witness its source carried. Before it opens a transaction, the adapter requires both the
 exact proof executor and the journal provenance from the consumed invocation to
 belong to the selected WorkflowRun. An in-memory stream, another run's journal,
 a copied property, an ordinary guard, a custom look-alike, or a wrapper another
@@ -464,13 +474,14 @@ rather than invoking an untracked native Git side effect.
 
 Successful effect coordination finishes the mutation scope, including child
 cleanup, before capturing the resulting root. The Deno provider installs that
-ordering for its adapter-private Workspace proof operation: the mutation
+ordering for its Workspace effect operation: the mutation
 savepoint, root publication, filtered routed Yield, and caller-owned transaction
-commit form one boundary. The proof filesystem uses the pinned synchronous DOFS
+commit form one boundary. The Workspace filesystem uses the pinned synchronous DOFS
 entry points for its string and byte-array surface, so cancellation leaves no
 eager promise or stream pull able to reach the connection after transaction
-authority ends. Public filesystem components and workflow lifecycle commands do
-not yet select that operation.
+authority ends. The transaction-bound Files provider selects that operation for
+every document filesystem read, write and search; workflow lifecycle commands do
+not select it yet.
 
 An external provider cannot join that transaction. Prompt, Git push and pull
 request effects derive a stable identity from the run and expansion, ask the
@@ -543,11 +554,11 @@ after SQLite has restored the prior frontier.
 
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
-exposes no public Workspace mutation effect, history selection or fork
-operation at this layer. Its adapter-private coordinator combines one mutation,
-immutable-root publication and one filtered journal result atomically for the
-provider-level proof; declarative `<File>` and workflow start/resume do not
-reach it yet.
+exposes no public history selection or fork operation at this layer. Its
+coordinator combines one mutation, immutable-root publication and one filtered
+journal result atomically, and the transaction-bound Files provider is what
+routes a document's `<File>` and `<Glob>` to it. Workflow start and resume do
+not reach it yet.
 
 The coordinator treats only errors produced through its private filesystem
 adapter's documented path and mutation refusals as journalable operation
@@ -937,6 +948,25 @@ than implied:
 
 Neither claim covers a native command a document runs.
 
+The workflow provider's operations are durable effects. A read, a write and a
+search each carry a description derived from the current expansion, the
+operation and the resolved logical path, so one authored element is the same
+effect across replays and a document edited to name another file is a different
+one. `checkFilePath` is not among them: it is lexical admission, it performs no
+effect, and it appends nothing.
+
+A write, the immutable root that results from it, and the filtered journal
+result share the one caller-owned transaction. An ordinary refusal rolls its
+mutation savepoint back before that result is published, so the retained
+outcome describes a Workspace that is exactly what it was, and the reason that
+crosses the boundary is selected from the shared vocabulary rather than derived
+from anything the filesystem said. Replay restores those recorded outcomes
+without performing the mutation, opening a transaction or consulting the current
+frontier, which is why a create/delete/create history replays in order. A
+temporary directory is refused outright: the provider has no host directory to
+hand out, and falling through to the caller's would be the uncontained
+filesystem the boundary exists to prevent.
+
 Failure data crosses the boundary as a plain frozen object under a stable tag,
 carrying a reason from a fixed vocabulary and the phase it came from. No
 message, errno code, resolved path, temporary name, or symlink target crosses.
@@ -1312,8 +1342,13 @@ It qualifies only while every one of these holds:
 - transfer happens only at a trusted wrapping site — one installed before any
   code the journal's content could influence, delegating to the exact stream it
   was handed. A document execution's journal passes through two: the secret
-  filter and the execution-owned target-admission wrapper. Each transfers only
-  what its source already had, so an unproven journal stays unproven; and
+  filter and the execution-owned admission wrapper. That second wrapper holds a
+  resumed run to its recorded root selection and, in the same read, applies
+  whatever an installation required of the history through its `admissions` —
+  workflow-run identity among them. Requirements are contributed to it rather
+  than wrapped around it, so no wrapping site is added and none of them is
+  reachable by middleware. Each transfers only what its source already had, so
+  an unproven journal stays unproven; and
 - it retains no execution, lifecycle, journal content or provider state.
 
 The exception exists because the exact-object, anti-forgery and loaded-copy
@@ -1374,7 +1409,8 @@ Status is measured against main.
 | `xmd targets` | prints one document's catalog as full document references, by inspection alone | built on the #412 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| `useWorkflow()` / `getWorkflowRun()` | associates one document execution with a workflow run | built on main |
+| `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
+| `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
 | workflow run storage | creates or compatibly finds one run by public run ID, retains its identity, state, document executions and filtered journal, and validates immutable Workspace roots through one provider-owned connection entry | built on the #365 stack; public workflow execution is unbuilt |
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
@@ -1385,7 +1421,7 @@ Status is measured against main.
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
-| transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | unbuilt; the adapter is #227's second layer, and workflow effect coordination and CLI reachability remain unbuilt |
+| transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack; CLI reachability remains unbuilt |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides and tests a non-delegating workflow service denial provider; #366 will install it in future start and resume scopes | built on main; no workflow CLI execution branch exists yet |
@@ -1394,7 +1430,7 @@ Status is measured against main.
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates an adapter-private mutation proof with its filtered Yield | built on the #365 stack; public mutation and workflow lifecycle reachability are unbuilt |
+| Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects route to it on the #366 stack, and workflow lifecycle reachability is unbuilt |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
 | suspension effect | suspend durably | defined, unbuilt |

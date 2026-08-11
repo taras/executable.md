@@ -138,6 +138,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "kills real Deno child processes with SIGKILL and reads the recovered node:sqlite WorkflowRun database they leave behind; the children run under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
     issue: "https://github.com/taras/executable.md/issues/365",
   },
+  {
+    path: "packages/workflow/tests/workspace-files.test.ts",
+    reason:
+      "drives <File> and <Glob> against a real node:sqlite WorkflowRun database through the Deno DOFS Workspace adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/366",
+  },
 ];
 
 /**

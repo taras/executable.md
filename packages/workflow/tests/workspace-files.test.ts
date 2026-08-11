@@ -1,0 +1,936 @@
+/**
+ * Tier WF — the document filesystem of a workflow run.
+ *
+ * These drive the real `<File>` and `<Glob>` definitions through `execute()`
+ * against a real run database, because what is under test is where a document's
+ * paths land and what survives in the journal — neither of which a stand-in for
+ * DOFS or for SQLite could show.
+ *
+ * Two observations do most of the work. A second connection counts committed
+ * journal rows, which says whether a transaction has already published rather
+ * than whether a row is there now; and a host `API.Files` spy is installed
+ * *outside* the workflow provider, so any call that fell through to the caller's
+ * filesystem would be recorded rather than merely suspected.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { createContext, scoped, type Operation } from "effection";
+import { type Api, createApi } from "@effectionx/context-api";
+import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { API, FILES_FATAL, parseFilesFatal, useHostFiles } from "@executablemd/runtime";
+import type { HostFilesEvent } from "@executablemd/runtime";
+import type { WorkflowRunDatabase } from "../mod.ts";
+import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
+import { WORKSPACE_FILE } from "../src/deno/workspace/files.ts";
+import { throwWorkspaceFilesystemFailure } from "../src/deno/workspace/errors.ts";
+import type { DenoWorkspaceFilesystem } from "../src/deno/workspace/filesystem.ts";
+import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
+import type { PrivateWorkspaceTransaction } from "../src/deno/workspace/private.ts";
+import {
+  committedEventCount,
+  createRun,
+  runPath,
+  tamper,
+  useStorageRoot,
+  withStorage,
+} from "./support/storage.ts";
+
+/** What an operation threw, so a suite can assert on it rather than fail. */
+function* raised(operation: Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/**
+ * The infrastructure failure somewhere in this failure's causes.
+ *
+ * A denied operation is raised where `<TempDir>` acquired it and reaches the
+ * caller wrapped in whatever the document execution reported, so the assertion
+ * follows the chain the engine builds rather than the top of it.
+ */
+function fatalOf(error: unknown): unknown {
+  let current = error;
+  for (let depth = 0; depth < 16 && current instanceof Error; depth += 1) {
+    if (parseFilesFatal(current) !== undefined) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return error;
+}
+
+/** The current root pointer, as a second connection sees it. */
+function committedRoot(path: string): unknown {
+  let found: unknown;
+  tamper(path, (database) => {
+    found = database.prepare("SELECT current_root_id AS root FROM workspace_state").get()?.root;
+  });
+  return found;
+}
+
+/** The Workspace root the newest committed journal row is associated with. */
+function rootOfLastEvent(path: string): unknown {
+  let found: unknown;
+  tamper(path, (database) => {
+    found = database
+      .prepare(
+        "SELECT workspace_root_id AS root FROM journal_events ORDER BY sequence DESC LIMIT 1",
+      )
+      .get()?.root;
+  });
+  return found;
+}
+
+/** Every host document-filesystem step this run performed. Must stay empty. */
+interface HostSpy {
+  readonly seen: HostFilesEvent[];
+}
+
+function* useHostSpy(): Operation<HostSpy> {
+  const seen: HostFilesEvent[] = [];
+  yield* API.Env.around(
+    {
+      // deno-lint-ignore require-yield
+      *cwd(): Operation<string> {
+        return "/nowhere-the-workflow-may-reach";
+      },
+    },
+    { at: "min" },
+  );
+  yield* useHostFiles({ observe: (event) => seen.push(event) });
+  return { seen };
+}
+
+interface Run {
+  readonly output: Json;
+  readonly host: HostSpy;
+}
+
+/**
+ * Execute `source` as this run's root document, with the run's Workspace
+ * attached and a host provider installed outside it.
+ */
+function runDocument(database: WorkflowRunDatabase, source: string): Operation<Run> {
+  return scoped(function* () {
+    const host = yield* useHostSpy();
+    const output = yield* withWorkflowWorkspace(
+      database,
+      scoped(function* () {
+        return yield* collect(
+          yield* execute({ ...inlineSource(source), stream: database.journal }),
+        );
+      }),
+    );
+    return { output, host };
+  });
+}
+
+/** The same document again, replaying the journal the first execution wrote. */
+function replayDocument(database: WorkflowRunDatabase, source: string): Operation<Run> {
+  return runDocument(database, source);
+}
+
+function* workspaceEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+  const events = yield* database.journal.readAll();
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === WORKSPACE_FILE,
+  );
+}
+
+/**
+ * The file effects this run recorded, as operation and outcome.
+ *
+ * What a document rendered is not evidence that a file effect happened: an
+ * element's own expansion is journaled too, so a provider that never recorded
+ * anything can still replay the text it produced. These rows are the provider's
+ * own history, which is what the durability claims are about.
+ */
+function* recordedFileEffects(
+  database: WorkflowRunDatabase,
+): Operation<Array<{ name: string; result: unknown }>> {
+  const events = yield* workspaceEvents(database);
+  return events.flatMap((event) =>
+    event.type === "yield" ? [{ name: event.description.name, result: event.result }] : [],
+  );
+}
+
+function* workspaceText(database: WorkflowRunDatabase, path: string): Operation<string> {
+  const read = yield* transactWorkspaceRoots(database, function* (workspace) {
+    return yield* workspace.filesystem.readTextFile(path);
+  });
+  if (!read.ok) {
+    throw read.error;
+  }
+  return read.value;
+}
+
+/**
+ * A Workspace filesystem that refuses one write the way DOFS refuses one.
+ *
+ * The failure is raised through the adapter's own wrapping, so what reaches the
+ * provider is indistinguishable from a real `EACCES`: it selects a reason and
+ * carries nothing else. It exists because no ordinary DOFS condition stops a
+ * write between creating its parents and writing the file — a parent chain that
+ * can be created is a chain the file can then be written into — so the state a
+ * savepoint is there to discard cannot otherwise be produced.
+ */
+function refusingWrite(
+  target: string,
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *writeFile(path, content, mode) {
+      if (path === target) {
+        throwWorkspaceFilesystemFailure(
+          Object.assign(new Error("planted"), { name: "WorkspaceFsError", code: "EACCES" }),
+        );
+      }
+      yield* filesystem.writeFile(path, content, mode);
+    },
+  });
+}
+
+/**
+ * Every name a Workspace filesystem decorator has answered to, rebuilt here.
+ *
+ * A contextual Api composes by stable name across loaded copies, so an
+ * independently constructed descriptor of the same name *is* the second copy.
+ * Each handler records that it was consulted and then delegates, so a seam that
+ * still existed would show up as a name in `reached` rather than as a broken
+ * run.
+ */
+const SEAM_NAMES: readonly string[] = [
+  "executablemd.workflow.deno.workspace.private.filesystem",
+  "executablemd.workflow.deno.workspace.private",
+  "executablemd.workflow.deno.workspace.effect.mutation",
+];
+
+interface SeamShape {
+  interpose(value: unknown): Operation<unknown>;
+}
+
+function* useImpostorSeams(reached: string[]): Operation<void> {
+  for (const name of SEAM_NAMES) {
+    const impostor: Api<SeamShape> = createApi<SeamShape>(name, {
+      // deno-lint-ignore require-yield
+      *interpose(value: unknown): Operation<unknown> {
+        return value;
+      },
+    });
+    yield* impostor.around({
+      *interpose([value], next) {
+        reached.push(name);
+        return yield* next(value);
+      },
+    });
+    yield* createContext<unknown>(name, undefined).set({ seized: true });
+  }
+}
+
+/** `<Tamper />` — the same impostors, installed from inside the document. */
+function useTamper(reached: string[]): Operation<void> {
+  return registerComponents([
+    {
+      name: "Tamper",
+      origin: "tier-wf",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        yield* useImpostorSeams(reached);
+        return "";
+      },
+    },
+  ]);
+}
+
+/** Whether one journal row is the recorded `operation` on `target`. */
+function namesEffect(record: unknown, operation: string, target: string): boolean {
+  if (typeof record !== "string") {
+    return false;
+  }
+  const parsed: unknown = JSON.parse(record);
+  if (typeof parsed !== "object" || parsed === null) {
+    return false;
+  }
+  const description = Reflect.get(parsed, "description");
+  const name =
+    typeof description === "object" && description !== null
+      ? Reflect.get(description, "name")
+      : undefined;
+  return (
+    Reflect.get(parsed, "type") === "yield" &&
+    typeof name === "string" &&
+    name.startsWith(`${operation}:`) &&
+    name.endsWith(`:${target}`)
+  );
+}
+
+/**
+ * Replace what one recorded file effect settled to.
+ *
+ * Written through SQL rather than through the provider, because the point of
+ * these cases is a journal holding something the provider would never write.
+ */
+function plantOutcome(path: string, operation: string, target: string, value: Json): void {
+  tamper(path, (database) => {
+    let planted = 0;
+    for (const row of database.prepare("SELECT sequence, record FROM journal_events").all()) {
+      if (!namesEffect(row["record"], operation, target)) {
+        continue;
+      }
+      const record = JSON.parse(String(row["record"]));
+      record.result = { status: "ok", value };
+      database
+        .prepare("UPDATE journal_events SET record = ? WHERE sequence = ?")
+        .run(`${JSON.stringify(record)}\n`, row["sequence"]);
+      planted += 1;
+    }
+    if (planted !== 1) {
+      throw new Error(`the journal records ${planted} ${operation} effects on ${target}`);
+    }
+  });
+}
+
+/**
+ * Take away the root's Close.
+ *
+ * A completed journal answers with its recorded root result without replaying
+ * anything, so a record planted in one of its effects is never read. Removing
+ * the Close is what makes the effects replay.
+ */
+function dropRootClose(path: string): void {
+  tamper(path, (database) => {
+    let dropped = 0;
+    for (const row of database.prepare("SELECT sequence, record FROM journal_events").all()) {
+      const parsed: unknown = JSON.parse(String(row["record"]));
+      if (typeof parsed !== "object" || parsed === null) {
+        continue;
+      }
+      if (
+        Reflect.get(parsed, "type") !== "close" ||
+        Reflect.get(parsed, "coroutineId") !== "root"
+      ) {
+        continue;
+      }
+      database.prepare("DELETE FROM journal_events WHERE sequence = ?").run(row["sequence"]);
+      dropped += 1;
+    }
+    if (dropped !== 1) {
+      throw new Error(`the journal records ${dropped} root closes`);
+    }
+  });
+}
+
+/**
+ * Drop the journal from the recorded effect on `target` onward.
+ *
+ * What is left replays up to that point and runs live after it, which is how a
+ * test observes what a document does *after* a replayed effect rather than only
+ * what that effect answers.
+ */
+function truncateFromEffect(path: string, operation: string, target: string): void {
+  tamper(path, (database) => {
+    const rows = database.prepare("SELECT sequence, record FROM journal_events").all();
+    const found = rows.find((row) => namesEffect(row["record"], operation, target));
+    if (found === undefined) {
+      throw new Error(`the journal records no ${operation} of ${target}`);
+    }
+    database.prepare("DELETE FROM journal_events WHERE sequence >= ?").run(found["sequence"]);
+  });
+}
+
+function* mutateWorkspace(
+  database: WorkflowRunDatabase,
+  body: (workspace: PrivateWorkspaceTransaction) => Operation<void>,
+): Operation<void> {
+  const changed = yield* transactWorkspaceRoots(database, function* (workspace) {
+    yield* body(workspace);
+    const root = yield* workspace.capture();
+    yield* workspace.publish(root.rootId);
+  });
+  if (!changed.ok) {
+    throw changed.error;
+  }
+}
+
+describe("WF workflow document filesystem", () => {
+  it("writes a file into the run's own Workspace and records one effect", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = yield* runDocument(
+        database,
+        ["# Release", "", '<File path="notes/release.md">Prepared</File>', ""].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      expect(yield* workspaceText(database, "/notes/release.md")).toEqual("Prepared");
+
+      const events = yield* workspaceEvents(database);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type === "yield" && events[0].description.name).toContain("write:");
+    });
+  });
+
+  it("reads a file back through the same logical Workspace", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = yield* runDocument(
+        database,
+        [
+          '<File path="config.json">{"channel":"stable"}</File>',
+          "",
+          '<File path="config.json" as="config" />',
+          "",
+          "Read: {config}",
+        ].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      expect(String(run.output)).toContain('Read: {"channel":"stable"}');
+    });
+  });
+
+  it("restores a read's recorded content when the frontier no longer holds it", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const source = [
+        '<File path="seed.txt">first</File>',
+        "",
+        '<File path="seed.txt" as="seen" />',
+        "",
+        "Seen: {seen}",
+      ].join("\n");
+      const first = yield* runDocument(database, source);
+      expect(String(first.output)).toContain("Seen: first");
+
+      // The provider recorded the read itself, not merely the element that
+      // asked for it: a read that answered from the frontier would leave one
+      // effect here instead of two.
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded.map((effect) => effect.name.split(":")[0])).toEqual(["write", "read"]);
+      expect(recorded[1]?.result).toEqual({
+        status: "ok",
+        value: { kind: "content", content: "first" },
+      });
+
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/seed.txt", "replaced");
+      });
+      expect(yield* workspaceText(database, "/seed.txt")).toEqual("replaced");
+
+      const replayed = yield* replayDocument(database, source);
+      expect(String(replayed.output)).toContain("Seen: first");
+      expect(replayed.host.seen).toEqual([]);
+      expect(yield* recordedFileEffects(database)).toEqual(recorded);
+    });
+  });
+
+  // WF6: the three refusals a document can act on, each decided before any
+  // effect exists. Nothing is recorded and nothing outside the run is asked,
+  // which is what "lexical" means here.
+  it("refuses an empty, absolute or escaping path without an effect or a host call", function* () {
+    const cases: Array<{ path: string; says: string }> = [
+      { path: "", says: "path is empty" },
+      { path: "/etc/passwd", says: "an absolute path is not accepted" },
+      { path: "../escape.txt", says: "resolves outside the working directory" },
+    ];
+
+    for (const refused of cases) {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        const before = committedRoot(path);
+        const run = yield* runDocument(database, `<File path="${refused.path}">no</File>`);
+
+        expect(String(run.output)).toContain(refused.says);
+        expect(run.host.seen).toEqual([]);
+        expect(yield* workspaceEvents(database)).toEqual([]);
+        expect(committedRoot(path)).toEqual(before);
+      });
+    }
+  });
+
+  // WF11: the search's document-facing shape, on the same contract the host
+  // provider answers on (HF3). A link is not a file, so it is neither a result
+  // nor a way into the tree it names.
+  it("searches regular files only, reporting no symbolic link and following none", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.mkdir("/docs", { recursive: true });
+        yield* workspace.filesystem.writeFile("/docs/a.md", "a");
+        yield* workspace.filesystem.mkdir("/hidden", { recursive: true });
+        yield* workspace.filesystem.writeFile("/hidden/b.md", "b");
+        yield* workspace.filesystem.symlink("/docs/a.md", "/link.md");
+        // Named so that walking *through* it would produce a second, matching
+        // path for a file the walk already reaches by its own name.
+        yield* workspace.filesystem.symlink("/hidden", "/mirror.md");
+      });
+
+      const run = yield* runDocument(
+        database,
+        ['<Glob include={["**/*.md"]} as="found" />', "", "Found: {found}"].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded[0]?.result).toEqual({
+        status: "ok",
+        value: { kind: "paths", paths: ["docs/a.md", "hidden/b.md"] },
+      });
+      // The file link is not a result, and the directory link is neither a
+      // result nor a second route to `b.md`.
+      expect(String(run.output)).not.toContain("link.md");
+      expect(String(run.output)).not.toContain("mirror.md");
+    });
+  });
+
+  it("reports a missing file as missing rather than reaching the host for it", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = yield* runDocument(database, '<File path="absent.txt" as="gone" />');
+
+      expect(String(run.output)).toContain("absent.txt");
+      expect(run.host.seen).toEqual([]);
+      const events = yield* workspaceEvents(database);
+      expect(events).toHaveLength(1);
+    });
+  });
+
+  it("searches the logical Workspace with <Glob>", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = yield* runDocument(
+        database,
+        [
+          '<File path="docs/a.md">a</File>',
+          '<File path="docs/b.md">b</File>',
+          '<File path="docs/skip.txt">c</File>',
+          "",
+          '<Glob include={["docs/*.md"]} as="found" />',
+          "",
+          "Found: {found}",
+        ].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      expect(String(run.output)).toContain("docs/a.md");
+      expect(String(run.output)).toContain("docs/b.md");
+      expect(String(run.output)).not.toContain("skip.txt");
+    });
+  });
+
+  it("commits the bytes, the current root and the filtered result together", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* runDocument(database, '<File path="atomic.txt">committed</File>');
+
+      // Counted through a second connection, so what it reports is what the
+      // transaction published rather than what this handle is holding.
+      expect(committedEventCount(path)).toBeGreaterThan(0);
+      expect(committedRoot(path)).toEqual(rootOfLastEvent(path));
+      expect(yield* workspaceText(database, "/atomic.txt")).toEqual("committed");
+
+      const events = yield* workspaceEvents(database);
+      const written = events[0];
+      expect(written?.type === "yield" && written.result).toEqual({
+        status: "ok",
+        value: { kind: "written" },
+      });
+    });
+  });
+
+  it("replays a create/delete/create history without consulting the current file", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const source = [
+        '<File path="x.txt">one</File>',
+        "",
+        '<File path="x.txt" as="seen" />',
+        "",
+        "Seen: {seen}",
+      ].join("\n");
+
+      const first = yield* runDocument(database, source);
+      expect(String(first.output)).toContain("Seen: one");
+
+      // The history the replay has to survive, built through the seam a
+      // provider owns rather than through a public delete component: the file
+      // the document created is removed, and then a different file is created
+      // at the same path.
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.remove("/x.txt");
+      });
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/x.txt", "three");
+      });
+
+      const before = yield* database.journal.readAll();
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded).toEqual([
+        { name: recorded[0]?.name ?? "", result: { status: "ok", value: { kind: "written" } } },
+        {
+          name: recorded[1]?.name ?? "",
+          result: { status: "ok", value: { kind: "content", content: "one" } },
+        },
+      ]);
+      const frontier = yield* workspaceText(database, "/x.txt");
+      expect(frontier).toEqual("three");
+
+      const replayed = yield* replayDocument(database, source);
+
+      expect(String(replayed.output)).toContain("Seen: one");
+      expect(replayed.host.seen).toEqual([]);
+      // The write did not run again, so the frontier is still what the private
+      // history left there rather than the document's own content.
+      expect(yield* workspaceText(database, "/x.txt")).toEqual(frontier);
+      expect((yield* database.journal.readAll()).length).toEqual(before.length);
+      expect(yield* recordedFileEffects(database)).toEqual(recorded);
+    });
+  });
+
+  it("refuses to publish a workflow file effect into a stream that is not the run's", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const before = yield* database.journal.readAll();
+
+      const failure = yield* raised(
+        scoped(function* () {
+          yield* useHostSpy();
+          return yield* withWorkflowWorkspace(
+            database,
+            scoped(function* () {
+              return yield* collect(
+                yield* execute({
+                  ...inlineSource('<File path="smuggled.txt">no</File>'),
+                  stream: new InMemoryStream(),
+                }),
+              );
+            }),
+          );
+        }),
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((yield* database.journal.readAll()).length).toEqual(before.length);
+      const present = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.readTextFile("/smuggled.txt");
+      });
+      expect(present.ok).toEqual(false);
+    });
+  });
+
+  it("publishes a refusal as rolled back, leaving the Workspace as it was", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/blocked", "a file, not a directory");
+      });
+      const before = committedRoot(path);
+
+      const run = yield* runDocument(database, '<File path="blocked/deep/x.txt">no</File>');
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.result).toEqual({
+        status: "ok",
+        value: { kind: "refused", phase: "transaction", reason: "not-directory" },
+      });
+      // Nothing the attempt created survives, so the root the effect published
+      // is the one it started from.
+      expect(committedRoot(path)).toEqual(before);
+
+      const created = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.stat("/blocked/deep");
+      });
+      expect(created.ok).toEqual(false);
+    });
+  });
+
+  // WF12: the savepoint around parent creation and the write together. The
+  // write fails after two directories exist, so what the assertion below sees
+  // is the rollback rather than an attempt that never started.
+  it("discards the parent directories a refused write already created", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/kept.txt", "kept");
+        });
+
+        const run = yield* runDocument(
+          database,
+          ['<File path="made/deep/x.txt">no</File>', "", '<File path="after.txt">yes</File>'].join(
+            "\n",
+          ),
+        );
+
+        expect(run.host.seen).toEqual([]);
+        const recorded = yield* recordedFileEffects(database);
+        expect(recorded[0]?.result).toEqual({
+          status: "ok",
+          value: { kind: "refused", phase: "transaction", reason: "permission-denied" },
+        });
+
+        // Both directories the attempt created are gone.
+        for (const created of ["/made", "/made/deep"]) {
+          const stat = yield* transactWorkspaceRoots(database, function* (workspace) {
+            return yield* workspace.filesystem.stat(created);
+          });
+          expect(stat.ok).toEqual(false);
+        }
+        // What the Workspace already held is what it still holds.
+        expect(yield* workspaceText(database, "/kept.txt")).toEqual("kept");
+        // The savepoint took back the mutation rather than the transaction, so
+        // the next effect still commits.
+        expect(recorded[1]?.result).toEqual({ status: "ok", value: { kind: "written" } });
+        expect(yield* workspaceText(database, "/after.txt")).toEqual("yes");
+      },
+      { decorateFilesystem: refusingWrite("/made/deep/x.txt") },
+    );
+  });
+
+  // WF14: the transaction filesystem is the provider's, decided where the
+  // provider was installed. The adversary here sits in the strongest position
+  // any composed code can occupy — a scope that encloses the whole document and
+  // was installed *after* the provider — and rebuilds, by name, every seam a
+  // filesystem decorator has answered to. A stable name is composition; this is
+  // what it means for authority not to travel through one.
+  it("keeps composed middleware away from the transaction filesystem", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const reached: string[] = [];
+
+      const run = yield* scoped(function* () {
+        yield* useImpostorSeams(reached);
+        yield* useTamper(reached);
+        return yield* runDocument(
+          database,
+          ["<Tamper />", "", '<File path="guarded.txt">written</File>'].join("\n"),
+        );
+      });
+
+      expect(run.host.seen).toEqual([]);
+      // The write went to the run's own Workspace, untouched.
+      expect(yield* workspaceText(database, "/guarded.txt")).toEqual("written");
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded.at(-1)?.result).toEqual({ status: "ok", value: { kind: "written" } });
+      // Neither position reached the filesystem: not the enclosing scope, and
+      // not the component that installed the same names from inside the
+      // document.
+      expect(reached).toEqual([]);
+    });
+  });
+
+  // WF13: durable history is parsed, not believed. A record carrying more than
+  // its variant carries, or a word the vocabulary does not hold, describes no
+  // outcome — and nothing it happens to hold is repeated back.
+  it("refuses a recorded outcome carrying extra or contradictory members", function* () {
+    const source = [
+      '<File path="seed.txt">first</File>',
+      "",
+      '<File path="seed.txt" as="seen" />',
+      "",
+      '<Glob include={["*.txt"]} as="found" />',
+      "",
+      "Seen: {seen}",
+    ].join("\n");
+
+    const cases: Array<{ operation: string; target: string; value: Json }> = [
+      // content, carrying a refusal's members as well as its own
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "content", content: "first", reason: "missing" },
+      },
+      // written, which carries nothing but its kind
+      { operation: "write", target: "/seed.txt", value: { kind: "written", content: "first" } },
+      // paths, carrying content
+      {
+        operation: "glob",
+        target: "/",
+        value: { kind: "paths", paths: ["seed.txt"], content: "x" },
+      },
+      // refused, missing the reason it is refused for
+      { operation: "read", target: "/seed.txt", value: { kind: "refused", phase: "target" } },
+      // refused, in a vocabulary this provider does not speak
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "refused", phase: "target", reason: "unspeakable" },
+      },
+      // refused, with planted text riding along beside the vocabulary
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "refused", phase: "target", reason: "missing", detail: "PLANTED-SECRET" },
+      },
+      // Every member, holding the wrong kind of value.
+      { operation: "read", target: "/seed.txt", value: { kind: "content", content: 7 } },
+      { operation: "glob", target: "/", value: { kind: "paths", paths: "seed.txt" } },
+      { operation: "glob", target: "/", value: { kind: "paths", paths: ["seed.txt", 7] } },
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "refused", phase: 7, reason: "missing" },
+      },
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "refused", phase: "target", reason: 7 },
+      },
+      // A word from the other operation's vocabulary is not this one's.
+      {
+        operation: "read",
+        target: "/seed.txt",
+        value: { kind: "refused", phase: "commit", reason: "missing" },
+      },
+    ];
+
+    for (const planted of cases) {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* runDocument(database, source);
+
+        dropRootClose(path);
+        plantOutcome(path, planted.operation, planted.target, planted.value);
+        const before = (yield* workspaceEvents(database)).length;
+
+        const failure = yield* raised(replayDocument(database, source));
+
+        expect(failure).toBeInstanceOf(Error);
+        // Exactly the fixed provider invariant — not merely "something failed".
+        const fatal = fatalOf(failure);
+        expect(parseFilesFatal(fatal)).toEqual({
+          type: FILES_FATAL,
+          kind: "invariant",
+          category: "protocol",
+        });
+        // Cause-free: nothing the journal held is carried along underneath it.
+        expect(fatal instanceof Error ? fatal.cause : "not an error").toBeUndefined();
+        expect(String(failure)).not.toContain("PLANTED-SECRET");
+        // The failed run performed no file effect of its own — the history it
+        // could not read is the whole of what it has.
+        expect((yield* workspaceEvents(database)).length).toEqual(before);
+      });
+    }
+  });
+
+  it("performs no later file effect once the history it replays is malformed", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      const source = [
+        '<File path="first.txt">one</File>',
+        "",
+        '<File path="second.txt">two</File>',
+      ].join("\n");
+      yield* runDocument(database, source);
+
+      // The journal now replays the first write and runs everything from the
+      // second one live, and the first write's record describes no outcome.
+      truncateFromEffect(path, "write", "/second.txt");
+      plantOutcome(path, "write", "/first.txt", { kind: "written", content: "one" });
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.remove("/second.txt");
+      });
+      const before = (yield* workspaceEvents(database)).length;
+
+      const failure = yield* raised(replayDocument(database, source));
+
+      expect(parseFilesFatal(fatalOf(failure))).toEqual({
+        type: FILES_FATAL,
+        kind: "invariant",
+        category: "protocol",
+      });
+      expect((yield* workspaceEvents(database)).length).toEqual(before);
+      const second = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.stat("/second.txt");
+      });
+      expect(second.ok).toEqual(false);
+    });
+  });
+
+  it("refuses to replace a directory before it changes anything", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.mkdir("/held", { recursive: true });
+        yield* workspace.filesystem.writeFile("/held/inner.txt", "kept");
+      });
+
+      const run = yield* runDocument(database, '<File path="held">replacement</File>');
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded[0]?.result).toEqual({
+        status: "ok",
+        value: { kind: "refused", phase: "target", reason: "directory" },
+      });
+      expect(yield* workspaceText(database, "/held/inner.txt")).toEqual("kept");
+    });
+  });
+
+  it("denies a temporary directory instead of handing out a host one", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runDocument(
+          database,
+          ["<TempDir>", '<File path="inside.txt">x</File>', "</TempDir>"].join("\n"),
+        ),
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(parseFilesFatal(fatalOf(failure))).toEqual({
+        type: FILES_FATAL,
+        kind: "operation-denied",
+        operation: "temporary-directory",
+      });
+    });
+  });
+
+  it("keeps an unrelated in-memory journal out of the run's storage", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const before = (yield* database.journal.readAll()).length;
+      yield* scoped(function* () {
+        yield* useHostSpy();
+        yield* collect(
+          yield* execute({ ...inlineSource("# plain"), stream: new InMemoryStream() }),
+        );
+      });
+      expect((yield* database.journal.readAll()).length).toEqual(before);
+    });
+  });
+});

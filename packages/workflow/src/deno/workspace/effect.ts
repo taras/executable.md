@@ -218,7 +218,7 @@ export function withWorkspaceEffects<T>(
   });
 }
 
-export function createWorkspaceProofEffect<T extends Json>(
+export function createWorkspaceEffect<T extends Json>(
   database: WorkflowRunDatabase,
   description: EffectDescription,
   mutate: DenoWorkspaceMutation<T>,
