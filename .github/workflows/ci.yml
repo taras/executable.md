@@ -411,8 +411,19 @@ jobs:
       # Clones itself, prepares that clone against a scratch DENO_DIR, then
       # fingerprints node_modules, the cache's dependency content, and the lock
       # around every build phase — each run offline.
+      #
+      # The soft descriptor limit rises to the hard one first. The runner
+      # starts every step at 1024, and the battery oversubscribes this runner
+      # by design, which is exactly what widens how many files its processes
+      # hold open at once: Node loads a module graph with parallel reads, and
+      # the slower each read, the more are in flight together. A package.json
+      # read that fails against the limit is one Node treats as the file being
+      # absent, so the package resolves without its exports map and the lane
+      # fails on a phantom module-not-found instead of naming the limit.
       - name: The chain holds from a clean checkout
-        run: deno task verify:clean
+        run: |
+          ulimit -n "$(ulimit -Hn)"
+          deno task verify:clean
 
   site:
     runs-on: ubuntu-latest
