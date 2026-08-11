@@ -372,7 +372,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.displayed).toContain("MARKER");
+    expect(result.output).toContain("MARKER");
   });
 
   it("OM5d: lets a printErrors(fn) component continue inside a region", function* () {
@@ -399,14 +399,18 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     expect(threw).toBe(true);
   });
 
-  it("OM5f: leaves a root without <Output> printing", function* () {
+  // A printing root used to render this failure and run the next block. A
+  // foreground command's nonzero exit is checked now: printing may decide how
+  // it is reported, never that the run succeeded (#441).
+  it("OM5f: a checked command failure fails a root without <Output>", function* () {
     const result = yield* run({
       "doc.md": ["```bash exec", "FAIL", "```", "", "```bash exec", "echo LATER", "```"].join("\n"),
     });
 
-    expect(result.output).toContain("Command failed");
-    expect(result.displayed).toContain("LATER");
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.displayed).not.toContain("LATER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
   });
 });
 
@@ -502,7 +506,9 @@ describe("Tier OM — the failed document is a determined outcome", () => {
     expect(first.ok).toBe(false);
     expect(second.ok).toBe(false);
     expect(second.output).toBe(first.output);
-    expect(second.output).toContain("BEFORE");
+    // The command's own text went to the reader on the first run and is not
+    // part of the document either time (#441).
+    expect(second.output).not.toContain("BEFORE");
     expect(String(second.error)).toContain(String(first.error));
     // Replay ran no command again: the recorded outcome answered for the run.
     expect(commands(stream.snapshot())).toHaveLength(commandsAfterFirst);
@@ -572,7 +578,7 @@ describe("Tier OM — every visible producer keeps its prefix", () => {
 
       expect(result.output).toContain("PREFIX");
       expect(result.ok).toBe(false);
-      expect(result.displayed).not.toContain("MARKER");
+      expect(result.output).not.toContain("MARKER");
       // The error that ended the run is the failure, not the output.
       expect(result.output).not.toContain("<!-- ERROR");
     });
@@ -910,7 +916,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     // decided is not something a wrapper undoes, so the execution ends rather
     // than resuming past somebody else's stop.
     expect(result.ok).toBe(false);
-    expect(result.displayed).not.toContain("MARKER");
+    expect(result.output).not.toContain("MARKER");
     // What the region rendered first is still preserved.
     expect(result.displayed).toContain("BEFORE");
   });
@@ -927,7 +933,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     // `<File>` prints the failure that left the region — it does not resume the
     // region, and it never writes a file built from content that failed.
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.displayed).toContain("MARKER");
+    expect(result.output).toContain("MARKER");
   });
 
   // The same failure through a printing component that does not recover from a
@@ -944,7 +950,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
     expect(result.ok).toBe(true);
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.displayed).toContain("MARKER");
+    expect(result.output).toContain("MARKER");
   });
 
   it("OM16: still prints what is raised under its own error mode", function* () {
@@ -954,7 +960,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     });
 
     expect(result.ok).toBe(true);
-    expect(result.displayed).toContain("MARKER");
+    expect(result.output).toContain("MARKER");
   });
 });
 
@@ -983,7 +989,7 @@ describe("Tier OM — the partial output reaches the stream, not only the close"
     // arrives must see what the region produced before it failed.
     const prefix = result.chunks.slice(0, result.chunks.length - 1).join("");
     expect(result.chunks.join("")).toContain("intro paragraph");
-    expect(result.chunks.join("")).toContain("BEFORE");
+    expect(result.displayed).toContain("BEFORE");
     // More than one chunk: the intro went out before the region ran at all.
     expect(prefix).toContain("intro paragraph");
   });

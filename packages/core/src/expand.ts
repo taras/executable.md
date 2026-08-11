@@ -51,7 +51,7 @@ import {
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
-import { printsErrors, usePrintErrors } from "./component-failures.ts";
+import { PrintsCheckedFailures, printsErrors, usePrintErrors } from "./component-failures.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
@@ -917,7 +917,9 @@ export function* expandSegments(
  */
 function* checkedCommandFailure(segment: ErrorSegment): Operation<ErrorSegment> {
   const mode = (yield* ErrorMode.get()) ?? "print";
-  if (mode !== "print") {
+  // A region that asked to print failures gets to print this one; a root that
+  // merely prints by default does not get to call the run a success.
+  if (mode !== "print" || (yield* PrintsCheckedFailures.get())) {
     return yield* raise(segment);
   }
   return yield* scoped(function* () {
