@@ -1119,6 +1119,43 @@ hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
 
+## Foreground commands
+
+An executable block is a foreground child process. Its stdout and stderr reach
+the reader's corresponding channels as the child produces them, before it
+exits, and each byte is displayed once: what was forwarded is never rendered
+into the document again at completion.
+
+Three questions about a command are separate, and answering one never answers
+another:
+
+- **Routing** is what a reader sees. An ordinary block forwards both channels;
+  a `<Capture as>` region takes stdout into the captured value and leaves
+  stderr diagnostic; `silent` displays neither; a value root shows a command's
+  stdout beside its JSON result rather than in it. Routing is visible in
+  document structure, never selected by a root-level presentation declaration
+  or by which runtime is executing.
+- **Retention** is what the run keeps. The host chooses it explicitly and says
+  so; nothing infers it from which stream implementation a journal happens to
+  use. A run that keeps no diagnostic record keeps the exit status alone, and
+  the transient path never accumulates the bytes on their way past — a command
+  that writes a gigabyte costs a gigabyte of nothing. A run given a journal
+  retains stdout and stderr in addition to whatever routing the document chose,
+  because a display policy does not weaken an explicit audit record.
+- **Failure** is neither. A nonzero exit is a checked failure: a printing
+  boundary may decide how it is reported, never that the run succeeded anyway.
+  Later executable work does not start, and the run fails without any
+  `<Output>` declaration. `<Output>` governs rendered document selection only.
+
+Retained output crosses the existing pre-persistence secret gate, exactly as
+any other journaled field does. Output that is never retained is never
+scanned, because there is nothing to persist and nothing was accumulated for a
+scanner to inspect.
+
+Forwarding, completion, cancellation and teardown belong to the executable
+block's own Effection scope. Cancelling the block stops the child and the tasks
+forwarding its output before the block settles.
+
 ## Configured timeouts
 
 Nothing has a timeout by default. Three contextual values bound three different
@@ -1487,6 +1524,7 @@ Status is measured against main.
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
+| foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |

@@ -963,7 +963,11 @@ describe("execute", () => {
         execCalled = true;
         const script = (options.command[2] ?? "").trim();
         if (script.startsWith("echo ")) {
-          return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
+          const text = script.slice(5) + "\n";
+          yield* Stdio.operations.stdout(new TextEncoder().encode(text));
+          return options.retain === false
+            ? { exitCode: 0, stdout: undefined, stderr: undefined }
+            : { exitCode: 0, stdout: text, stderr: "" };
         }
         return { exitCode: 0, stdout: "", stderr: "" };
       },
@@ -990,17 +994,13 @@ describe("execute", () => {
     // Reset tracking — on resume, exec should be called live
     execCalled = false;
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream: partialStream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream: partialStream })));
+    });
 
-    expect(result).toContain("Hello, world!");
-    expect(result).toContain("done");
+    expect(run.value).toContain("Hello, world!");
+    // The block ran live on the resumed pass and its text reached the reader.
+    expect(run.stdout).toContain("done");
     expect(execCalled).toBeTruthy();
   });
 
@@ -1311,7 +1311,9 @@ describe("component-declared output — document workflow", () => {
   it("keeps per-segment streaming for roots without <Output>", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "README.md": "```bash exec\necho one\n```\n\n```bash exec\necho two\n```\n",
+      // Two rendering segments around a foreground block, whose own output
+      // goes to the reader rather than into the document (#441).
+      "README.md": "one\n\n```bash exec\necho between\n```\n\ntwo\n",
     });
     yield* useStubExec();
 

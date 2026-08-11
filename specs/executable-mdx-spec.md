@@ -514,7 +514,9 @@ Custom factories can be provided via `ExecuteOptions.modifiers`.
 **`exec`** — executes the code block as a shell command via
 `durableExec`. This is a terminal handler — it does not call `next()`.
 It reads the code block info from the Effection context via
-`useCodeBlock()`. It resolves the exec default at the block —
+`useCodeBlock()`. It forwards the child's channels as they arrive and retains
+their text only when the host asked for a record (§3.6). It resolves the exec
+default at the block —
 `timeoutExec` (`specs/acp-client-spec.md` §Config), which is what a
 `timeout=` modifier around it has already overridden, or what
 `xmd run --timeout-exec` established, or nothing — and hands it to the
@@ -913,7 +915,61 @@ function parseInfoString(infoString: string): ParsedInfoString {
 }
 ```
 
-### 3.6 What is the command?
+### 3.6 Foreground execution, capture, and retention
+
+An `exec` block is a foreground child process.
+
+**Routing.** stdout and stderr are forwarded to the host's corresponding
+channels as the child produces them. The first chunk is observable before the
+child exits, and each byte is displayed once: a forwarded block renders nothing
+into the document at completion.
+
+| Context | stdout | stderr |
+| --- | --- | --- |
+| ordinary `exec` | forwarded live | forwarded live |
+| inside `<Capture as>` | collected into the captured value | forwarded live |
+| `silent exec` | neither | neither |
+| value root | shown on stderr, so the result's channel stays JSON-only | forwarded live |
+
+Capture is structural, not a modifier: a `<Capture as>` region may hold prose,
+components and several blocks, and every foreground block inside it writes its
+stdout into the binding rather than to the reader. Streaming and capturing at
+once is not implied.
+
+```md
+<Capture as="buildOutput">
+```bash exec
+deno task build
+```
+</Capture>
+```
+
+**Retention.** What a run keeps is the host's explicit choice, carried by
+`ExecuteSettings.retainProcessOutput` and defaulting to keeping output so an
+existing programmatic caller is unchanged. `xmd run` keeps output only with
+`--journal`.
+
+| Invocation | Live routing | Retained result |
+| --- | --- | --- |
+| `xmd run` | as the table above | exit status only |
+| `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr |
+
+Without a journal the run never builds the complete strings: the Process
+operation acquires the child and subscribes to its streams only when the caller
+asked to retain them. The one exception is a structural capture, whose buffer
+has the capture's scope. With a journal, output is teed into the record in
+addition to the routing the document chose — including for `silent` and
+captured blocks, because a display policy does not weaken an audit record.
+Retained output crosses the pre-persistence secret gate; output that is not
+retained is never accumulated for a scanner to inspect.
+
+**Failure.** A nonzero exit is a checked failure. The ambient printing mode may
+decide how it is reported, never that the run succeeded: later executable
+blocks do not run and the execution fails, with no `<Output>` declaration
+required. `<Output>` selects rendered document content and nothing else.
+`silent` hides output; it does not convert a failure into success.
+
+### 3.7 What is the command?
 
 The content of the code block is the command. The language determines
 how it is invoked:
@@ -927,7 +983,7 @@ how it is invoked:
 
 Multi-line code blocks are passed as a single string to the `-c` flag.
 
-### 3.7 Examples of modifier chain execution
+### 3.8 Examples of modifier chain execution
 
 **`exec` alone** — `exec` runs the command via `durableExec`
 (one journal entry). stdout becomes the output.

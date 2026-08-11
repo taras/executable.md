@@ -17,6 +17,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { Stdio } from "@effectionx/process";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
@@ -35,6 +36,8 @@ interface Run {
   /** Chunks in the order consumers received them. */
   chunks: string[];
   output: string;
+  /** What a foreground command displayed while the run went on (#441). */
+  displayed: string;
   ok: boolean;
   error: unknown;
   events: DurableEvent[];
@@ -53,19 +56,35 @@ function commands(events: DurableEvent[]): string[] {
 /** An exec stub that fails the command named FAIL and echoes anything else. */
 function* useStagedExec(): Operation<void> {
   yield* API.Process.around({
-    // deno-lint-ignore require-yield
     *exec([options], _next) {
       const script = (options.command[2] ?? "").trim();
-      if (script.includes("FAIL")) {
-        return { exitCode: 1, stdout: "PREVIEW\n", stderr: "stage failed" };
+      const failing = script.includes("FAIL");
+      const text = failing ? "PREVIEW\n" : `${script}\n`;
+      yield* Stdio.operations.stdout(new TextEncoder().encode(text));
+      if (options.retain === false) {
+        return { exitCode: failing ? 1 : 0, stdout: undefined, stderr: undefined };
       }
-      return { exitCode: 0, stdout: `${script}\n`, stderr: "" };
+      return {
+        exitCode: failing ? 1 : 0,
+        stdout: text,
+        stderr: failing ? "stage failed" : "",
+      };
     },
   });
 }
 
 function run(files: Record<string, string>, stream = new InMemoryStream()): Operation<Run> {
   return scoped(function* () {
+    let displayed = "";
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+      *stderr([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+    });
     yield* useStubFs(files);
     yield* useStagedExec();
     // `<File>` reaches `API.Files`, which has no host default.
@@ -81,6 +100,7 @@ function run(files: Record<string, string>, stream = new InMemoryStream()): Oper
     return {
       chunks,
       output: chunks.join(""),
+      displayed,
       ok: result.ok,
       error: result.ok ? undefined : result.error,
       events: stream.snapshot(),
@@ -216,7 +236,7 @@ describe("Tier OM — a failing <Output> keeps what it rendered", () => {
       ].join("\n"),
     });
 
-    expect(result.output).toContain("BEFORE");
+    expect(result.displayed).toContain("BEFORE");
     expect(result.ok).toBe(false);
     // The block after the failure never started.
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
@@ -240,7 +260,7 @@ describe("Tier OM — a failing <Output> keeps what it rendered", () => {
       "doc.md": "<Stage />\n\n```bash exec\necho LATER\n```\n",
     });
 
-    expect(result.output).toContain("BEFORE");
+    expect(result.displayed).toContain("BEFORE");
     expect(result.ok).toBe(false);
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
   });
@@ -264,7 +284,7 @@ describe("Tier OM — a failing <Output> keeps what it rendered", () => {
       ].join("\n"),
     });
 
-    expect(result.output).toContain("PREVIEW");
+    expect(result.displayed).toContain("PREVIEW");
     expect(result.ok).toBe(false);
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
   });
@@ -298,9 +318,9 @@ describe("Tier OM — a failing <Output> keeps what it rendered", () => {
       ].join("\n"),
     });
 
-    expect(result.output).toContain("FIRST");
+    expect(result.displayed).toContain("FIRST");
     expect(result.ok).toBe(false);
-    expect(result.output).not.toContain("SECOND");
+    expect(result.displayed).not.toContain("SECOND");
     const started = commands(result.events);
     expect(started.some((name) => name.includes("DOCUMENTATION"))).toBe(false);
     expect(started.some((name) => name.includes("SECOND"))).toBe(false);
@@ -352,7 +372,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.output).toContain("MARKER");
+    expect(result.displayed).toContain("MARKER");
   });
 
   it("OM5d: lets a printErrors(fn) component continue inside a region", function* () {
@@ -385,7 +405,7 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     });
 
     expect(result.output).toContain("Command failed");
-    expect(result.output).toContain("LATER");
+    expect(result.displayed).toContain("LATER");
     expect(result.ok).toBe(true);
   });
 });
@@ -552,7 +572,7 @@ describe("Tier OM — every visible producer keeps its prefix", () => {
 
       expect(result.output).toContain("PREFIX");
       expect(result.ok).toBe(false);
-      expect(result.output).not.toContain("MARKER");
+      expect(result.displayed).not.toContain("MARKER");
       // The error that ended the run is the failure, not the output.
       expect(result.output).not.toContain("<!-- ERROR");
     });
@@ -890,9 +910,9 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     // decided is not something a wrapper undoes, so the execution ends rather
     // than resuming past somebody else's stop.
     expect(result.ok).toBe(false);
-    expect(result.output).not.toContain("MARKER");
+    expect(result.displayed).not.toContain("MARKER");
     // What the region rendered first is still preserved.
-    expect(result.output).toContain("BEFORE");
+    expect(result.displayed).toContain("BEFORE");
   });
 
   // The same, where the boundary is a built-in that prints its own failures
@@ -907,7 +927,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     // `<File>` prints the failure that left the region — it does not resume the
     // region, and it never writes a file built from content that failed.
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.output).toContain("MARKER");
+    expect(result.displayed).toContain("MARKER");
   });
 
   // The same failure through a printing component that does not recover from a
@@ -924,7 +944,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
     expect(result.ok).toBe(true);
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.output).toContain("MARKER");
+    expect(result.displayed).toContain("MARKER");
   });
 
   it("OM16: still prints what is raised under its own error mode", function* () {
@@ -934,7 +954,7 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     });
 
     expect(result.ok).toBe(true);
-    expect(result.output).toContain("MARKER");
+    expect(result.displayed).toContain("MARKER");
   });
 });
 
