@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "effection";
+import { createContext, ensure, scoped, sleep, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
@@ -576,17 +576,15 @@ describe("Tier EP — the execution protocol", () => {
     expect(finalized).toEqual(["cleanup"]);
   });
 
-  // EP25: cancelling an execution halts the authored work inside it and
-  // finalizes exactly once.
-  //
-  // What this does not prove is cancellation of an already-returned handle by a
-  // separate consumer: it halts the task that both started the execution and
-  // consumes it, so parent-scope cancellation reaches the owner too. That
-  // stronger case is not covered here — see the PR body.
-  it("EP25: cancellation halts a suspended document and finalizes exactly once", function* () {
+  // EP25: cancelling a consumer of an *already-returned* handle cancels the
+  // invocation. The handle is obtained in a caller scope that keeps running, and
+  // the task that is halted never started the execution — nothing but the handle
+  // connects them.
+  it("EP25: halting a consumer of a returned handle cancels the invocation", function* () {
     const finalized: string[] = [];
-    const reached = withResolvers<void>();
     const halted: string[] = [];
+    const reached = withResolvers<void>();
+    const settledBy: Array<boolean> = [];
 
     yield* scoped(function* () {
       yield* Execution.around({
@@ -601,27 +599,89 @@ describe("Tier EP — the execution protocol", () => {
         },
       });
 
-      const running = yield* spawn(function* () {
-        const execution = yield* executeInstalled(
-          { ...inlineSource(DOC), stream: new InMemoryStream() },
-          [
-            {
-              *install(): Operation<void> {
-                yield* ensure(() => {
-                  finalized.push("cleanup");
-                });
-              },
+      const execution = yield* executeInstalled(
+        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(() => {
+                finalized.push("cleanup");
+              });
             },
-          ],
-        );
+          },
+        ],
+      );
+      yield* reached.operation;
+
+      const consumer = yield* spawn(function* () {
         yield* execution;
       });
+      // The spawned task has to reach its observation before halting it means
+      // anything — a halt delivered first would tear down a task that had not
+      // started, which proves nothing about a returned handle.
+      yield* sleep(1);
+      yield* consumer.halt();
 
-      yield* reached.operation;
-      yield* running.halt();
+      // Asserted before this scope exits: halting the consumer is what closed
+      // the invocation, not the surrounding scope unwinding.
+      expect(halted).toEqual(["document"]);
+      expect(finalized).toEqual(["cleanup"]);
+
+      // Another observer of the same handle settles rather than hanging...
+      settledBy.push((yield* execution).ok);
+      // ...and observing it again starts nothing and refinalizes nothing.
+      settledBy.push((yield* execution).ok);
     });
 
+    expect(settledBy).toEqual([false, false]);
     expect(halted).toEqual(["document"]);
+    expect(finalized).toEqual(["cleanup"]);
+  });
+
+  it("EP25b: a fatal document result survives cancellation by identity", function* () {
+    const durable = new DurablePersistenceError("yield", new Error("planted"));
+    const released = withResolvers<void>();
+    const finalized: string[] = [];
+
+    const observed = yield* scoped(function* () {
+      yield* Execution.around({
+        // deno-lint-ignore require-yield
+        *document() {
+          throw durable;
+        },
+      });
+
+      const execution = yield* executeInstalled(
+        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(function* () {
+                finalized.push("cleanup");
+                // Teardown is still running when the consumer below is halted.
+                yield* released.operation;
+              });
+            },
+          },
+        ],
+      );
+
+      const consumer = yield* spawn(function* () {
+        yield* execution;
+      });
+      const halting = yield* spawn(function* () {
+        yield* consumer.halt();
+      });
+      released.resolve();
+      yield* halting;
+
+      return yield* execution;
+    });
+
+    // The document had already decided, and cancelling a consumer during
+    // teardown did not erase that — by identity.
+    expect(observed.ok).toBe(false);
+    expect(observed.ok ? undefined : observed.error).toBe(durable);
     expect(finalized).toEqual(["cleanup"]);
   });
 
