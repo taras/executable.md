@@ -160,9 +160,15 @@ describe("Tier SC — Sample component", () => {
           "",
           '<Sample model="test-model">',
           "",
+          // A command's output reaches the reader, not the rendered children
+          // (#441); a region that wants it as text asks for it.
+          '<Capture as="childrenOutput">',
           "```bash exec",
           "echo children-output-here",
           "```",
+          "</Capture>",
+          "",
+          "{childrenOutput}",
           "",
           "</Sample>",
           "",
