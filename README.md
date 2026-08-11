@@ -1,5 +1,7 @@
 # executable.md
 
+<Output />
+
 **executable.md** treats markdown documents as executable workflows. A document can expand markdown components, execute annotated code blocks, and evaluate in-process [Effection](https://frontside.com/effection) operations while staying a valid, readable markdown file in any viewer.
 
 The command-line tool is called **`xmd`** (eXecutable MarkDown).
@@ -330,20 +332,137 @@ Each invocation requires a new path. If the path already exists, `xmd` exits wit
 
 ## Development
 
-This is a Deno-first project. Prepare a checkout once, then run the tool from
-source and the checks with `deno`:
+This is a Deno-first project, and this section is executable. Every command
+below is an ordinary `bash` fence you can copy, and the same fences run through
+the source CLI when you address one of these headings as a document target:
 
 ```bash
-deno task setup                                  # install both dependency layouts, build the browser bundle
-deno task xmd run packages/core/examples/hello-world.md   # run a document from source
-deno task build                                  # compile the standalone xmd binary
-deno task lint                                   # oxlint + oxfmt
-deno task check                                  # typecheck
-deno task test                                   # run the test suite
-deno task verify                                 # the whole applicable battery, concurrently
+deno task xmd targets README.md                               # list what this document addresses
+deno task xmd run README.md#Development/Setup                 # prepare a checkout
+deno task xmd run README.md#Development/Build                 # setup, then compile the binary
+deno task xmd run README.md#Development/Verification/Focused  # setup, then the short battery
+deno task xmd run README.md#Development/Verification/Complete # setup, then the whole battery
 ```
 
-### Implementation feedback
+Preparing a checkout is common to all of them, so it lives here rather than in
+each one, and runs before whichever heading you selected:
+
+```bash silent exec
+deno task setup
+```
+
+| Invocation | Commands, in order |
+| --- | --- |
+| `README.md#Development/Setup` | setup |
+| `README.md#Development/Build` | setup, build |
+| `README.md#Development/Verification/Focused` | setup, lint, check, check:jsr, changed tests |
+| `README.md#Development/Verification/Complete` | setup, verify |
+| `README.md#Development/Verification` | setup, lint, check, check:jsr, changed tests, verify |
+| `README.md` (unqualified) | setup, build, lint, check, check:jsr, changed tests, verify |
+
+Selecting the `Verification` parent, or running the whole document, repeats
+work that `deno task verify` does again. That is deliberate: this document runs
+preparation, a build and verification only. It never bumps a version,
+publishes, generates or rewrites a workflow, creates a release, or touches Git
+history — so the cost of the repetition is time, and nothing else.
+
+**What running these sections means.** They execute through `xmd run` in your
+own shell: the Deno, pnpm, compiler, test and shell commands receive exactly the
+host access they have when you type them yourself. The `API.Files` contract
+governs a document's own filesystem operations, not the native commands these
+blocks start. No Workspace and no workflow run is created; nothing about the
+commands, their output, or the files they change is retained for resume or
+rolled back after an interruption. A failed or interrupted invocation is
+restarted by invoking the target again, subject to each low-level command's own
+idempotence.
+
+A command that exits nonzero ends the document there: the blocks after it and
+the sections beside it do not run, and `xmd run` exits nonzero. A run that
+succeeds prints nothing, because these blocks are `silent` — the exit status is
+the result.
+
+`xmd run` is how these sections are meant to be entered. `xmd test README.md`
+also executes this document — that command runs a document while looking for
+`<Test>` regions — so it runs the sequence below before reporting that this file
+holds no tests.
+
+Every low-level task stays directly callable, and nothing here replaces one:
+
+```bash
+deno task setup     # install both dependency layouts, build the browser bundle
+deno task build     # compile the standalone xmd binary
+deno task lint      # oxlint + oxfmt
+deno task check     # typecheck
+deno task check:jsr # JSR publishability dry run
+deno task test      # the full Deno suite
+deno task verify    # the whole applicable battery, concurrently
+deno task xmd run packages/core/examples/hello-world.md   # run a document from source
+```
+
+### Setup
+
+`deno task setup` is the only thing that installs, and it is the block above:
+selecting this target prepares a checkout and does nothing else. It installs
+both dependency layouts and builds the browser bundle. Run it again after
+changing a dependency.
+
+### Build
+
+Compiles the standalone `xmd` binary into `dist/`, after building the browser
+bundle it embeds:
+
+```bash silent exec
+deno task build
+```
+
+### Verification
+
+Selecting this heading runs both batteries below, in that order.
+
+#### Focused
+
+The short loop: lint and format, typecheck, the JSR publishability dry run, and
+the tests this branch and worktree affect. Each command is its own block, so the
+first one to fail is where the document stops.
+
+```bash silent exec
+deno task lint
+```
+
+```bash silent exec
+deno task check
+```
+
+```bash silent exec
+deno task check:jsr
+```
+
+```bash silent exec
+deno task test --changed=origin/main >/dev/null
+```
+
+The redirection is the block's, not the task's: a test report is long and this
+repository's fixtures deliberately resemble credentials, so the report is
+discarded rather than journaled and scanned. The exit status, stderr and failure
+diagnostics are untouched, and `deno task test --changed=origin/main` on its own
+still prints the complete report.
+
+`deno task verify:focused` is the shorthand that enters this target:
+
+```bash
+deno task verify:focused
+```
+
+#### Complete
+
+The whole applicable battery at once, which also fails if any of it leaves a
+tracked file changed:
+
+```bash silent timeout=30m exec
+deno task verify
+```
+
+## Implementation feedback
 
 Feedback on an implementation is given against a **feedback commit**: the stable
 revision an implementor commits as soon as the smallest affected evidence
@@ -368,7 +487,7 @@ against its frozen list rather than against newly imagined permutations.
 
 `AGENTS.md` holds the complete review and specialized-verification contract.
 
-### Dependency layout
+## Dependency layout
 
 `deno task setup` is the only thing that installs. Builds and checks read what
 it prepared and leave what this repository owns — tracked files, `node_modules`,
