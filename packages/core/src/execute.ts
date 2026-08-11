@@ -1607,9 +1607,29 @@ function* runInvocation(
           yield* owner.halt();
         }
       });
+      // The hook exists so a test can cancel a consumer at the one moment that
+      // matters — after this observation is cancellable — without waiting a
+      // scheduler turn and calling that a proof. It carries nothing and decides
+      // nothing, and no entrypoint exports the way to set it.
+      observingHandle?.();
       return yield* settled.operation;
     },
   };
+}
+
+/**
+ * Notified when a consumer has become cancellable inside a returned handle.
+ *
+ * Test-only, and adapter-private: `packages/core/mod.ts` and
+ * `packages/core/host.ts` export neither this nor the setter, so nothing
+ * outside this package's own suites can reach it. It is a notification, not a
+ * channel — it takes no arguments, returns nothing, and no decision reads it.
+ */
+let observingHandle: (() => void) | undefined;
+
+/** Test-only: install (or clear) the observation hook. */
+export function observeHandleForTesting(hook: (() => void) | undefined): void {
+  observingHandle = hook;
 }
 
 /** The fatal failure this one carries, if it carries one. */

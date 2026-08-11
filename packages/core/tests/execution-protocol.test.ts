@@ -33,6 +33,7 @@ import {
 } from "../mod.ts";
 import type { ExecutionRequest, ModifierFactory } from "../mod.ts";
 import { executeInstalled } from "../host.ts";
+import { observeHandleForTesting } from "../src/execute.ts";
 import type { ExecutionInstallation, JournalAdmission } from "../host.ts";
 
 const DOC = "# Hello\n";
@@ -613,22 +614,16 @@ describe("Tier EP — the execution protocol", () => {
       // The consumer says when it is about to observe the handle, so the halt
       // lands on a task that is *inside* the observation rather than on one
       // that never started. A delay would only make that likely.
-      // The consumer subscribes to the live output — a real suspension point —
-      // and says so, which puts it inside the invocation before the halt.
-      //
-      // The `sleep` is the part I could not remove: registering the handle's
-      // cancellation hook happens one turn after the barrier resolves, and
-      // nothing outside the handle can observe that turn. EP25b covers the
-      // teardown half deterministically; this one still leans on the scheduler
-      // for that single step.
+      // The acknowledgement comes from inside the observation itself: the
+      // handle notifies once the consumer is cancellable. No elapsed time, and
+      // a halt delivered earlier would leave `halted` empty.
       const observing = withResolvers<void>();
+      yield* ensure(() => observeHandleForTesting(undefined));
+      observeHandleForTesting(() => observing.resolve());
       const consumer = yield* spawn(function* () {
-        yield* execution.output;
-        observing.resolve();
         yield* execution;
       });
       yield* observing.operation;
-      yield* sleep(1);
       yield* consumer.halt();
 
       // Asserted before this scope exits: halting the consumer is what closed
@@ -738,10 +733,13 @@ describe("Tier EP — the execution protocol", () => {
       );
       yield* reached.operation;
 
+      const observing = withResolvers<void>();
+      yield* ensure(() => observeHandleForTesting(undefined));
+      observeHandleForTesting(() => observing.resolve());
       const consumer = yield* spawn(function* () {
         yield* execution;
       });
-      yield* sleep(1);
+      yield* observing.operation;
       const halting = yield* spawn(function* () {
         yield* consumer.halt();
       });
