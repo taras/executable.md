@@ -43,7 +43,7 @@ import { useJournalRouting } from "../../src/deno/journal-route.ts";
 import { readTransaction } from "../../src/deno/reading.ts";
 import { verifySchema } from "../../src/deno/schema.ts";
 import {
-  createWorkspaceProofEffect,
+  createWorkspaceEffect,
   useWorkspaceEffects,
   withWorkspaceEffects,
 } from "../../src/deno/workspace/effect.ts";
@@ -146,7 +146,7 @@ function* crash(root: string, runId: string): Operation<void> {
     // The run this process resumes already holds this effect's result, so it
     // replays. Executing it would mean the crash effect below is not the
     // first live work of the process, and the count says which happened.
-    yield createWorkspaceProofEffect(
+    yield createWorkspaceEffect(
       database,
       { type: "workspace-proof", name: BASELINE_EFFECT },
       // deno-lint-ignore require-yield
@@ -155,7 +155,7 @@ function* crash(root: string, runId: string): Operation<void> {
         return null;
       },
     );
-    yield createWorkspaceProofEffect(
+    yield createWorkspaceEffect(
       database,
       { type: "workspace-proof", name: CRASH_EFFECT },
       function* (selected) {

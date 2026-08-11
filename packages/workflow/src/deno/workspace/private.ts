@@ -42,6 +42,29 @@ function unavailable(): never {
   );
 }
 
+/**
+ * What decorates the filesystem a Workspace transaction hands its body.
+ *
+ * Dependency injection, deliberately, rather than anything a scope can reach.
+ * It is supplied once when the storage provider is installed — before any
+ * document exists — and lives in that provider's closure. There is no context
+ * name to reconstruct, nothing is handed to a descendant, and no module-scoped
+ * hook accumulates: a component cannot observe the authoritative filesystem,
+ * and cannot put anything in front of it.
+ *
+ * It exists because a mutation discarded part-way through cannot otherwise be
+ * observed. A write creates the parent directories it needs and then writes the
+ * file, and DOFS has no condition that stops between the two — a parent chain
+ * that can be created is a chain the file can then be written into.
+ */
+export type WorkspaceFilesystemDecorator = (
+  filesystem: DenoWorkspaceFilesystem,
+) => DenoWorkspaceFilesystem;
+
+export interface PrivateWorkspaceOptions {
+  readonly decorateFilesystem?: WorkspaceFilesystemDecorator;
+}
+
 const PrivateWorkspace: Api<PrivateWorkspaceApi> = createApi<PrivateWorkspaceApi>(
   "executablemd.workflow.deno.workspace.private",
   {
@@ -68,7 +91,11 @@ const PrivateWorkspace: Api<PrivateWorkspaceApi> = createApi<PrivateWorkspaceApi
   },
 );
 
-export function usePrivateWorkspace(connections: WorkflowRunConnections): Operation<void> {
+export function usePrivateWorkspace(
+  connections: WorkflowRunConnections,
+  options: PrivateWorkspaceOptions = {},
+): Operation<void> {
+  const decorate = options.decorateFilesystem ?? ((filesystem) => filesystem);
   return PrivateWorkspace.around(
     {
       *transact<T>([database, transaction, body]: [
@@ -85,7 +112,7 @@ export function usePrivateWorkspace(connections: WorkflowRunConnections): Operat
           connections.authorizeTransaction(database, transaction);
         };
         const workspace: PrivateWorkspaceTransaction = {
-          filesystem: createDenoWorkspaceFilesystem(connection, authorize),
+          filesystem: decorate(createDenoWorkspaceFilesystem(connection, authorize)),
 
           // deno-lint-ignore require-yield
           *currentRoot(): Operation<string> {

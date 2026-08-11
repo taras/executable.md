@@ -69,6 +69,7 @@ import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
 import { SavepointObservation } from "./savepoints.ts";
 import { usePrivateWorkspace } from "./workspace/private.ts";
+import type { PrivateWorkspaceOptions } from "./workspace/private.ts";
 import { useWorkspaceEffects } from "./workspace/effect.ts";
 
 const INSERT_RUN = `INSERT INTO workflow_run
@@ -107,14 +108,29 @@ export const WorkflowRunRecognition = createContext<WorkflowRunRecognitionProbe>
  * long as the scope that installed the provider and nothing accumulates
  * between runs.
  */
-export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
+export function useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
+  return installWorkflowRunStorage(options, {});
+}
+
+/**
+ * The same installation, with what only this adapter's own suites supply.
+ *
+ * Kept apart from the published entrypoint on purpose: `internal` carries a
+ * decorator for the authoritative Workspace filesystem, which is provider
+ * authority rather than host arrangement. It is captured in the provider's
+ * closure here and never handed to a scope, a context or a descendant.
+ */
+export function* installWorkflowRunStorage(
+  options: WorkflowRunStorageOptions,
+  internal: PrivateWorkspaceOptions,
+): Operation<void> {
   const root = authorizedRoot(options.root);
   const connections = createWorkflowRunConnections(yield* SavepointObservation.get());
   yield* ensure(() => {
     connections.close();
   });
   yield* useJournalRouting(connections);
-  yield* usePrivateWorkspace(connections);
+  yield* usePrivateWorkspace(connections, internal);
   yield* useWorkspaceEffects(connections);
 
   yield* WorkflowRunStorage.around(

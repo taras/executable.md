@@ -37,7 +37,7 @@ import { useJournalRouting } from "../src/deno/journal-route.ts";
 import { SavepointObservation, type SavepointObserver } from "../src/deno/savepoints.ts";
 import { initializeSchema } from "../src/deno/schema.ts";
 import {
-  createWorkspaceProofEffect,
+  createWorkspaceEffect,
   useWorkspaceEffects,
   withWorkspaceEffects,
 } from "../src/deno/workspace/effect.ts";
@@ -132,7 +132,7 @@ function* workspaceStep(
   name: string,
   mutate: (filesystem: DenoWorkspaceFilesystem) => Operation<Json>,
 ): Workflow<void> {
-  yield createWorkspaceProofEffect(database, { type: "workspace-proof", name }, mutate);
+  yield createWorkspaceEffect(database, { type: "workspace-proof", name }, mutate);
 }
 
 function* inspectWorkspace(

@@ -23,7 +23,9 @@ import {
   type WorkflowRunDatabase,
   WorkflowRunStorage,
 } from "../../mod.ts";
-import { useWorkflowRunStorage, workflowRunPath } from "../../deno.ts";
+import { workflowRunPath } from "../../deno.ts";
+import { installWorkflowRunStorage } from "../../src/deno/provider.ts";
+import type { PrivateWorkspaceOptions } from "../../src/deno/workspace/private.ts";
 
 export const SHA1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 
@@ -67,10 +69,21 @@ export function request(
   };
 }
 
-/** Run `body` with this host's storage installed for its scope only. */
-export function withStorage<T>(root: string, body: () => Operation<T>): Operation<T> {
+/**
+ * Run `body` with this host's storage installed for its scope only.
+ *
+ * `internal` is the provider's own installation option, supplied here and
+ * nowhere a document could reach: the decorator it may carry replaces the
+ * authoritative Workspace filesystem, and that decision belongs to whoever
+ * installs the provider.
+ */
+export function withStorage<T>(
+  root: string,
+  body: () => Operation<T>,
+  internal: PrivateWorkspaceOptions = {},
+): Operation<T> {
   return scoped(function* () {
-    yield* useWorkflowRunStorage({ root });
+    yield* installWorkflowRunStorage({ root }, internal);
     return yield* body();
   });
 }

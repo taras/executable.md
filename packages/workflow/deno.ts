@@ -28,3 +28,6 @@ export { useWorkflowRunStorage } from "./src/deno/provider.ts";
 export type { WorkflowRunStorageOptions } from "./src/deno/provider.ts";
 export { hashRunId, workflowRunPath } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
+export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
+export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
+export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";

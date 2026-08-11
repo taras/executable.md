@@ -11,11 +11,13 @@
  * data rather than from whoever happened to be holding the journal.
  *
  * ```ts
- * import { useWorkflow } from "@executablemd/workflow";
- * import { execute } from "@executablemd/core";
+ * import { workflowInstallation } from "@executablemd/workflow";
+ * import { executeInstalled } from "@executablemd/core/host";
  *
- * yield* useWorkflow({ base: "main" });
- * const execution = yield* execute({ path: "./workflow.md", stream });
+ * const execution = yield* executeInstalled(
+ *   { path: "./workflow.md", stream },
+ *   [workflowInstallation({ base: "main" })],
+ * );
  * ```
  *
  * A run's durable record lives behind the Workflow Run Storage Api, which
@@ -26,7 +28,7 @@
 
 export { Git, GitRevisionError, revParse } from "./src/git.ts";
 export type { GitApi } from "./src/git.ts";
-export { getWorkflowRun, useWorkflow } from "./src/run.ts";
+export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 

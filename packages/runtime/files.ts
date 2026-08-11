@@ -443,6 +443,26 @@ function phaseOf(value: unknown): FilesPhase | undefined {
   return PHASES.find((phase) => phase === value);
 }
 
+/**
+ * The vocabularies, for a provider that reads a failure back out of storage.
+ *
+ * A transaction-bound provider retains what it refused rather than a serialized
+ * error, so restoring one means turning stored text back into the vocabulary.
+ * Parsing it here is what keeps one list of reasons and phases: a provider that
+ * declared its own copy would be a second list to keep in agreement with this.
+ */
+export function parseFilesReason(value: unknown): FilesReason | undefined {
+  return reasonOf(value);
+}
+
+export function parseFilesPhase(value: unknown): FilesPhase | undefined {
+  return phaseOf(value);
+}
+
+export function parseFileWritePhase(value: unknown): FileWritePhase | undefined {
+  return writePhaseOf(value)?.[0];
+}
+
 function invariantCategory(value: unknown): FilesInvariantCategory | undefined {
   return INVARIANT_CATEGORIES.find((category) => category === value);
 }
