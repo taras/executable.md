@@ -15,6 +15,9 @@ import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import type { CodeBlockResult } from "../types.ts";
 
+/** The duration a `timeout` modifier that names none declares. */
+export const DEFAULT_DURATION = "30s";
+
 /**
  * Parse a duration string into milliseconds.
  *
@@ -50,12 +53,12 @@ export function parseDuration(s: string): number {
  */
 export const timeoutFactory: ModifierFactory = (params) => (_args, next) =>
   (function* () {
-    const ms = parseDuration(params ?? "30s");
+    const duration = params ?? DEFAULT_DURATION;
     const result = yield* ephemeral(
-      timebox(ms, () => next() as unknown as Operation<CodeBlockResult>),
+      timebox(parseDuration(duration), () => next() as unknown as Operation<CodeBlockResult>),
     );
     if (result.timeout) {
-      throw new Error(`eval block timed out after ${params ?? "30s"}`);
+      throw new Error(`eval block timed out after ${duration}`);
     }
     return result.value;
   })();

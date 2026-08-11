@@ -514,7 +514,10 @@ Custom factories can be provided via `ExecuteOptions.modifiers`.
 **`exec`** — executes the code block as a shell command via
 `durableExec`. This is a terminal handler — it does not call `next()`.
 It reads the code block info from the Effection context via
-`useCodeBlock()`:
+`useCodeBlock()`. It supplies no timeout of its own, so the command is
+bounded by the contextual one (`specs/acp-client-spec.md` §Config) — the
+value a `timeout` modifier declares for the block, or `xmd run --timeout`,
+or the 120-second default:
 
 ```typescript
 function createExecFactory(): ModifierFactory {
@@ -523,7 +526,7 @@ function createExecFactory(): ModifierFactory {
     const command = buildCommand(context.language, context.content);
     const result = yield* durableExec(
       `exec:${truncate(context.content, 40)}`,
-      { command, timeout: 30_000, throwOnError: false },
+      { command, throwOnError: false },
     );
     return {
       output: result.stdout,
@@ -687,6 +690,13 @@ completes.
 specified duration. Uses `timebox()` from `@effectionx/timebox`, which
 returns a discriminated union (`Timeboxed<T>`) instead of throwing.
 Accepted units: `ms`, `s`, `m`. Default: `30s`.
+
+The declared duration is also the contextual timeout for what the block
+runs, installed at `min` for the chain's scope so it outranks an ambient
+value and a nested block still overrides it. A command, request, or prompt
+inside the block is therefore bounded by what the block asked for rather
+than by the ambient default. The timebox starts first and stays the
+authority over the block itself.
 
 ```typescript
 export const timeoutFactory: ModifierFactory = (params) =>
@@ -6960,7 +6970,7 @@ With the default directory resolver:
 [2] yield  root  { type: "import_component", name: "Footer" }
     result: { status: "ok", value: { path: "./components/Footer.md", content: "..." } }
 
-[3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"], timeout: 30000 }
+[3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"] }
     result: { status: "ok", value: { exitCode: 0, stdout: "2026\n", stderr: "" } }
 
 [4] yield  root  { type: "eval", name: "eval:root:0", language: "js" }
@@ -7368,6 +7378,9 @@ visible warning blocks, gather into a separate error report).
 | M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
 | M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
 | M6 | Default timeout is 30s | `timeoutFactory(undefined)` → 30000ms |
+| M7 | Exec block declares no duration | Bounded by the contextual timeout, not a fixed 30s |
+| M8 | Block declares a longer duration | The block's duration outranks a shorter contextual one |
+| M9 | `xmd run --timeout` reaches a block | A block with no duration of its own is bounded by the CLI value |
 
 ### Tier O — Eval scope hierarchy
 

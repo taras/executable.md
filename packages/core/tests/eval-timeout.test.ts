@@ -8,6 +8,7 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { parseDuration } from "../src/modifiers/timeout.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { Config } from "@executablemd/runtime";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -70,6 +71,36 @@ describe("Tier T7 — timeout modifier", () => {
       }),
     );
 
+    expect(output).not.toContain("timed out");
+  });
+
+  /**
+   * The contextual timeout is what an exec block is bounded by (#153). These
+   * two run real commands rather than the echo stub: what is under test is the
+   * duration the Process Api resolves, which a stub would answer for.
+   */
+  it("T54: an exec block that declares no duration is bounded by the contextual one", function* () {
+    const stream = new InMemoryStream();
+    yield* Config.around({ timeout: () => 25 }, { at: "min" });
+    yield* useStubFs({
+      "test.md": "```bash exec\nsleep 2\n```\n",
+    });
+
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+
+    expect(output).toContain("timed out after 25ms");
+  });
+
+  it("T55: a block's declared duration outranks a shorter contextual one", function* () {
+    const stream = new InMemoryStream();
+    yield* Config.around({ timeout: () => 25 }, { at: "min" });
+    yield* useStubFs({
+      "test.md": "```bash timeout=5s exec\nsleep 0.3 && echo RAISED\n```\n",
+    });
+
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+
+    expect(output).toContain("RAISED");
     expect(output).not.toContain("timed out");
   });
 });

@@ -170,6 +170,10 @@ The timeout is shared: a per-call `timeout` always wins, and otherwise Process
 explicit per-call timeout short-circuits that resolution, so an invalid
 contextual value is never consulted.
 
+An executable code block supplies no per-call timeout, so `exec` blocks are
+bounded by this value. A `timeout` modifier declares it for its own chain, which
+is how a document gives one block longer than the rest of the run has.
+
 ## Permissions
 
 `PermissionMode` selects the policy that answers `Agent.requestPermission`. It is
