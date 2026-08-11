@@ -729,14 +729,15 @@ export const timeoutFactory: ModifierFactory = (params) =>
     }
     return result.value;
   })();
-
-function parseDuration(s: string): number {
-  if (s.endsWith("ms")) return parseInt(s, 10);
-  if (s.endsWith("m"))  return parseInt(s, 10) * 60_000;
-  if (s.endsWith("s"))  return parseInt(s, 10) * 1_000;
-  return parseInt(s, 10);
-}
 ```
+
+`parseDuration` is the shared grammar in `packages/runtime/duration.ts`, used by
+the three command-line options and by every declarative duration a document
+writes. It accepts a whole number with an optional unit — `ms`, `s`, `m`, `min`
+— where bare digits are milliseconds, and refuses everything else: empty, zero,
+negative, signed, fractional, hexadecimal, scientific-notation, `Infinity`,
+`NaN`, and any trailing text. It substitutes nothing; a value it refuses fails
+where it was written.
 
 #### Chain composition
 
@@ -1581,7 +1582,9 @@ run but are absent from the diagnostic trace.
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
-| `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
+| `src/modifiers/timeout.ts` | `timeoutFactory` |
+| `packages/runtime/duration.ts` | `asDuration()`, `parseDuration()`, `durationError()` — the one duration grammar |
+| `packages/runtime/config.ts` | `Config`, and the validated `timeout` / `timeoutExec` / `timeoutFetch` operations |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
 | `src/modifiers/service.ts` | `serviceFactory` — scoped service attachment |
@@ -7395,15 +7398,17 @@ visible warning blocks, gather into a separate error report).
 |---|------|--------|
 | M1 | Block completes within timeout | Result returned normally |
 | M2 | Block exceeds timeout | Error thrown: "eval block timed out after 5s" |
-| M3 | `parseDuration` handles `ms` | `"500ms"` → 500 |
-| M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
-| M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
+| M3 | `parseDuration` handles `ms`, `s`, `m`, `min` | `"500ms"` → 500, `"30s"` → 30000, `"5min"` → 300000 |
+| M4 | `parseDuration` refuses empty, zero, negative and malformed values | No duration, and no substitution |
+| M5 | The grammar is shared | The command-line options and a block's `timeout=` accept exactly the same spellings |
 | M6 | Bare `timeout` | Boxes the block at the run's exec default |
 | M7 | Bare `timeout` with no exec default | Refuses before the process starts |
 | M8 | `timeout=` and malformed durations | Refused before the process starts |
 | M9 | Exec block declares no duration | Bounded by the exec default, and by nothing when none is configured |
 | M10 | `timeout=<duration>` | Overrides the exec default for that block's chain alone |
 | M11 | A replaced `timeout` factory | No built-in override survives; an unreachable `timeout` is never applied |
+| M12 | The run deadline encloses preparation | Inspection, target and props preparation, provider installation, execution and output are all inside it; a run suspended in its first read is cancelled |
+| M13 | The run boundary consumes `Config.timeout` | It resolves the validated contextual operation once and boxes the run with that value; an enclosing deadline bounds a run that named none, and a malformed option is refused before any read |
 
 ### Tier O — Eval scope hierarchy
 

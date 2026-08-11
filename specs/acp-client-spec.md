@@ -278,7 +278,10 @@ prompt failure.
 `useAcpxProvider` exposes the same operations without the Agent install, so
 several independent providers can run in sibling scopes. The provider owns
 every resource it starts and creates the shared runtime lazily on first use with
-the contextual cwd and validated `timeout` — nothing spawns at install.
+the contextual cwd — nothing spawns at install, and no timeout is invented for a
+prompt nobody bounded. A prompt carries the duration its caller supplied, from
+`<Prompt timeout>` or the enclosing `<AgentProvider timeout>`, and otherwise
+none.
 
 - **Availability.** The first use of an agent validates it through a disposable
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and

@@ -164,15 +164,41 @@ describe("Tier TF — run timeout options", () => {
     });
   });
 
-  it("TF11: a malformed option value fails before the document is prepared", function* () {
-    yield* useDocument(["```bash exec", "echo RAN", "```", ""].join("\n"), function* (dir) {
-      const { code, stdout, stderr } = yield* runCli(
-        ["run", "doc.md", "--timeout-exec", "30 seconds", "--raw"],
-        { cwd: dir },
-      ).join();
-      expect(code).toBe(1);
-      expect(stderr).toContain("--timeout-exec must be a duration");
-      expect(stdout).toBe("");
+  /**
+   * The document is one preparation refuses: its props schema is invalid, so
+   * inspecting it reports that instead. Seeing the duration error — and never
+   * the schema's — is what proves the option was recognized first. An empty
+   * stdout would have proven only that nothing rendered.
+   */
+  it("TF11: a malformed option value is refused before the document is inspected", function* () {
+    const unpreparable = [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      "    who:",
+      "      type: not-a-json-schema-type",
+      "---",
+      "",
+      "# Doc",
+      "",
+    ].join("\n");
+    yield* useDocument(unpreparable, function* (dir) {
+      const refused = yield* runCli(["run", "doc.md", "--timeout-exec", "30 seconds", "--raw"], {
+        cwd: dir,
+      }).join();
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain("--timeout-exec must be a duration");
+      expect(refused.stderr).not.toContain("props schema");
+      expect(refused.stdout).toBe("");
+
+      // The same document, with the option written correctly: now preparation
+      // runs and reports what it found, which is what the case above skipped.
+      const prepared = yield* runCli(["run", "doc.md", "--timeout-exec", "30s", "--raw"], {
+        cwd: dir,
+      }).join();
+      expect(prepared.code).toBe(1);
+      expect(prepared.stderr).toContain("props schema");
     });
   });
 

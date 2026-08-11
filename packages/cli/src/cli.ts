@@ -66,6 +66,7 @@ import { installTestingComponents, TestFailureError, useTesting } from "@executa
 import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
+import { timeout as runTimeout } from "@executablemd/runtime";
 import { resolveAgentConfig } from "./agent-config.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
@@ -393,23 +394,41 @@ function* installRunTimeouts(timeouts: RunTimeouts): Operation<void> {
 }
 
 /**
- * The run under its deadline: `undefined` means the deadline expired and
- * cancelled the run.
+ * The whole run, under whatever deadline applies to it.
  *
- * Expiry is cancellation, not a result — `timebox` halts the run and Effection
- * unwinds it, so teardown still completes and the process exits once it has.
- * The deadline encloses preparation and execution together, so a longer exec
- * or Fetch timeout inside it cannot outlive it.
+ * The command line's values are installed first, and the deadline is then read
+ * back through the validated contextual operation — once, and from the same
+ * place every other consumer reads its own field. That is what makes an
+ * enclosing `Config.timeout` bound a run that named none, and an invalid one
+ * fail here rather than part-way through a document.
+ *
+ * Expiry is cancellation, not a result: `timebox` halts the run and Effection
+ * unwinds it, so structured teardown completes before the timeout is reported.
+ * The deadline encloses preparation and execution together, so a longer exec or
+ * Fetch timeout inside it cannot outlive it.
  */
-function* underRunDeadline(
-  deadline: number | undefined,
-  body: () => Operation<Result<void>>,
-): Operation<Result<void> | undefined> {
-  if (deadline === undefined) {
-    return yield* body();
+function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): Operation<void> {
+  yield* installRunTimeouts(timeouts);
+
+  let deadline: number | undefined;
+  try {
+    deadline = yield* runTimeout;
+  } catch (error) {
+    console.error(describeError(error));
+    yield* exit(1);
+    return;
   }
+
+  if (deadline === undefined) {
+    yield* body();
+    return;
+  }
+
   const boxed = yield* timebox(deadline, body);
-  return boxed.timeout ? undefined : boxed.value;
+  if (boxed.timeout) {
+    console.error(`the run exceeded its --timeout of ${deadline}ms and was cancelled`);
+    yield* exit(1);
+  }
 }
 
 /**
@@ -1203,18 +1222,20 @@ function* resolveRunProps(
  * `process.stdout` and `node:fs/promises`. Routing those through contextual
  * APIs is #156.
  */
-export function* runXmd(args: string[], installService: HostServiceInstaller): Operation<void> {
-  // First, so that no later scanner — help, properties, agent flags — can
-  // mistake the inline document's own text for an option.
-  const evalFlags = readEvalFlags(args);
-  const grammarError = evalGrammarError(evalFlags);
-  if (grammarError) {
-    console.error(grammarError);
-    yield* exit(1);
-    return;
-  }
-
-  const helpRequest = takeHelpFlag(evalFlags.rest);
+/**
+ * Everything an invocation does once its options are recognized: the props
+ * phase, the command parse, and the command itself.
+ *
+ * For `xmd run` this is the run lifecycle, and it runs inside the run's
+ * deadline — document inspection, target and props preparation, provider
+ * installation, execution and output consumption all included. Nothing here
+ * reads an option the caller has not already had validated.
+ */
+function* dispatch(
+  evalFlags: EvalFlags,
+  helpRequest: { requested: boolean; args: string[] },
+  installService: HostServiceInstaller,
+): Operation<void> {
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
   if (propsPhase.error) {
@@ -1279,36 +1300,22 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
         break;
       }
       const root = propsPhase.root;
-      const timeouts = resolveRunTimeouts(evalFlags.rest);
-      if ("error" in timeouts) {
-        console.error(timeouts.error);
-        yield* exit(1);
-        break;
-      }
       announceSecretDetection(config.secretDetection);
-      yield* installRunTimeouts(timeouts);
-      const result = yield* underRunDeadline(timeouts.timeout, () =>
-        runScopedDocument(
-          { ...config, root },
-          {
-            testing: false,
-            props: props.value,
-            agent: {
-              agentProvider: config.agentProvider,
-              defaultAgent: config.defaultAgent,
-              approveAll: config.approveAll,
-              approveReads: config.approveReads,
-              denyAll: config.denyAll,
-            },
+      const result = yield* runScopedDocument(
+        { ...config, root },
+        {
+          testing: false,
+          props: props.value,
+          agent: {
+            agentProvider: config.agentProvider,
+            defaultAgent: config.defaultAgent,
+            approveAll: config.approveAll,
+            approveReads: config.approveReads,
+            denyAll: config.denyAll,
           },
-          installService,
-        ),
+        },
+        installService,
       );
-      if (result === undefined) {
-        console.error(`the run exceeded its --timeout of ${timeouts.timeout}ms and was cancelled`);
-        yield* exit(1);
-        break;
-      }
       if (!result.ok) {
         // The document is reread between preparation and execution, so the
         // exact target this run decided on can be gone by the time it runs.
@@ -1349,6 +1356,14 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
       break;
     }
     case "test": {
+      const strayTimeout = findTimeoutFlag(evalFlags.rest);
+      if (strayTimeout) {
+        console.error(
+          `unrecognized option for xmd test: ${strayTimeout} — timeout options are exclusive to xmd run`,
+        );
+        yield* exit(1);
+        break;
+      }
       const agentFlag = findAgentOnlyFlag(evalFlags.rest);
       if (agentFlag) {
         console.error(
@@ -1372,4 +1387,39 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
       yield* runTestAgentWorker({ connect: command.config.connect });
       break;
   }
+}
+
+export function* runXmd(args: string[], installService: HostServiceInstaller): Operation<void> {
+  // First, so that no later scanner — help, properties, agent flags — can
+  // mistake the inline document's own text for an option.
+  const evalFlags = readEvalFlags(args);
+  const grammarError = evalGrammarError(evalFlags);
+  if (grammarError) {
+    console.error(grammarError);
+    yield* exit(1);
+    return;
+  }
+
+  const helpRequest = takeHelpFlag(evalFlags.rest);
+  // Recognized before anything reads a document: a malformed duration is a
+  // grammar failure, and a grammar failure never depends on what is on disk.
+  // Help, `--version`, and the other commands stay outside a run lifecycle,
+  // which is why the timeout options are read only for a run.
+  const provisional = xmd.parse({ args: helpRequest.args });
+  const selected = provisional.ok ? provisional.value.config : undefined;
+  const isRun =
+    !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
+
+  if (!isRun) {
+    return yield* dispatch(evalFlags, helpRequest, installService);
+  }
+
+  const timeouts = resolveRunTimeouts(evalFlags.rest);
+  if ("error" in timeouts) {
+    console.error(timeouts.error);
+    yield* exit(1);
+    return;
+  }
+
+  yield* underRunDeadline(timeouts, () => dispatch(evalFlags, helpRequest, installService));
 }
