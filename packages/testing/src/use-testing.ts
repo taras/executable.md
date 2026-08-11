@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { Execution } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
-import { decorateCompletion, installTestingComponents } from "./components.ts";
+import { installTestingComponents } from "./components.ts";
 import { flushStaged } from "./test-component.ts";
 
 export interface Testing {
@@ -79,15 +79,17 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   // BEFORE a handle exists — the pre-handle throw path.
   let executed = false;
   yield* Execution.around({
-    *execute([executeOptions], next) {
+    *execute([request], next) {
+      // Refused before delegating: no execution is issued, which is what makes
+      // the second call fail rather than produce a document whose outcomes are
+      // the first call's.
       if (executed) {
         throw new Error(
           "a useTesting() session supports one execute() call — start a new session for another document",
         );
       }
       executed = true;
-      const inner = yield* next(executeOptions);
-      return decorateCompletion(inner, () => {
+      request.addCompletionFailure(() => {
         if (collected.length === 0) {
           return new TestFailureError("no tests were discovered");
         }
@@ -105,6 +107,7 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
         }
         return undefined;
       });
+      yield* next(request);
     },
   });
 

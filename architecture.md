@@ -55,6 +55,9 @@ Existing documents and code get aligned to this section retroactively.
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
+| authority | the power to decide what an execution or effect *is* — whether it happens, what it may replay from, and what it settles to — as distinct from the power to observe or refuse one |
+| authoritative behavior | behavior that exercises authority; non-authoritative behavior may inspect, narrow, refuse or add a failure, but cannot bring an execution into being, substitute one, or rescue one |
+| trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
 ## Three axes
@@ -1014,6 +1017,93 @@ provided via context. No module-scoped registries — not as collections, not
 hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
+
+## Authoritative behavior
+
+**Authoritative** behavior decides what an execution *is*: whether it runs at
+all, what history it may replay from, what options it runs under, and what it
+settles to. **Non-authoritative** behavior observes, narrows, refuses, or adds —
+it can stop something from happening and can make a success into a failure, but
+it cannot bring an execution into being, substitute one, or rescue one.
+
+Public middleware is non-authoritative by construction. `Execution` and
+`ReplayGuard` handlers compose lexically, and a handler installed further out
+may answer without delegating — so anything they could decide would be decided
+by registration order. They may refuse; they may not complete.
+
+### Capability-backed execution
+
+Canonical core is authoritative for document execution. It invokes the stable
+`Execution` middleware through a private, per-invocation same-name Api whose
+instance-owned default handler is the authoritative terminal. A stable name
+shares the middleware context, so every public handler — including one installed
+through another loaded copy's descriptor — composes exactly as it always did;
+what a name does not share is the default handler, and that is where authority
+sits. The exported `Execution.execute` default always refuses, so calling it
+with a captured request settles nothing.
+
+`Execution.execute` middleware is handed an opaque `ExecutionRequest` and
+returns nothing: it may
+inspect the options, narrow them, register an additive completion policy,
+install contextual behavior, refuse by throwing, and delegate. The document is
+run afterwards, by the invocation that issued the request, under the options the
+canonical terminal recorded.
+
+Terminal acceptance stores a detached, immutable structural snapshot of the
+options: the containers are copied and frozen while the operational identities
+inside them — the selected `DurableStream`, each modifier factory — are carried
+across unchanged. The chain unwinds before the document runs, so an outer
+handler that delegates and then edits what it delegated changes only its own
+data. Replacing options before delegating, through `withOptions()`, remains the
+supported path.
+
+Each invocation owns a child scope, held by one structured owner task, and
+**settlement closes it** — on success, on failure, and on cancellation alike.
+Contextual behavior an installation establishes is visible to the document and
+to its teardown, isolated from a concurrent invocation, and absent from the next
+execution in the same host scope. The final `Result` is published only after
+that scope has finished tearing down, so a caller continuing on the completion
+continues after cleanup, and a completed handle carries no live scope.
+
+A document outcome and an invocation-teardown failure are kept apart until the
+scope has closed and then ranked, never replaced: a durability failure wins from
+wherever it came and is returned by identity, then a Files infrastructure
+failure on the same terms, then an existing document failure, and only a success
+is converted by teardown. Every finalizer runs, exactly once, before the result
+is observable. Once a handle exists, teardown contributes to its `Result` rather
+than escaping as a thrown completion. Canonical
+core constructs the one authoritative handle; it exposes the inner execution's
+replay-safe output directly rather than bridging it through a second channel.
+
+The request is the capability, and it is **one-use**. It carries a private
+reference to one invocation; a reconstructed look-alike, a superseded request, a
+foreign invocation's request, and a second delegation are each refused with a
+fresh, cause-free `ExecutionProtocolError`, before any journal read, expansion
+or append. Reaching the end of the chain without consuming the request is the
+same refusal.
+
+### Trusted host orchestration
+
+A **trusted host** is the code that decides what an execution is for — a CLI
+entrypoint, a workflow runner — as distinct from the document, the components it
+expands, and the middleware packages composed around it.
+
+A host attaches requirements to one execution through
+`@executablemd/core/host`: `executeInstalled(options, installations)`, where an
+installation carries `admissions` and an optional `install()`. Admissions are
+copied and frozen **before** any installation runs, so what ends up
+authoritative is fixed before any installed code, any middleware and any
+document code exists. Each runs inside the execution's own journal read, on the
+retained snapshot, in capture order, stopping at the first refusal — ahead of
+root-history admission, `ReplayGuard`, terminal reuse, authored work and any
+append.
+
+Admissions are refusal-only functions: they receive the retained history, return
+nothing, and never receive a `next`. They travel as values the host holds and
+passes — not through a context, an Api, a stable name, structural metadata or
+module-scoped state — which is why a separately loaded package composes here by
+handing over a closure rather than by agreeing on a name, and why no middleware
+can read, transport or remove the collection.
 
 ### The weak journal-provenance association
 

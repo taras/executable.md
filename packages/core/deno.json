@@ -2,7 +2,8 @@
   "name": "@executablemd/core",
   "version": "0.8.0",
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./host": "./host.ts"
   },
   "imports": {
     "@effectionx/context-api": "npm:@effectionx/context-api@0.6.0",

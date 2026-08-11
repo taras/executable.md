@@ -1,29 +1,30 @@
 /**
  * Agent component registration (specs/acp-client-spec.md).
  *
- * Registers the agent words as ordinary function components for this scope,
- * and decorates the Execution Api so prompt failures — and, when a root
- * provider is configured, provider teardown failures — participate in the
- * DocumentExecution completion.
+ * Registers the agent words as ordinary function components for this scope, and
+ * registers an additive completion policy so prompt failures — and, when a root
+ * provider is configured, provider teardown failures — turn an otherwise
+ * successful document into a failure.
  *
- * Registration and execution decoration are separate concerns: the components
- * are defaults a document can replace by writing its own file with one of these
- * names, while the completion decoration belongs to the execution regardless of
- * which implementation answered.
+ * Registration and completion policy are separate concerns: the components are
+ * defaults a document can replace by writing its own file with one of these
+ * names, while the policy belongs to the execution regardless of which
+ * implementation answered.
  *
- * The root provider's lifetime is part of the execution: the middleware
- * returns a bridged DocumentExecution whose owning spawned operation
- * enters a scoped provider lifetime, runs the inner execution, forwards
- * its output (the bridged output closes when the inner output closes),
- * and resolves the completion only after provider cleanup has finished.
- * Teardown failures therefore affect the final result without delaying
- * rendered output.
+ * The root provider's lifetime is `Execution.document`. The provider scope
+ * surrounds the document's expansion and ends while the journal is still live,
+ * so cleanup has finished before the completion settles and rendered output is
+ * not delayed by it. A confirmed full replay never enters the provider at all.
+ *
+ * Completion precedence is first-failure: a document that already failed keeps
+ * its own failure, and prompt and teardown failures are added to a success
+ * rather than replacing anything.
  */
 
 import { Err, scoped, spawn, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { Execution } from "../execute.ts";
-import type { DocumentExecution, ExecuteOptions } from "../execute.ts";
+import type { DocumentResult } from "../execute.ts";
 import { registerComponents } from "../components/registration.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
@@ -90,7 +91,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
   const rootProvider = options?.rootProvider;
 
   yield* Execution.around({
-    *execute([executeOptions], next) {
+    *execute([request], next) {
       // Fresh per-execution prompt bookkeeping: an explicit sequence
       // records execution order in the journal, and per-location ordinals
       // keep durable identities stable through <Each> loops.
@@ -117,7 +118,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       // Confirmed full replay: durableRun returns the stored root result
       // without re-expanding, so no prompt would re-record. Restore the
       // journaled failures into this execution's collector instead.
-      const replayed = yield* readCompletedPrompts(executeOptions.stream);
+      const replayed = yield* readCompletedPrompts(request.options.stream);
       if (replayed) {
         for (const record of replayed) {
           const failure = promptFailureFromRecord(record);
@@ -127,147 +128,89 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
         }
       }
 
-      // A confirmed full replay restores results from the journal, so it must
-      // never enter the root-provider lifetime — no availability check, setup,
-      // or prompt. Only a live run with a root provider bridges the provider.
-      if (!rootProvider || replayed) {
-        const inner = yield* next(executeOptions);
-        return decorateCompletion(inner, (result) =>
-          combineCompletion(result, failures, undefined),
-        );
+      // The provider's lifetime has to surround authored work and end while the
+      // journal is still live, which is what `Execution.document` is. Installed
+      // from here so it inherits this execution's replay decision — a confirmed
+      // full replay never enters the provider at all.
+      const teardown: TeardownSlot = {};
+      if (rootProvider && !replayed) {
+        yield* Execution.around({
+          *document([props], nextDocument) {
+            return yield* withRootProvider(rootProvider, teardown, () => nextDocument(props));
+          },
+        });
       }
 
-      return yield* bridgeRootProvider(rootProvider, executeOptions, failures, next);
+      // Additive: prompt failures and a provider teardown failure turn a
+      // successful document into a failure. A document that already failed
+      // keeps its own failure — the completion policy adds, it does not replace.
+      request.addCompletionFailure(() => completionFailure(failures, teardown.error));
+      yield* next(request);
     },
   });
 }
 
-function* bridgeRootProvider(
+interface TeardownSlot {
+  error?: Error;
+}
+
+/**
+ * Run the document inside the root provider's lifetime.
+ *
+ * A failure raised while dismantling the provider is recorded rather than
+ * thrown: the document already completed, and reporting the teardown as *its*
+ * failure would replace a result the document earned. It becomes an additive
+ * completion failure instead, which is the same precedence the bridged
+ * implementation had.
+ */
+function* withRootProvider(
   rootProvider: { factory: AgentProviderFactory; options: AgentProviderOptions },
-  executeOptions: ExecuteOptions,
-  failures: SequencedFailure[],
-  next: (options: ExecuteOptions) => Operation<DocumentExecution>,
-): Operation<DocumentExecution> {
-  const channel = createReplayStream<string, string>();
-  const completion = withResolvers<Result<Json>>();
-
-  yield* spawn(function* () {
-    let docResult: Result<Json> | undefined;
-    let teardown: Error | undefined;
-    let outputClosed = false;
-    let emitted = "";
-
-    try {
-      yield* scoped(function* () {
-        yield* rootProvider.factory(rootProvider.options);
-        const inner = yield* next(executeOptions);
-        const subscription = yield* inner.output;
-        let chunk = yield* subscription.next();
-        while (!chunk.done) {
-          emitted += chunk.value;
-          yield* channel.send(chunk.value);
-          chunk = yield* subscription.next();
-        }
-        yield* channel.close(chunk.value);
-        outputClosed = true;
-        docResult = yield* inner;
-      });
-    } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      if (docResult === undefined) {
-        docResult = Err(failure);
-      } else {
-        // The inner execution completed; the throw came from dismantling
-        // the provider scope.
-        teardown = failure;
-      }
+  teardown: TeardownSlot,
+  body: () => Operation<DocumentResult>,
+): Operation<DocumentResult> {
+  let completed: DocumentResult | undefined;
+  try {
+    return yield* scoped(function* () {
+      yield* rootProvider.factory(rootProvider.options);
+      completed = yield* body();
+      return completed;
+    });
+  } catch (error) {
+    if (completed === undefined) {
+      throw error;
     }
-
-    if (!outputClosed) {
-      yield* channel.close(emitted);
-    }
-    completion.resolve(
-      combineCompletion(
-        docResult ?? Err(new Error("document execution did not complete")),
-        failures,
-        teardown,
-      ),
-    );
-  });
-
-  return {
-    output: channel,
-    *[Symbol.iterator]() {
-      return yield* completion.operation;
-    },
-  };
+    teardown.error = error instanceof Error ? error : new Error(String(error));
+    return completed;
+  }
 }
 
 /**
- * Map an execution's completion: an `Ok` becomes `Err(failure())` when the
- * policy reports one, after the inner completion — and therefore its
- * closed output stream — settles. An existing `Err` passes through
- * unchanged. (Local copy of the testing package's decorator — core cannot
- * depend on testing.)
+ * The one failure a successful document earns from prompts and teardown.
+ *
+ * Flat, and primary first: the prompt failures in the order they were recorded,
+ * then whatever dismantling the provider raised. A reader looking for what went
+ * wrong first finds it first, and an `AggregateError` a member already is gets
+ * unpacked rather than nested.
  */
-function decorateCompletion(
-  inner: DocumentExecution,
-  decorate: (result: Result<Json>) => Result<Json>,
-): DocumentExecution {
-  return {
-    output: inner.output,
-    *[Symbol.iterator]() {
-      const result = yield* inner;
-      if (!result.ok) {
-        return result;
-      }
-      return decorate(result);
-    },
-  };
-}
-
-/**
- * Combine the document result, collected prompt failures, and provider
- * teardown failure into the final completion. Primary failures come
- * before teardown failures; existing AggregateError members are flattened
- * rather than nested.
- */
-function combineCompletion(
-  docResult: Result<Json>,
+function completionFailure(
   failures: SequencedFailure[],
   teardown: Error | undefined,
-): Result<Json> {
+): Error | undefined {
   const promptErrors = [...failures]
     .sort((a, b) => a.sequence - b.sequence)
     .map((failure) => failure.error);
   const promptMessage = `${promptErrors.length} agent prompt(s) failed`;
 
-  if (!docResult.ok) {
-    if (!teardown) {
-      return docResult;
-    }
-    return Err(
-      new AggregateError(
-        [...flatten(docResult.error), ...flatten(teardown)],
-        "document execution and agent provider teardown failed",
-      ),
-    );
-  }
   if (promptErrors.length > 0 && teardown) {
-    return Err(
-      new AggregateError(
-        [...promptErrors, ...flatten(teardown)],
-        `${promptMessage}; agent provider teardown failed`,
-      ),
+    return new AggregateError(
+      [...promptErrors, ...flatten(teardown)],
+      `${promptMessage}; agent provider teardown failed`,
     );
   }
   if (promptErrors.length > 0) {
-    return Err(new AggregateError(promptErrors, promptMessage));
+    return new AggregateError(promptErrors, promptMessage);
   }
-  if (teardown) {
-    return Err(teardown);
-  }
-  return docResult;
+  return teardown;
 }
 
 function flatten(error: Error): Error[] {

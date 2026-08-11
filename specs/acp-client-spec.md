@@ -42,14 +42,25 @@ interface AgentProviderOptions { defaultAgent: string; permissionMode: Permissio
 ```
 
 `installAgentComponents({ rootProvider: { factory, options } })` owns the root
-provider's lifetime as part of each `DocumentExecution`: the factory runs inside
-a scoped provider lifetime, the document renders through it, and the completion
-resolves **only after the provider's finalizers have run**. Rendered output
-closes independently of teardown. A provider-teardown failure folds into the
-completion: an otherwise-successful run becomes an `Err`, and when the document
-or its prompts already failed the teardown error joins them in an
-`AggregateError` (primary errors first). Every finalizer runs even if one
-throws.
+provider's lifetime through `Execution.document`: the factory runs inside a
+scoped provider lifetime that surrounds the document's expansion and ends while
+the journal is still live, so the completion resolves **only after the
+provider's finalizers have run**. Rendered output closes independently of
+teardown, and every finalizer runs even if one throws.
+
+Teardown and prompt failures are *additive completion policies*, and completion
+precedence is first-failure:
+
+- a document that already failed keeps its own failure — provider teardown
+  neither replaces it nor aggregates onto it, and the policy is not consulted;
+- an otherwise-successful document becomes an `Err` when its prompts failed,
+  when teardown failed, or both — prompt failures first, then teardown, flat
+  rather than nested; and
+- once a policy has failed the completion, no later policy replaces it.
+
+Cleanup still runs in every case. "The document failed" and "cleanup also
+failed" are both true; what the caller receives is the document's own failure,
+because that is the one it earned.
 
 ### The provider registry
 

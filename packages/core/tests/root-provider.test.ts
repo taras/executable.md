@@ -167,6 +167,33 @@ describe("Tier RP — root-provider lifecycle", () => {
     }
   });
 
+  // RP5: first-failure precedence, where it is easiest to get wrong. The
+  // document fails on its own terms and cleanup fails too. Both happened; what
+  // the caller receives is the failure the document earned, because a completion
+  // policy adds and never replaces.
+  it("RP5: a failed document keeps its own failure even when cleanup also fails", function* () {
+    const boom = new Error("teardown boom");
+    const { factory, state } = createProvider({ teardownError: boom, extraFinalizer: true });
+    yield* installAgentComponents({ rootProvider: { factory, options: OPTIONS } });
+
+    // The document fails on its own terms — a failing command inside <Output>,
+    // where an error fails the execution rather than printing — with no prompt
+    // having failed.
+    const { result } = yield* runDoc(
+      ["<Output>", "", "```bash exec", "exit 3", "```", "", "</Output>", ""].join("\n"),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toBe(boom);
+      expect(result.error).not.toBeInstanceOf(AggregateError);
+      expect(result.error.message).not.toContain("teardown boom");
+    }
+    // Cleanup still ran — both finalizers.
+    expect(state.extraRan).toBe(true);
+    expect(state.cleanupDone).toBe(true);
+  });
+
   it("RP3: a prompt failure plus a teardown failure aggregate — primary first, every cleanup runs", function* () {
     const boom = new Error("teardown boom");
     const { factory, state } = createProvider({

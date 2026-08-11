@@ -6260,12 +6260,73 @@ execution, and the root eval scope (§5.5), and the output→stream
 bridge — so nothing leaks onto the caller's scope and the whole run
 inherits them contextually.
 
-`execute` is delivered through the `Execution` context Api. The default
-provider runs the document; extensions decorate the execution lifecycle
-with `Execution.around({ execute })` middleware — observing options,
-wrapping the returned handle, or mapping its completion `Result` — without
-introducing another execution function. Core itself has no knowledge of
-any particular extension.
+`execute` is delivered through the `Execution` context Api, and the Api is a
+**policy** surface rather than an execution one. A handler installed with
+`Execution.around({ execute })` receives an opaque `ExecutionRequest`, returns
+nothing, and has whatever it returns ignored. It may:
+
+- read the options as they stand (`request.options`);
+- narrow or replace them (`request.withOptions(options)`), which supersedes the
+  request it was derived from;
+- register an additive completion failure (`request.addCompletionFailure`);
+- install contextual behavior the document will inherit;
+- refuse, by throwing, before delegating; and
+- delegate.
+
+It may not complete an execution. Canonical core invokes the stable `Execution`
+middleware through a private, per-invocation same-name Api whose instance-owned
+default handler is the authoritative terminal; the exported `Execution.execute`
+default always refuses. Only canonical core runs a document, after the chain
+unwinds, with the options that terminal recorded — so a handler cannot
+answer with a synthetic execution, manufacture or replace a `DocumentExecution`,
+wrap its output stream, turn a failure into a success, or reach the admissions
+the invocation captured.
+
+The request is a one-use capability. It carries a private reference to a single
+invocation, and delegating a reconstructed look-alike, a request a later
+`withOptions()` superseded, a request another invocation issued, or the same
+request twice is an `ExecutionProtocolError` — fresh and cause-free, raised
+before the journal is read, before the document expands, and before anything is
+appended. An invocation whose chain returns without ever reaching the terminal
+fails the same way.
+
+Completion failures are additive and apply inside canonical completion, not by
+wrapping the returned handle: an execution that already failed keeps its own
+failure, the first policy that reports one turns a success into that failure,
+and no later policy replaces it.
+
+### The invocation's lifetime
+
+Each execution is owned by one structured task holding its own scope. That scope
+stays alive through the document's execution and through `Execution.document`
+teardown, and **completion becomes observable only after teardown has
+finished** — so a caller continuing on the completion continues after cleanup,
+and a completed handle carries no live scope.
+
+Cancelling a consumer of a live returned handle cancels the invocation: authored
+work is halted, the invocation's finalizers run exactly once, and every other
+observer of that handle settles rather than waiting on a run that is over.
+Observing a settled handle again reads the recorded result and starts nothing.
+
+A document outcome and an invocation-teardown failure are ranked, never
+replaced:
+
+1. a durability failure outranks every other kind;
+2. otherwise a Files infrastructure failure outranks an ordinary one;
+3. **within the winning kind the earlier failure wins** — the document's
+   outcome precedes the invocation's teardown — and it is returned by exact
+   identity, because the engine's fences match the object rather than a rebuilt
+   copy;
+4. without a fatal failure, an existing ordinary document failure remains
+   unchanged; and
+5. only a successful document result is converted by an ordinary teardown
+   failure.
+
+Cancellation is held to the same boundary: a document that had already produced
+an outcome keeps it, and a fatal failure raised while cancelling tears down
+ranks by the same rules.
+
+Core itself has no knowledge of any particular extension.
 
 ### 8.2 Usage from standalone code
 
@@ -7734,6 +7795,41 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | TX43 | One read across phases | Two valid recorded selections behind one accessor — Alpha then Beta — resume as Alpha: Alpha's section executes, Beta's never does, the source is read once, and the appended Close describes the Alpha execution |
 | TX38–TX41 | Totality, on the envelope | A result that refuses to be read, a value that refuses to be read, a settlement that refuses to be read, and a successful result with no value are each malformed rather than unrelated — the fixed cause-free diagnostic, no recorded terminal result reused, no planted text anywhere, nothing expanded and nothing appended, for the original failing selector and for a different selector that would otherwise succeed |
 | TX42 | Ordinary failed settlement | A root import recorded as failed for non-selection reasons is left alone by this protocol |
+
+### Tier EP — The execution protocol
+
+Defined in §8.1.
+
+| # | Test | Verify |
+|---|------|--------|
+| EP1 | Ordinary execution | `execute()` with nothing installed runs the document unchanged |
+| EP2 | Option transformation | Options replaced through `withOptions()` are the options the document runs under |
+| EP3 | Answering without delegating | A handler that returns instead of delegating is an `ExecutionProtocolError`: the journal is never read, nothing expands, nothing is appended |
+| EP4 | A substitute return | Whatever a handler returns after delegating is ignored |
+| EP5 | Refusal before delegation | A throwing handler propagates, and performs no read, expansion, Yield or Close |
+| EP6 | Double delegation | Delegating the same request twice fails |
+| EP7 | A consumed request | Delegating a request a previous execution consumed fails |
+| EP8 | A reconstructed look-alike | A value rebuilt from the public shape is not a request, and nothing is read or run |
+| EP9 | A superseded request | Delegating a request a later `withOptions()` replaced fails |
+| EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates |
+| EP11 | Capture precedes installation | Admissions are copied before `install()` runs |
+| EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
+| EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, `Execution.document`, authored work and any append |
+| EP14 | No ambient channel | Rebuilding the obsolete `executablemd.core.journal-admission` context and setting it to `[]`, before and during the invocation, removes no captured admission |
+| EP15 | Precedence over an existing failure | A completion policy is not consulted when the document already failed, and cannot replace its failure |
+| EP16 | Additive against a success | A completion policy still turns a successful document into a failure |
+| EP17 | First failure wins | With two policies, the first to report a failure is the result and the second is never consulted |
+| EP18 | An immutable history | An admission that tries to set `length`, replace an index, delete a member, reverse or splice the retained history is ineffective or refused; the next admission sees the original, the completed replay stays completed, and nothing is appended |
+| EP19 | A nested live foreign request | A nested invocation handed its caller's still-live request is refused as another execution's; both invocations then settle on their own |
+| EP20 | Concurrent live requests | Two invocations held at a barrier until both requests exist and neither is consumed each refuse the other's, and each still runs its own document |
+| EP21 | The exported default | Calling `Execution.operations.execute` directly with a live request refuses and consumes nothing; the request still settles its own invocation |
+| EP22 | Invalid values | `null`, `undefined`, primitives, symbols, plain objects and a proxy whose traps throw each produce a fresh cause-free `ExecutionProtocolError`, with no journal read or append |
+| EP23 | Invocation context | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
+| EP24 | Settlement-owned cleanup | Installation finalizers have run exactly once before the completion is observed, on success, document failure and completion-policy failure; concurrent invocations finalize independently; a completed handle re-observed does not refinalize and still replays its output |
+| EP25 | Returned-handle cancellation | Halting a separate consumer of an already-returned handle halts the suspended authored work, finalizes exactly once, settles every other observer rather than leaving it waiting, and starts nothing when the handle is observed again; a fatal document result established before cancellation survives it by identity |
+| EP26 | A detached options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events, the accepted modifier factory runs by identity, and the caller's own array and record are observably edited while the execution is not |
+| EP27 | Teardown reconciliation | A document outcome and an invocation-teardown failure are ranked, not replaced: a durability failure wins by identity, then a Files infrastructure failure, then an existing document failure, and only a success is converted by teardown — with every finalizer run exactly once before the result is observable |
+| EP28 | Invocation isolation | Concurrent observations of two returned handles stay separate: cancelling one consumer halts and finalizes only its own invocation while the other settles independently, and neither invocation's cleanup or authored work reaches the other |
 
 ### Tier SL — Own-scope context updates
 

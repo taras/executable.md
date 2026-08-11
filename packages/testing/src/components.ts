@@ -117,7 +117,7 @@ export function* installHandlers(
   ];
   yield* registerComponents(registrations);
   yield* Execution.around({
-    *execute([executeOptions], next) {
+    *execute([request], next) {
       // Fresh boundary collection per execution: outcomes reported by
       // explicit <Testing> elements in THIS run decide this run's Result.
       const boundaries: BoundaryOutcome[] = [];
@@ -135,7 +135,7 @@ export function* installHandlers(
       // live or partial journal (no root Close) hydrates nothing;
       // re-expansion records each result exactly once via its durable
       // operation.
-      const replayed = yield* readCompletedRun(executeOptions.stream);
+      const replayed = yield* readCompletedRun(request.options.stream);
       if (replayed) {
         for (const result of replayed.results) {
           yield* record(result);
@@ -144,8 +144,7 @@ export function* installHandlers(
           yield* boundary(outcome);
         }
       }
-      const inner = yield* next(executeOptions);
-      return decorateCompletion(inner, () => {
+      request.addCompletionFailure(() => {
         const failed = boundaries.filter((b) => b.failed > 0);
         if (failed.length > 0) {
           return new TestFailureError(
@@ -157,33 +156,9 @@ export function* installHandlers(
         }
         return undefined;
       });
+      yield* next(request);
     },
   });
-}
-
-/**
- * Map an execution's completion: an `Ok` becomes `Err(failure())` when the
- * policy reports one, after the inner completion — and therefore its closed
- * output stream — settles. An existing `Err` passes through unchanged.
- */
-export function decorateCompletion(
-  inner: DocumentExecution,
-  failure: () => Error | undefined,
-): DocumentExecution {
-  return {
-    output: inner.output,
-    *[Symbol.iterator]() {
-      const result = yield* inner;
-      if (!result.ok) {
-        return result;
-      }
-      const error = failure();
-      if (error) {
-        return Err(error);
-      }
-      return result;
-    },
-  };
 }
 
 /** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */

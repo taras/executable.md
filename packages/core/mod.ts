@@ -130,6 +130,10 @@ export type {
   ExecutionApi,
   DocumentExecution,
 } from "./src/execute.ts";
+// The narrowing surface a middleware handler needs, and nothing that completes
+// an execution: `executeInstalled` and `JournalAdmission` are host boundary.
+export { ExecutionProtocolError } from "./src/execution-request.ts";
+export type { CompletionFailure, ExecutionRequest } from "./src/execution-request.ts";
 export {
   fileSource,
   formatDocumentReference,
