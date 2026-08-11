@@ -31,7 +31,7 @@ import {
   inlineSource,
   registerComponents,
 } from "../mod.ts";
-import type { ExecutionRequest } from "../mod.ts";
+import type { ExecutionRequest, ModifierFactory } from "../mod.ts";
 import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation, JournalAdmission } from "../host.ts";
 
@@ -814,7 +814,11 @@ describe("Tier EP — the execution protocol", () => {
     }
   });
 
-  it("EP26: options are snapshotted when the terminal accepts them", function* () {
+  // EP26: what the terminal accepted stops being the caller's to change. Each
+  // field below is mutated *after* the private terminal returned and before the
+  // public chain finishes, and each one materially affects execution — so the
+  // accepted snapshot is what the assertions read, not the edited original.
+  it("EP26: the accepted options are a detached snapshot", function* () {
     // Control: replacing the same fields *before* delegating still works.
     const replaced = yield* scoped(function* () {
       yield* Execution.around({
@@ -828,35 +832,187 @@ describe("Tier EP — the execution protocol", () => {
 
     const accepted = new InMemoryStream();
     const smuggled = new InMemoryStream();
+    const acceptedDirs = ["./components", "./"];
+    const acceptedModifiers: Record<string, ModifierFactory> = {
+      shout: (_params) => (_args, next) =>
+        (function* () {
+          const inner = yield* next();
+          return { ...inner, output: `SHOUTED:${inner.output}` };
+        })(),
+    };
 
     const output = yield* scoped(function* () {
       yield* Execution.around({
         *execute([request], next) {
           const options = request.options;
           yield* next(request);
-          // Everything below happens after the private terminal accepted, and
-          // before the public chain finishes.
-          const editable = Object.assign({}, options);
+
+          // Every one of these is the caller's own object, edited after the
+          // terminal accepted a copy of it.
           Reflect.set(options, "stream", smuggled);
-          Reflect.set(options, "componentDirs", ["/nowhere"]);
-          Reflect.set(options, "modifiers", {});
-          void editable;
+          Reflect.set(options, "path", "/nowhere/replaced.md");
+          const dirs = options.componentDirs;
+          if (Array.isArray(dirs)) {
+            Reflect.set(dirs, 0, "/nowhere");
+            Reflect.set(dirs, "length", 0);
+          }
+          const modifiers = options.modifiers;
+          if (typeof modifiers === "object" && modifiers !== null) {
+            Reflect.deleteProperty(modifiers, "shout");
+            Reflect.set(modifiers, "shout", () => () => "REPLACED");
+          }
         },
       });
+
       return yield* collect(
         yield* execute({
-          ...inlineSource(DOC),
+          ...inlineSource(["```bash shout exec", "echo hi", "```", ""].join("\n")),
           stream: accepted,
+          componentDirs: acceptedDirs,
+          modifiers: acceptedModifiers,
         }),
       );
     });
 
-    // The document ran under what the terminal accepted: its journal is the
-    // accepted stream, and the stream substituted afterwards received nothing.
-    expect(String(output)).toContain("Hello");
+    // The accepted modifier ran, by identity — not the replacement.
+    expect(String(output)).toContain("SHOUTED:");
+    expect(String(output)).not.toContain("REPLACED");
+    // Events went to the accepted stream, and the substituted one saw nothing.
     expect(accepted.snapshot().length).toBeGreaterThan(0);
     expect(smuggled.snapshot()).toEqual([]);
-    expect(JSON.stringify(accepted.snapshot())).not.toContain("smuggled");
+    // The caller's own arrays and records really were edited — the snapshot is
+    // what protected the execution, not an absence of mutation.
+    expect(acceptedDirs).toEqual([]);
+    expect(Object.keys(acceptedModifiers)).toEqual(["shout"]);
+  });
+
+  // EP27: a document outcome and an invocation-teardown failure are ranked, not
+  // replaced. A fatal failure is reported by identity from wherever it came.
+  it("EP27: teardown reconciles with the document outcome by precedence", function* () {
+    const durable = new DurablePersistenceError("yield", new Error("planted"));
+    const otherDurable = new DurablePersistenceError("close", new Error("planted-second"));
+    const filesFatal = new FilesInvariantError("protocol");
+    const otherFilesFatal = new FilesInvariantError("protocol");
+    const cleanup = new Error("INSTALLATION-CLEANUP");
+
+    const cases: Array<{
+      says: string;
+      fail?: Error;
+      teardown?: Error;
+      expected: (result: Result<Json>) => void;
+    }> = [
+      {
+        says: "durability failure outranks an ordinary cleanup error",
+        fail: durable,
+        teardown: cleanup,
+        expected: (result) => {
+          expect(result.ok).toBe(false);
+          // By identity: the engine's fences match the exact object.
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "an ordinary document failure stays authoritative",
+        fail: new Error("DOCUMENT-FAILED"),
+        teardown: cleanup,
+        expected: (result) => {
+          expect(String(result.ok ? "" : result.error.message)).toContain("DOCUMENT-FAILED");
+          expect(String(result.ok ? "" : result.error.message)).not.toContain(
+            "INSTALLATION-CLEANUP",
+          );
+        },
+      },
+      {
+        says: "a cleanup error converts a successful document",
+        teardown: cleanup,
+        expected: (result) => {
+          expect(result.ok).toBe(false);
+          expect(result.ok ? undefined : result.error).toBe(cleanup);
+        },
+      },
+      {
+        says: "a fatal teardown outranks an ordinary document failure",
+        fail: new Error("DOCUMENT-FAILED"),
+        teardown: durable,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "the document's durability failure precedes the teardown's",
+        fail: durable,
+        teardown: otherDurable,
+        expected: (result) => {
+          // Same kind on both sides: the one that happened first wins, and it
+          // is the exact object rather than a rebuilt one.
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "the document's Files failure precedes the teardown's",
+        fail: filesFatal,
+        teardown: otherFilesFatal,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(filesFatal);
+        },
+      },
+      {
+        says: "durability outranks Files wherever each came from",
+        fail: filesFatal,
+        teardown: durable,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "a document durability failure outranks a Files teardown",
+        fail: durable,
+        teardown: filesFatal,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const finalized: string[] = [];
+      const observed: number[] = [];
+
+      const result = yield* scoped(function* () {
+        if (scenario.fail) {
+          const failure = scenario.fail;
+          yield* Execution.around({
+            // deno-lint-ignore require-yield
+            *document() {
+              throw failure;
+            },
+          });
+        }
+        const execution = yield* executeInstalled(
+          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push("cleanup");
+                  if (scenario.teardown) {
+                    throw scenario.teardown;
+                  }
+                });
+              },
+            },
+          ],
+        );
+        const settled = yield* execution;
+        observed.push(finalized.length);
+        return settled;
+      });
+
+      scenario.expected(result);
+      // Every finalizer ran, exactly once, before the result was observable.
+      expect(finalized).toEqual(["cleanup"]);
+      expect(observed).toEqual([1]);
+    }
   });
 
   it("EP11: admissions are copied before install() runs", function* () {
