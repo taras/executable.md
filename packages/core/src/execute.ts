@@ -1089,7 +1089,8 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
       // lexically, and a modifier inside the chain may have narrowed it.
       const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
 
-      let output = "";
+      const captured = selected.stdout === "capture";
+      let live = "";
       const result = (yield createDurableOperation<Json>(
         {
           type: "exec",
@@ -1109,7 +1110,7 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
             retain: false,
           });
           const kept = finished();
-          output = kept.captured;
+          live = kept.captured;
           return {
             exitCode: execResult.exitCode,
             ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
@@ -1119,11 +1120,12 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
       )) as unknown as ProcessOutcome;
 
       return {
-        // A captured region's text is the live buffer's: it belongs to the
-        // region, not to the durable record, so a run that keeps no record
-        // still reconstructs the binding. Forwarded bytes reached the reader
-        // already and are never rendered again.
-        output,
+        // A capture's binding comes from the record when there is one and from
+        // the region's own live buffer when there is not. That is what lets a
+        // journaled run resume: replay never runs the child, so the retained
+        // stdout — and only stdout, never stderr — is the binding. Forwarded
+        // bytes reached the reader already and are never rendered again.
+        output: captured ? (result.stdout ?? live) : "",
         exitCode: result.exitCode,
         stderr: result.stderr ?? "",
       };

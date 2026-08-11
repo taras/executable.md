@@ -101,6 +101,17 @@ export interface ForegroundOutput {
  *   what stops it being displayed as well as captured; and
  * - a run that keeps no record accumulates nothing, so a capture's stderr —
  *   diagnostic, and possibly enormous — is forwarded and forgotten.
+ *
+ * A channel is classified by where the child wrote it, before any display
+ * decision. A value root displays its commands' stdout on the host's stderr,
+ * and that redirection re-enters this Api; `redirecting` is how the stderr
+ * handler tells a child's own stderr from stdout passing through on its way to
+ * a free channel, so the record keeps each channel exactly.
+ *
+ * Each channel decodes with its own streaming decoder, and each chunk is
+ * decoded once and reused, so a code point split across chunks survives and one
+ * channel can never disturb the other's partial character. Both decoders are
+ * flushed once, when the process is done.
  */
 export function* route(
   selected: ForegroundRouting,
@@ -109,28 +120,41 @@ export function* route(
   let captured = "";
   let retainedStdout = "";
   let retainedStderr = "";
-  const decoder = new TextDecoder();
+  let redirecting = 0;
+  const fromStdout = new TextDecoder();
+  const fromStderr = new TextDecoder();
+  const wanted = retain || selected.stdout === "capture";
 
   yield* Stdio.around({
     *stdout([bytes], next) {
+      // Decoded once, for whoever wants it: feeding the same bytes through a
+      // stateful decoder twice would corrupt a split code point.
+      const text = wanted ? fromStdout.decode(bytes, { stream: true }) : "";
       if (retain) {
-        retainedStdout += decoder.decode(bytes, { stream: true });
+        retainedStdout += text;
       }
       if (selected.stdout === "capture") {
-        captured += decoder.decode(bytes, { stream: true });
+        captured += text;
         return;
       }
       if (selected.stdout === "hidden") {
         return;
       }
       if (selected.stdout === "diagnostic") {
-        return yield* Stdio.operations.stderr(bytes);
+        // Shown on the channel a value root leaves free. It is still the
+        // child's stdout, and is recorded as such.
+        redirecting += 1;
+        try {
+          return yield* Stdio.operations.stderr(bytes);
+        } finally {
+          redirecting -= 1;
+        }
       }
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      if (retain) {
-        retainedStderr += decoder.decode(bytes, { stream: true });
+      if (retain && redirecting === 0) {
+        retainedStderr += fromStderr.decode(bytes, { stream: true });
       }
       if (selected.stderr === "hidden") {
         return;
@@ -139,9 +163,25 @@ export function* route(
     },
   });
 
-  return () => ({
-    captured,
-    retainedStdout: retain ? retainedStdout : undefined,
-    retainedStderr: retain ? retainedStderr : undefined,
-  });
+  return () => {
+    // Flushed once the child is done, so a truncated final sequence is
+    // reported rather than held.
+    if (wanted) {
+      const tail = fromStdout.decode();
+      if (retain) {
+        retainedStdout += tail;
+      }
+      if (selected.stdout === "capture") {
+        captured += tail;
+      }
+    }
+    if (retain) {
+      retainedStderr += fromStderr.decode();
+    }
+    return {
+      captured,
+      retainedStdout: retain ? retainedStdout : undefined,
+      retainedStderr: retain ? retainedStderr : undefined,
+    };
+  };
 }

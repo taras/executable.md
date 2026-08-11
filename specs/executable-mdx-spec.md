@@ -7312,7 +7312,7 @@ visible warning blocks, gather into a separate error report).
 | D1 | `bash exec` golden run | `execHandler` runs, stdout is displayed as it arrives and rendered nowhere, journal has exec entry |
 | D2 | Exec repeated run | Command executes again and its output is displayed again |
 | D3 | Non-zero exit code | A checked failure: the execution fails and later blocks do not run, with or without `<Output>`. The exit code alone decides — what the command printed does not enter into it |
-| D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation error mode, which stops the next sibling from running |
+| D3b | **Non-zero exit with stdout** | What the command printed was displayed as it ran and is rendered nowhere; the checked failure follows through the failure boundary, and the next sibling does not run |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
 | D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output and the inner outcome |

@@ -154,18 +154,26 @@ function errorCode(error: unknown): string | undefined {
 export function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
   let stdout = "";
   let stderr = "";
-  const decoder = new TextDecoder();
+  // One decoder per channel: a code point split across chunks belongs to the
+  // channel that split it, and sharing decoder state would let one channel
+  // corrupt the other's partial character.
+  const fromStdout = new TextDecoder();
+  const fromStderr = new TextDecoder();
   yield* Stdio.around({
     *stdout([bytes], next) {
-      stdout += decoder.decode(bytes, { stream: true });
+      stdout += fromStdout.decode(bytes, { stream: true });
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      stderr += decoder.decode(bytes, { stream: true });
+      stderr += fromStderr.decode(bytes, { stream: true });
       return yield* next(bytes);
     },
   });
-  return { stdout: () => stdout, stderr: () => stderr };
+  // Flushed once, when the process is done.
+  return {
+    stdout: () => stdout + fromStdout.decode(),
+    stderr: () => stderr + fromStderr.decode(),
+  };
 }
 
 /**

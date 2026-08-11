@@ -20,6 +20,9 @@ import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useStubFs } from "@executablemd/runtime/test";
+import { exec, retaining } from "@executablemd/runtime";
+import { FOREGROUND, VALUE_ROOT, route } from "../src/foreground.ts";
+import type { ForegroundOutput } from "../src/foreground.ts";
 import { API } from "@executablemd/runtime";
 
 interface Seen {
@@ -369,5 +372,155 @@ describe("Tier FG — foreground execution", () => {
     // The block after the region is an ordinary foreground block again.
     expect(run.seen.stdout).toContain("after");
     expect(run.output).not.toContain("after");
+  });
+
+  /**
+   * A value root's stdout carries its JSON result, so a command's stdout is
+   * shown on the channel that is free. It is still the child's stdout, and a
+   * record that called it stderr would not be the child's result.
+   */
+  it("FG13: a value root displays stdout on stderr and records it as stdout", function* () {
+    const encoder = new TextEncoder();
+    let kept: ForegroundOutput | undefined;
+
+    const seen = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        const finished = yield* route(VALUE_ROOT, true);
+        yield* Stdio.operations.stdout(encoder.encode("from-stdout\n"));
+        yield* Stdio.operations.stderr(encoder.encode("from-stderr\n"));
+        kept = finished();
+      });
+      return seen;
+    });
+
+    // Displayed where a value root can afford to show it.
+    expect(seen.stderr).toContain("from-stdout");
+    expect(seen.stdout).toBe("");
+    // Recorded as what the child actually wrote.
+    expect(kept?.retainedStdout).toBe("from-stdout\n");
+    expect(kept?.retainedStderr).toBe("from-stderr\n");
+  });
+
+  /**
+   * A code point split across chunks belongs to the channel that split it. One
+   * shared decoder would hand a channel the other's continuation bytes and
+   * produce replacement characters on both.
+   */
+  it("FG14: a split code point survives interleaving with the other channel", function* () {
+    const euro = new TextEncoder().encode("€");
+    let kept: ForegroundOutput | undefined;
+
+    yield* scoped(function* () {
+      const finished = yield* route(FOREGROUND, true);
+      yield* Stdio.operations.stdout(euro.slice(0, 1));
+      yield* Stdio.operations.stderr(new TextEncoder().encode("x"));
+      yield* Stdio.operations.stdout(euro.slice(1));
+      kept = finished();
+    });
+
+    expect(kept?.retainedStdout).toBe("€");
+    expect(kept?.retainedStderr).toBe("x");
+  });
+
+  it("FG15: a journaled capture agrees byte for byte with what it retained", function* () {
+    const euro = new TextEncoder().encode("€");
+    let kept: ForegroundOutput | undefined;
+
+    yield* scoped(function* () {
+      const finished = yield* route({ stdout: "capture", stderr: "forward" }, true);
+      yield* Stdio.operations.stdout(euro.slice(0, 2));
+      yield* Stdio.operations.stderr(new TextEncoder().encode("diagnostic"));
+      yield* Stdio.operations.stdout(euro.slice(2));
+      kept = finished();
+    });
+
+    // The same bytes, decoded once and handed to both.
+    expect(kept?.captured).toBe("€");
+    expect(kept?.retainedStdout).toBe("€");
+    expect(kept?.retainedStderr).toBe("diagnostic");
+  });
+
+  it("FG16: the runtime helper keeps each channel's split code points apart", function* () {
+    const encoder = new TextEncoder();
+    const euro = encoder.encode("€");
+    let kept: { stdout: string; stderr: string } | undefined;
+
+    yield* scoped(function* () {
+      const retained = yield* retaining();
+      yield* Stdio.operations.stdout(euro.slice(0, 1));
+      yield* Stdio.operations.stderr(encoder.encode("x"));
+      yield* Stdio.operations.stdout(euro.slice(1));
+      kept = { stdout: retained.stdout(), stderr: retained.stderr() };
+    });
+
+    expect(kept?.stdout).toBe("€");
+    expect(kept?.stderr).toBe("x");
+  });
+
+  it("FG16a: exec({ retain: true }) reports a real child's channels exactly", function* () {
+    const result = yield* exec({
+      command: ["bash", "-c", "printf 'out-€'; printf 'err-€' >&2"],
+      retain: true,
+    });
+
+    expect(result.stdout).toBe("out-€");
+    expect(result.stderr).toBe("err-€");
+    expect(result.exitCode).toBe(0);
+  });
+
+  /**
+   * A journaled capture has to survive a resumed run: replay never starts the
+   * child, so the binding can only come from what the record kept.
+   */
+  it("FG17: a resumed journaled capture rebuilds its binding without running again", function* () {
+    const source = [
+      '<Capture as="taken">',
+      "```bash exec",
+      "echo recorded-once",
+      "```",
+      "</Capture>",
+      "",
+      "[{taken}]",
+      "",
+    ].join("\n");
+
+    let starts = 0;
+    const first = new InMemoryStream();
+    yield* watching(function* () {
+      yield* scoped(function* () {
+        yield* API.Process.around({
+          *exec([options], next) {
+            starts += 1;
+            return yield* next(options);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: true, stream: first });
+      });
+    });
+    expect(starts).toBe(1);
+
+    // The completed exec Yield stays; the run's terminal record does not.
+    const events = first.snapshot();
+    expect(events.at(-1)?.type).toBe("close");
+    const partial = new InMemoryStream(events.slice(0, -1));
+
+    const resumed = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* API.Process.around({
+          *exec([options], next) {
+            starts += 1;
+            return yield* next(options);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: true, stream: partial });
+      });
+      return { output: run.output, seen };
+    });
+
+    // The child never ran again, the binding is the one the record holds, and
+    // nothing was displayed a second time.
+    expect(starts).toBe(1);
+    expect(resumed.output).toContain("recorded-once");
+    expect(resumed.seen.stdout).toBe("");
   });
 });
