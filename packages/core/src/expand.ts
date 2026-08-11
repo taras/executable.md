@@ -862,7 +862,11 @@ export function* expandSegments(
             result.push(
               yield* checkedCommandFailure({
                 type: "error",
-                message: `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`,
+                // stderr reached the reader as the command wrote it, so the
+                // diagnostic quotes it only when this run retained it (#441).
+                message: codeResult.stderr
+                  ? `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`
+                  : `Command failed (exit ${codeResult.exitCode})`,
                 source: segment.content,
               }),
             );

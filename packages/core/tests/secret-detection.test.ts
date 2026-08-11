@@ -43,6 +43,7 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { Stdio } from "@effectionx/process";
 import { execute, Execution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -145,11 +146,20 @@ function label(event: DurableEvent): string {
 }
 
 /** Every command answers with `output`, so no real shell runs. */
+/**
+ * A stand-in child, which displays what it claims to have written.
+ *
+ * Retention reads the same chain a reader does (#441), so a stub that returned
+ * text without writing it would leave nothing for the journal to hold — and
+ * nothing for the secret gate to inspect.
+ */
 function* useExecOutput(output: string): Operation<void> {
   yield* API.Process.around({
-    // deno-lint-ignore require-yield
-    *exec() {
-      return { exitCode: 0, stdout: output, stderr: "" };
+    *exec([options]) {
+      yield* Stdio.operations.stdout(new TextEncoder().encode(output));
+      return options.retain === false
+        ? { exitCode: 0, stdout: undefined, stderr: undefined }
+        : { exitCode: 0, stdout: output, stderr: "" };
     },
   });
 }

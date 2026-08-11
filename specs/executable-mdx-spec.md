@@ -985,28 +985,32 @@ Multi-line code blocks are passed as a single string to the `-c` flag.
 
 ### 3.8 Examples of modifier chain execution
 
-**`exec` alone** — `exec` runs the command via `durableExec`
-(one journal entry). stdout becomes the output.
+**`exec` alone** — `exec` runs the command as a foreground child (§3.6). Its
+stdout and stderr reach the reader's corresponding channels as the child
+produces them, and the block renders nothing: those bytes were displayed once
+already. One journal entry is written. It holds the exit status, and holds
+stdout and stderr as well when the host asked for a record.
 
-Whether a block failed is a separate question from what it printed, and
-the exit code alone answers it. A non-zero exit produces an
-`ErrorSegment` — decided by the ambient error mode, so a comment under
-`print` and a failure under `output` or `throw` (§6.9) —
-whatever the command wrote. Output the command produced is kept as its
-`execOutput` segment and precedes that printed error, because a command
-that prints before it fails is usually explaining itself.
+Whether a block failed is a separate question from what it printed, and the
+exit code alone answers it. A non-zero exit is a **checked failure**: the
+ambient error mode may decide how it is reported, never that the run succeeded.
+Later executable blocks do not run, the execution fails, and no `<Output>`
+declaration is required. A `<PrintErrors>` region is the construct that
+deliberately handles one — inside it the failure is printed and the region
+continues, which is what makes printing an explicit act rather than the default
+a root falls into.
 
-**`silent exec`** — `exec` runs the command and journals the
-result as usual. `silent` calls `next()` (so exec runs), then returns
-the same outcome with empty output. No extra journal entry from
-`silent`. A non-zero exit is still a failure: `silent` hides what the
-command printed, not whether it worked.
+**`silent exec`** — `exec` runs the command and journals the result as usual.
+`silent` displays neither channel. A non-zero exit is still a failure: `silent`
+hides what the command printed, not whether it worked. It does not weaken a
+record either — with `--journal`, a silent block's stdout and stderr are
+retained exactly.
 
-**`silent timeout[30s] exec`** — `exec` journals the command result.
-`timeout` cancels the block if it overruns. `silent` discards the
-output. The journal entry is still written; the document gets nothing.
-The inner chain still runs because `silent` wraps `timeout` — it calls
-`next()` which runs the entire inner chain before discarding.
+**`silent timeout[30s] exec`** — `exec` journals the command result. `timeout`
+cancels the block if it overruns. `silent` displays nothing. The journal entry
+is still written; the reader sees nothing. The inner chain still runs because
+`silent` wraps `timeout` — it calls `next()`, which runs the entire inner
+chain.
 
 **`daemon exec`** — `daemon` is the outermost terminal modifier. It
 ignores `next` entirely — `exec` is never invoked. `daemon` forks the
@@ -7305,9 +7309,9 @@ visible warning blocks, gather into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| D1 | `bash exec` golden run | `execHandler` runs, stdout in output, journal has exec entry |
-| D2 | Exec repeated run | Command executes again and current stdout is used |
-| D3 | Non-zero exit code | ErrorSegment in output. The exit code alone decides — what the command printed does not enter into it |
+| D1 | `bash exec` golden run | `execHandler` runs, stdout is displayed as it arrives and rendered nowhere, journal has exec entry |
+| D2 | Exec repeated run | Command executes again and its output is displayed again |
+| D3 | Non-zero exit code | A checked failure: the execution fails and later blocks do not run, with or without `<Output>`. The exit code alone decides — what the command printed does not enter into it |
 | D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation error mode, which stops the next sibling from running |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
@@ -7328,6 +7332,23 @@ visible warning blocks, gather into a separate error report).
 | D18 | Modifier override in child scope | Parent registers `sample`, child overrides with different handler |
 | D19 | Modifier parsing: `timeout=30s` | Modifier has name "timeout", params "30s" |
 | D20 | Info string with language only | Not executable, treated as passive text |
+
+### Tier FG — Foreground execution, capture, and retention (§3.6)
+
+| # | Test | Verify |
+|---|------|--------|
+| FG1 | A held-open child | A chunk is displayed before the child exits |
+| FG2 | stdout and stderr | Each keeps its own channel and appears exactly once |
+| FG3 | No journal | The record holds exit status alone; nothing is accumulated |
+| FG4 | `--journal` | Streams live and records exactly what the child wrote |
+| FG5 | `<Capture as>` | stdout fills the binding without being displayed; stderr stays diagnostic |
+| FG6 | `silent` with a journal | Displays neither channel; the record keeps both |
+| FG7 | Non-zero exit | Earlier output survives, the next block never starts, no `<Output>` |
+| FG8 | Cancellation | Child and forwarding stop; nothing arrives afterwards |
+| FG9 | Bytes during acquisition | Retained exactly, and displayed once |
+| FG10 | A same-name Context | Cannot suppress a record the host asked for |
+| FG11 | A same-name Context | Cannot make a transient run retain output |
+| FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
 
 ### Tier E — End-to-end
 

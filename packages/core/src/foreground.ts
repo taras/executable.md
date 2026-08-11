@@ -57,25 +57,9 @@ export const ForegroundRouting: Context<ForegroundRouting | undefined> = createC
   ForegroundRouting | undefined
 >("core.foregroundRouting", undefined);
 
-/**
- * Whether the run keeps a command's output once it has finished.
- *
- * The host decides this and says so. Nothing here infers it from which stream
- * implementation a journal happens to use.
- */
-export const RetainProcessOutput: Context<boolean> = createContext<boolean>(
-  "core.retainProcessOutput",
-  true,
-);
-
 /** What a region declared, if anything did. */
 export function* declaredRouting(): Operation<ForegroundRouting | undefined> {
   return yield* ForegroundRouting.get();
-}
-
-/** Whether this run keeps process output; hosts that want none say so. */
-export function* retaining(): Operation<boolean> {
-  return (yield* RetainProcessOutput.get()) ?? true;
 }
 
 /**
@@ -94,31 +78,70 @@ export function withRouting<T>(
   });
 }
 
+/** What one block's output did, once it has finished. */
+export interface ForegroundOutput {
+  /** stdout a `<Capture as>` region asked for; empty otherwise. */
+  captured: string;
+  /** stdout the host asked to retain; undefined when it asked for none. */
+  retainedStdout: string | undefined;
+  /** stderr the host asked to retain; undefined when it asked for none. */
+  retainedStderr: string | undefined;
+}
+
 /**
- * Install what `selected` means for the child about to start.
+ * Route one block's channels, and keep what this run has been told to keep.
  *
- * A channel that is displayed installs nothing: the process package's own
- * default writes it to the host's corresponding stream, which is the behavior
- * being asked for. A channel that is not displayed is answered here instead, so
- * the bytes stop at this scope rather than reaching a terminal.
+ * Installed before the child is acquired, so a chunk written during startup is
+ * routed and retained like any other. Routing and retention are decided
+ * together because they read the same bytes and must not read them twice:
+ *
+ * - retention records first, so silencing a block never weakens a record the
+ *   host explicitly asked for;
+ * - captured stdout goes to the region's own buffer and no further, which is
+ *   what stops it being displayed as well as captured; and
+ * - a run that keeps no record accumulates nothing, so a capture's stderr —
+ *   diagnostic, and possibly enormous — is forwarded and forgotten.
  */
-export function* silence(selected: ForegroundRouting): Operation<void> {
-  const around: Record<string, unknown> = {};
-  if (selected.stdout === "capture" || selected.stdout === "hidden") {
-    Object.assign(around, { *stdout() {} });
-  }
-  if (selected.stdout === "diagnostic") {
-    // Shown, on the channel a value root leaves free.
-    Object.assign(around, {
-      *stdout([bytes]: [Uint8Array]) {
-        yield* Stdio.operations.stderr(bytes);
-      },
-    });
-  }
-  if (selected.stderr !== "forward") {
-    Object.assign(around, { *stderr() {} });
-  }
-  if (Object.keys(around).length > 0) {
-    yield* Stdio.around(around as Parameters<typeof Stdio.around>[0]);
-  }
+export function* route(
+  selected: ForegroundRouting,
+  retain: boolean,
+): Operation<() => ForegroundOutput> {
+  let captured = "";
+  let retainedStdout = "";
+  let retainedStderr = "";
+  const decoder = new TextDecoder();
+
+  yield* Stdio.around({
+    *stdout([bytes], next) {
+      if (retain) {
+        retainedStdout += decoder.decode(bytes, { stream: true });
+      }
+      if (selected.stdout === "capture") {
+        captured += decoder.decode(bytes, { stream: true });
+        return;
+      }
+      if (selected.stdout === "hidden") {
+        return;
+      }
+      if (selected.stdout === "diagnostic") {
+        return yield* Stdio.operations.stderr(bytes);
+      }
+      return yield* next(bytes);
+    },
+    *stderr([bytes], next) {
+      if (retain) {
+        retainedStderr += decoder.decode(bytes, { stream: true });
+      }
+      if (selected.stderr === "hidden") {
+        return;
+      }
+      return yield* next(bytes);
+    },
+  });
+
+  return () => ({
+    captured,
+    retainedStdout: retain ? retainedStdout : undefined,
+    retainedStderr: retain ? retainedStderr : undefined,
+  });
 }

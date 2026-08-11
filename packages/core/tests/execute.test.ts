@@ -33,14 +33,20 @@ function* displayed<T>(
   let stderr = "";
   const decoder = new TextDecoder();
   return yield* scoped(function* () {
-    yield* Stdio.around({
-      *stdout([bytes]) {
-        stdout += decoder.decode(bytes);
+    // At `min`, where the host's writer is: what a reader sees is what
+    // survives the document's routing, so a silenced block must reach here as
+    // nothing at all (#441).
+    yield* Stdio.around(
+      {
+        *stdout([bytes]) {
+          stdout += decoder.decode(bytes);
+        },
+        *stderr([bytes]) {
+          stderr += decoder.decode(bytes);
+        },
       },
-      *stderr([bytes]) {
-        stderr += decoder.decode(bytes);
-      },
-    });
+      { at: "min" },
+    );
     const value = yield* body();
     return { value, stdout, stderr };
   });
@@ -86,11 +92,16 @@ function* useStubExec(): Operation<void> {
  * otherwise hide entirely, since it suppresses exactly the channel that carries
  * the explanation.
  */
+/** A stand-in child that prints on both channels and then fails. */
 function* useFailingStdoutExec(): Operation<void> {
   yield* API.Process.around({
-    // deno-lint-ignore require-yield
-    *exec(_args, _next) {
-      return { exitCode: 3, stdout: "secret\n", stderr: "why" };
+    *exec([options], _next) {
+      const encoder = new TextEncoder();
+      yield* Stdio.operations.stdout(encoder.encode("secret\n"));
+      yield* Stdio.operations.stderr(encoder.encode("why"));
+      return options.retain === false
+        ? { exitCode: 3, stdout: undefined, stderr: undefined }
+        : { exitCode: 3, stdout: "secret\n", stderr: "why" };
     },
   });
 }

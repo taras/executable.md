@@ -117,15 +117,7 @@ import type { CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import {
-  declaredRouting,
-  FOREGROUND,
-  retaining,
-  silence,
-  VALUE_ROOT,
-  withRouting,
-} from "./foreground.ts";
-import { RetainProcessOutput } from "./foreground.ts";
+import { declaredRouting, FOREGROUND, route, VALUE_ROOT, withRouting } from "./foreground.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
@@ -1074,50 +1066,69 @@ function admitRootSelection(event: Yield, root: RootDocumentSource): void {
   }
 }
 
-const execFactory: ModifierFactory = (_params) => (_args, _next) =>
-  (function* () {
-    const context = yield* useCodeBlock();
-    const command = buildCommand(context.language, context.content);
-    // Resolved here, where the block is, and handed to the Process operation
-    // explicitly: an enclosing `timeout=` has already made this its own value,
-    // and the Process Api itself defaults to nothing (spec §Config).
-    const timeout = yield* ephemeral(timeoutExec);
-    // The block carries where its output goes: a `<Capture as>` region decided
-    // that lexically, and a modifier inside the chain may have narrowed it.
-    const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
-    const captured = selected.stdout === "capture";
-    // A journal is a record of what ran; a capture is text the document needs.
-    // Either one asks for the output, and nothing else does.
-    const retain = (yield* ephemeral(retaining())) || captured;
+/**
+ * The exec terminal for one execution.
+ *
+ * `retainProcessOutput` is the trusted host's accepted choice and is captured
+ * here by value. It decides what reaches durable storage and therefore what
+ * crosses the secret gate, so it is not contextual state: no public middleware
+ * and no separately loaded same-name Context can turn a journal's record off,
+ * or make a run that asked for no record start keeping one. Routing stays
+ * lexical and composable, because routing decides only what a reader sees.
+ */
+function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
+  return (_params) => (_args, _next) =>
+    (function* () {
+      const context = yield* useCodeBlock();
+      const command = buildCommand(context.language, context.content);
+      // Resolved here, where the block is, and handed to the Process operation
+      // explicitly: an enclosing `timeout=` has already made this its own value,
+      // and the Process Api itself defaults to nothing (spec §Config).
+      const timeout = yield* ephemeral(timeoutExec);
+      // Where this block's output goes: a `<Capture as>` region decided that
+      // lexically, and a modifier inside the chain may have narrowed it.
+      const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
 
-    const result = (yield createDurableOperation<Json>(
-      {
-        type: "exec",
-        name: `exec:${context.content.slice(0, 40).replace(/\n/g, " ")}`,
-        command: command as unknown as Json,
-      },
-      function* (): Operation<Json> {
-        yield* silence(selected);
-        // The Api operation rather than the `exec` helper: retention varies per
-        // block here, so the outcome's shape is decided at runtime.
-        const execResult = yield* API.Process.operations.exec({
-          command,
-          cwd: yield* cwd(),
-          timeout,
-          retain,
-        });
-        return execResult as unknown as Json;
-      },
-    )) as unknown as ProcessOutcome;
+      let output = "";
+      const result = (yield createDurableOperation<Json>(
+        {
+          type: "exec",
+          name: `exec:${context.content.slice(0, 40).replace(/\n/g, " ")}`,
+          command: command as unknown as Json,
+        },
+        function* (): Operation<Json> {
+          // Routing and retention are established before the child exists, so
+          // startup chunks are treated like every other byte.
+          const finished = yield* route(selected, retainProcessOutput);
+          // `retain: false`: this execution keeps what it decided to keep, on
+          // the chain above, where silencing cannot hide it from a record.
+          const execResult = yield* API.Process.operations.exec({
+            command,
+            cwd: yield* cwd(),
+            timeout,
+            retain: false,
+          });
+          const kept = finished();
+          output = kept.captured;
+          return {
+            exitCode: execResult.exitCode,
+            ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
+            ...(kept.retainedStderr === undefined ? {} : { stderr: kept.retainedStderr }),
+          } as unknown as Json;
+        },
+      )) as unknown as ProcessOutcome;
 
-    return {
-      // Forwarded bytes reached the reader as they arrived; rendering the
-      // retained copy would show them a second time. Only a capture renders.
-      output: captured ? (result.stdout ?? "") : "",
-      exitCode: result.exitCode,
-      stderr: result.stderr ?? "",
-    };
-  })();
+      return {
+        // A captured region's text is the live buffer's: it belongs to the
+        // region, not to the durable record, so a run that keeps no record
+        // still reconstructs the binding. Forwarded bytes reached the reader
+        // already and are never rendered again.
+        output,
+        exitCode: result.exitCode,
+        stderr: result.stderr ?? "",
+      };
+    })();
+}
 
 // `silent` suppresses output; it does not convert failure into success (#307).
 // The outcome it hands back is the inner chain's, so a silenced command that
@@ -1649,7 +1660,7 @@ function* executeDocument(
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
-  registry.set("exec", execFactory);
+  registry.set("exec", createExecFactory(retainProcessOutput));
   registry.set("silent", silentFactory);
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
@@ -1689,9 +1700,6 @@ function* executeDocument(
           yield* channel.send(text);
         },
       });
-
-      // What this run keeps of a command, decided by the host that started it.
-      yield* RetainProcessOutput.set(retainProcessOutput);
 
       // The state this run owns: the table its printed errors record their
       // causes in, the schema compilers, and the slot its completion reads its

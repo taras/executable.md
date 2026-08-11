@@ -112,6 +112,11 @@ jobs:
             --component-dir packages/core/components \
             --raw
 
+      # Foreground execution is about what a caller sees and what status they
+      # get, and only the binary shows both surviving `deno compile`.
+      - name: Smoke test foreground output and fail-fast with the compiled binary
+        run: deno run --allow-all --frozen scripts/smoke-foreground.ts
+
       # The script installs a second copy of core beside a repository component.
       # The declaration must cross into the bundled engine so the failure prints
       # and execution continues.

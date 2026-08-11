@@ -86,7 +86,7 @@ import {
   writeTextFile as fsWriteTextFile,
 } from "@effectionx/fs";
 import { exec as processExec, Stdio } from "@effectionx/process";
-import { race, sleep, spawn, until } from "effection";
+import { race, scoped, sleep, until } from "effection";
 import type { Operation } from "effection";
 import { timeoutFetch as contextualFetchTimeout } from "./config.ts";
 import { Files } from "./files.ts";
@@ -143,13 +143,38 @@ function errorCode(error: unknown): string | undefined {
 }
 
 /**
+ * Record every byte a child writes, from before it exists.
+ *
+ * The adapter starts forwarding during acquisition and publishes its retained
+ * observations through Signals, which drop a send nobody is subscribed to. So
+ * retention cannot begin by subscribing to the process it is given — by then
+ * the first chunks are gone. It begins here instead, on the display chain the
+ * adapter calls for every chunk, installed before the child is acquired.
+ */
+export function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
+  let stdout = "";
+  let stderr = "";
+  const decoder = new TextDecoder();
+  yield* Stdio.around({
+    *stdout([bytes], next) {
+      stdout += decoder.decode(bytes, { stream: true });
+      return yield* next(bytes);
+    },
+    *stderr([bytes], next) {
+      stderr += decoder.decode(bytes, { stream: true });
+      return yield* next(bytes);
+    },
+  });
+  return { stdout: () => stdout, stderr: () => stderr };
+}
+
+/**
  * Run one child to completion and report what the caller asked to keep.
  *
- * The child is acquired rather than collected: `Stdio` middleware sees every
- * chunk as it arrives whatever this decides, because forwarding and retention
- * are separate paths through the same process. Retention subscribes to the
- * process streams and accumulates; a transient run never does, so a command
- * that writes a gigabyte costs a gigabyte of nothing.
+ * Forwarding and retention are separate paths through the same process: the
+ * `Stdio` chain displays every chunk whatever this decides, and a transient run
+ * subscribes to nothing, so a command that writes a gigabyte costs a gigabyte
+ * of nothing.
  */
 function* run(options: {
   command: string;
@@ -158,38 +183,24 @@ function* run(options: {
   env?: Record<string, string>;
   retain: boolean;
 }): Operation<ProcessOutcome> {
-  const child = yield* processExec(options.command, {
-    arguments: options.args,
-    cwd: options.cwd,
-    env: options.env,
-  });
+  return yield* scoped(function* () {
+    // Before acquisition, so a chunk written while the child is being started
+    // is retained rather than raced for.
+    const kept = options.retain ? yield* retaining() : undefined;
 
-  if (!options.retain) {
+    const child = yield* processExec(options.command, {
+      arguments: options.args,
+      cwd: options.cwd,
+      env: options.env,
+    });
     const status = yield* child.join();
-    return { exitCode: status.code ?? 1, stdout: undefined, stderr: undefined };
-  }
 
-  let stdout = "";
-  let stderr = "";
-  yield* spawn(function* () {
-    const subscription = yield* child.stdout;
-    let next = yield* subscription.next();
-    while (!next.done) {
-      stdout += next.value;
-      next = yield* subscription.next();
-    }
+    return {
+      exitCode: status.code ?? 1,
+      stdout: kept?.stdout(),
+      stderr: kept?.stderr(),
+    };
   });
-  yield* spawn(function* () {
-    const subscription = yield* child.stderr;
-    let next = yield* subscription.next();
-    while (!next.done) {
-      stderr += next.value;
-      next = yield* subscription.next();
-    }
-  });
-
-  const status = yield* child.join();
-  return { exitCode: status.code ?? 1, stdout, stderr };
 }
 
 function* withTimeout<T>(

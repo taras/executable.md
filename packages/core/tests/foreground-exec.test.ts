@@ -8,7 +8,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, spawn } from "effection";
+import { createContext, ensure, scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { when } from "@effectionx/converge";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
@@ -20,6 +20,7 @@ import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useStubFs } from "@executablemd/runtime/test";
+import { API } from "@executablemd/runtime";
 
 interface Seen {
   /** Every chunk displayed, in arrival order, with the channel it arrived on. */
@@ -258,5 +259,115 @@ describe("Tier FG — foreground execution", () => {
     // Nothing arrives once the scope is gone.
     expect(seen.chunks.length).toBe(afterTeardown);
     expect(seen.stdout).toContain("started");
+  });
+
+  /**
+   * The adapter starts forwarding while it acquires the child, and publishes
+   * its retained observations through Signals, which drop a send nobody has
+   * subscribed to yet. A run that began retaining after acquisition would keep
+   * a record missing its first bytes — silently, and only sometimes. The child
+   * here writes before this case can possibly have subscribed to anything.
+   */
+  it("FG9: a journal keeps what a child wrote while it was still starting", function* () {
+    const encoder = new TextEncoder();
+    const source = ["```bash exec", "echo after-acquisition", "```", ""].join("\n");
+
+    const run = yield* watching(function* (seen) {
+      // The seam: bytes emitted while the process is being acquired, before
+      // any Process object exists to subscribe to. Retention that began after
+      // acquisition would miss exactly these, and only sometimes.
+      yield* API.Process.around({
+        *exec([options], next) {
+          yield* Stdio.operations.stdout(encoder.encode("during-acquisition-out\n"));
+          yield* Stdio.operations.stderr(encoder.encode("during-acquisition-err\n"));
+          return yield* next(options);
+        },
+      });
+      const { stream } = yield* runDocument(source, { retainProcessOutput: true });
+      return { seen, stream };
+    });
+    const outcome = execOutcome(run.stream);
+
+    expect(outcome?.stdout).toBe("during-acquisition-out\nafter-acquisition\n");
+    expect(outcome?.stderr).toBe("during-acquisition-err\n");
+    // Displayed once as well: retention reads the same bytes, it does not
+    // consume them.
+    expect(run.seen.stdout.match(/during-acquisition-out/g) ?? []).toHaveLength(1);
+  });
+
+  /**
+   * Retention decides what reaches durable storage and therefore what crosses
+   * the secret gate, so it is the host's and nothing else's. A same-name
+   * Context is the reachable impostor: `createContext` keys by name, so a
+   * separately loaded copy addresses the same binding.
+   */
+  it("FG10: a same-name Context cannot suppress a record the host asked for", function* () {
+    const impostor = createContext<boolean>("core.retainProcessOutput", true);
+    const source = ["```bash exec", "echo recorded", "```", ""].join("\n");
+
+    const stream = yield* scoped(function* () {
+      yield* impostor.set(false);
+      const run = yield* watching(() => runDocument(source, { retainProcessOutput: true }));
+      return run.stream;
+    });
+
+    expect(execOutcome(stream)?.stdout).toBe("recorded\n");
+  });
+
+  it("FG11: a same-name Context cannot make a transient run start keeping output", function* () {
+    const impostor = createContext<boolean>("core.retainProcessOutput", false);
+    const source = ["```bash exec", "echo not-recorded", "```", ""].join("\n");
+
+    const stream = yield* scoped(function* () {
+      yield* impostor.set(true);
+      const run = yield* watching(() => runDocument(source, { retainProcessOutput: false }));
+      return run.stream;
+    });
+
+    const outcome = execOutcome(stream);
+    expect(outcome?.exitCode).toBe(0);
+    expect(outcome?.stdout).toBe(undefined);
+    expect(outcome?.stderr).toBe(undefined);
+  });
+
+  /**
+   * A capture owns a buffer, not a retention policy. Without a journal the
+   * region still reconstructs its binding, while the durable record stays exit
+   * status alone — including for the region's stderr, which is diagnostic and
+   * is forwarded rather than accumulated.
+   */
+  it("FG12: a capture without a journal binds its stdout and records nothing", function* () {
+    const source = [
+      '<Capture as="taken">',
+      "```bash exec",
+      "echo bound; echo loud >&2",
+      "```",
+      "</Capture>",
+      "",
+      "[{taken}]",
+      "",
+      "```bash exec",
+      "echo after",
+      "```",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(function* (seen) {
+      const { output, stream } = yield* runDocument(source, { retainProcessOutput: false });
+      return { seen, output, stream };
+    });
+    const outcome = execOutcome(run.stream);
+
+    // The binding was reconstructed live, from the region's own buffer.
+    expect(run.output).toContain("bound");
+    expect(run.seen.stdout).not.toContain("bound");
+    // stderr stays diagnostic and reaches the reader.
+    expect(run.seen.stderr).toContain("loud");
+    // And nothing at all was retained.
+    expect(outcome?.stdout).toBe(undefined);
+    expect(outcome?.stderr).toBe(undefined);
+    // The block after the region is an ordinary foreground block again.
+    expect(run.seen.stdout).toContain("after");
+    expect(run.output).not.toContain("after");
   });
 });
