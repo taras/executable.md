@@ -6286,6 +6286,37 @@ wrapping the returned handle: an execution that already failed keeps its own
 failure, the first policy that reports one turns a success into that failure,
 and no later policy replaces it.
 
+### The invocation's lifetime
+
+Each execution is owned by one structured task holding its own scope. That scope
+stays alive through the document's execution and through `Execution.document`
+teardown, and **completion becomes observable only after teardown has
+finished** — so a caller continuing on the completion continues after cleanup,
+and a completed handle carries no live scope.
+
+Cancelling a consumer of a live returned handle cancels the invocation: authored
+work is halted, the invocation's finalizers run exactly once, and every other
+observer of that handle settles rather than waiting on a run that is over.
+Observing a settled handle again reads the recorded result and starts nothing.
+
+A document outcome and an invocation-teardown failure are ranked, never
+replaced:
+
+1. a durability failure outranks every other kind;
+2. otherwise a Files infrastructure failure outranks an ordinary one;
+3. **within the winning kind the earlier failure wins** — the document's
+   outcome precedes the invocation's teardown — and it is returned by exact
+   identity, because the engine's fences match the object rather than a rebuilt
+   copy;
+4. without a fatal failure, an existing ordinary document failure remains
+   unchanged; and
+5. only a successful document result is converted by an ordinary teardown
+   failure.
+
+Cancellation is held to the same boundary: a document that had already produced
+an outcome keeps it, and a fatal failure raised while cancelling tears down
+ranks by the same rules.
+
 Core itself has no knowledge of any particular extension.
 
 ### 8.2 Usage from standalone code
@@ -7786,9 +7817,9 @@ Defined in §8.1.
 | EP22 | Invalid values | `null`, `undefined`, primitives, symbols, plain objects and a proxy whose traps throw each produce a fresh cause-free `ExecutionProtocolError`, with no journal read or append |
 | EP23 | Invocation context | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
 | EP24 | Settlement-owned cleanup | Installation finalizers have run exactly once before the completion is observed, on success, document failure and completion-policy failure; concurrent invocations finalize independently; a completed handle re-observed does not refinalize and still replays its output |
-| EP25 | Cancellation-owned cleanup | Halting a live handle while `Execution.document` is suspended halts the authored work and finalizes exactly once |
+| EP25 | Returned-handle cancellation | Halting a separate consumer of an already-returned handle halts the suspended authored work, finalizes exactly once, settles every other observer rather than leaving it waiting, and starts nothing when the handle is observed again; a fatal document result established before cancellation survives it by identity |
+| EP26 | A detached options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events, the accepted modifier factory runs by identity, and the caller's own array and record are observably edited while the execution is not |
 | EP27 | Teardown reconciliation | A document outcome and an invocation-teardown failure are ranked, not replaced: a durability failure wins by identity, then a Files infrastructure failure, then an existing document failure, and only a success is converted by teardown — with every finalizer run exactly once before the result is observable |
-| EP26 | An immutable options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events and the substituted one receives none |
 
 ### Tier SL — Own-scope context updates
 
