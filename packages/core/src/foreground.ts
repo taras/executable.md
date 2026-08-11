@@ -1,6 +1,20 @@
 /**
  * Where a foreground command's output goes, and what is kept of it (spec §3.6).
  *
+ * This is one boundary in a chain, and where it sits decides what "the
+ * command's output" means:
+ *
+ * ```
+ * child → enclosing host middleware → here → this document's display → terminal
+ * ```
+ *
+ * Everything upstream is the host's own preprocessing, and it is trusted: a
+ * host may transform, redact, redirect or consume a channel before this
+ * boundary sees it, and what arrives is then what the run captures, journals
+ * and reports. Everything downstream is this document's display policy —
+ * `silent`, a capture region, a value root's stream choice — and none of it may
+ * change what was already received.
+ *
  * Three separate questions, deliberately not one:
  *
  * - **Routing** is what a reader sees while the command runs. An ordinary block
@@ -101,14 +115,14 @@ export interface ForegroundOutput {
  * - a run that keeps no record accumulates nothing, so a capture's stderr —
  *   diagnostic, and possibly enormous — is forwarded and forgotten.
  *
- * A channel is what the child wrote it on, and this reads that from the only
- * thing that states it: the operation the adapter called. Nothing here ever
- * hands one channel's bytes to the other channel's operation, so there is no
- * later point at which an origin could have been lost and would have to be
- * recovered — not from the payload, which middleware may copy or transform, and
- * not from contextual state, which is addressed by name and belongs to whoever
- * can name it. Showing one channel on another stream is a host's decision about
- * its own streams, taken at the display boundary below this.
+ * A channel is the operation this boundary receives bytes on. Enclosing
+ * middleware that forwards a command's stdout on stderr has reclassified it,
+ * and the record says stderr, because that is what reached here. Nothing below
+ * this boundary reclassifies anything: no path hands one channel's bytes to the
+ * other channel's operation, so the received channel is never restated and
+ * never has to be recovered from a payload or from contextual state. Showing
+ * one channel on another of the host's streams is a decision taken downstream,
+ * and it leaves the record alone.
  *
  * Each channel decodes with its own streaming decoder, and each chunk is
  * decoded once and reused, so a code point split across chunks survives and one

@@ -143,13 +143,13 @@ function errorCode(error: unknown): string | undefined {
 }
 
 /**
- * Record every byte a child writes, from before it exists.
+ * Record what this call receives, from before the child exists.
  *
- * The adapter starts forwarding during acquisition and publishes its retained
- * observations through Signals, which drop a send nobody is subscribed to. So
- * retention cannot begin by subscribing to the process it is given — by then
- * the first chunks are gone. It begins here instead, on the display chain the
- * adapter calls for every chunk, installed before the child is acquired.
+ * Installed on the stdio chain before acquisition, so a chunk forwarded while
+ * the child is being started is received like any other. What arrives here is
+ * what enclosing middleware forwarded: a host that transforms, redacts,
+ * redirects, or consumes output upstream of this call is trusted preprocessing,
+ * and its result is what a caller is told the command produced.
  */
 function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
   let stdout = "";

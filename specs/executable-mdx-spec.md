@@ -919,10 +919,31 @@ function parseInfoString(infoString: string): ParsedInfoString {
 
 An `exec` block is a foreground child process.
 
+**The boundary.** A command's output passes through several hands:
+
+```
+child → enclosing host stdio middleware → the per-exec boundary → this
+document's display policy → terminal
+```
+
+Middleware installed around an execution is trusted preprocessing: the process
+stdio chain is a documented extension point, and a host may consume, transform,
+redact, or redirect a channel before the run receives it. One wrapper per `exec`
+is installed before the child is acquired and stays until it completes and both
+decoders flush. Everywhere below, **exact output means exactly what reaches the
+per-exec boundary** — never a claim about what the child wrote to its pipe,
+which no execution observes. So text a host rewrote is what is captured and
+journaled, output it consumed is absent from both, and output it forwarded on
+the other channel is recorded as that other channel.
+
+`silent`, a capture region's suppression of terminal stdout, quiet runtime
+output, and the command line's value-root stream selection are all *downstream
+display policies*. They decide what a reader sees and never what the run keeps.
+
 **Routing.** stdout and stderr are forwarded to the host's corresponding
-channels as the child produces them. The first chunk is observable before the
-child exits, and each byte is displayed once: a forwarded block renders nothing
-into the document at completion.
+channels as they are received. The first chunk is observable before the child
+exits, and each byte is displayed once: a forwarded block renders nothing into
+the document at completion.
 
 | Context | stdout | stderr |
 | --- | --- | --- |
@@ -930,10 +951,11 @@ into the document at completion.
 | inside `<Capture as>` | collected into the captured value | forwarded live |
 | `silent exec` | neither | neither |
 
-Routing decides whether a channel reaches the host, not which of the host's
-streams it lands on. That second question is the host's: under `xmd run` a value
-root's stdout carries the JSON result, so the command line shows a command's
-stdout on the stream the result leaves free, and stdout stays JSON-only.
+Routing decides whether a channel reaches the terminal, not which of the host's
+streams it lands on. That second question is the host's, and is answered
+downstream: under `xmd run` a value root's stdout carries the JSON result, so
+the command line shows a command's stdout on the stream the result leaves free
+while still retaining it as stdout, and stdout stays JSON-only.
 
 Capture is structural, not a modifier: a `<Capture as>` region may hold prose,
 components and several blocks, and every foreground block inside it writes its
@@ -966,22 +988,29 @@ what a command printed rather than running it again to find out.
 
 Where nothing is retained the run never builds the complete strings: the Process
 operation accumulates only when the caller asked it to. The one exception is a
-structural capture, whose buffer has the capture's scope. Where output is
-retained it is kept in addition to the routing the document chose — including
-for `silent` and captured blocks, because a display policy does not weaken an
-audit record. Silencing output for the host's terminal likewise leaves the
-record intact: not showing something and not knowing it are different decisions.
-Retained output crosses the pre-persistence secret gate; output that is not
-retained is never accumulated for a scanner to inspect.
+structural capture, whose buffer has the capture's scope and holds received
+stdout alone. Where output is retained it is kept in addition to the routing the
+document chose — including for `silent` and captured blocks, because a display
+policy does not weaken an audit record. Silencing output for the host's terminal
+likewise leaves the record intact: not showing something and not knowing it are
+different decisions.
 
-**Channels.** A channel is what the child wrote it on, stated once by the
-adapter as the operation it forwards on. No execution path hands one channel's
-bytes to the other channel's operation, so the origin is never lost and is never
-recovered from the payload, from contextual state, or from state held for the
-run. A host showing one channel on another of its streams changes nothing about
-the result: each channel is reported as the child produced it. Each channel
-decodes independently, so a character split across two chunks survives
-interleaving with the other channel.
+Retained output crosses the pre-persistence secret gate, which examines what the
+boundary received — after enclosing middleware, not before. A host may therefore
+redact a credential upstream so that it never reaches the gate, and a host that
+introduces credential-shaped text upstream is refused like any other run that
+would persist one. Output that is not retained is never accumulated for a
+scanner to inspect.
+
+**Channels.** A channel is the stdio operation on which the boundary receives
+bytes. Enclosing middleware that forwards a command's stdout on stderr has
+reclassified it, and the result says stderr. Below the boundary nothing
+reclassifies anything: no path hands one channel's bytes to the other channel's
+operation, so the received channel is never restated and never recovered from a
+byte payload, from contextual state, or from state held for the run. A
+downstream policy showing one channel on another of the host's streams changes
+nothing about the result. Each received channel decodes independently, so a
+character split across two chunks survives interleaving with the other channel.
 
 **Failure.** A nonzero exit is a checked failure. The ambient printing mode may
 decide how it is reported, never that the run succeeded: later executable
@@ -7360,16 +7389,16 @@ visible warning blocks, gather into a separate error report).
 | FG1 | A held-open child | A chunk is displayed before the child exits |
 | FG2 | stdout and stderr | Each keeps its own channel and appears exactly once |
 | FG3 | No journal | The record holds exit status alone; nothing is accumulated |
-| FG4 | `--journal` | Streams live and records exactly what the child wrote |
+| FG4 | `--journal` | Streams live and records exactly what the boundary received |
 | FG5 | `<Capture as>` | stdout fills the binding without being displayed; stderr stays diagnostic |
 | FG6 | `silent` with a journal | Displays neither channel; the record keeps both |
 | FG7 | Non-zero exit | Earlier output survives, the next block never starts, no `<Output>` |
 | FG8 | Cancellation | Child and forwarding stop; nothing arrives afterwards |
-| FG9 | Bytes during acquisition | Retained exactly, and displayed once |
+| FG9 | An emission during acquisition | The per-exec wrapper is already active; retained exactly, displayed once |
 | FG10 | A same-name Context | Cannot suppress a record the host asked for |
 | FG11 | A same-name Context | Cannot make a transient run retain output |
 | FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
-| FG13 | Two channels | Each is forwarded and recorded on the channel it was written to |
+| FG13 | Two channels | Each is forwarded and recorded on the channel it was received on |
 | FG14 | A code point split across chunks | Survives interleaving with the other channel |
 | FG15 | A journaled capture | The binding and the record agree byte for byte |
 | FG16 | A real child splitting a code point | Each channel decodes its own; neither disturbs the other |
@@ -7378,8 +7407,11 @@ visible warning blocks, gather into a separate error report).
 | FG16c | Quiet subprocess output | Hidden from the host, still reported to its caller |
 | FG17 | A resumed journaled capture | Rebuilds its binding without running the child again |
 | FG18 | A chunk held up in downstream middleware | Cannot take the other channel's bytes with it |
-| FG19 | Enclosing middleware that copies the bytes | Cannot make one channel look like the other |
-| FG23 | A same-name context set by neighbouring middleware | Cannot take a channel out of the record |
+| FG19 | Enclosing middleware that transforms the bytes | What it forwards is what is displayed and retained |
+| FG23 | Handlers above and below the boundary | The one above decides the record; the one below decides nothing about it |
+| FG24 | An upstream redaction | Captured, journaled and replayed as the safe text; the original is nowhere, and replay starts no child |
+| FG25 | Upstream consumption | Displayed and retained nowhere; exit status and the other channel are unaffected |
+| FG26 | An upstream redirect | Reclassifies the channel the run records; retained stdout is empty |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |

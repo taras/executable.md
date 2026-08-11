@@ -1121,10 +1121,40 @@ on that value.
 
 ## Foreground commands
 
-An executable block is a foreground child process. Its stdout and stderr reach
-the reader's corresponding channels as the child produces them, before it
-exits, and each byte is displayed once: what was forwarded is never rendered
-into the document again at completion.
+An executable block is a foreground child process. Its output reaches the reader
+as the child produces it, before it exits, and each byte is displayed once: what
+was forwarded is never rendered into the document again at completion.
+
+A command's output passes through several hands, and where a run observes it
+decides what "the command's output" means:
+
+```
+child → enclosing host stdio middleware → the per-exec boundary → this
+document's display policy → terminal
+```
+
+**Enclosing host middleware is trusted preprocessing.** The process stdio chain
+is a documented extension point: middleware installed around an execution may
+consume, transform, redact, or redirect a channel before the run receives it,
+and a host that does so is exercising its own authority over its own child
+processes. What it forwards is what exists as far as the document is concerned.
+So transformed text is what a run captures and journals, consumed output is
+absent from both, and output an enclosing handler forwards on the other channel
+is recorded as that other channel.
+
+**The per-exec boundary is where a run observes.** One wrapper is installed
+before `Process.exec` begins and stays alive until the child completes and both
+decoders have flushed, so nothing forwarded during acquisition or at the tail is
+missed. "Exactly what the command produced" means, throughout this repository,
+*exactly the bytes received here* — never a claim about what the child wrote to
+its pipe, which no execution observes.
+
+**A run's own display policies are downstream and change nothing.** `silent`, a
+`<Capture as>` region's suppression of terminal stdout, quiet runtime output for
+a caller whose subprocess output is an answer, the command line's choice of
+which stream a value root's diagnostics land on, and the terminal writers all
+sit below the boundary. They decide what a reader sees; they never decide what
+the run keeps. Not showing something and not knowing it are different decisions.
 
 Three questions about a command are separate, and answering one never answers
 another:
@@ -1132,32 +1162,31 @@ another:
 - **Routing** is what a reader sees. An ordinary block forwards both channels;
   a `<Capture as>` region takes stdout into the captured value and leaves
   stderr diagnostic; `silent` displays neither. Routing answers "does this
-  channel reach the host, and does anything else want it" — never "which of the
-  host's streams does it land on". It is visible in document structure, never
-  selected by a root-level presentation declaration or by which runtime is
+  channel reach the terminal, and does anything else want it" — never "which of
+  the host's streams does it land on". It is visible in document structure,
+  never selected by a root-level presentation declaration or by which runtime is
   executing.
 - **Retention** is what the run keeps. The host path that starts a run states
   it; nothing infers it from which stream implementation a journal happens to
   use, or from whether a pathname was named. A run that keeps no diagnostic
   record keeps the exit status alone, and the transient path never accumulates
   the bytes on their way past — a command that writes a gigabyte costs a
-  gigabyte of nothing. A run that retains keeps stdout and stderr in addition to
-  whatever routing the document chose, because a display policy does not weaken
-  an explicit audit record.
-- **Display suppression** is routing, not retention. A caller whose subprocess
-  output is an answer rather than something to show silences it at the display
-  boundary, where the host's own writer sits, so everything upstream — a run's
-  record, a region's capture, the adapter's own retention — still reads it.
-  Not showing something and not knowing it are different decisions.
+  gigabyte of nothing. A run that retains keeps both received channels in
+  addition to whatever routing the document chose, because a display policy does
+  not weaken an explicit audit record.
 - **Failure** is neither. A nonzero exit is a checked failure: a printing
   boundary may decide how it is reported, never that the run succeeded anyway.
   Later executable work does not start, and the run fails without any
   `<Output>` declaration. `<Output>` governs rendered document selection only.
 
-Retained output crosses the existing pre-persistence secret gate, exactly as
-any other journaled field does. Output that is never retained is never
-scanned, because there is nothing to persist and nothing was accumulated for a
-scanner to inspect.
+Retained output crosses the pre-persistence secret gate exactly as any other
+journaled field does, and the gate examines what the boundary received — after
+enclosing middleware, not before. Two consequences follow, and both are
+intended: a host may redact a credential upstream so that the material never
+reaches the gate at all, and a host that introduces credential-shaped text
+upstream is refused by the gate like any other run that would persist one.
+Output that is never retained is never scanned, because there is nothing to
+persist and nothing was accumulated for a scanner to inspect.
 
 Which host paths retain is a property of the path, stated where the run starts:
 `xmd run` and `xmd test` retain when the caller asked for a diagnostic trace and
@@ -1167,24 +1196,14 @@ commands that produced them; programmatic execution retains unless its trusted
 caller selects transient execution. A shared runner never decides this from what
 it was given.
 
-A chunk's source channel is stated once, by the adapter, as the operation it
-forwards on — and it is never restated. No execution path hands one channel's
-bytes to the other channel's operation, so there is no later point at which the
-origin could be lost and would have to be recovered. This matters because the
-recovery mechanisms are all unsound: the payload is a byte buffer middleware may
-legitimately copy or transform; contextual state is addressed by name and
-belongs to anything that can name it, which durable authority may not depend on;
-and state held for the run cannot describe one emission while two channels are
-forwarded concurrently.
-
-Which of the host's streams a channel is shown on is the host's own decision,
-taken at the display boundary beneath the document. A value root's stdout
-carries its JSON result, so the command line shows a command's stdout on the
-stream the result leaves free — visible, never mistaken for the result, and
-recorded as the child's stdout because that is the channel it was written to.
-Between the adapter and that boundary, the process stdio chain is the composable
-display path and nothing else: middleware there may show, hide, or transform,
-and can no more alter the record than it can alter what the child wrote.
+A channel is the operation the boundary receives bytes on, and nothing below it
+reclassifies anything: no path hands one channel's bytes to the other channel's
+operation, so the received channel is never restated and never has to be
+recovered from a byte payload, from contextual state, or from state held for a
+run whose channels are forwarded concurrently. A value root's stdout carries its
+JSON result, so the command line shows a command's stdout on the stream the
+result leaves free — visible, never mistaken for the result, and still recorded
+as stdout, because stdout is what reached the boundary.
 
 Forwarding, completion, cancellation and teardown belong to the executable
 block's own Effection scope. Cancelling the block stops the child and the tasks

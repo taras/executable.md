@@ -1,10 +1,17 @@
 /**
  * Tier FG — foreground execution, capture, and retention (spec §3.6, #441).
  *
- * These run real children, because what is under test is what a child's output
- * does on its way to a reader. Nothing waits on a duration: a command that must
- * still be running holds itself open until the case releases it, so "the first
- * chunk arrived before the child exited" is a fact rather than a race.
+ * These run real children, because what is under test is what a command's
+ * output does on its way to a reader. Nothing waits on a duration: a command
+ * that must still be running holds itself open until the case releases it, so
+ * "the first chunk arrived before the child exited" is a fact rather than a
+ * race.
+ *
+ * "Exactly" always means exactly what reached the per-exec boundary. Middleware
+ * enclosing an execution is trusted preprocessing and may transform, redact,
+ * redirect or consume a channel first; what a run captures, journals and
+ * reports is what that leaves. What the child wrote to its pipe is not observed
+ * by anything here, and no case claims it.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -152,7 +159,7 @@ describe("Tier FG — foreground execution", () => {
     expect(outcome?.stderr).toBe(undefined);
   });
 
-  it("FG4: a run that keeps a record keeps exactly what the child wrote", function* () {
+  it("FG4: a run that keeps a record keeps exactly what the boundary received", function* () {
     const source = ["```bash exec", "echo out; echo err >&2", "```", ""].join("\n");
 
     const seenAndStream = yield* watching(function* (seen) {
@@ -270,14 +277,14 @@ describe("Tier FG — foreground execution", () => {
    * a record missing its first bytes — silently, and only sometimes. The child
    * here writes before this case can possibly have subscribed to anything.
    */
-  it("FG9: a journal keeps what a child wrote while it was still starting", function* () {
+  it("FG9: the per-exec wrapper is already active while the child is being acquired", function* () {
     const encoder = new TextEncoder();
     const source = ["```bash exec", "echo after-acquisition", "```", ""].join("\n");
 
     const run = yield* watching(function* (seen) {
-      // The seam: bytes emitted while the process is being acquired, before
-      // any Process object exists to subscribe to. Retention that began after
-      // acquisition would miss exactly these, and only sometimes.
+      // The seam: an emission that reaches the chain while the process is
+      // still being acquired. A wrapper installed after `Process.exec` returns
+      // would miss exactly these, and only sometimes.
       yield* API.Process.around({
         *exec([options], next) {
           yield* Stdio.operations.stdout(encoder.encode("during-acquisition-out\n"));
@@ -374,12 +381,13 @@ describe("Tier FG — foreground execution", () => {
   });
 
   /**
-   * The one thing that states which channel a chunk came from is the operation
-   * the adapter called. Nothing here hands one channel's bytes to the other
-   * channel's operation, so a host may show them wherever it likes without the
-   * record having to reconstruct an origin it never lost.
+   * A channel is the operation this boundary receives bytes on. Nothing below
+   * it hands one channel's bytes to the other channel's operation, so a
+   * downstream policy may show them wherever it likes without the record having
+   * to reconstruct an origin it never lost. What an enclosing handler did
+   * before the boundary is a different question, and FG26 asks it.
    */
-  it("FG13: each channel is forwarded and recorded on the channel it was written to", function* () {
+  it("FG13: each channel is forwarded and recorded on the channel it was received on", function* () {
     const encoder = new TextEncoder();
     let kept: ForegroundOutput | undefined;
 
@@ -553,27 +561,24 @@ describe("Tier FG — foreground execution", () => {
 
   /**
    * `Stdio` middleware is documented as free to capture, transform, or redirect
-   * what it forwards, so a host that hands on a copy of the bytes it was given
-   * is behaving correctly. A route that read anything off the payload would
-   * lose it to exactly that host.
+   * what it forwards, and an enclosing handler doing so is the host exercising
+   * authority over its own child processes. What it forwards is what the run
+   * has: the boundary keeps the transformed text, not the bytes behind it.
    */
-  it("FG19: an enclosing middleware may copy the bytes without confusing the channels", function* () {
+  it("FG19: transformed bytes an enclosing middleware forwards are what is retained", function* () {
     const encoder = new TextEncoder();
-    let copies = 0;
+    const decoder = new TextDecoder();
+    let transformed = 0;
     let kept: ForegroundOutput | undefined;
 
     const seen = yield* watching(function* (seen) {
       yield* scoped(function* () {
-        // Installed before the route, so every emission arrives here first and
-        // goes on as a plain array holding the same bytes.
+        // Upstream of the boundary, so this is what the run ever sees.
         yield* Stdio.around({
           *stdout([bytes], next) {
-            copies += 1;
-            return yield* next(new Uint8Array(bytes));
-          },
-          *stderr([bytes], next) {
-            copies += 1;
-            return yield* next(new Uint8Array(bytes));
+            transformed += 1;
+            const text = decoder.decode(bytes, { stream: false }).toUpperCase();
+            return yield* next(encoder.encode(text));
           },
         });
 
@@ -585,72 +590,205 @@ describe("Tier FG — foreground execution", () => {
       return seen;
     });
 
-    // The copying middleware really did see both emissions.
-    expect(copies).toBe(2);
-    expect(seen.stdout).toBe("out");
+    // The transforming middleware really did run.
+    expect(transformed).toBe(1);
+    // What it forwarded is what was displayed and what was kept.
+    expect(seen.stdout).toBe("OUT");
     expect(seen.stderr).toBe("err");
-    // And the record is still the child's own two channels.
-    expect(kept?.retainedStdout).toBe("out");
+    expect(kept?.retainedStdout).toBe("OUT");
     expect(kept?.retainedStderr).toBe("err");
   });
 
   /**
-   * A context is addressed by name, so anything that can name one can read and
-   * write it. Middleware sits between a route and the host by design, and a
-   * record of what a child wrote — which crosses the secret gate before it
-   * persists — may not depend on state that any neighbour can set.
+   * Where authority sits, in both directions, in one case.
    *
-   * The attack is the strongest form: capture whatever the route left in the
-   * context while its stdout is in flight, then install it again while genuine
-   * stderr goes past. It finds nothing, because the classification is the
-   * operation the adapter called and lives nowhere a neighbour can reach.
+   * A handler enclosing an execution is trusted preprocessing: what it forwards
+   * is what the run has. A handler below the boundary is this document's
+   * display policy — `silent`, a capture region, a value root's stream choice
+   * are all of this kind — and it decides what a reader sees and nothing else.
+   * Reversing either half is the defect this holds shut.
    */
-  it("FG23: a same-name context cannot take a channel out of the record", function* () {
-    const Shadow = createContext<object | undefined>(
-      "@executablemd/core/foreground/redirecting",
-      undefined,
-    );
+  it("FG23: what is retained is set upstream of the boundary and is untouchable below it", function* () {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
-    let captures = 0;
-    let replays = 0;
-    let stolen: object | undefined;
+    let above = 0;
+    let below = 0;
+
+    const upstream = yield* scoped(function* () {
+      // Above: rewrites stdout, and the run keeps the rewrite.
+      yield* Stdio.around({
+        *stdout([bytes], next) {
+          above += 1;
+          void decoder.decode(bytes, { stream: false });
+          return yield* next(encoder.encode("rewritten"));
+        },
+      });
+      const finished = yield* route(FOREGROUND, true);
+      yield* Stdio.operations.stdout(encoder.encode("original"));
+      yield* Stdio.operations.stderr(encoder.encode("err"));
+      return finished();
+    });
+
+    const downstream = yield* scoped(function* () {
+      const finished = yield* route(FOREGROUND, true);
+      // Below: consumes stdout entirely and rewrites stderr. Nothing reaches a
+      // reader, and the record is exactly what the boundary received.
+      yield* Stdio.around(
+        {
+          *stdout() {
+            below += 1;
+          },
+          *stderr([bytes], next) {
+            below += 1;
+            void bytes;
+            return yield* next(encoder.encode("swapped"));
+          },
+        },
+        { at: "min" },
+      );
+      yield* Stdio.operations.stdout(encoder.encode("original"));
+      yield* Stdio.operations.stderr(encoder.encode("err"));
+      return finished();
+    });
+
+    // Both handlers really ran.
+    expect(above).toBe(1);
+    expect(below).toBe(2);
+    // The one above decided the record.
+    expect(upstream.retainedStdout).toBe("rewritten");
+    expect(upstream.retainedStderr).toBe("err");
+    // The one below decided nothing about it.
+    expect(downstream.retainedStdout).toBe("original");
+    expect(downstream.retainedStderr).toBe("err");
+  });
+
+  /**
+   * A host that redacts a command's output upstream has decided what the run
+   * knows. The safe text is what is displayed, bound, journaled and replayed;
+   * the original is nowhere, including in the record a resume reads back.
+   */
+  it("FG24: a redaction upstream of the boundary is what is captured, journaled and replayed", function* () {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const source = [
+      '<Capture as="taken">',
+      "```bash exec",
+      "echo account-1234-5678",
+      "```",
+      "</Capture>",
+      "",
+      "[{taken}]",
+      "",
+    ].join("\n");
+
+    function* redacting(): Operation<void> {
+      yield* Stdio.around({
+        *stdout([bytes], next) {
+          const text = decoder.decode(bytes, { stream: false });
+          return yield* next(encoder.encode(text.replace(/account-[\d-]+/g, "account-REDACTED")));
+        },
+      });
+    }
+
+    let starts = 0;
+    const first = new InMemoryStream();
+    const live = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* redacting();
+        yield* API.Process.around({
+          *exec([options], next) {
+            starts += 1;
+            return yield* next(options);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: true, stream: first });
+      });
+      return { output: run.output, seen };
+    });
+
+    expect(starts).toBe(1);
+    // Bound and displayed as the redaction, never as what the child printed.
+    expect(live.output).toContain("account-REDACTED");
+    expect(live.output).not.toContain("1234-5678");
+    expect(live.seen.stdout).not.toContain("1234-5678");
+    // And journaled the same way.
+    const kept = execOutcome(first);
+    expect(kept?.stdout).toBe("account-REDACTED\n");
+    // The document names the command, so the record holds that; what it must
+    // not hold is what the command printed.
+    expect(JSON.stringify(kept)).not.toContain("1234-5678");
+
+    // A resumed run reads the record rather than the child.
+    const events = first.snapshot();
+    expect(events.at(-1)?.type).toBe("close");
+    const partial = new InMemoryStream(events.slice(0, -1));
+    const resumed = yield* scoped(function* () {
+      yield* API.Process.around({
+        *exec([options], next) {
+          starts += 1;
+          return yield* next(options);
+        },
+      });
+      return yield* runDocument(source, { retainProcessOutput: true, stream: partial });
+    });
+
+    expect(starts).toBe(1);
+    expect(resumed.output).toContain("account-REDACTED");
+    expect(resumed.output).not.toContain("1234-5678");
+  });
+
+  /**
+   * Consumption is the strongest form of the same authority: an enclosing
+   * handler that forwards nothing has decided the run saw nothing. The exit
+   * status is the child's own and is unaffected, and the other channel is
+   * untouched.
+   */
+  it("FG25: stdout consumed upstream of the boundary is displayed and retained nowhere", function* () {
+    const source = ["```bash exec", "echo swallowed; echo kept >&2", "```", ""].join("\n");
+
+    let consumed = 0;
+    const run = yield* watching(function* (seen) {
+      const result = yield* scoped(function* () {
+        yield* Stdio.around({
+          *stdout() {
+            consumed += 1;
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: true });
+      });
+      return { seen, stream: result.stream };
+    });
+    const kept = execOutcome(run.stream);
+
+    expect(consumed).toBeGreaterThan(0);
+    // Nothing displayed, nothing retained, and no trace in the record.
+    expect(run.seen.stdout).toBe("");
+    expect(kept?.stdout).toBe("");
+    expect(JSON.stringify(kept)).not.toContain("swallowed");
+    // The status and the channel it did forward are the child's own.
+    expect(kept?.exitCode).toBe(0);
+    expect(kept?.stderr).toBe("kept\n");
+  });
+
+  /**
+   * An enclosing handler that forwards stdout on stderr has reclassified it,
+   * and the record says stderr — that is what "the channel it was received on"
+   * means. Only the totals are asserted: two channels forwarded concurrently
+   * arrive in whatever order they arrive.
+   */
+  it("FG26: an upstream redirect reclassifies the channel the run records", function* () {
+    const encoder = new TextEncoder();
+    let redirects = 0;
     let kept: ForegroundOutput | undefined;
-    const arrived: string[] = [];
 
     const seen = yield* watching(function* (seen) {
       yield* scoped(function* () {
         yield* Stdio.around({
-          *stdout([bytes], next) {
-            // Whatever the route is holding while its own stdout is in flight.
-            stolen = yield* Shadow.get();
-            captures += 1;
-            return yield* next(bytes);
-          },
-          *stderr([bytes], next) {
-            if (decoder.decode(bytes, { stream: false }).includes("err")) {
-              yield* Shadow.set(stolen ?? {});
-              replays += 1;
-            }
-            return yield* next(bytes);
+          *stdout([bytes]) {
+            redirects += 1;
+            return yield* Stdio.operations.stderr(bytes);
           },
         });
-
-        // Below the route: which operation an emission arrives on here is the
-        // only statement of where it came from, so nothing may change it.
-        yield* Stdio.around(
-          {
-            *stdout([bytes], next) {
-              arrived.push(`stdout:${decoder.decode(bytes, { stream: false })}`);
-              return yield* next(bytes);
-            },
-            *stderr([bytes], next) {
-              arrived.push(`stderr:${decoder.decode(bytes, { stream: false })}`);
-              return yield* next(bytes);
-            },
-          },
-          { at: "min" },
-        );
 
         const finished = yield* route(FOREGROUND, true);
         yield* Stdio.operations.stdout(encoder.encode("out"));
@@ -660,16 +798,15 @@ describe("Tier FG — foreground execution", () => {
       return seen;
     });
 
-    // The attempt really was made, on both halves.
-    expect(captures).toBe(1);
-    expect(replays).toBe(1);
-    // Every emission reached the boundary on the channel it was written to, so
-    // there is no point at which an origin could have been lost.
-    expect(arrived).toEqual(["stdout:out", "stderr:err"]);
-    // Display is untouched, and the record still holds both channels.
-    expect(seen.stdout).toBe("out");
-    expect(seen.stderr).toBe("err");
-    expect(kept?.retainedStdout).toBe("out");
-    expect(kept?.retainedStderr).toBe("err");
+    expect(redirects).toBe(1);
+    // Nothing arrived on stdout, so nothing is recorded there.
+    expect(kept?.retainedStdout).toBe("");
+    expect(seen.stdout).toBe("");
+    // Both texts arrived on stderr, and both are recorded there.
+    expect(kept?.retainedStderr).toContain("out");
+    expect(kept?.retainedStderr).toContain("err");
+    expect(kept?.retainedStderr?.length).toBe("outerr".length);
+    expect(seen.stderr).toContain("out");
+    expect(seen.stderr).toContain("err");
   });
 });
