@@ -33,6 +33,10 @@ Stop and return evidence when implementation reveals:
 Ask the user or Planner for resolution. Do not hide the choice behind a helper,
 fallback, compatibility behavior or follow-up issue.
 
+A review finding that fails one of the five blocking conditions in `AGENTS.md`
+is reported with that classification rather than implemented quietly.
+Implementing it decides that the contract now covers it.
+
 Ordinary implementation details remain the Implementor's responsibility. Do
 not stop for choices that code, tests or primary documentation can resolve.
 
@@ -71,6 +75,17 @@ user directs otherwise.
 
 If feedback conflicts with a settled decision, report the conflict to the user
 or Architect instead of choosing which contract to ignore.
+
+## Correction reports
+
+A correction report on architecture-sensitive work maps every change and every
+test to the checklist item it satisfies, at one exact head. The reviewer reads
+it against the frozen checklist rather than reconstructing the boundary from the
+diff.
+
+State any requested scope expansion plainly, together with what it would add to
+the settled boundary. Name it; do not absorb it. An expansion the record does
+not cover is an amendment for the Architect to make.
 
 ## Continuity record
 

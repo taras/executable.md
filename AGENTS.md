@@ -311,3 +311,69 @@ Every handoff records enough durable state for another agent to continue:
 Conversation memory is not an authoritative project record. Consequential
 decisions belong in architecture, specifications, issues, PR comments or named
 handoff artifacts, as authorized by the user.
+
+## Architecture-sensitive review
+
+A change is architecture-sensitive when it affects authority or trusted-host
+ownership; durable identity, admission or publication; replay and
+retained-history compatibility; concurrency, cancellation, resource lifetime or
+teardown; failure precedence or exact identity; loaded-package-copy composition;
+or a public middleware contract.
+
+Such a change carries one settled architecture record before implementation
+begins. The [Architect](.agents/architect.md) produces it, and that contract
+states what it holds: the actors, the adversarial capabilities in scope, the
+explicit non-goals, the ownership boundaries, the behavior across success,
+failure, cancellation, teardown and replay, the acceptance matrix, and the
+condition under which architecture review passes.
+
+### When a finding blocks
+
+A finding blocks the current PR when all five of these are true:
+
+1. It reproduces against the exact reviewed head.
+2. It violates a named, already-settled invariant.
+3. It uses an in-scope input or supported public surface.
+4. It has an observable authority, durability, replay, lifecycle or
+   public-completion consequence.
+5. Its correction belongs within the PR's existing purpose.
+
+Classify every finding as one of:
+
+- **architecture blocker** — changes what executes, what history or identity is
+  accepted, what durable state is published, or what authoritative outcome wins;
+- **correctness blocker** — violates an explicit public contract on a supported
+  path; or
+- **hardening follow-up** — extends the threat model, requires arbitrary process
+  sabotage, affects only non-authoritative diagnostics, or falls outside the
+  PR's purpose.
+
+A finding that fails one of the five conditions becomes a follow-up issue rather
+than an unstated extension of the contract the PR is held to. These two-word
+names classify review findings; `architecture.md`'s *blocker* — an execution
+that needs input — keeps its own meaning.
+
+### Closing the review
+
+An accepted architecture ruling is checked against, not extended. A new material
+invariant requires an explicit amendment stating its scope and consequence, and
+is delivered separately unless it exposes a high-severity violation inside the
+current boundary.
+
+After two correction rounds the Architect supplies one consolidated ruling:
+final invariants, the adversary, the required evidence, the non-goals and the
+exact pass condition. The Implementor reports against that checklist at one
+exact head. The final reviewer either identifies a checklist violation with a
+reproducer or passes the PR. Documentation cleanup and speculative hardening do
+not restart architecture review.
+
+Prefer one authority or lifecycle boundary per prerequisite PR while `main` can
+stay coherent. Independent invariants are not combined because one review loop
+found them together.
+
+### What these rules do not license
+
+An unusual input is not irrelevant for being unusual. A green check is not
+architecture evidence. A demonstrated high-severity defect blocks however late
+it appears. An ordinary PR is not threat-modeled — this section governs the
+changes named at the top of it and nothing else.

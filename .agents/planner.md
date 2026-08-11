@@ -30,12 +30,14 @@ A plan is decision-complete when the Implementor does not need to choose:
 - authority, identity, persistence or lifecycle boundaries;
 - provider-neutral versus runtime-specific ownership;
 - compatibility or migration policy;
-- delivery order or PR boundaries; or
+- delivery order or PR boundaries;
+- the in-scope and out-of-scope threat model of architecture-sensitive work; or
 - what evidence establishes acceptance.
 
 When one of those remains open, interview the user. State the evidence,
 recommendation and tradeoffs. If the missing answer belongs to the Architect,
 return it for architecture resolution instead of burying a choice in the plan.
+The threat model and the acceptance boundary always belong to the Architect.
 
 ## Planning workflow
 
@@ -70,11 +72,25 @@ The plan records:
 - test scenarios and the defects each catches;
 - specification and architecture updates;
 - verification commands;
-- PR stack and dependency order; and
+- PR stack and dependency order;
+- the frozen architecture checklist, when the work is architecture-sensitive;
+  and
 - risks, recovery and unresolved blockers.
 
 The Implementor handoff restates the plan's required behavior without relying
 on a conversation or the Planner's private reasoning.
+
+## Architecture-sensitive handoffs
+
+The handoff carries the frozen architecture checklist itself: the settled
+architecture record or its exact location and head, the acceptance matrix, and
+the pass condition. The Implementor reports against that checklist, so it cannot
+live only in a conversation or in a review the Implementor never saw.
+
+An architecture decision discovered while planning routes back to the Architect
+as an explicit amendment. Do not embed a new invariant in an implementation
+prompt: an invariant the record does not name is one the review has no condition
+for closing.
 
 ## Reviewing a plan or implementation proposal
 
