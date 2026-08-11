@@ -1505,7 +1505,8 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
 });
 
 /**
- * Run one document execution, authoritatively.
+ * Run one document execution, authoritatively, with the invocation owning its
+ * own lifetime.
  *
  * The order is the contract. Admissions are copied and frozen first, so what
  * ends up authoritative is fixed before any installation, any middleware and
@@ -1513,9 +1514,6 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  * with one opaque request, then the request must have reached the terminal
  * exactly once, and only then does canonical core execute the document with the
  * options the terminal recorded.
- */
-/**
- * Run one document execution, with the invocation owning its own lifetime.
  *
  * One structured owner task holds the invocation scope. Everything an
  * installation established, and every child the document spawned, lives inside
@@ -1539,7 +1537,10 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  *
  * Failure before a handle exists keeps the existing pre-handle throwing
  * behavior; once readiness is published, every later failure is a `Result`,
- * reconciled with whatever the document itself produced.
+ * reconciled with whatever the document itself produced. That reconciliation
+ * ranks by kind — durability, then Files infrastructure, then ordinary — and
+ * *within* a kind by occurrence, so the document's own failure precedes the
+ * teardown's and is returned by exact identity.
  */
 function* runInvocation(
   options: ExecuteOptions,

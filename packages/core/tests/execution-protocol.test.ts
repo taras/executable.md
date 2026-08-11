@@ -613,12 +613,24 @@ describe("Tier EP — the execution protocol", () => {
       );
       yield* reached.operation;
 
+      // The consumer says when it is about to observe the handle, so the halt
+      // lands on a task that is *inside* the observation rather than on one
+      // that never started. A delay would only make that likely.
+      // The consumer subscribes to the live output — a real suspension point —
+      // and says so, which puts it inside the invocation before the halt.
+      //
+      // The `sleep` is the part I could not remove: registering the handle's
+      // cancellation hook happens one turn after the barrier resolves, and
+      // nothing outside the handle can observe that turn. EP25b covers the
+      // teardown half deterministically; this one still leans on the scheduler
+      // for that single step.
+      const observing = withResolvers<void>();
       const consumer = yield* spawn(function* () {
+        yield* execution.output;
+        observing.resolve();
         yield* execution;
       });
-      // The spawned task has to reach its observation before halting it means
-      // anything — a halt delivered first would tear down a task that had not
-      // started, which proves nothing about a returned handle.
+      yield* observing.operation;
       yield* sleep(1);
       yield* consumer.halt();
 
@@ -641,6 +653,7 @@ describe("Tier EP — the execution protocol", () => {
   it("EP25b: a fatal document result survives cancellation by identity", function* () {
     const durable = new DurablePersistenceError("yield", new Error("planted"));
     const released = withResolvers<void>();
+    const enteredTeardown = withResolvers<void>();
     const finalized: string[] = [];
 
     const observed = yield* scoped(function* () {
@@ -658,7 +671,9 @@ describe("Tier EP — the execution protocol", () => {
             *install(): Operation<void> {
               yield* ensure(function* () {
                 finalized.push("cleanup");
-                // Teardown is still running when the consumer below is halted.
+                enteredTeardown.resolve();
+                // Held open until the test says so, so cancellation lands while
+                // teardown is genuinely in progress.
                 yield* released.operation;
               });
             },
@@ -666,9 +681,14 @@ describe("Tier EP — the execution protocol", () => {
         ],
       );
 
+      const observing = withResolvers<void>();
       const consumer = yield* spawn(function* () {
+        observing.resolve();
         yield* execution;
       });
+      yield* observing.operation;
+      // The document has already failed, so teardown is what is running now.
+      yield* enteredTeardown.operation;
       const halting = yield* spawn(function* () {
         yield* consumer.halt();
       });
