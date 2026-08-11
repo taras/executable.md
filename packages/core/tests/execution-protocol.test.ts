@@ -19,8 +19,9 @@ import { createContext, ensure, scoped, spawn, suspend, withResolvers } from "ef
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
-import { InMemoryStream } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import { DurablePersistenceError, InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import type { Result } from "effection";
 import {
   collect,
   execute,
@@ -574,7 +575,13 @@ describe("Tier EP — the execution protocol", () => {
     expect(finalized).toEqual(["cleanup"]);
   });
 
-  // EP25: cancelling a live handle halts authored work and finalizes once.
+  // EP25: cancelling an execution halts the authored work inside it and
+  // finalizes exactly once.
+  //
+  // What this does not prove is cancellation of an already-returned handle by a
+  // separate consumer: it halts the task that both started the execution and
+  // consumes it, so parent-scope cancellation reaches the owner too. That
+  // stronger case is not covered here — see the PR body.
   it("EP25: cancellation halts a suspended document and finalizes exactly once", function* () {
     const finalized: string[] = [];
     const reached = withResolvers<void>();
@@ -615,6 +622,98 @@ describe("Tier EP — the execution protocol", () => {
 
     expect(halted).toEqual(["document"]);
     expect(finalized).toEqual(["cleanup"]);
+  });
+
+  // EP27: a document outcome and an invocation-teardown failure are ranked, not
+  // replaced. A fatal failure is reported by identity from wherever it came.
+  it("EP27: teardown reconciles with the document outcome by precedence", function* () {
+    const durable = new DurablePersistenceError("yield", new Error("planted"));
+    const cleanup = new Error("INSTALLATION-CLEANUP");
+
+    const cases: Array<{
+      says: string;
+      fail?: Error;
+      teardown?: Error;
+      expected: (result: Result<Json>) => void;
+    }> = [
+      {
+        says: "durability failure outranks an ordinary cleanup error",
+        fail: durable,
+        teardown: cleanup,
+        expected: (result) => {
+          expect(result.ok).toBe(false);
+          // By identity: the engine's fences match the exact object.
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "an ordinary document failure stays authoritative",
+        fail: new Error("DOCUMENT-FAILED"),
+        teardown: cleanup,
+        expected: (result) => {
+          expect(String(result.ok ? "" : result.error.message)).toContain("DOCUMENT-FAILED");
+          expect(String(result.ok ? "" : result.error.message)).not.toContain(
+            "INSTALLATION-CLEANUP",
+          );
+        },
+      },
+      {
+        says: "a cleanup error converts a successful document",
+        teardown: cleanup,
+        expected: (result) => {
+          expect(result.ok).toBe(false);
+          expect(result.ok ? undefined : result.error).toBe(cleanup);
+        },
+      },
+      {
+        says: "a fatal teardown outranks an ordinary document failure",
+        fail: new Error("DOCUMENT-FAILED"),
+        teardown: durable,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const finalized: string[] = [];
+      const observed: number[] = [];
+
+      const result = yield* scoped(function* () {
+        if (scenario.fail) {
+          const failure = scenario.fail;
+          yield* Execution.around({
+            // deno-lint-ignore require-yield
+            *document() {
+              throw failure;
+            },
+          });
+        }
+        const execution = yield* executeInstalled(
+          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push("cleanup");
+                  if (scenario.teardown) {
+                    throw scenario.teardown;
+                  }
+                });
+              },
+            },
+          ],
+        );
+        const settled = yield* execution;
+        observed.push(finalized.length);
+        return settled;
+      });
+
+      scenario.expected(result);
+      // Every finalizer ran, exactly once, before the result was observable.
+      expect(finalized).toEqual(["cleanup"]);
+      expect(observed).toEqual([1]);
+    }
   });
 
   it("EP26: options are snapshotted when the terminal accepts them", function* () {

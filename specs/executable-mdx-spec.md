@@ -7787,6 +7787,7 @@ Defined in §8.1.
 | EP23 | Invocation context | Context an installation establishes is visible to the document and its teardown, and absent from the next ordinary execution in the same host scope |
 | EP24 | Settlement-owned cleanup | Installation finalizers have run exactly once before the completion is observed, on success, document failure and completion-policy failure; concurrent invocations finalize independently; a completed handle re-observed does not refinalize and still replays its output |
 | EP25 | Cancellation-owned cleanup | Halting a live handle while `Execution.document` is suspended halts the authored work and finalizes exactly once |
+| EP27 | Teardown reconciliation | A document outcome and an invocation-teardown failure are ranked, not replaced: a durability failure wins by identity, then a Files infrastructure failure, then an existing document failure, and only a success is converted by teardown — with every finalizer run exactly once before the result is observable |
 | EP26 | An immutable options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events and the substituted one receives none |
 
 ### Tier SL — Own-scope context updates

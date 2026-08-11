@@ -10,7 +10,7 @@
  * See DEC-005 in specs/decisions.md.
  */
 
-import { Err, Ok, resource, scoped, spawn, withResolvers, until } from "effection";
+import { Err, Ok, ensure, scoped, spawn, withResolvers, until } from "effection";
 import type { Operation, Result, Stream } from "effection";
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import {
@@ -84,6 +84,7 @@ import {
   documentationError,
   documentationFailure,
   durabilityFailure,
+  filesFatalFailure,
   useSegmentCauses,
 } from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
@@ -1530,8 +1531,15 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
  * caller that continues on the completion continues after cleanup, and a
  * completed handle carries no live scope to re-enter.
  *
+ * Cancelling a live handle cancels the invocation. A consumer that is halted
+ * before settlement halts the owner on its way out, which is what closes the
+ * scope and the authored work inside it; the owner then settles the completion
+ * so no other observer is left waiting on a run that is over. Once settled,
+ * observing the handle again reads the recorded result and starts nothing.
+ *
  * Failure before a handle exists keeps the existing pre-handle throwing
- * behavior; once readiness is published, every later failure is a `Result`.
+ * behavior; once readiness is published, every later failure is a `Result`,
+ * reconciled with whatever the document itself produced.
  */
 function* runInvocation(
   options: ExecuteOptions,
@@ -1539,36 +1547,94 @@ function* runInvocation(
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
   const settled = withResolvers<Result<Json>>();
+  const state = { finished: false };
 
-  yield* spawn(function* () {
+  const finish = (result: Result<Json>): void => {
+    if (!state.finished) {
+      state.finished = true;
+      settled.resolve(result);
+    }
+  };
+
+  const owner = yield* spawn(function* () {
+    // Whatever ends this task — completion, failure, or a cancelled handle —
+    // leaves no observer waiting on a run that is over.
+    yield* ensure(() => {
+      finish(Err(new Error("the document execution was cancelled")));
+    });
+
     let published = false;
+    let document: Result<Json> | undefined;
     try {
-      const outcome = yield* scoped(function* () {
+      yield* scoped(function* () {
         const execution = yield* invoke(options, installations);
         published = true;
         ready.resolve(execution);
-        return yield* execution;
+        document = yield* execution;
       });
-      settled.resolve(outcome);
     } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      if (published) {
-        // The document had already begun, so its outcome is a Result — a
-        // teardown failure after that point does not become a thrown completion.
-        settled.resolve(Err(failure));
+      const teardown = error instanceof Error ? error : new Error(String(error));
+      if (!published) {
+        // No handle exists, so this throws — but a durability or Files failure
+        // raised during cleanup is still the failure that gets reported.
+        ready.reject(fatalOf(teardown) ?? teardown);
         return;
       }
-      ready.reject(failure);
+      finish(reconcile(document, teardown));
+      return;
     }
+    finish(document ?? Err(new Error("the document execution did not complete")));
   });
 
   const execution = yield* ready.operation;
   return {
     output: execution.output,
     *[Symbol.iterator]() {
+      // Registered in the *consumer's* scope, so halting a consumer that is
+      // still waiting takes the invocation down with it. After settlement this
+      // does nothing, which is what lets a completed handle be read again.
+      yield* ensure(function* () {
+        if (!state.finished) {
+          yield* owner.halt();
+        }
+      });
       return yield* settled.operation;
     },
   };
+}
+
+/** The fatal failure this one carries, if it carries one. */
+function fatalOf(error: unknown): Error | undefined {
+  return durabilityFailure(error) ?? filesFatalFailure(error);
+}
+
+/**
+ * The one result of a document whose invocation also failed to tear down.
+ *
+ * Both outcomes are kept until the scope has closed, and then ranked. A fatal
+ * failure is reported by identity from wherever it came — a durability failure
+ * first, then a Files infrastructure failure — because the engine's fences
+ * match on the exact object. Below that a document that already failed keeps
+ * its own failure, and only a success is converted by teardown.
+ */
+function reconcile(document: Result<Json> | undefined, teardown: Error): Result<Json> {
+  const fromTeardown = fatalOf(teardown);
+  const fromDocument = document && !document.ok ? fatalOf(document.error) : undefined;
+
+  const durable =
+    durabilityFailure(teardown) ??
+    (document && !document.ok ? durabilityFailure(document.error) : undefined);
+  if (durable) {
+    return Err(durable);
+  }
+  const files = fromTeardown ?? fromDocument;
+  if (files) {
+    return Err(files);
+  }
+  if (document && !document.ok) {
+    return document;
+  }
+  return Err(teardown);
 }
 
 function* invoke(

@@ -1056,7 +1056,15 @@ Contextual behavior an installation establishes is visible to the document and
 to its teardown, isolated from a concurrent invocation, and absent from the next
 execution in the same host scope. The final `Result` is published only after
 that scope has finished tearing down, so a caller continuing on the completion
-continues after cleanup, and a completed handle carries no live scope. Canonical
+continues after cleanup, and a completed handle carries no live scope.
+
+A document outcome and an invocation-teardown failure are kept apart until the
+scope has closed and then ranked, never replaced: a durability failure wins from
+wherever it came and is returned by identity, then a Files infrastructure
+failure on the same terms, then an existing document failure, and only a success
+is converted by teardown. Every finalizer runs, exactly once, before the result
+is observable. Once a handle exists, teardown contributes to its `Result` rather
+than escaping as a thrown completion. Canonical
 core constructs the one authoritative handle; it exposes the inner execution's
 replay-safe output directly rather than bridging it through a second channel.
 
