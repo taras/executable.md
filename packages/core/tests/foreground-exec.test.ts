@@ -8,7 +8,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, scoped, spawn } from "effection";
+import { createContext, ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { when } from "@effectionx/converge";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
@@ -522,5 +522,62 @@ describe("Tier FG — foreground execution", () => {
     expect(starts).toBe(1);
     expect(resumed.output).toContain("recorded-once");
     expect(resumed.seen.stdout).toBe("");
+  });
+
+  /**
+   * The two channels are forwarded by concurrent tasks, so "this byte is a
+   * redirect" cannot be a fact about the route as a whole. Here a downstream
+   * handler holds the redirected stdout while a genuine stderr chunk arrives
+   * behind it: shared classification would call that chunk somebody else's
+   * stdout and drop it from the record, silently, and only under load.
+   */
+  it("FG18: a held-up redirect cannot swallow a sibling's stderr", function* () {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const release = withResolvers<void>();
+    let holding = false;
+    let kept: ForegroundOutput | undefined;
+
+    const seen = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        // Downstream of the route, so it receives what the route forwards.
+        yield* Stdio.around(
+          {
+            *stderr([bytes], next) {
+              if (decoder.decode(bytes, { stream: false }).includes("out")) {
+                holding = true;
+                yield* release.operation;
+              }
+              return yield* next(bytes);
+            },
+          },
+          { at: "min" },
+        );
+
+        const finished = yield* route(VALUE_ROOT, true);
+
+        const redirect = yield* spawn(() => Stdio.operations.stdout(encoder.encode("out")));
+        // The redirect is inside the blocked handler before the sibling writes.
+        yield* when(function* () {
+          return holding;
+        });
+        yield* Stdio.operations.stderr(encoder.encode("err"));
+        release.resolve();
+        yield* redirect;
+
+        kept = finished();
+      });
+      return seen;
+    });
+
+    // A value root keeps its own stdout free, and both reached the reader once.
+    expect(seen.stdout).toBe("");
+    expect(seen.stderr).toContain("out");
+    expect(seen.stderr).toContain("err");
+    expect(seen.stderr.match(/out/g) ?? []).toHaveLength(1);
+    expect(seen.stderr.match(/err/g) ?? []).toHaveLength(1);
+    // And the record still says which channel each came from.
+    expect(kept?.retainedStdout).toBe("out");
+    expect(kept?.retainedStderr).toBe("err");
   });
 });

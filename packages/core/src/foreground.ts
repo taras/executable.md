@@ -78,6 +78,23 @@ export function withRouting<T>(
   });
 }
 
+/**
+ * stdout on its way to the channel a value root leaves free.
+ *
+ * It holds the same bytes, so what a reader receives is byte-for-byte what the
+ * child wrote. Carrying the origin on the emission is
+ * what keeps two concurrently forwarded channels from being confused for one
+ * another: only this array is somebody else's stdout, and only while it is in
+ * flight.
+ */
+class RedirectedStdout extends Uint8Array {}
+
+function redirected(bytes: Uint8Array): RedirectedStdout {
+  const marked = new RedirectedStdout(bytes.length);
+  marked.set(bytes);
+  return marked;
+}
+
 /** What one block's output did, once it has finished. */
 export interface ForegroundOutput {
   /** stdout a `<Capture as>` region asked for; empty otherwise. */
@@ -104,9 +121,13 @@ export interface ForegroundOutput {
  *
  * A channel is classified by where the child wrote it, before any display
  * decision. A value root displays its commands' stdout on the host's stderr,
- * and that redirection re-enters this Api; `redirecting` is how the stderr
- * handler tells a child's own stderr from stdout passing through on its way to
- * a free channel, so the record keeps each channel exactly.
+ * and that redirection re-enters this Api, so the stderr handler has to tell a
+ * child's own stderr from stdout passing through on its way to a free channel.
+ * The origin travels with the bytes — `RedirectedStdout` is a view over the
+ * very same memory, so nothing is copied and nothing is displayed differently —
+ * because the two channels are forwarded by concurrent tasks: a redirect held
+ * up in downstream middleware must not make a sibling's stderr look like
+ * somebody else's stdout.
  *
  * Each channel decodes with its own streaming decoder, and each chunk is
  * decoded once and reused, so a code point split across chunks survives and one
@@ -120,7 +141,6 @@ export function* route(
   let captured = "";
   let retainedStdout = "";
   let retainedStderr = "";
-  let redirecting = 0;
   const fromStdout = new TextDecoder();
   const fromStderr = new TextDecoder();
   const wanted = retain || selected.stdout === "capture";
@@ -142,18 +162,14 @@ export function* route(
       }
       if (selected.stdout === "diagnostic") {
         // Shown on the channel a value root leaves free. It is still the
-        // child's stdout, and is recorded as such.
-        redirecting += 1;
-        try {
-          return yield* Stdio.operations.stderr(bytes);
-        } finally {
-          redirecting -= 1;
-        }
+        // child's stdout: it was recorded as such above, and it is marked so
+        // the stderr handler below does not record it twice.
+        return yield* Stdio.operations.stderr(redirected(bytes));
       }
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      if (retain && redirecting === 0) {
+      if (retain && !(bytes instanceof RedirectedStdout)) {
         retainedStderr += fromStderr.decode(bytes, { stream: true });
       }
       if (selected.stderr === "hidden") {
