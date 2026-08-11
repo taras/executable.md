@@ -13,6 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import { useDenoService } from "./deno-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
@@ -37,5 +38,5 @@ await main(function* (args) {
   // no host default: a run with no provider must fail rather than reach the
   // host by accident.
   yield* useHostFiles();
-  yield* runXmd(args, useDenoService);
+  yield* runXmd(args, useDenoService, useDenoWorkflowHost);
 });

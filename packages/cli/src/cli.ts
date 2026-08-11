@@ -5,9 +5,12 @@
  *   xmd run <document-reference> [options]
  *   xmd <document-reference> [options]   (run is the default command)
  *   xmd targets <document.md>
+ *   xmd workflow start <document.md> [options]
+ *   xmd workflow resume <run-id>
  *
  * A document reference is a path, optionally followed by `#` and one target
- * selector naming a section of the document (spec §5.4).
+ * selector naming a section of the document (spec §5.4). `workflow start` takes
+ * a plain path: a definition descriptor cannot record a target yet.
  *
  * Examples:
  *   xmd run packages/core/examples/hello-world.md
@@ -15,6 +18,8 @@
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
  *   xmd targets README.md
  *   xmd run README.md#Release/Publish
+ *   xmd workflow start --id=release-1.4 flows/prepare-release.md
+ *   xmd workflow resume release-1.4
  */
 
 import {
@@ -55,10 +60,13 @@ import {
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
+  retainedSource,
   rootSourcePath,
   useNormalizedOutput,
   useTerminalOutput,
 } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { DocumentInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
@@ -86,6 +94,17 @@ import type { Binding, Extraction } from "./props.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
+import {
+  parseWorkflowRequest,
+  runWorkflow,
+  UNSUPPORTED_WORKFLOW_HOST,
+  unsupportedWorkflowHost,
+  workflowConfig,
+} from "./workflow.ts";
+import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workflow.ts";
+import { establishDefinition } from "./workflow-definition.ts";
+import type { EstablishedDefinition } from "./workflow-definition.ts";
+import { useWorkflowServiceDenial } from "@executablemd/workflow";
 import denoJson from "../deno.json" with { type: "json" };
 
 const SECRET_DETECTION_OPTION = "--secret-detection";
@@ -240,6 +259,7 @@ const xmd = program({
       test: testConfig,
       targets: targetsConfig,
       "test-agent": testAgentConfig,
+      workflow: workflowConfig,
     },
     { default: "run" },
   ),
@@ -475,12 +495,29 @@ interface DocumentConfig {
   raw: boolean;
   /** Whether this document's durable events are scanned before they persist. */
   secretDetection: boolean;
+  /**
+   * The journal this execution reads and appends, when the caller owns one.
+   *
+   * A workflow run does: its journal is the run's retained history, and
+   * replacing it with a fresh stream would make every execution a first one.
+   * `xmd run` supplies none and gets the empty stream below.
+   */
+  stream?: DurableStream;
 }
 
 interface DocumentMode {
   testing: boolean;
   agent?: AgentFlags;
   props?: Record<string, Json>;
+  /**
+   * What a trusted host attaches to this one execution.
+   *
+   * Values passed straight to `executeInstalled()`, so canonical core captures
+   * their admissions and preparations before any installation, middleware or
+   * document code exists. `xmd run` and `xmd test` attach none, and an empty
+   * list is exactly what `execute()` itself does.
+   */
+  installations?: readonly ExecutionInstallation[];
 }
 
 export type HostServiceInstaller = () => Operation<void>;
@@ -500,11 +537,14 @@ function* runDocument(
 ): Operation<Result<void>> {
   const { root, componentDir, verbose, journal, raw, secretDetection } = config;
 
-  // Every CLI invocation starts from an empty stream. --journal writes
-  // current-run diagnostics only; existing traces are never loaded.
+  // Every CLI invocation starts from an empty stream unless the caller owns
+  // one. --journal writes current-run diagnostics only; existing traces are
+  // never loaded.
   let stream: DurableStream;
 
-  if (journal) {
+  if (config.stream) {
+    stream = config.stream;
+  } else if (journal) {
     yield* createJournalFile(journal);
     stream = new FileStream(journal);
   } else {
@@ -587,13 +627,20 @@ function* runDocument(
   // the provider for a service.
   yield* installService();
 
-  const execution = yield* execute({
-    ...root,
-    stream,
-    props: mode.props,
-    componentDirs: componentDir,
-    secretDetection,
-  });
+  // One authoritative execution, and only one. What a host attaches travels as
+  // values canonical core captures before anything else exists — never as a
+  // second call, and never as middleware that could be reordered around this
+  // one.
+  const execution = yield* executeInstalled(
+    {
+      ...root,
+      stream,
+      props: mode.props,
+      componentDirs: componentDir,
+      secretDetection,
+    },
+    mode.installations ?? [],
+  );
 
   // Consume the output stream with forEach.
   // A value root reserves stdout for its result: its rendered body is
@@ -1003,12 +1050,29 @@ function readPatternFlags(args: string[]): PatternFlags {
 interface PropsPhase {
   /** argv with document-derived tokens removed. */
   args: string[];
+  /**
+   * The subcommand and target `xmd workflow` resolved, when it is the command.
+   *
+   * Carried rather than re-parsed downstream: `args` is the head, so a
+   * positional written after `--` is not in it, and asking the parser again
+   * would lose exactly the token the separator was there to protect.
+   */
+  workflow?: { action?: string; target?: string };
   root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
   propsSchema?: unknown;
   declared?: string[];
   error?: string;
+  /**
+   * The immutable definition a `workflow start` established, when it did.
+   *
+   * Established here rather than later because the props a run is created with
+   * are the ones the *pinned* document declares: reading the working tree to
+   * build the bindings and then executing the commit would let help and parsing
+   * describe a document that is not the one running.
+   */
+  established?: EstablishedDefinition;
 }
 
 /**
@@ -1019,7 +1083,15 @@ interface PropsPhase {
  * of argv, so it needs no parse at all.
  */
 function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<PropsPhase> {
-  const provisional = xmd.parse({ args });
+  // `xmd workflow` reads its options from the head and its remaining positionals
+  // from the tail. The parser only ever sees the head, so a dash-leading token
+  // after `--` is never offered to it as an option; the grammar check below
+  // still sees the argv that had the separator, because where options stopped
+  // is what decides whether a later token is a third positional.
+  const workflow = namesWorkflow(args);
+  const separated = separateArgs(args);
+  const parsed = workflow ? separated.head : args;
+  const provisional = xmd.parse({ args: parsed });
   // `program` short-circuits on `--version` and leaves no configuration
   // behind, so there is nothing to inspect.
   const selected = provisional.ok ? provisional.value.config : undefined;
@@ -1027,6 +1099,15 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
   const documentPath =
     selected && !selected.help && selected.name === "run" ? selected.config.path : undefined;
   const [supplied] = evalFlags.values;
+
+  if (selected && !selected.help && selected.name === "workflow") {
+    return yield* prepareWorkflowProps(
+      args,
+      parsed,
+      { ...selected.config, ...workflowPositionals(selected.config, separated.tail) },
+      supplied,
+    );
+  }
 
   if (supplied !== undefined && command !== undefined && command !== "run") {
     return {
@@ -1116,7 +1197,188 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
   return root.source === undefined ? { path: root.path, target } : { ...root, target };
 }
 
-const COMMAND_NAMES = ["run", "test", "targets", "test-agent"];
+/**
+ * The props phase of a `workflow` invocation.
+ *
+ * `start` reads what the pinned definition declares, so its generated
+ * `--props-*` arguments are exactly `xmd run`'s for that document. `resume`
+ * declares nothing at all: its props are the ones the run retained, and any
+ * spelling that would supply new ones is refused rather than ignored.
+ */
+function* prepareWorkflowProps(
+  rawArgs: string[],
+  args: string[],
+  config: { action?: string; target?: string },
+  inlineDocument: string | undefined,
+): Operation<PropsPhase> {
+  const workflow = { action: config.action, target: config.target };
+  if (inlineDocument !== undefined) {
+    return {
+      args: rawArgs,
+      bindings: [],
+      workflow,
+      error: `unrecognized option for xmd workflow: ${EVAL_OPTION} — inline documents are exclusive to xmd run`,
+    };
+  }
+
+  // Read before anything is stripped: `--` ends option parsing, so a token
+  // after it is positional however it is spelled, and the count has to be taken
+  // while the separator is still there to say where options stopped.
+  const extra = extraWorkflowArgument(rawArgs);
+  if (extra !== undefined) {
+    return {
+      args: rawArgs,
+      bindings: [],
+      workflow,
+      error:
+        `unrecognized argument for xmd workflow: ${extra} — start names one definition and ` +
+        "resume names one run",
+    };
+  }
+
+  const stray = findPropsFlag(args);
+  if (config.action !== "start") {
+    if (stray) {
+      return {
+        args,
+        bindings: [],
+        workflow,
+        error:
+          `unrecognized option for xmd workflow ${config.action ?? "resume"}: ${stray} — a resume ` +
+          "runs the props its run retained",
+      };
+    }
+    return { args, bindings: [], workflow };
+  }
+
+  if (config.target === undefined || config.target === "") {
+    return { args, bindings: [], workflow };
+  }
+
+  const established = yield* establishDefinition(config.target);
+  if (!established.ok) {
+    return { args, bindings: [], workflow, error: established.error.message };
+  }
+
+  const root = retainedSource(
+    established.value.definition.rootDocumentPath,
+    established.value.source,
+  );
+  try {
+    const document = yield* inspectDocument(root);
+    const bindings = buildBindings(document.props);
+    const extraction = extractPropsArgs(args, bindings);
+    return {
+      args: extraction.rest,
+      workflow,
+      root,
+      bindings,
+      extraction,
+      propsSchema: document.props,
+      declared: declaredProperties(document.props),
+      established: established.value,
+    };
+  } catch (error) {
+    return { args, bindings: [], workflow, root, error: describeError(error) };
+  }
+}
+
+/**
+ * Whether these arguments select the `workflow` command.
+ *
+ * Read from argv rather than from a parse, because the answer is needed before
+ * the props phase and the props phase is what makes a parse meaningful.
+ * Whatever the command turns out to be, only `workflow` names it first.
+ */
+function namesWorkflow(args: string[]): boolean {
+  return args[0] === "workflow";
+}
+
+/**
+ * A third positional argument to `xmd workflow`, when one was written.
+ *
+ * The parser stops at the first token it does not define rather than rejecting
+ * it, so `xmd workflow resume <id> <document>` would otherwise run the resume
+ * and silently ignore the document — exactly the confusion the lifecycle rule
+ * exists to prevent, since a document never selects a run.
+ *
+ * Read from the argv the props phase already stripped, so a generated property
+ * value is not mistaken for an argument. `--id` is the one option that takes a
+ * separated value, and `--` ends option parsing: every token after it is
+ * positional, including one that begins with `-`.
+ */
+function extraWorkflowArgument(args: string[]): string | undefined {
+  const start = args.indexOf("workflow");
+  if (start === -1) {
+    return undefined;
+  }
+  let positionals = 0;
+  let skip = false;
+  let parsingOptions = true;
+  for (const arg of args.slice(start + 1)) {
+    if (parsingOptions && !skip && arg === "--") {
+      // The end of *option* parsing, and nothing more. What follows is
+      // positional however it is spelled, so a third argument is still a third
+      // argument — writing it after `--` used to end the check instead of the
+      // options, which let it through to storage.
+      parsingOptions = false;
+      continue;
+    }
+    if (skip) {
+      skip = false;
+      continue;
+    }
+    if (parsingOptions && arg.startsWith("-")) {
+      skip = arg === "--id";
+      continue;
+    }
+    positionals += 1;
+    if (positionals > 2) {
+      return arg;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * An argv split at its end-of-options separator.
+ *
+ * The tail is carried rather than folded back in. Dropping the separator and
+ * rejoining would hand a dash-leading positional — `-run-id`, `-definition.md`
+ * — back to a parser that reads a leading dash as an option, which is exactly
+ * what `--` was written to prevent.
+ */
+interface SeparatedArgs {
+  /** Everything before `--`: the options, and any positionals written early. */
+  head: string[];
+  /** Everything after it, each token positional however it is spelled. */
+  tail: string[];
+}
+
+function separateArgs(args: string[]): SeparatedArgs {
+  const at = args.indexOf("--");
+  return at === -1
+    ? { head: args, tail: [] }
+    : { head: args.slice(0, at), tail: args.slice(at + 1) };
+}
+
+/**
+ * The subcommand and target one `xmd workflow` invocation names.
+ *
+ * The parser classifies what it can — everything before `--` — and the tail
+ * supplies the rest in order. A token's spelling decides nothing here: after the
+ * separator it is positional because of where it is.
+ */
+function workflowPositionals(
+  config: { action?: string; target?: string },
+  tail: string[],
+): { action?: string; target?: string } {
+  const named = [config.action, config.target].filter((value) => value !== undefined);
+  const [action, target] = [...named, ...tail];
+  return { action, target };
+}
+
+const COMMAND_NAMES = ["run", "test", "targets", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -1230,11 +1492,16 @@ function* resolveRunProps(
  * deadline — document inspection, target and props preparation, provider
  * installation, execution and output consumption all included. Nothing here
  * reads an option the caller has not already had validated.
+ *
+ * `workflowHost` is present only for `xmd workflow`, and only on a host that
+ * supports it: every other invocation is handed nothing, which is what keeps a
+ * run store from being inherited by omission.
  */
 function* dispatch(
   evalFlags: EvalFlags,
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
+  workflowHost: WorkflowHost | undefined,
 ): Operation<void> {
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
@@ -1386,10 +1653,80 @@ function* dispatch(
     case "test-agent":
       yield* runTestAgentWorker({ connect: command.config.connect });
       break;
+    case "workflow": {
+      // The parser saw only the head, so the positionals the separator carried
+      // come from the props phase rather than from a second parse of an argv
+      // they are not in.
+      const config = { ...command.config, ...propsPhase.workflow };
+      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
+      if (agentFlag) {
+        console.error(
+          `unrecognized option for xmd workflow: ${agentFlag} — agent options are exclusive to xmd run`,
+        );
+        yield* exit(1);
+        break;
+      }
+      if (workflowHost === undefined) {
+        console.error(UNSUPPORTED_WORKFLOW_HOST);
+        yield* exit(1);
+        break;
+      }
+      const request = parseWorkflowRequest(config);
+      if (!request.ok) {
+        console.error(request.error.message);
+        yield* exit(1);
+        break;
+      }
+      const props = yield* resolveRunProps(propsPhase);
+      if (props.error) {
+        console.error(props.error);
+        yield* exit(1);
+        break;
+      }
+      const start: WorkflowStart | undefined =
+        propsPhase.established === undefined
+          ? undefined
+          : { established: propsPhase.established, props: props.value ?? {} };
+      announceSecretDetection(config.secretDetection);
+      const outcome = yield* runWorkflow(request.value, start, workflowHost, (execution) =>
+        execution.around(
+          runScopedDocument(
+            {
+              root: execution.root,
+              // A workflow definition is one immutable object. A component
+              // search path would read the mutable checkout beside it, so a
+              // repository component fails to resolve rather than resolving
+              // to content the definition does not describe.
+              componentDir: [],
+              verbose: request.value.verbose,
+              journal: undefined,
+              raw: request.value.raw,
+              secretDetection: request.value.secretDetection,
+              stream: execution.stream,
+            },
+            { testing: false, props: execution.props, installations: execution.installations },
+            // The workflow authority boundary sits exactly where a host
+            // service adapter would: installed inside the execution scope,
+            // before the root document is imported.
+            useWorkflowServiceDenial,
+          ),
+        ),
+      );
+      yield* exit(outcome.exitCode);
+      break;
+    }
   }
 }
 
-export function* runXmd(args: string[], installService: HostServiceInstaller): Operation<void> {
+export function* runXmd(
+  args: string[],
+  installService: HostServiceInstaller,
+  // Defaults to the host that refuses. A caller driving this without naming a
+  // workflow host has no run store, and inheriting one by omission is the
+  // failure mode the whole boundary exists to prevent — so the default is the
+  // one that creates and executes nothing.
+  installWorkflowHost: HostWorkflowInstaller = unsupportedWorkflowHost,
+): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
   const evalFlags = readEvalFlags(args);
@@ -1401,6 +1738,23 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
   }
 
   const helpRequest = takeHelpFlag(evalFlags.rest);
+
+  // Before the props phase, because that phase establishes a workflow start's
+  // definition from Git in order to read what the *pinned* document declares.
+  // On a host without workflow support the first thing a caller would otherwise
+  // see is whatever Git said about their directory, which is not the reason the
+  // command is not going to run. Help is exempt: the grammar is the same
+  // everywhere, and describing it costs nothing.
+  let workflowHost: WorkflowHost | undefined;
+  if (!helpRequest.requested && namesWorkflow(helpRequest.args)) {
+    try {
+      workflowHost = yield* installWorkflowHost();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      yield* exit(1);
+      return;
+    }
+  }
   // Recognized before anything reads a document: a malformed duration is a
   // grammar failure, and a grammar failure never depends on what is on disk.
   // Help, `--version`, and the other commands stay outside a run lifecycle,
@@ -1411,7 +1765,7 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
     !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
 
   if (!isRun) {
-    return yield* dispatch(evalFlags, helpRequest, installService);
+    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost);
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -1421,5 +1775,7 @@ export function* runXmd(args: string[], installService: HostServiceInstaller): O
     return;
   }
 
-  yield* underRunDeadline(timeouts, () => dispatch(evalFlags, helpRequest, installService));
+  yield* underRunDeadline(timeouts, () =>
+    dispatch(evalFlags, helpRequest, installService, workflowHost),
+  );
 }

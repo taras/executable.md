@@ -113,6 +113,58 @@ Useful flags:
 - `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.
 
+## Run a workflow
+
+`xmd run` executes against the directory you are in and promises nothing
+afterwards. `xmd workflow` executes against a **run**: one retained Workspace and
+one filtered journal, in a database that outlives the process, so an interrupted
+procedure resumes from where it stopped instead of starting again.
+
+```bash
+xmd workflow start flows/prepare-release.md
+xmd workflow start --id=release-1.4 --props-channel=stable flows/prepare-release.md
+xmd workflow resume release-1.4
+```
+
+`start` names a document; `resume` names a run. A document path locates a
+definition and never selects a previous run, so starting the same document twice
+without `--id` creates two runs. Reusing an `--id` addresses the same run when
+the definition, base and normalized properties all agree, and is refused when
+any of them differ. `resume` takes no document and no properties: it uses the
+ones its run retained.
+
+What a run is, is a Git object: the repository containing the document, the
+commit `HEAD` resolves to, and the document's path inside it. **The committed
+document runs**, so uncommitted edits in your working tree do not change what a
+run is a run of, and a resume months later loads the same object rather than
+whatever the file says now.
+
+Inside a run, `<File>` and `<Glob>` name entries in the run's own logical
+filesystem rather than yours. Each read, write and search is one durable effect:
+the mutation, the Workspace root it produces and the journal result commit
+together, so a crash leaves all three or none, and a resume restores what was
+recorded instead of doing it again. Operations a run does not have — a temporary
+directory, a native service — fail explicitly rather than reaching your machine.
+
+Identity and outcome go to standard error, so piping stdout still gives you the
+document:
+
+```text
+workflow run: release-1.4
+workflow status: completed
+```
+
+Only a completed run exits `0`. Failed exits `1`, suspended `2`, cancelled `3`
+and interrupted `130`, so a script cannot mistake an incomplete workflow for a
+finished one.
+
+Runs live under `~/.xmd/runs`; set `XMD_WORKFLOW_RUNS` to an absolute directory
+to keep them somewhere else. `xmd workflow` is available through the Deno
+entrypoint and the compiled binary; under Node and Bun the command exists and
+refuses before creating anything.
+
+Status, list, history, cancel and fork are designed but not yet shipped.
+
 ## Coding agents
 
 Run ACP-compatible coding agents directly from a document with `<Agent>`,

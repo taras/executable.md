@@ -57,13 +57,15 @@ export default define.page(function GettingStarted({ url }) {
               xmd workflow
             </span>
             <span class="pill" style="color:var(--code-expr);">
-              Not yet shipped
+              start · resume
             </span>
           </span>
           <span style="font-size:0.84375rem;line-height:1.55;color:var(--body);">
-            Will run a document in a retained Workspace so an interrupted
-            workflow can reattach and continue. Unsupported imperative
-            operations fail explicitly instead of falling back to the host.
+            Runs a document in a retained Workspace, so an interrupted workflow
+            resumes from its journal frontier instead of starting again.
+            Unsupported operations fail explicitly instead of falling back to
+            the host. Available through the Deno entrypoint and the compiled
+            binary.
           </span>
         </div>
       </div>

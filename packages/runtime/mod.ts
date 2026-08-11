@@ -39,6 +39,7 @@ export {
   platform,
   command,
   compile,
+  useQuietProcessOutput,
 } from "./apis.ts";
 export type { EvalBlock, ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
 export {
