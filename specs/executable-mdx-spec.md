@@ -1557,6 +1557,7 @@ run but are absent from the diagnostic trace.
 | `src/sample-api.ts` | `Sample` Api definition (§3.4) — LLM middleware surface |
 | `packages/runtime/service.ts` | provider-neutral `API.Service`, XMD service handshake types and `startService()` attachment |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
+| `src/document-request.ts` | `DocumentRequest` and `DocumentProtocolError` — the one-use capability one document expansion is asked through, its detached prop snapshot, and the settlement canonical core reconciles |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
@@ -6295,6 +6296,166 @@ wrapping the returned handle: an execution that already failed keeps its own
 failure, the first policy that reports one turns a success into that failure,
 and no later policy replaces it.
 
+### The document expansion
+
+`Execution.document` is a policy surface on the same terms, with one structural
+difference: the `execute` chain records the options and unwinds **before** the
+document runs, while the `document` chain **surrounds** canonical document
+execution. A handler receives an opaque `DocumentRequest`, returns nothing, and
+has whatever it returns ignored. It may:
+
+- read the props as they stand (`request.props`);
+- narrow or replace them (`request.withProps(props)`), which supersedes the
+  request it was derived from;
+- install contextual behavior the document will inherit;
+- refuse, by throwing, before delegating; and
+- delegate.
+
+It may not produce a document. Canonical core runs the expansion through a
+private, **per-expansion** same-name Api whose instance-owned default handler is
+the authoritative terminal, keeps the outcome that terminal produced, and
+publishes only it; the exported `Execution.document` default always refuses, so
+calling it with a captured request expands nothing and consumes nothing.
+
+The request is one-use and belongs to one expansion. Delegating a reconstructed
+look-alike, a request a later `withProps()` superseded, a request another
+expansion issued — including one still live in a concurrent invocation — the
+same request twice, or any value that is not a request produces a fresh,
+cause-free `DocumentProtocolError`. A chain that returns without ever reaching
+the terminal fails the same way. A refused delegation consumes neither the
+request nor the expansion, so a handler may recover and delegate a valid one.
+
+A refusal stops what has not happened yet; it does not unwind what has. An
+invalid delegation authorizes no root import, no expansion and no authored
+effect — and the durable root still records the refusal as its own terminal,
+because that is what the run turned out to be. A second delegation adds no
+second expansion, import or authored effect, while the work the first valid
+delegation already did stands. A preparation refusal prevents every later
+preparation, all document policy, the root import and every authored effect,
+while durable effects earlier preparations completed stay retained and are not
+rolled back; the root records the refusal as its terminal.
+
+A failure raised before the root import is whatever a handler or a preparation
+threw, which is to say: anything. Describing it is therefore total over unknown
+and hostile values, and the boundary is a specific one:
+
+- **Nothing is coerced.** `String(value)` is a call into whatever the value
+  decides `Symbol.toPrimitive` means.
+- **No member is read without tolerating a refusal**, and that includes
+  classification itself: `instanceof` consults a `Proxy`'s `getPrototypeOf`
+  trap, and prototype and own-property checks are calls into the value too. A
+  member that will not be read is simply absent.
+- **A trap failure never replaces the failure being handled**, never escapes,
+  and never stops the bound terminal from being written. Text a trap planted
+  does not reach the result, the journal, the diagnostic, the stack or the
+  cause.
+- **Diagnostics obtained safely from an ordinary `Error` — its name, its
+  message, a string cause — are recorded.** That is what makes a replayed
+  failure describe the one that happened, and what is recorded stays subject to
+  the journal's existing security boundary like any other recorded value.
+- **A value that will not describe itself is recorded under a fixed core-owned
+  name and message.**
+
+What crosses the completion boundary as itself is decided by **provenance, not
+inspection**. Inspecting an untrusted value cannot establish that publishing it
+is safe: an accessor or a `Proxy` trap may answer harmlessly while core is
+looking and throw when the caller reads the same member afterwards, so a value
+that passed inspection is only a value that behaved once. Publishing it would
+move the trap into whoever reads the result.
+
+So an ordinary value thrown by public `Execution.document` policy or by trusted
+durable preparation is **always** converted into a core-owned error built from
+the total description above — which keeps whatever the failure gave up safely,
+and can be read as often as anyone likes.
+
+Only a durability or Files infrastructure failure crosses by exact identity, and
+those are not converted at all. Everything else the completion publishes is a
+value this run constructed.
+
+A canonical protocol refusal keeps its classification and its original
+diagnostic, and it does so **without** publishing the object middleware saw.
+Provenance says where an object came from; it does not say what the object still
+holds. A handler can catch the very refusal the expansion raised, replace its
+members with throwing accessors, and rethrow the same object — still core's
+object, no longer core's diagnostic. So the expansion records the *reason* it
+refused beside the identity it raised, and the completion publishes a fresh
+`DocumentProtocolError` built from that reason. The returned object is never
+read. The record is private to the expansion — no brand, stable name, shape,
+ambient state or module-scoped registry carries it.
+
+Reuse is authorized by the **complete** form core writes here, not by the
+binding alone. Core reaches this position only by failing, so a recorded success
+carrying a copied binding is a record it could not have produced. Admission
+parses the whole terminal — one recorded completion, on the root coroutine, with
+no root import, an outer settlement core returned rather than threw, an inner
+result whose status is `err`, the canonical failure shape, and exactly one
+well-formed binding agreeing with the requested root. Every other form is the
+fixed cause-free unreadable-root diagnostic, and nothing planted in journal data
+escapes through it.
+
+A terminal core creates *before* the root import carries a binding to the exact
+root source and target it was about. Core builds that binding from the root
+source this execution was given and parses it on the way back in; nothing a
+host, a document or a middleware package supplies can reach it. Root-history
+admission validates it before any terminal is reused, so an identical execution
+replays the recorded failure — running no preparation, no policy, no import
+and no authored work, and appending nothing — while a different root source or
+target is refused, and a missing, malformed, duplicated or conflicting binding
+fails closed. A partial history is re-entered: a preparation that already
+recorded a durable effect finds it retained and restores it rather than
+performing it again, and a refusal that follows records a fresh terminal. A history with no recorded completion is unaffected: it continues
+live, and preparation runs again through the ordinary durable protocol.
+
+
+Terminal acceptance stores a **detached** structural copy of the accepted props:
+objects and arrays are recursively copied and frozen, `"__proto__"` is carried
+as an ordinary data member rather than assigned, and no container the caller
+still holds is retained. A value that is not JSON, and an object that resists
+being read, are refused as a `DocumentProtocolError` built at the boundary
+rather than rethrown, so neither a hostile trap's message nor the value that
+produced it reaches the caller.
+
+Detachment reads caller-controlled objects, so it runs caller code: a getter, an
+`ownKeys` trap and an array's own accessors each get a turn while the copy is
+being built, and any of them may call `withProps()` and return normally. Lineage
+is therefore verified again on the far side of detachment, before acceptance is
+recorded. A request superseded from inside its own detachment is refused,
+consuming neither it nor the replacement, and the replacement settles the
+expansion normally.
+
+The canonical outcome and a failure raised **after** delegation are kept apart
+until both exist and then ranked, never replaced:
+
+1. a durability failure wins from wherever it came, by exact identity;
+2. otherwise a Files infrastructure failure wins, on the same terms;
+3. within one kind the earlier failure wins, and canonical execution is always
+   the earlier one;
+4. without a fatal failure, an existing ordinary canonical failure remains
+   unchanged; and
+5. only a canonical success is converted by an ordinary later policy failure.
+
+A failure canonical execution raised is authoritative whether or not middleware
+lets it propagate: catching it and returning normally leaves it exactly as
+final. A refusal before delegation and a document-protocol violation fail
+normally, having no canonical outcome to be ranked against. Cancellation keeps
+structured teardown semantics and is never reported as an ordinary policy
+failure.
+
+### Trusted durable preparation
+
+An installation passed to `executeInstalled()` may carry a `prepare` hook —
+`DurablePreparation`:
+the trusted durable work a host performs inside the durable root. Its property
+is read exactly once and captured by value before any `install()` runs, and the
+collection is copied and frozen, so replacing or removing it afterwards changes
+nothing. Preparations run in installation order, stopping at the first
+refusal, **after** retained-history admission and **before** any public
+`Execution.document` policy, the root import and every authored effect. On a
+completed terminal replay the durable root is already settled and no
+preparation runs; on a live or partial continuation they run and record
+through the ordinary durable protocol, so an effect an earlier preparation
+completed is restored from its retained record rather than performed again.
+
 ### The invocation's lifetime
 
 Each execution is owned by one structured task holding its own scope. That scope
@@ -7814,7 +7975,7 @@ Defined in §8.1.
 | EP10 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects, transforms and delegates |
 | EP11 | Capture precedes installation | Admissions are copied before `install()` runs |
 | EP12 | Every admission, in order | Each captured admission runs, in capture order, on the retained history |
-| EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, `Execution.document`, authored work and any append |
+| EP13 | One refusal stops everything | A refusing admission prevents every later admission, `ReplayGuard`, terminal reuse, preparation, `Execution.document`, authored work and any append |
 | EP14 | No ambient channel | Rebuilding the obsolete `executablemd.core.journal-admission` context and setting it to `[]`, before and during the invocation, removes no captured admission |
 | EP15 | Precedence over an existing failure | A completion policy is not consulted when the document already failed, and cannot replace its failure |
 | EP16 | Additive against a success | A completion policy still turns a successful document into a failure |
@@ -7830,6 +7991,43 @@ Defined in §8.1.
 | EP26 | A detached options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events, the accepted modifier factory runs by identity, and the caller's own array and record are observably edited while the execution is not |
 | EP27 | Teardown reconciliation | A document outcome and an invocation-teardown failure are ranked, not replaced: a durability failure wins by identity, then a Files infrastructure failure, then an existing document failure, and only a success is converted by teardown — with every finalizer run exactly once before the result is observable |
 | EP28 | Invocation isolation | Concurrent observations of two returned handles stay separate: cancelling one consumer halts and finalizes only its own invocation while the other settles independently, and neither invocation's cleanup or authored work reaches the other |
+
+### Tier DP — The document protocol
+
+Defined in §8.1.
+
+| # | Test | Verify |
+|---|------|--------|
+| DP1 | Answering without delegating | A handler that returns instead of delegating is a `DocumentProtocolError`: nothing expands, no root import is recorded, and the durable root's only event is the terminal that records the refusal |
+| DP2 | A substitute return | Whatever a handler returns after delegating is ignored |
+| DP3 | Prop transformation | Props replaced through `withProps()` are the props the document runs on |
+| DP4 | Double delegation | A second delegation adds no second expansion, import or authored effect, and the first delegation's work stands |
+| DP5 | A superseded request | Delegating a request a later `withProps()` replaced fails |
+| DP6 | Invalid and reconstructed values | `null`, `undefined`, primitives, a plain object, a look-alike carrying the public shape, and a proxy whose traps throw each produce a fresh cause-free `DocumentProtocolError`, with nothing expanded and no import recorded |
+| DP7 | A stale request | A request whose expansion is over is refused by a later invocation's terminal |
+| DP8 | Another loaded copy | Middleware installed through an independently constructed descriptor of the Api's name inspects and delegates normally |
+| DP9 | Concurrent live expansions | Two expansions held at a barrier until both requests exist and neither is consumed each refuse the other's, consume neither, and each still runs its own document exactly once |
+| DP10 | The exported default | Calling `Execution.operations.document` directly with a live request refuses and consumes nothing; the request still settles its own expansion |
+| DP11 | Detached props | Props edited in the window between terminal acceptance and the root import do not change what the document reads, while the handler's own containers are observably edited |
+| DP12 | `"__proto__"` as data | A `"__proto__"` member survives detachment as an ordinary member rather than becoming the copy's prototype, and what it held is not readable through the chain |
+| DP13 | A refused detachment | Props that resist being read are refused with a fresh cause-free `DocumentProtocolError` carrying no trap text, consuming neither the request nor the expansion, which then settles a valid one |
+| DP14 | Reentrant supersession | A getter, an `ownKeys` trap and an array's indexed accessor each calling `withProps()` during detachment are refused; the superseded props never execute and the replacement settles the expansion exactly once |
+| DP15 | Outcome reconciliation | A canonical outcome and a later policy failure are ranked, not replaced: durability first by identity, then Files infrastructure, then the earlier within one kind, an existing ordinary canonical failure unchanged, only a success converted — and a canonical failure the handler caught is still final |
+| DP16 | Cleanup before observation | A handler's finalizers have run exactly once before the reconciled result is observable |
+| DP17 | Cancellation | Cancelling while document policy is suspended keeps structured teardown: finalizers run exactly once and the result is a cancellation, not an ordinary policy failure |
+| DP18 | Capture precedes installation | `prepare` is read exactly once, by value, before any `install()` runs; replacing it from inside `install()` changes nothing |
+| DP19 | Every preparation, in order | Each captured preparation runs, in installation order |
+| DP20 | A refusal keeps what was prepared | A refusing preparation stops every later preparation, all document policy, the root import and authored work; the durable effect the first preparation completed stays retained, and the journal holds exactly that Yield and the terminal recording the refusal. Resuming that history with only the terminal removed re-enters the first preparation, restores its effect with no executor call, refuses again, runs nothing later, and leaves the retained Yield singular |
+| DP21 | Admission, then preparation | Admission runs before preparation, which runs before document policy and the root import |
+| DP22 | Replay of durable preparation | A completed terminal replay enters no preparation and executes no effect and appends nothing; a partial continuation re-enters preparation and restores its effect from the retained Yield without calling the executor again |
+| DP23 | Replaying a pre-root refusal | An identical execution reads the recorded refusal back, entering no preparation, no policy, no import and no authored work, and appending nothing |
+| DP24 | A different root document | A pre-root terminal is refused for a different inline source, a different target, and a different path, before terminal reuse |
+| DP25 | Binding data that fails closed | A terminal whose binding is missing, not an object, `null`, short a member, carrying an extra member, mistyped, or duplicated by a second recorded completion is never reusable |
+| DP26 | Replaying a failed preparation | A refusal recorded before the root import replays as the same failure, without re-entering preparation and without appending |
+| DP27 | A failure that will not be read | At both pre-root boundaries, a proxy whose coercion throws, a proxy whose `getPrototypeOf` throws, an error behind such a proxy, a proxy hostile to every property read, and an error whose `name`, `message`, `stack` and `cause` accessors refuse each still record a bound, replayable terminal carrying none of their planted text; every ordinary value is reported through a core-owned error that is itself safe to inspect and stringify, and durability and Files infrastructure failures keep their identity and precedence without being converted |
+| DP28 | The complete canonical terminal | A recorded success carrying an otherwise-valid binding, inner failure data of the wrong shape or carrying an extra member, and rendered output a pre-root terminal never has are each the fixed unreadable-root diagnostic, quoting nothing the record held |
+| DP29 | Hostile after inspection | At both pre-root boundaries, a failure that answers safely while canonical core inspects it and throws afterwards is not the object the completion reports: reading the reported error repeatedly, every way, never throws; no planted text is in the result or the journal; and the bound terminal still replays without running preparation, policy, import or authored work |
+| DP30 | A mutated canonical refusal | Middleware that catches the refusal the expansion raised, installs throwing `name`, `stack` and `cause` accessors and a planted `message`, and rethrows the same object does not decide what the completion reports: the result is a fresh `DocumentProtocolError` carrying core's original reason, repeated inspection never throws, no planted text is in the result or the journal, nothing authored runs, and the bound terminal replays without policy, preparation, import or append |
 
 ### Tier SL — Own-scope context updates
 

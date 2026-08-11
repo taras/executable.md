@@ -3,12 +3,32 @@
  *
  * The infrastructure boundary of document execution.
  *
- * Attaching an admission to an execution is a host act, not an authoring one:
- * it decides what a retained history must satisfy before the document is
- * allowed to replay from it. Keeping it behind its own entrypoint is what makes
- * that visible at the import — nothing a document, a component or a middleware
- * package reaches by importing `@executablemd/core` can require anything of a
- * journal.
+ * An installation carries the two things only a host may contribute, and both
+ * are acts of infrastructure rather than of authoring:
+ *
+ * - **Admissions** constrain a retained history *before* it is replayed from.
+ *   They decide what a journal must already say for this execution to be
+ *   allowed to continue it.
+ * - **Preparations** perform trusted durable work *inside* the durable root,
+ *   after admission and before any public `Execution.document` policy or the
+ *   root import. They are `Workflow` operations, so what they prepare is
+ *   journaled: on a live run they execute and record, on a partial continuation
+ *   they run again and restore what they already recorded rather than
+ *   performing it twice, and on a completed terminal replay they are not
+ *   entered at all. They are what lets a host — the workflow package, for one —
+ *   prepare a run in the journal that the document then runs against.
+ *
+ * Both stop at the first refusal, and a refusal stops only what has not
+ * happened yet: durable effects an earlier preparation completed stay
+ * retained and are not rolled back, and the durable root records the refusal as
+ * its own terminal. Because core binds such a terminal to the exact root source
+ * and target it was about, an identical execution replays that failure instead
+ * of finding a history it cannot read.
+ *
+ * Keeping both behind their own entrypoint is what makes that visible at the
+ * import: nothing a document, a component or a middleware package reaches by
+ * importing `@executablemd/core` can require anything of a journal or write to
+ * one ahead of the document.
  *
  * The value crosses as a plain function the host holds and passes:
  *
@@ -26,3 +46,4 @@
 
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
+export type { DurablePreparation } from "./src/document-request.ts";

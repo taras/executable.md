@@ -42,10 +42,11 @@ interface AgentProviderOptions { defaultAgent: string; permissionMode: Permissio
 ```
 
 `installAgentComponents({ rootProvider: { factory, options } })` owns the root
-provider's lifetime through `Execution.document`: the factory runs inside a
-scoped provider lifetime that surrounds the document's expansion and ends while
-the journal is still live, so the completion resolves **only after the
-provider's finalizers have run**. Rendered output closes independently of
+provider's lifetime through `Execution.document`: the handler delegates the
+request it was given and returns nothing, and the factory runs inside a scoped
+provider lifetime that surrounds the document's expansion and ends while the
+journal is still live, so the completion resolves **only after the provider's
+finalizers have run**. Rendered output closes independently of
 teardown, and every finalizer runs even if one throws.
 
 Teardown and prompt failures are *additive completion policies*, and completion

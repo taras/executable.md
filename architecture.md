@@ -77,10 +77,12 @@ Determinism is two properties:
 ## Workflow runs
 
 Core retains one document-execution entry point: `execute()`. A host that needs
-workflow-run metadata installs `useWorkflow({ base })` with the definition base
-in the child scope that owns one document execution. The installation applies ordinary
-`Execution.document` middleware, so the durable journal is active before the
-workflow run is created or restored and before the root document is imported.
+workflow-run metadata passes an `ExecutionInstallation` to `executeInstalled()`
+for the one document execution it is preparing. The run is created or
+restored by that installation's preparation, which canonical core invokes
+inside the durable root — so the journal is active before the workflow run
+exists, and the run exists before any document policy observes it and before the
+root document is imported.
 A later document execution, including one that continues the same workflow
 run, gets a new child scope and a new middleware installation. Workflow
 metadata is durable; the middleware and every ongoing effect remain
@@ -1082,6 +1084,150 @@ fresh, cause-free `ExecutionProtocolError`, before any journal read, expansion
 or append. Reaching the end of the chain without consuming the request is the
 same refusal.
 
+### Capability-backed document expansion
+
+The same division holds for `Execution.document`, with one structural
+difference: the `execute` chain records the options and **unwinds before** the
+document runs, while the `document` chain **surrounds** canonical document
+execution. A handler is therefore running while the document is, which is why
+its authority has to be bounded on more than one side.
+
+A handler is handed an opaque `DocumentRequest` and returns nothing. It may read
+the props (`request.props`), narrow or replace them (`request.withProps()`,
+which supersedes the request it was derived from), install contextual behavior
+the document will inherit, refuse by throwing, and delegate. It cannot produce a
+document. Canonical core runs the expansion through a private, **per-expansion**
+same-name Api whose instance-owned default is the terminal, keeps the outcome
+that terminal produced, and publishes only that; whatever a handler returns is
+ignored. The exported `Execution.document` default always refuses, so calling it
+with a captured request expands nothing and consumes nothing.
+
+The request is one-use and belongs to one expansion. A reconstructed look-alike,
+a request a later `withProps()` superseded, a request another expansion issued —
+including one still live in a concurrent invocation — a request already
+delegated, and any value that is not a request at all are each refused with a
+fresh, cause-free `DocumentProtocolError`. A refused delegation consumes neither
+the request nor the expansion, so the handler may recover and delegate a valid
+one.
+
+A refusal stops what has not happened yet; it does not unwind what has. An
+invalid delegation authorizes no root import, no expansion and no authored
+effect — and the durable root still records the refusal as its own terminal,
+because that is what the run turned out to be. A second delegation adds no
+second expansion, import or authored effect, while the work the first valid
+delegation already did stands. A preparation refusal prevents every later
+preparation, all document policy, the root import and every authored effect,
+while durable effects earlier preparations completed stay retained and are not
+rolled back; the root records the refusal as its terminal.
+
+A failure raised before the root import is whatever a handler or a preparation
+threw, which is to say: anything. Describing it is therefore total over unknown
+and hostile values, and the boundary is a specific one:
+
+- **Nothing is coerced.** `String(value)` is a call into whatever the value
+  decides `Symbol.toPrimitive` means.
+- **No member is read without tolerating a refusal**, and that includes
+  classification itself: `instanceof` consults a `Proxy`'s `getPrototypeOf`
+  trap, and prototype and own-property checks are calls into the value too. A
+  member that will not be read is simply absent.
+- **A trap failure never replaces the failure being handled**, never escapes,
+  and never stops the bound terminal from being written. Text a trap planted
+  does not reach the result, the journal, the diagnostic, the stack or the
+  cause.
+- **Diagnostics obtained safely from an ordinary `Error` — its name, its
+  message, a string cause — are recorded.** That is what makes a replayed
+  failure describe the one that happened, and what is recorded stays subject to
+  the journal's existing security boundary like any other recorded value.
+- **A value that will not describe itself is recorded under a fixed core-owned
+  name and message.**
+
+What crosses the completion boundary as itself is decided by **provenance, not
+inspection**. Inspecting an untrusted value cannot establish that publishing it
+is safe: an accessor or a `Proxy` trap may answer harmlessly while core is
+looking and throw when the caller reads the same member afterwards, so a value
+that passed inspection is only a value that behaved once. Publishing it would
+move the trap into whoever reads the result.
+
+So an ordinary value thrown by public `Execution.document` policy or by trusted
+durable preparation is **always** converted into a core-owned error built from
+the total description above — which keeps whatever the failure gave up safely,
+and can be read as often as anyone likes.
+
+Only a durability or Files infrastructure failure crosses by exact identity, and
+those are not converted at all. Everything else the completion publishes is a
+value this run constructed.
+
+A canonical protocol refusal keeps its classification and its original
+diagnostic, and it does so **without** publishing the object middleware saw.
+Provenance says where an object came from; it does not say what the object still
+holds. A handler can catch the very refusal the expansion raised, replace its
+members with throwing accessors, and rethrow the same object — still core's
+object, no longer core's diagnostic. So the expansion records the *reason* it
+refused beside the identity it raised, and the completion publishes a fresh
+`DocumentProtocolError` built from that reason. The returned object is never
+read. The record is private to the expansion — no brand, stable name, shape,
+ambient state or module-scoped registry carries it.
+
+Reuse is authorized by the **complete** form core writes here, not by the
+binding alone. Core reaches this position only by failing, so a recorded success
+carrying a copied binding is a record it could not have produced. Admission
+parses the whole terminal — one recorded completion, on the root coroutine, with
+no root import, an outer settlement core returned rather than threw, an inner
+result whose status is `err`, the canonical failure shape — including the two
+places core writes the same message — and exactly one
+well-formed binding agreeing with the requested root. Every other form is the
+fixed cause-free unreadable-root diagnostic, and nothing planted in journal data
+escapes through it.
+
+A terminal core creates *before* the root import carries a binding to the exact
+root source and target it was about. Core builds that binding from the root
+source this execution was given and parses it on the way back in; nothing a
+host, a document or a middleware package supplies can reach it. Root-history
+admission validates it before any terminal is reused, so an identical execution
+replays the recorded failure — running no preparation, no policy, no import
+and no authored work, and appending nothing — while a different root source or
+target is refused, and a missing, malformed, duplicated or conflicting binding
+fails closed. A partial history is re-entered: a preparation that already
+recorded a durable effect finds it retained and restores it rather than
+performing it again, and a refusal that follows records a fresh terminal. A history with no recorded completion is unaffected: it continues
+live, and preparation runs again through the ordinary durable protocol.
+
+
+Terminal acceptance stores a **detached** structural copy of the accepted props:
+objects and arrays are recursively copied and frozen, `"__proto__"` is carried
+as an ordinary data member rather than assigned, and no container the caller
+still holds is retained. Anything that is not JSON, and any object that resists
+being read, is refused as a `DocumentProtocolError` built here rather than
+rethrown — so neither a hostile trap's message nor the value that produced it
+reaches the caller.
+
+Detachment reads caller-controlled objects, which means it runs caller code: a
+getter, an `ownKeys` trap and an array's own accessors each get a turn while the
+copy is being built, and any of them may call `withProps()` and return normally.
+So lineage is verified **again** on the far side of detachment, before
+acceptance is recorded. A request superseded from inside its own detachment is
+refused, consuming neither it nor the replacement, and the replacement settles
+the expansion normally.
+
+The canonical outcome and a failure raised **after** delegation are kept apart
+until both exist, and then ranked on the same terms an invocation is ranked
+against its teardown:
+
+1. a durability failure wins from wherever it came, by exact identity;
+2. otherwise a Files infrastructure failure wins, on the same terms;
+3. within one kind the earlier failure wins, and canonical execution is always
+   the earlier one;
+4. without a fatal failure, an existing ordinary canonical failure remains
+   unchanged; and
+5. only a canonical success is converted by an ordinary later policy failure.
+
+A failure canonical execution raised is authoritative whether or not middleware
+lets it propagate: catching it and returning normally leaves it exactly as
+final. A refusal *before* delegation, and a document-protocol violation, fail
+normally — there is no canonical outcome for them to be ranked against.
+Cancellation keeps structured teardown semantics and is never reported as an
+ordinary policy failure.
+
 ### Trusted host orchestration
 
 A **trusted host** is the code that decides what an execution is for — a CLI
@@ -1104,6 +1250,24 @@ passes — not through a context, an Api, a stable name, structural metadata or
 module-scoped state — which is why a separately loaded package composes here by
 handing over a closure rather than by agreeing on a name, and why no middleware
 can read, transport or remove the collection.
+
+### Trusted durable preparation
+
+An installation may also carry a `prepare` hook — `DurablePreparation`, the
+trusted durable work a host performs *inside* the durable root. It is read
+exactly once and captured by value at the same moment admissions are, and the
+collection is copied and frozen, so replacing or removing the property from
+inside `install()` changes nothing. It travels as a value on the same terms an
+admission does, and is reachable through no context, Api or name.
+
+Preparations run in installation order, stopping at the first refusal, **after**
+retained-history admission and **before** any public `Execution.document`
+policy, the root import, and every authored effect. They are `Workflow`
+operations, so what they record is journaled: on a completed terminal replay the
+durable root is already settled and no preparation runs at all, while on a live
+or partial continuation they run and record through the ordinary durable
+protocol — an effect an earlier preparation already completed is restored from
+its retained record rather than performed again.
 
 ### The weak journal-provenance association
 

@@ -134,6 +134,11 @@ export type {
 // an execution: `executeInstalled` and `JournalAdmission` are host boundary.
 export { ExecutionProtocolError } from "./src/execution-request.ts";
 export type { CompletionFailure, ExecutionRequest } from "./src/execution-request.ts";
+// The same division for document expansion: a handler receives a request and
+// may refuse. Issuing one, the expansion it belongs to, claiming it and reading
+// what canonical execution settled to are all internal.
+export { DocumentProtocolError } from "./src/document-request.ts";
+export type { DocumentRequest } from "./src/document-request.ts";
 export {
   fileSource,
   formatDocumentReference,

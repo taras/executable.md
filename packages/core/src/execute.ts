@@ -30,6 +30,9 @@ import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
+import { DocumentProtocolError, issueDocument } from "./document-request.ts";
+import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
+import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
 import { createContext } from "effection";
 import type { Context } from "effection";
@@ -363,6 +366,17 @@ type SelectionOutcome =
 const UNREADABLE_ROOT_RECORD = "The recorded root document import cannot be read by this version.";
 
 /** The coroutine a document execution's own terminal result belongs to. */
+/**
+ * What a resumed run says when the history it was handed failed before
+ * importing a root document, and that document was not this one.
+ *
+ * Fixed, like the unreadable-record diagnostic beside it: what the record names
+ * is journal data, and naming it back would put it into a message.
+ */
+const DIFFERENT_PRE_ROOT_DOCUMENT =
+  "The recorded run failed before importing its root document, and it recorded a " +
+  "different root document than this one.";
+
 const ROOT_COROUTINE = "root";
 
 /**
@@ -704,13 +718,283 @@ function admitRootHistory(
   // behind.
   if (terminal) {
     const owned = imports.filter((event) => attempt(() => event.coroutineId) === coroutineId);
-    if (imports.length !== 1 || owned.length !== 1) {
+    if (imports.length === 0) {
+      // No import at all. The one history this describes rather than
+      // contradicts is one whose terminal core wrote before importing anything,
+      // and said so.
+      admitPreRootTerminal(retained, root, coroutineId);
+    } else if (imports.length !== 1 || owned.length !== 1) {
       throw new Error(UNREADABLE_ROOT_RECORD);
     }
   }
 
   for (const event of imports) {
     admitRootSelection(event, root);
+  }
+}
+
+/**
+ * The member a terminal recorded before the root import carries.
+ *
+ * A run can fail before it has imported anything — a document handler that
+ * refuses, a protocol violation, a preparation that will not prepare. The
+ * durable root still records that outcome, and the history it leaves behind has
+ * a terminal and no root import. Without something in that terminal saying
+ * which document it was about, the only safe answer on replay is to refuse it,
+ * which is what made a journal canonical core had just written unreadable to
+ * the identical execution.
+ *
+ * So core writes the identity into the terminal it creates. It is core's own:
+ * the value is built here, from the root source this execution was given, and
+ * parsed here on the way back in. Nothing a host, a document or a middleware
+ * package supplies reaches it, and a terminal that does not carry one stays
+ * exactly as unreusable as it was.
+ */
+const ROOT_BINDING = "root_binding";
+
+/** Which root document a pre-root terminal was about. */
+interface RootBinding {
+  readonly path: string;
+  /**
+   * The supplied text for an inline root, and nothing for a file root.
+   *
+   * Every inline root reports the same path, so the path alone would let one
+   * supplied document reuse a terminal another one recorded. The text is the
+   * identity there, and the journal already keeps it for any run that got as
+   * far as importing.
+   */
+  readonly source: string | null;
+  /** The requested selector as written, or nothing when the whole document. */
+  readonly target: string | null;
+}
+
+function rootBinding(root: RootDocumentSource): RootBinding {
+  return {
+    path: rootSourcePath(root),
+    source: root.source ?? null,
+    target: root.target ?? null,
+  };
+}
+
+/** The own enumerable keys of a journal value, in a fixed order, or nothing. */
+function recordedKeys(value: object): string | undefined {
+  const keys = read(() => Object.keys(value).sort().join(","));
+  return typeof keys === "string" ? keys : undefined;
+}
+
+/** A recorded member, read once through the refusal-tolerant boundary. */
+function recordedMember(value: object, name: string): unknown {
+  const member: unknown = read(() => Reflect.get(value, name));
+  return member === UNREADABLE ? undefined : member;
+}
+
+/** A recorded value that is an object, or nothing. */
+function recordedObject(value: unknown): object | undefined {
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+
+/**
+ * The complete terminal canonical core writes when it fails before importing a
+ * root document, parsed, or nothing.
+ *
+ * A binding on its own establishes nothing. Core can only reach this lifecycle
+ * position by failing, so the only history it can have written here is a
+ * *failed* document result carrying a binding — and a recorded success that
+ * carries a copied binding is a record core could not have produced. Parsing
+ * the whole form is what tells those apart, so every member of it is checked,
+ * exactly, including the ones this run has no other use for.
+ *
+ * Total over journal-provided values: a member that refuses to be read, a wrong
+ * type and an extra member are each "not this form" rather than an error of
+ * their own, and "not this form" is refused by the caller.
+ */
+function recordedPreRootTerminal(event: DurableEvent): RootBinding | undefined {
+  const settlement = recordedObject(read(() => event.result));
+  if (settlement === undefined || recordedKeys(settlement) !== "status,value") {
+    return undefined;
+  }
+  // The outer settlement is `ok`: the body *returned* this record rather than
+  // throwing it, which is the whole mechanism that makes it replayable.
+  if (recordedMember(settlement, "status") !== "ok") {
+    return undefined;
+  }
+  const result = recordedObject(recordedMember(settlement, "value"));
+  if (result === undefined || recordedKeys(result) !== "error,output,root_binding,status") {
+    return undefined;
+  }
+  // Never "ok". Canonical core arrives here only by failing.
+  if (recordedMember(result, "status") !== "err") {
+    return undefined;
+  }
+  if (recordedMember(result, "output") !== "") {
+    return undefined;
+  }
+  if (!recordedPreRootFailure(recordedObject(recordedMember(result, "error")))) {
+    return undefined;
+  }
+  return recordedBinding(recordedObject(recordedMember(result, ROOT_BINDING)));
+}
+
+/** Whether a recorded failure is the shape a pre-root terminal describes. */
+function recordedPreRootFailure(failure: object | undefined): boolean {
+  if (failure === undefined) {
+    return false;
+  }
+  const keys = recordedKeys(failure);
+  if (keys !== "message,name,segment" && keys !== "cause,message,name,segment") {
+    return false;
+  }
+  if (typeof recordedMember(failure, "name") !== "string") {
+    return false;
+  }
+  if (typeof recordedMember(failure, "message") !== "string") {
+    return false;
+  }
+  if (keys.startsWith("cause") && typeof recordedMember(failure, "cause") !== "string") {
+    return false;
+  }
+  const segment = recordedObject(recordedMember(failure, "segment"));
+  if (segment === undefined || recordedKeys(segment) !== "message") {
+    return false;
+  }
+  // Nothing was imported, so no segment failed and the description core writes
+  // repeats the failure's own message in both places. A record whose two
+  // messages disagree is one core could not have written, whatever else about
+  // it looks well formed.
+  return recordedMember(segment, "message") === recordedMember(failure, "message");
+}
+
+/** The binding a recorded pre-root terminal carries, or nothing. */
+function recordedBinding(carried: object | undefined): RootBinding | undefined {
+  if (carried === undefined || recordedKeys(carried) !== "path,source,target") {
+    return undefined;
+  }
+  const path: unknown = recordedMember(carried, "path");
+  const source: unknown = recordedMember(carried, "source");
+  const target: unknown = recordedMember(carried, "target");
+  if (typeof path !== "string") {
+    return undefined;
+  }
+  if (source !== null && typeof source !== "string") {
+    return undefined;
+  }
+  if (target !== null && typeof target !== "string") {
+    return undefined;
+  }
+  return { path, source, target };
+}
+
+/**
+ * The name and message a pre-root failure is recorded under when the failure
+ * itself will not say.
+ *
+ * Fixed and core-owned. A failure raised before the root import is whatever a
+ * handler or a preparation threw, which is to say: anything. It may be a
+ * `Proxy` whose `Symbol.toPrimitive` throws, an `Error` subclass whose `message`
+ * accessor refuses, or a value that is not an error at all. None of that may
+ * decide whether this run can record a replayable terminal.
+ */
+const UNDESCRIBED_PRE_ROOT_NAME = "Error";
+const UNDESCRIBED_PRE_ROOT_MESSAGE =
+  "The document execution failed before importing its root document, and the " +
+  "failure could not be described.";
+
+/**
+ * A string a value will give up willingly, or nothing.
+ *
+ * Never coerces. `String(value)` is a call into whatever the value decides
+ * `Symbol.toPrimitive` means, and a description step that can be made to throw
+ * is a description step that stops a terminal from being written at all.
+ */
+function safeText(get: () => unknown): string | undefined {
+  const value = read(get);
+  return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * Describe a failure raised before the root import, whatever it turns out to be.
+ *
+ * Total: every read goes through the same refusal-tolerant boundary the journal
+ * protocol uses, and a member that will not be read is simply absent. What comes
+ * out is JSON this run wrote, never a value the failure supplied — so nothing
+ * planted in a trap reaches the journal, the diagnostic, or a later replay.
+ */
+function describePreRootFailure(error: unknown): DocumentFailure {
+  const name = safeText(() => (error instanceof Error ? error.name : undefined));
+  const message = safeText(() => (error instanceof Error ? error.message : undefined));
+  const described = message ?? UNDESCRIBED_PRE_ROOT_MESSAGE;
+  // A cause is recorded only when it hands over a string of its own accord.
+  // There is no fallback: an absent cause and an unreadable one are the same
+  // fact here, which is that this run has nothing to say about it.
+  const cause = safeText(() =>
+    error instanceof Error && Object.hasOwn(error, "cause") && error.cause instanceof Error
+      ? error.cause.message
+      : undefined,
+  );
+  return {
+    name: name ?? UNDESCRIBED_PRE_ROOT_NAME,
+    message: described,
+    // Nothing was imported, so no segment failed and none is described. The
+    // failure speaks for itself, as far as it will speak at all.
+    segment: { message: described },
+    ...(cause === undefined ? {} : { cause }),
+  };
+}
+
+/**
+ * What this run records when it fails before importing its root document.
+ *
+ * Returned rather than thrown, so the durable root closes around it and an
+ * identical replay reads the same failure back instead of re-running policy
+ * that already refused. A live run still reports the original object when that
+ * object is an ordinary `Error` — the failure is remembered before this is
+ * built — so nothing about identity changes for the execution that produced it.
+ */
+function preRootTerminal(
+  error: unknown,
+  root: RootDocumentSource,
+): DocumentFailureResult & { readonly [ROOT_BINDING]: RootBinding } {
+  return {
+    status: "err",
+    output: "",
+    error: describePreRootFailure(error),
+    [ROOT_BINDING]: rootBinding(root),
+  };
+}
+
+/**
+ * Admit a history whose terminal was created before any root import.
+ *
+ * Fails closed in every direction. The history must hold exactly one recorded
+ * completion, it must be this coroutine's, it must carry a binding core wrote,
+ * and that binding must name the document this run was asked for. A terminal
+ * that merely *is* terminal establishes nothing — which is the point: an
+ * arbitrary recorded failure does not become reusable by having no import.
+ */
+function admitPreRootTerminal(
+  retained: readonly DurableEvent[],
+  root: RootDocumentSource,
+  coroutineId: CoroutineId,
+): void {
+  const closes = retained.filter((event) => attempt(() => event.type) === "close");
+  if (closes.length !== 1) {
+    throw new Error(UNREADABLE_ROOT_RECORD);
+  }
+  const close = closes[0];
+  if (close === undefined || attempt(() => close.coroutineId) !== coroutineId) {
+    throw new Error(UNREADABLE_ROOT_RECORD);
+  }
+  const recorded = recordedPreRootTerminal(close);
+  if (recorded === undefined) {
+    throw new Error(UNREADABLE_ROOT_RECORD);
+  }
+  const requested = rootBinding(root);
+  if (
+    recorded.path !== requested.path ||
+    recorded.source !== requested.source ||
+    recorded.target !== requested.target
+  ) {
+    throw new Error(DIFFERENT_PRE_ROOT_DOCUMENT);
   }
 }
 
@@ -839,7 +1123,7 @@ type DocumentFailureResult = {
 /**
  * What crosses the journal about a failure. Everything here is JSON: object
  * identity, stacks, and the cause graph stay behind, which is why the live path
- * resolves the original error instead of this description (`LiveFailure`).
+ * resolves a live object instead of this description (`LiveFailure`).
  *
  * A field is absent when the failure had nothing to say there, and present when
  * it did. The distinction is load-bearing for `cause`: an absent key says the
@@ -918,8 +1202,15 @@ function describeCause(cause: unknown): string {
 }
 
 /**
- * The error a completion reports for a failed document: the original one on a
- * live run, and otherwise the documented reconstruction of it.
+ * The error a completion reports for a failed document: the one this run put in
+ * the slot, and otherwise the documented reconstruction of it.
+ *
+ * What goes in the slot is the caller of `rememberLiveFailure`'s decision, and
+ * the two callers decide differently. A failure the document itself raised is
+ * remembered as it is — it came from authored work this run was executing. A
+ * failure raised *before* the root import came from public middleware or a
+ * host's preparation, and what is remembered there is a value this run
+ * constructed, never the object that came back.
  */
 function failureError(failure: DocumentFailure, live: unknown): unknown {
   if (live !== undefined) {
@@ -1285,6 +1576,7 @@ function* executeDocument(
   options: ExecuteOptions,
   admissions: readonly JournalAdmission[] = [],
   completions: readonly CompletionFailure[] = [],
+  preparations: readonly DurablePreparation[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -1403,9 +1695,97 @@ function* executeDocument(
       // The journal is wrapped before it reaches `durableRun`, so the identity
       // check happens inside the read that every phase downstream depends on
       // rather than in middleware anything could replace.
-      const returned = yield* durableRun(() => Execution.operations.document(props), {
-        stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
-      });
+      const returned = yield* durableRun(
+        function* (): Operation<DocumentResult> {
+          const issued = issueDocument<DocumentResult>(props, (claimed) =>
+            documentWorkflow(claimed),
+          );
+          try {
+            return yield* beforeAnyImport(issued);
+          } catch (error) {
+            // Reaching the terminal means a root import was attempted, so the
+            // history already carries one and this failure is the document's.
+            if (issued.settlement().status !== "absent") {
+              throw error;
+            }
+            // A durability failure says the journal no longer describes this
+            // run, and a Files infrastructure failure is not this run's outcome
+            // to record either. Both keep escaping, by identity.
+            //
+            // Asked through the same boundary as everything else here: the
+            // search walks a cause graph with `instanceof` checks, and a value
+            // that refuses to be walked is not thereby fatal. A refusal to
+            // classify must not stop the bound terminal from being written.
+            const fatal = read(() => fatalOf(error));
+            if (fatal !== UNREADABLE && fatal !== undefined) {
+              throw error;
+            }
+            // Remembered before it is described, so the live run still reports
+            // the original object while the journal keeps a replayable account.
+            // Nothing that came back through public middleware is published as
+            // it stands.
+            //
+            // Inspecting an untrusted value cannot establish that publishing it
+            // is safe: an accessor or a `Proxy` trap may answer harmlessly while
+            // core is looking and throw when the caller reads the same member
+            // afterwards, so a value that passed inspection is a value that
+            // behaved once. And provenance alone is not enough either — a
+            // handler can catch the very refusal this expansion raised, replace
+            // its members with throwing accessors, and rethrow the same object.
+            // It is still core's object; it is no longer core's diagnostic.
+            //
+            // So a canonical refusal is rebuilt from the reason this expansion
+            // recorded when it refused, and everything else is described from
+            // whatever the failure will safely give up. Either way what gets
+            // published, and what reaches the journal, is a value this run
+            // constructed and nobody else has held.
+            const refusal = issued.republish(error);
+            if (refusal !== undefined) {
+              yield* ephemeral(rememberLiveFailure(refusal));
+            }
+            return preRootTerminal(refusal ?? error, root);
+          }
+
+          function* beforeAnyImport(
+            issued: IssuedDocument<DocumentResult>,
+          ): Operation<DocumentResult> {
+            // Preparation first: what a trusted host records inside the
+            // durable root precedes every public document policy and the root
+            // import, so nothing a handler does can prevent it or observe the
+            // run before it exists.
+            for (const prepare of preparations) {
+              yield* prepare();
+            }
+            // The terminal for this expansion and no other: a same-name
+            // instance whose default core owns, so every public handler still
+            // composes while none of them can produce a document.
+            const expansion = createApi<{ document(request: DocumentRequest): Operation<void> }>(
+              "Execution",
+              {
+                *document(request: DocumentRequest): Operation<void> {
+                  yield* issued.claim(request);
+                },
+              },
+            );
+            // Whatever a handler returns is not a document, so it is not read.
+            // What it *throws* is kept rather than propagated, because a policy
+            // failure raised after delegation must not bury the outcome
+            // canonical execution already produced. Halting is not caught here:
+            // cancellation unwinds through `return()`, so structured teardown is
+            // unaffected.
+            let policy: { raised: unknown } | undefined;
+            try {
+              yield* expansion.operations.document(issued.request);
+            } catch (error) {
+              policy = { raised: error };
+            }
+            return reconcileExpansion(issued.settlement(), policy);
+          }
+        },
+        {
+          stream: guardedJournal(journal, root, ROOT_COROUTINE, admissions),
+        },
+      );
       // Taken rather than read, so the handoff belongs to the run that made it.
       const live = yield* takeLiveFailure(liveFailure);
       const result = parseDocumentResult(returned);
@@ -1462,6 +1842,15 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  */
 export interface ExecutionInstallation {
   readonly admissions?: readonly JournalAdmission[];
+  /**
+   * What this installation records inside the durable root.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * and invoked after retained-history admission and before any public document
+   * policy or the root import. A handler cannot prevent it, and cannot observe
+   * the run before it exists.
+   */
+  readonly prepare?: DurablePreparation;
   install?(): Operation<void>;
 }
 
@@ -1483,7 +1872,7 @@ export interface ExecutionApi {
    * live and before the root Close is written — the only place work that has to
    * outlast every element but still be journaled can go.
    */
-  document(props: Record<string, Json>): Operation<DocumentResult>;
+  document(request: DocumentRequest): Operation<void>;
 }
 
 /**
@@ -1499,8 +1888,9 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
   *execute(_request: ExecutionRequest): Operation<void> {
     throw new ExecutionProtocolError("invoked execution outside canonical core");
   },
-  *document(props: Record<string, Json>): Operation<DocumentResult> {
-    return yield* documentWorkflow(props);
+  // deno-lint-ignore require-yield
+  *document(_request: DocumentRequest): Operation<void> {
+    throw new DocumentProtocolError("invoked a document expansion outside canonical core");
   },
 });
 
@@ -1620,6 +2010,57 @@ function* runInvocation(
   };
 }
 
+/**
+ * The one outcome of an expansion whose public policy also failed.
+ *
+ * Ranked on the same terms `reconcile()` ranks an invocation against its
+ * teardown, for the same reason: a fatal failure is the run's regardless of
+ * which layer raised it, and within one kind the earlier one is the real one.
+ * Canonical execution is always the earlier of the two here.
+ *
+ * The one thing policy may do to a canonical outcome is fail a success. It can
+ * neither replace a document that already failed nor rescue a failure canonical
+ * execution raised — catching that failure and returning normally leaves it
+ * exactly as authoritative as letting it propagate.
+ */
+function reconcileExpansion(
+  settlement: DocumentSettlement<DocumentResult>,
+  policy: { raised: unknown } | undefined,
+): DocumentResult {
+  const canonical = settlement.status === "raised" ? settlement.raised : undefined;
+  const raised = policy?.raised;
+
+  const durable =
+    (canonical === undefined ? undefined : durabilityFailure(canonical)) ??
+    (raised === undefined ? undefined : durabilityFailure(raised));
+  if (durable !== undefined) {
+    throw durable;
+  }
+  const files =
+    (canonical === undefined ? undefined : filesFatalFailure(canonical)) ??
+    (raised === undefined ? undefined : filesFatalFailure(raised));
+  if (files !== undefined) {
+    throw files;
+  }
+
+  if (settlement.status === "raised") {
+    throw settlement.raised;
+  }
+  if (settlement.status === "absent") {
+    // A chain that threw did not "return without delegating": its own refusal
+    // is what went wrong, and it is reported instead of the protocol violation
+    // that never happened.
+    throw policy === undefined ? settlement.refusal : policy.raised;
+  }
+  if (settlement.outcome.status === "err") {
+    return settlement.outcome;
+  }
+  if (policy !== undefined) {
+    throw policy.raised;
+  }
+  return settlement.outcome;
+}
+
 /** The fatal failure this one carries, if it carries one. */
 function fatalOf(error: unknown): Error | undefined {
   return durabilityFailure(error) ?? filesFatalFailure(error);
@@ -1671,6 +2112,18 @@ function* invoke(
   const admissions = Object.freeze(
     installations.flatMap((installation) => [...(installation.admissions ?? [])]),
   );
+  // Captured by value at the same moment, and for the same reason: what ends up
+  // authoritative is fixed before any installation, middleware or document code
+  // exists.
+  const preparations = Object.freeze(
+    installations.flatMap((installation) => {
+      // Read once. A property that answers differently the second time would
+      // otherwise let a host be tested for a preparation and then run a
+      // different one.
+      const prepare = installation.prepare;
+      return prepare === undefined ? [] : [prepare];
+    }),
+  );
 
   for (const installation of installations) {
     if (installation.install) {
@@ -1702,7 +2155,7 @@ function* invoke(
   // Whatever a handler returns is not an execution, so it is not read.
   yield* invocationExecution.operations.execute(issued.request);
 
-  return yield* executeDocument(issued.settle(), admissions, issued.completions());
+  return yield* executeDocument(issued.settle(), admissions, issued.completions(), preparations);
 }
 
 /**
