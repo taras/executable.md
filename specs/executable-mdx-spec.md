@@ -7820,6 +7820,7 @@ Defined in §8.1.
 | EP25 | Returned-handle cancellation | Halting a separate consumer of an already-returned handle halts the suspended authored work, finalizes exactly once, settles every other observer rather than leaving it waiting, and starts nothing when the handle is observed again; a fatal document result established before cancellation survives it by identity |
 | EP26 | A detached options snapshot | Options edited after the private terminal accepted them do not change what executes: the accepted stream receives the events, the accepted modifier factory runs by identity, and the caller's own array and record are observably edited while the execution is not |
 | EP27 | Teardown reconciliation | A document outcome and an invocation-teardown failure are ranked, not replaced: a durability failure wins by identity, then a Files infrastructure failure, then an existing document failure, and only a success is converted by teardown — with every finalizer run exactly once before the result is observable |
+| EP28 | Invocation isolation | Concurrent observations of two returned handles stay separate: cancelling one consumer halts and finalizes only its own invocation while the other settles independently, and neither invocation's cleanup or authored work reaches the other |
 
 ### Tier SL — Own-scope context updates
 

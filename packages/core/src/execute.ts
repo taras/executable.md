@@ -1545,7 +1545,7 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
 function* runInvocation(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
-  observers: InvocationObservers = {},
+  observed?: () => void,
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
   const settled = withResolvers<Result<Json>>();
@@ -1608,13 +1608,13 @@ function* runInvocation(
           yield* owner.halt();
         }
       });
-      // This invocation's own observer, closed over here and reachable from
-      // nowhere else. It exists so a test can cancel a consumer at the one
-      // moment that matters — after this observation is cancellable — without
-      // waiting a scheduler turn and calling that a proof. It carries nothing,
-      // decides nothing, and belongs to one execution, so a concurrent
-      // invocation can neither receive it nor replace it.
-      observers.observed?.();
+      // The callback this invocation was started with, captured by value at
+      // the boundary rather than reread from a record the caller still holds —
+      // so replacing that record afterwards changes nothing here. It exists so
+      // a test can cancel a consumer at the one moment that matters, after this
+      // observation is cancellable, without waiting a scheduler turn and calling
+      // that a proof. It carries nothing and decides nothing.
+      observed?.();
       return yield* settled.operation;
     },
   };
@@ -1708,9 +1708,12 @@ function* invoke(
 /**
  * What one invocation may be watched by, and nothing more.
  *
- * Non-authoritative by construction: each member takes no arguments, returns
+ * Non-authoritative by construction: the callback takes no arguments, returns
  * nothing, and is read at exactly one point. Nothing here can change what an
  * execution does, what it settles to, or how it is torn down.
+ *
+ * The record is the caller's; what the invocation keeps is the function it held
+ * at the moment the invocation started.
  */
 export interface InvocationObservers {
   /** Called once a consumer of the returned handle has become cancellable. */
@@ -1734,7 +1737,9 @@ export function executeObserved(
   installations: readonly ExecutionInstallation[],
   observers: InvocationObservers,
 ): Operation<DocumentExecution> {
-  return runInvocation(options, [...installations], observers);
+  // The callback is read here, once, and passed on as a value. What the caller
+  // does to its own record afterwards is its own business.
+  return runInvocation(options, [...installations], observers.observed);
 }
 
 /**

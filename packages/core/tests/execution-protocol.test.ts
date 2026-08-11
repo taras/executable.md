@@ -47,6 +47,7 @@ import {
 import type { ExecutionRequest, ModifierFactory } from "../mod.ts";
 import { executeInstalled } from "../host.ts";
 import { executeObserved } from "../src/execute.ts";
+import type { InvocationObservers } from "../src/execute.ts";
 import type { ExecutionInstallation, JournalAdmission } from "../host.ts";
 
 const DOC = "# Hello\n";
@@ -790,90 +791,6 @@ describe("Tier EP — the execution protocol", () => {
     expect(finalized).toEqual(["cleanup"]);
   });
 
-  // EP28: an observer belongs to the invocation it watches. Two executions run
-  // concurrently, each with its own callback and its own finalizer; cancelling
-  // one consumer must reach only that invocation. A single shared slot would
-  // let one execution receive or overwrite the other's notification.
-  it("EP28: observers, cancellation and cleanup never cross invocations", function* () {
-    const seen: string[] = [];
-    const finalized: string[] = [];
-    const halted: string[] = [];
-    const reachedFirst = withResolvers<void>();
-    const reachedSecond = withResolvers<void>();
-    const observingFirst = withResolvers<void>();
-    const observingSecond = withResolvers<void>();
-
-    const settledSecond = yield* scoped(function* () {
-      yield* Execution.around({
-        *document([props], next) {
-          const which = seen.includes("start:first") ? "second" : "first";
-          seen.push(`start:${which}`);
-          if (which === "first") {
-            reachedFirst.resolve();
-            try {
-              yield* suspend();
-            } finally {
-              halted.push("first");
-            }
-          }
-          reachedSecond.resolve();
-          return yield* next(props);
-        },
-      });
-
-      const start = (name: string, observing: { resolve(): void }) =>
-        executeObserved(
-          { ...inlineSource(DOC), stream: new InMemoryStream() },
-          [
-            {
-              *install(): Operation<void> {
-                yield* ensure(() => {
-                  finalized.push(name);
-                });
-              },
-            },
-          ],
-          {
-            observed: () => {
-              seen.push(`observed:${name}`);
-              observing.resolve();
-            },
-          },
-        );
-
-      const first = yield* start("first", observingFirst);
-      yield* reachedFirst.operation;
-      const second = yield* start("second", observingSecond);
-
-      const firstConsumer = yield* spawn(function* () {
-        yield* first;
-      });
-      const secondConsumer = yield* spawn(function* () {
-        return yield* second;
-      });
-      yield* observingFirst.operation;
-      yield* observingSecond.operation;
-
-      // Only the first invocation's consumer is cancelled.
-      yield* firstConsumer.halt();
-
-      expect(halted).toEqual(["first"]);
-      expect(finalized).toEqual(["first"]);
-
-      // The second invocation is untouched and settles on its own.
-      return yield* secondConsumer;
-    });
-
-    // Each callback fired for its own invocation, once.
-    expect(seen.filter((entry) => entry.startsWith("observed:")).sort()).toEqual([
-      "observed:first",
-      "observed:second",
-    ]);
-    expect(settledSecond.ok).toBe(true);
-    expect(halted).toEqual(["first"]);
-    expect(finalized).toEqual(["first", "second"]);
-  });
-
   // EP26: what the terminal accepted stops being the caller's to change. Each
   // field below is mutated *after* the private terminal returned and before the
   // public chain finishes, and each one materially affects execution — so the
@@ -1121,6 +1038,105 @@ describe("Tier EP — the execution protocol", () => {
       expect(finalized).toEqual(["cleanup"]);
       expect(observed).toEqual([1]);
     }
+  });
+
+  // EP28: an observer belongs to the invocation it watches. Two executions run
+  // concurrently, each with its own callback and its own finalizer; cancelling
+  // one consumer must reach only that invocation. A single shared slot would
+  // let one execution receive or overwrite the other's notification.
+  it("EP28: observers, cancellation and cleanup never cross invocations", function* () {
+    const seen: string[] = [];
+    const finalized: string[] = [];
+    const halted: string[] = [];
+    const reachedFirst = withResolvers<void>();
+    const reachedSecond = withResolvers<void>();
+    const observingFirst = withResolvers<void>();
+    const observingSecond = withResolvers<void>();
+
+    // A descriptor the caller keeps and edits after the invocation started:
+    // only the callback it held at the start may run.
+    yield* scoped(function* () {
+      const retained: InvocationObservers = { observed: () => seen.push("observed:A") };
+      const replaced = yield* executeObserved(
+        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        [],
+        retained,
+      );
+      retained.observed = () => seen.push("observed:B");
+      yield* replaced;
+    });
+
+    const settledSecond = yield* scoped(function* () {
+      yield* Execution.around({
+        *document([props], next) {
+          const which = seen.includes("start:first") ? "second" : "first";
+          seen.push(`start:${which}`);
+          if (which === "first") {
+            reachedFirst.resolve();
+            try {
+              yield* suspend();
+            } finally {
+              halted.push("first");
+            }
+          }
+          reachedSecond.resolve();
+          return yield* next(props);
+        },
+      });
+
+      const start = (name: string, observing: { resolve(): void }) =>
+        executeObserved(
+          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push(name);
+                });
+              },
+            },
+          ],
+          {
+            observed: () => {
+              seen.push(`observed:${name}`);
+              observing.resolve();
+            },
+          },
+        );
+
+      const first = yield* start("first", observingFirst);
+      yield* reachedFirst.operation;
+      const second = yield* start("second", observingSecond);
+
+      const firstConsumer = yield* spawn(function* () {
+        yield* first;
+      });
+      const secondConsumer = yield* spawn(function* () {
+        return yield* second;
+      });
+      yield* observingFirst.operation;
+      yield* observingSecond.operation;
+
+      // Only the first invocation's consumer is cancelled.
+      yield* firstConsumer.halt();
+
+      expect(halted).toEqual(["first"]);
+      expect(finalized).toEqual(["first"]);
+
+      // The second invocation is untouched and settles on its own.
+      return yield* secondConsumer;
+    });
+
+    // Each callback fired for its own invocation, once — and the invocation
+    // started with A ran A, not the B its caller substituted afterwards.
+    expect(seen.filter((entry) => entry.startsWith("observed:")).sort()).toEqual([
+      "observed:A",
+      "observed:first",
+      "observed:second",
+    ]);
+    expect(settledSecond.ok).toBe(true);
+    expect(halted).toEqual(["first"]);
+    expect(finalized).toEqual(["first", "second"]);
   });
 
   it("EP11: admissions are copied before install() runs", function* () {
