@@ -1545,6 +1545,7 @@ export const Execution: Api<ExecutionApi> = createApi<ExecutionApi>("Execution",
 function* runInvocation(
   options: ExecuteOptions,
   installations: readonly ExecutionInstallation[],
+  observers: InvocationObservers = {},
 ): Operation<DocumentExecution> {
   const ready = withResolvers<DocumentExecution>();
   const settled = withResolvers<Result<Json>>();
@@ -1607,29 +1608,16 @@ function* runInvocation(
           yield* owner.halt();
         }
       });
-      // The hook exists so a test can cancel a consumer at the one moment that
-      // matters — after this observation is cancellable — without waiting a
-      // scheduler turn and calling that a proof. It carries nothing and decides
-      // nothing, and no entrypoint exports the way to set it.
-      observingHandle?.();
+      // This invocation's own observer, closed over here and reachable from
+      // nowhere else. It exists so a test can cancel a consumer at the one
+      // moment that matters — after this observation is cancellable — without
+      // waiting a scheduler turn and calling that a proof. It carries nothing,
+      // decides nothing, and belongs to one execution, so a concurrent
+      // invocation can neither receive it nor replace it.
+      observers.observed?.();
       return yield* settled.operation;
     },
   };
-}
-
-/**
- * Notified when a consumer has become cancellable inside a returned handle.
- *
- * Test-only, and adapter-private: `packages/core/mod.ts` and
- * `packages/core/host.ts` export neither this nor the setter, so nothing
- * outside this package's own suites can reach it. It is a notification, not a
- * channel — it takes no arguments, returns nothing, and no decision reads it.
- */
-let observingHandle: (() => void) | undefined;
-
-/** Test-only: install (or clear) the observation hook. */
-export function observeHandleForTesting(hook: (() => void) | undefined): void {
-  observingHandle = hook;
 }
 
 /** The fatal failure this one carries, if it carries one. */
@@ -1717,9 +1705,36 @@ function* invoke(
   return yield* executeDocument(issued.settle(), admissions, issued.completions());
 }
 
+/**
+ * What one invocation may be watched by, and nothing more.
+ *
+ * Non-authoritative by construction: each member takes no arguments, returns
+ * nothing, and is read at exactly one point. Nothing here can change what an
+ * execution does, what it settles to, or how it is torn down.
+ */
+export interface InvocationObservers {
+  /** Called once a consumer of the returned handle has become cancellable. */
+  observed?: () => void;
+}
+
 /** The ordinary entrypoint: one execution, nothing installed around it. */
 export function execute(options: ExecuteOptions): Operation<DocumentExecution> {
   return runInvocation(options, []);
+}
+
+/**
+ * The same invocation, watched.
+ *
+ * Package-internal and test-only: neither `@executablemd/core` nor
+ * `@executablemd/core/host` exports it, and the observers it takes belong to
+ * this call alone rather than to a slot every execution shares.
+ */
+export function executeObserved(
+  options: ExecuteOptions,
+  installations: readonly ExecutionInstallation[],
+  observers: InvocationObservers,
+): Operation<DocumentExecution> {
+  return runInvocation(options, [...installations], observers);
 }
 
 /**

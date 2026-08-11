@@ -15,8 +15,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, resource, scoped, spawn, suspend, withResolvers } from "effection";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  createContext,
+  ensure,
+  resource,
+  scoped,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
+import { rm, writeTextFile } from "@effectionx/fs";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Operation } from "effection";
@@ -36,7 +46,7 @@ import {
 } from "../mod.ts";
 import type { ExecutionRequest, ModifierFactory } from "../mod.ts";
 import { executeInstalled } from "../host.ts";
-import { observeHandleForTesting } from "../src/execute.ts";
+import { executeObserved } from "../src/execute.ts";
 import type { ExecutionInstallation, JournalAdmission } from "../host.ts";
 
 const DOC = "# Hello\n";
@@ -58,16 +68,21 @@ function watched(): { stream: InMemoryStream; reads: number } {
   return watcher;
 }
 
-/** A directory holding one Markdown component, for this test only. */
+/**
+ * A directory holding one Markdown component, for this test only.
+ *
+ * `mkdtemp` is the one step `@effectionx/fs` has no equivalent for; the write
+ * and the removal go through it. Cleanup is an `ensure`, so a cancelled test
+ * cannot strand the directory.
+ */
 function useComponentFixture(): Operation<string> {
   return resource<string>(function* (provide) {
-    const dir = mkdtempSync(join(tmpdir(), "xmd-ep26-"));
-    writeFileSync(join(dir, "Accepted.md"), "ACCEPTED-COMPONENT\n");
-    try {
-      yield* provide(dir);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = yield* until(mkdtemp(join(tmpdir(), "xmd-ep26-")));
+    yield* ensure(function* () {
+      yield* rm(dir, { recursive: true, force: true });
+    });
+    yield* writeTextFile(join(dir, "Accepted.md"), "ACCEPTED-COMPONENT\n");
+    yield* provide(dir);
   });
 }
 
@@ -613,7 +628,8 @@ describe("Tier EP — the execution protocol", () => {
         },
       });
 
-      const execution = yield* executeInstalled(
+      const observing = withResolvers<void>();
+      const execution = yield* executeObserved(
         { ...inlineSource(DOC), stream: new InMemoryStream() },
         [
           {
@@ -624,6 +640,7 @@ describe("Tier EP — the execution protocol", () => {
             },
           },
         ],
+        { observed: () => observing.resolve() },
       );
       yield* reached.operation;
 
@@ -633,9 +650,6 @@ describe("Tier EP — the execution protocol", () => {
       // The acknowledgement comes from inside the observation itself: the
       // handle notifies once the consumer is cancellable. No elapsed time, and
       // a halt delivered earlier would leave `halted` empty.
-      const observing = withResolvers<void>();
-      yield* ensure(() => observeHandleForTesting(undefined));
-      observeHandleForTesting(() => observing.resolve());
       const consumer = yield* spawn(function* () {
         yield* execution;
       });
@@ -732,7 +746,8 @@ describe("Tier EP — the execution protocol", () => {
         },
       });
 
-      const execution = yield* executeInstalled(
+      const observing = withResolvers<void>();
+      const execution = yield* executeObserved(
         { ...inlineSource(DOC), stream: new InMemoryStream() },
         [
           {
@@ -746,12 +761,10 @@ describe("Tier EP — the execution protocol", () => {
             },
           },
         ],
+        { observed: () => observing.resolve() },
       );
       yield* reached.operation;
 
-      const observing = withResolvers<void>();
-      yield* ensure(() => observeHandleForTesting(undefined));
-      observeHandleForTesting(() => observing.resolve());
       const consumer = yield* spawn(function* () {
         yield* execution;
       });
@@ -775,6 +788,90 @@ describe("Tier EP — the execution protocol", () => {
       expect(result.ok ? undefined : result.error).toBe(durable);
     }
     expect(finalized).toEqual(["cleanup"]);
+  });
+
+  // EP28: an observer belongs to the invocation it watches. Two executions run
+  // concurrently, each with its own callback and its own finalizer; cancelling
+  // one consumer must reach only that invocation. A single shared slot would
+  // let one execution receive or overwrite the other's notification.
+  it("EP28: observers, cancellation and cleanup never cross invocations", function* () {
+    const seen: string[] = [];
+    const finalized: string[] = [];
+    const halted: string[] = [];
+    const reachedFirst = withResolvers<void>();
+    const reachedSecond = withResolvers<void>();
+    const observingFirst = withResolvers<void>();
+    const observingSecond = withResolvers<void>();
+
+    const settledSecond = yield* scoped(function* () {
+      yield* Execution.around({
+        *document([props], next) {
+          const which = seen.includes("start:first") ? "second" : "first";
+          seen.push(`start:${which}`);
+          if (which === "first") {
+            reachedFirst.resolve();
+            try {
+              yield* suspend();
+            } finally {
+              halted.push("first");
+            }
+          }
+          reachedSecond.resolve();
+          return yield* next(props);
+        },
+      });
+
+      const start = (name: string, observing: { resolve(): void }) =>
+        executeObserved(
+          { ...inlineSource(DOC), stream: new InMemoryStream() },
+          [
+            {
+              *install(): Operation<void> {
+                yield* ensure(() => {
+                  finalized.push(name);
+                });
+              },
+            },
+          ],
+          {
+            observed: () => {
+              seen.push(`observed:${name}`);
+              observing.resolve();
+            },
+          },
+        );
+
+      const first = yield* start("first", observingFirst);
+      yield* reachedFirst.operation;
+      const second = yield* start("second", observingSecond);
+
+      const firstConsumer = yield* spawn(function* () {
+        yield* first;
+      });
+      const secondConsumer = yield* spawn(function* () {
+        return yield* second;
+      });
+      yield* observingFirst.operation;
+      yield* observingSecond.operation;
+
+      // Only the first invocation's consumer is cancelled.
+      yield* firstConsumer.halt();
+
+      expect(halted).toEqual(["first"]);
+      expect(finalized).toEqual(["first"]);
+
+      // The second invocation is untouched and settles on its own.
+      return yield* secondConsumer;
+    });
+
+    // Each callback fired for its own invocation, once.
+    expect(seen.filter((entry) => entry.startsWith("observed:")).sort()).toEqual([
+      "observed:first",
+      "observed:second",
+    ]);
+    expect(settledSecond.ok).toBe(true);
+    expect(halted).toEqual(["first"]);
+    expect(finalized).toEqual(["first", "second"]);
   });
 
   // EP26: what the terminal accepted stops being the caller's to change. Each
