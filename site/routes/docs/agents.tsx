@@ -116,11 +116,10 @@ export default define.page(function Agents() {
         </li>
         <li>
           <strong>How long may it wait?</strong>{" "}
-          Prompts have a two-minute default limit. Use <code>--timeout 90</code>
-          {" "}
-          for a shared 90-second limit for each operation without its own
-          timeout, or set a prompt-specific <code>timeout</code>{" "}
-          when one request needs a different limit.
+          Nothing is bounded by default. Use <code>--timeout 20min</code>{" "}
+          for a deadline on the whole run, or set a <code>timeout</code>{" "}
+          prop on a prompt or its provider when one request needs a limit of its
+          own.
         </li>
       </ul>
       <p>

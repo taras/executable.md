@@ -107,34 +107,6 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     expect(result.stderr).not.toContain("unavailable");
   });
 
-  it("CA4: --timeout accepts only a complete decimal number of seconds", function* () {
-    // The parser coerces and drops lexical forms, so these are asserted
-    // through the CLI rather than against the parsing function alone.
-    const rejected = ["1e3", "0x10", ".5", "+1", "Infinity", "NaN", "12seconds", "0", "-1"];
-    for (const value of rejected) {
-      const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], env(fixture)).join();
-      });
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain("--timeout");
-      expect(result.stdout).not.toContain("PLAIN_MARKER");
-    }
-
-    for (const value of ["30", "0.5"]) {
-      const result = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--timeout", value, "--raw"], env(fixture)).join();
-      });
-      expect(result.code).toBe(0);
-      expect(result.stdout).toContain("PLAIN_MARKER");
-    }
-
-    const equalsForm = yield* useFixture({ "doc.md": PLAIN_DOC }, function* (fixture) {
-      return yield* runCli(["run", "doc.md", "--timeout=1e3", "--raw"], env(fixture)).join();
-    });
-    expect(equalsForm.code).toBe(1);
-    expect(equalsForm.stderr).toContain("--timeout");
-  });
-
   it("CA5: the default agent resolves environment, then flag, with the flag winning", function* () {
     const fromEnv = yield* useFixture({ "doc.md": AGENT_DOC }, function* (fixture) {
       return yield* runCli(["run", "doc.md", "--raw"], {
@@ -185,7 +157,6 @@ describe("Tier CA — xmd run agent stack", { sanitizeOps: false, sanitizeResour
     const options = [
       { name: "--agent-provider", args: ["--agent-provider", "acpx"] },
       { name: "--default-agent", args: ["--default-agent", "xmd-nonexistent-agent"] },
-      { name: "--timeout", args: ["--timeout", "30"] },
       { name: "--approve-all", args: ["--approve-all"] },
       { name: "--approve-reads", args: ["--approve-reads"] },
       { name: "--deny-all", args: ["--deny-all"] },

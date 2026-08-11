@@ -14,7 +14,6 @@ import {
   ServiceTeardownError,
   ServiceUnexpectedExitError,
   parseServiceReadyRecord,
-  timeout,
 } from "@executablemd/runtime";
 import type {
   ServiceAttachment,
@@ -191,9 +190,9 @@ function* waitForHandshake(options: {
   handshakeFailure: Operation<never>;
   process: { join(): Operation<{ code?: number; signal?: string }> };
   observer: HandshakeObserver;
-  startupTimeout: number;
+  startupTimeout: number | undefined;
 }): Operation<ServiceEndpoint> {
-  const result = yield* timebox(options.startupTimeout, () =>
+  const handshake = (): Operation<ServiceEndpoint> =>
     race([
       options.ready,
       (function* (): Operation<ServiceEndpoint> {
@@ -204,8 +203,14 @@ function* waitForHandshake(options: {
       (function* (): Operation<ServiceEndpoint> {
         return yield* options.handshakeFailure;
       })(),
-    ]),
-  );
+    ]);
+
+  // Nothing configured bounds startup, so the handshake waits for the run's
+  // own deadline rather than for a duration this host invented.
+  if (options.startupTimeout === undefined) {
+    return yield* handshake();
+  }
+  const result = yield* timebox(options.startupTimeout, handshake);
   if (result.timeout) {
     throw new ServiceStartupTimeoutError(options.startupTimeout);
   }
@@ -247,7 +252,8 @@ function startHostService(
     if (!/^[0-9a-f]{64}$/.test(token)) {
       throw new Error("attached service host returned an invalid handshake token");
     }
-    const startupTimeout = validTimeout(options.startupTimeout ?? (yield* timeout));
+    const startupTimeout =
+      options.startupTimeout === undefined ? undefined : validTimeout(options.startupTimeout);
     const ready = withResolvers<ServiceEndpoint>();
     const handshakeFailure = withResolvers<never>();
     const observer = createProtocolObserver({

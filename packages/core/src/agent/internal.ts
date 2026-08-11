@@ -26,6 +26,14 @@ interface AgentInternalApi {
   /** Permission mode inherited by `<AgentProvider>`. */
   permissionMode: PermissionMode;
   /**
+   * How long a prompt beneath an `<AgentProvider timeout>` may take, in
+   * milliseconds; undefined when nothing declared one.
+   *
+   * The agent layer keeps its own default because the run's `Config.timeout`
+   * is the deadline for the whole run, not a per-operation bound (§Config).
+   */
+  promptTimeout: number | undefined;
+  /**
    * Whether a prompt that fails should end the document even though the
    * author did not ask for it (`installPromptFailurePolicy`).
    *
@@ -57,6 +65,7 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   },
   defaultAgentName: undefined,
   permissionMode: "deny-all",
+  promptTimeout: undefined,
   // deno-lint-ignore require-yield
   *promptFailurePolicy(): Operation<boolean> {
     return false;

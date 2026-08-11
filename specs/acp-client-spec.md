@@ -1,8 +1,8 @@
 # Executable.md ACP Client
 
 The `Agent` Api, the `<Agent>` / `<Session>` / `<Prompt>` components, prompt
-journaling and replay, the provider-factory seam, and the shared `Config`
-timeout are implemented in `@executablemd/core`. A provider is supplied through
+journaling and replay, the provider-factory seam, and the `Config` timeouts are
+implemented in `@executablemd/core`. A provider is supplied through
 the `rootProvider` factory seam described below.
 
 ## The Agent Api
@@ -104,8 +104,10 @@ boundary runs after the component has returned.
 - **`<AgentProvider>`** resolves a registered provider by its `name` prop and
   installs it for its body. The optional `defaultAgent` prop overrides the
   inherited default agent for that body, and the optional `timeout` prop
-  overrides the contextual timeout. The permission mode is **inherited and has
-  no prop** — it always reaches the factory unchanged.
+  declares how long each prompt in that body may take. A prompt nobody bounded
+  has no timeout: the run deadline bounds the run, not each prompt inside it.
+  The permission mode is **inherited and has no prop** — it always reaches the
+  factory unchanged.
 
   ```md
   <AgentProvider name="acpx" defaultAgent="codex" timeout="30s">
@@ -159,16 +161,35 @@ was already handled where it occurred.
 ## Config
 
 `Config` (`@executablemd/runtime`, re-exported from `@executablemd/core`) is the
-shared execution config. It supplies the contextual `timeout` in milliseconds
-(default 120 000). Override it for a scope with
-`yield* Config.around({ timeout: () => 30_000 }, { at: "min" })`. The validated
-`yield* timeout` operation returns a positive, finite number of milliseconds and
-throws on any other value (zero, negative, NaN, Infinity, or a non-number).
+shared execution config. It carries three optional timeouts in milliseconds, and
+**there is no timeout by default**: each is `undefined` until something
+configures it, and `undefined` means the operation is not bounded.
 
-The timeout is shared: a per-call `timeout` always wins, and otherwise Process
-`exec`, Fetch, and agent prompts each resolve the validated contextual value. An
-explicit per-call timeout short-circuits that resolution, so an invalid
-contextual value is never consulted.
+| Field | Bounds | Consumed by |
+| --- | --- | --- |
+| `timeout` | the entire run, preparation and execution together | the outer run boundary |
+| `timeoutExec` | each exec block | exec blocks and the built-in `timeout` modifier |
+| `timeoutFetch` | each Fetch | Fetch |
+
+Override a field for a scope with
+`yield* Config.around({ timeoutExec: () => 30_000 }, { at: "min" })`. Installing
+at `min` is what lets a nested override win. Omitting a field inherits the
+enclosing value; it does not clear it. The validated `timeout`, `timeoutExec`
+and `timeoutFetch` operations each return a positive, finite number of
+milliseconds or `undefined`, and throw on any other value (zero, negative, NaN,
+Infinity, or a non-number) before the operation they would bound starts.
+
+Ownership is strict, and nothing falls back to a field it does not own. A
+per-call `timeout` always wins where one is supported; otherwise Fetch resolves
+`timeoutFetch`, and an exec block resolves `timeoutExec` at the block and hands
+it to the Process operation explicitly. The Process operation itself consults no
+configuration: what bounds a command is what its caller asked for. Agent prompts
+and service startup are bounded by what a document or caller declared for them,
+never by the run deadline.
+
+The run deadline encloses everything above, so a longer exec or Fetch timeout
+cannot outlive it. Its expiry is Effection cancellation rather than a result, so
+structured teardown still completes before the process exits.
 
 ## Permissions
 
@@ -197,20 +218,30 @@ stack instead.
 | --- | --- |
 | `--agent-provider <name>` | the registered provider to install (default `acpx`) |
 | `--default-agent <name>` | the default agent |
-| `--timeout <seconds>` | the shared contextual timeout |
 | `--approve-all` | approve every permission request |
 | `--approve-reads` | approve reads and searches, ask for the rest (default) |
 | `--deny-all` | deny every permission request |
 
 The permission options are mutually exclusive.
 
-`--timeout` is a number of seconds written as decimal digits with an optional
-fractional part, and the fractional form requires digits on both sides of the
-point — `30` and `0.5` are seconds, `.5` is not. The value is greater than zero.
-Signs, hexadecimal, scientific notation, `Infinity`, `NaN` and trailing text are
-rejected, and the whole argument has to match: `12seconds` is not twelve
-seconds. The raw argument text is what gets validated, because an argument
-parser may coerce or drop these forms before they reach the check.
+`xmd run` also takes the three timeout options, which are exclusive to it in the
+same way:
+
+| Option | Establishes |
+| --- | --- |
+| `--timeout <duration>` | the deadline for the whole run |
+| `--timeout-exec <duration>` | the default timeout for each exec block |
+| `--timeout-fetch <duration>` | the default timeout for each Fetch |
+
+An option nobody writes leaves its field absent, which is no timeout. Each value
+is a **duration**: a whole number with an optional unit — `500ms`, `30s`,
+`5min`, `20min` — where bare digits are milliseconds. The value is greater than
+zero. Empty, zero, negative, signed, hexadecimal, scientific-notation,
+`Infinity`, `NaN`, fractional and trailing-text forms are rejected, and the
+whole argument has to match: `30 seconds` is not a duration. The raw argument
+text is what gets validated, because an argument parser may coerce or drop these
+forms before they reach the check. A rejected value fails the invocation before
+it prepares a document.
 
 Invalid options and an unknown `--agent-provider` fail before the document
 executes, with a non-zero exit status.
@@ -247,7 +278,10 @@ prompt failure.
 `useAcpxProvider` exposes the same operations without the Agent install, so
 several independent providers can run in sibling scopes. The provider owns
 every resource it starts and creates the shared runtime lazily on first use with
-the contextual cwd and validated `timeout` — nothing spawns at install.
+the contextual cwd — nothing spawns at install, and no timeout is invented for a
+prompt nobody bounded. A prompt carries the duration its caller supplied, from
+`<Prompt timeout>` or the enclosing `<AgentProvider timeout>`, and otherwise
+none.
 
 - **Availability.** The first use of an agent validates it through a disposable
   probe runtime's `doctor()`; a non-ok report throws with the agent's code and

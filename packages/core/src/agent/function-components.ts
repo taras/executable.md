@@ -14,12 +14,11 @@
  * part of. None of them asks for anything special to make that so.
  */
 
-import { Config } from "@executablemd/runtime";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { content, hasContent } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
-import { parseDuration } from "../modifiers/timeout.ts";
+import { parseDuration } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
@@ -107,10 +106,15 @@ export function* AgentProvider(props: Record<string, Json>): Operation<Json> {
   }
 
   const timeoutProp = asString(props.timeout);
-  if (timeoutProp !== undefined) {
-    yield* Config.around({ timeout: () => parseDuration(timeoutProp) }, { at: "min" });
-  }
-  yield* AgentInternal.around({ defaultAgentName: () => defaultAgent }, { at: "min" });
+  const promptTimeout =
+    timeoutProp === undefined ? undefined : parseDuration(timeoutProp, "<AgentProvider timeout>");
+  yield* AgentInternal.around(
+    {
+      defaultAgentName: () => defaultAgent,
+      ...(promptTimeout === undefined ? {} : { promptTimeout: () => promptTimeout }),
+    },
+    { at: "min" },
+  );
   yield* factory({ defaultAgent, permissionMode });
 
   if (!(yield* hasContent())) {
@@ -195,8 +199,11 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
     options.session = sessionProp;
   }
   const timeoutProp = asString(props.timeout);
+  const inherited = yield* AgentInternal.operations.promptTimeout;
   if (timeoutProp !== undefined) {
-    options.timeout = parseDuration(timeoutProp);
+    options.timeout = parseDuration(timeoutProp, "<Prompt timeout>");
+  } else if (inherited !== undefined) {
+    options.timeout = inherited;
   }
 
   const throwOnError =

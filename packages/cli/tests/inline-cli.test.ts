@@ -255,7 +255,7 @@ describe(
         "--raw",
         "--verbose",
         "--timeout",
-        "5",
+        "5min",
         "--approve-reads",
       ]).join();
 

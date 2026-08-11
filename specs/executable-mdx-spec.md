@@ -514,16 +514,21 @@ Custom factories can be provided via `ExecuteOptions.modifiers`.
 **`exec`** — executes the code block as a shell command via
 `durableExec`. This is a terminal handler — it does not call `next()`.
 It reads the code block info from the Effection context via
-`useCodeBlock()`:
+`useCodeBlock()`. It resolves the exec default at the block —
+`timeoutExec` (`specs/acp-client-spec.md` §Config), which is what a
+`timeout=` modifier around it has already overridden, or what
+`xmd run --timeout-exec` established, or nothing — and hands it to the
+Process operation explicitly:
 
 ```typescript
 function createExecFactory(): ModifierFactory {
   return (_params) => (_args, _next) => function* () {
     const context = yield* useCodeBlock();
     const command = buildCommand(context.language, context.content);
+    const timeout = yield* timeoutExec;
     const result = yield* durableExec(
       `exec:${truncate(context.content, 40)}`,
-      { command, timeout: 30_000, throwOnError: false },
+      { command, timeout, throwOnError: false },
     );
     return {
       output: result.stdout,
@@ -685,27 +690,54 @@ completes.
 
 **`timeout`** — cancels the block if it does not complete within the
 specified duration. Uses `timebox()` from `@effectionx/timebox`, which
-returns a discriminated union (`Timeboxed<T>`) instead of throwing.
-Accepted units: `ms`, `s`, `m`. Default: `30s`.
+returns a discriminated union (`Timeboxed<T>`) instead of throwing. A
+duration is a whole number with an optional unit — `500ms`, `30s`, `5min`,
+`20min` — where bare digits are milliseconds.
+
+`timeout=<duration>` is what one block asks for. It boxes the block, and
+while it is delegating to the rest of the chain it is also the exec default
+that chain observes: it installs `timeoutExec` at `min` for its own scope, so
+the exec terminal inside it is bounded by the block's duration while
+middleware outside it still observes the enclosing default. The override ends
+with the middleware, so the next block is bounded by the run's default again.
+
+Bare `timeout` declares nothing of its own: it boxes the block at the run's
+exec default and installs no override. With no exec default configured it has
+named no duration at all, so it **refuses before the process starts** rather
+than running unbounded. `timeout=` is neither form — an explicit empty
+duration is a malformed one, and it is refused the same way.
+
+Only the modifier registry knows this behavior: nothing else in the chain
+reads the info string for a `timeout`, so replacing the registry entry through
+`ExecuteOptions.modifiers` replaces all of it, and a `timeout` written after a
+terminal modifier is unreachable and is never parsed or applied.
 
 ```typescript
 export const timeoutFactory: ModifierFactory = (params) =>
   (_args, next) => (function* () {
-    const ms = parseDuration(params ?? "30s");
-    const result = yield* timebox(ms, () => next());
+    // Bare `timeout` takes the run's exec default and refuses without one;
+    // `timeout=<duration>` declares its own for the chain it wraps.
+    const { ms, declared, label } = yield* effective(params);
+    const result = yield* scoped(function* () {
+      if (declared) {
+        yield* Config.around({ timeoutExec: () => ms }, { at: "min" });
+      }
+      return yield* timebox(ms, () => next());
+    });
     if (result.timeout) {
-      throw new Error(`eval block timed out after ${params ?? "30s"}`);
+      throw new Error(`eval block timed out after ${label}`);
     }
     return result.value;
   })();
-
-function parseDuration(s: string): number {
-  if (s.endsWith("ms")) return parseInt(s, 10);
-  if (s.endsWith("m"))  return parseInt(s, 10) * 60_000;
-  if (s.endsWith("s"))  return parseInt(s, 10) * 1_000;
-  return parseInt(s, 10);
-}
 ```
+
+`parseDuration` is the shared grammar in `packages/runtime/duration.ts`, used by
+the three command-line options and by every declarative duration a document
+writes. It accepts a whole number with an optional unit — `ms`, `s`, `m`, `min`
+— where bare digits are milliseconds, and refuses everything else: empty, zero,
+negative, signed, fractional, hexadecimal, scientific-notation, `Infinity`,
+`NaN`, and any trailing text. It substitutes nothing; a value it refuses fails
+where it was written.
 
 #### Chain composition
 
@@ -1550,7 +1582,9 @@ run but are absent from the diagnostic trace.
 | `src/eval-handler.ts` | `evalFactory` |
 | `src/eval-interpolate.ts` | `interpolateEvalBindings()` — bare `{name}` substitution |
 | `src/modifiers/persist.ts` | `persistFactory` |
-| `src/modifiers/timeout.ts` | `timeoutFactory`, `parseDuration()` |
+| `src/modifiers/timeout.ts` | `timeoutFactory` |
+| `packages/runtime/duration.ts` | `asDuration()`, `parseDuration()`, `durationError()` — the one duration grammar |
+| `packages/runtime/config.ts` | `Config`, and the validated `timeout` / `timeoutExec` / `timeoutFetch` operations |
 | `src/modifiers/daemon.ts` | `daemonFactory` — long-running subprocess terminal modifier |
 | `src/modifiers/ephemeral.ts` | `ephemeralFactory` — replay-safe live eval wrapper |
 | `src/modifiers/service.ts` | `serviceFactory` — scoped service attachment |
@@ -6960,7 +6994,7 @@ With the default directory resolver:
 [2] yield  root  { type: "import_component", name: "Footer" }
     result: { status: "ok", value: { path: "./components/Footer.md", content: "..." } }
 
-[3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"], timeout: 30000 }
+[3] yield  root  { type: "exec", name: "exec:date +%Y", command: ["bash", "-c", "date +%Y"] }
     result: { status: "ok", value: { exitCode: 0, stdout: "2026\n", stderr: "" } }
 
 [4] yield  root  { type: "eval", name: "eval:root:0", language: "js" }
@@ -7317,7 +7351,7 @@ visible warning blocks, gather into a separate error report).
 | I2 | `eval` returns empty output | `result.output === ""`, `exitCode === 0` |
 | I3 | `persist eval` composes | `persist` makes `persistent` answer true, `eval` reads it |
 | I4 | `timeout=5s eval` composes | Timeout cancels after 5s if block hangs |
-| I5 | `timeout eval` default | Default timeout is 30s |
+| I5 | `timeout eval` names no duration | Bounded by the run's exec default |
 | I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
 | I7 | `silent eval` | Silent wraps eval — both run, output empty |
 
@@ -7364,10 +7398,17 @@ visible warning blocks, gather into a separate error report).
 |---|------|--------|
 | M1 | Block completes within timeout | Result returned normally |
 | M2 | Block exceeds timeout | Error thrown: "eval block timed out after 5s" |
-| M3 | `parseDuration` handles `ms` | `"500ms"` → 500 |
-| M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
-| M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
-| M6 | Default timeout is 30s | `timeoutFactory(undefined)` → 30000ms |
+| M3 | `parseDuration` handles `ms`, `s`, `m`, `min` | `"500ms"` → 500, `"30s"` → 30000, `"5min"` → 300000 |
+| M4 | `parseDuration` refuses empty, zero, negative and malformed values | No duration, and no substitution |
+| M5 | The grammar is shared | The command-line options and a block's `timeout=` accept exactly the same spellings |
+| M6 | Bare `timeout` | Boxes the block at the run's exec default |
+| M7 | Bare `timeout` with no exec default | Refuses before the process starts |
+| M8 | `timeout=` and malformed durations | Refused before the process starts |
+| M9 | Exec block declares no duration | Bounded by the exec default, and by nothing when none is configured |
+| M10 | `timeout=<duration>` | Overrides the exec default for that block's chain alone |
+| M11 | A replaced `timeout` factory | No built-in override survives; an unreachable `timeout` is never applied |
+| M12 | The run deadline encloses preparation | Inspection, target and props preparation, provider installation, execution and output are all inside it; a run suspended in its first read is cancelled |
+| M13 | The run boundary consumes `Config.timeout` | It resolves the validated contextual operation once and boxes the run with that value; an enclosing deadline bounds a run that named none, and a malformed option is refused before any read |
 
 ### Tier O — Eval scope hierarchy
 
