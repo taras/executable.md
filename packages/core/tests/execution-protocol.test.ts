@@ -471,9 +471,6 @@ describe("Tier EP — the execution protocol", () => {
     expect(seen).toEqual(["document:installed", "teardown", "document:absent", "teardown"]);
   });
 
-  // EP26: what the terminal accepted stops being the caller's to change. The
-  // chain unwinds before the document runs, so a handler that delegates and
-  // then edits what it delegated would otherwise change what executes.
   // EP24: settlement owns the invocation scope. A caller that continues on the
   // completion continues after this invocation's cleanup has finished — which a
   // caller-owned resource would not give, since it would still be standing.
@@ -702,6 +699,67 @@ describe("Tier EP — the execution protocol", () => {
     // teardown did not erase that — by identity.
     expect(observed.ok).toBe(false);
     expect(observed.ok ? undefined : observed.error).toBe(durable);
+    expect(finalized).toEqual(["cleanup"]);
+  });
+
+  // EP25c: §8.1's other cancellation promise — a fatal failure raised *while*
+  // cancellation tears the invocation down is ranked and returned by identity,
+  // rather than being swallowed by the cancellation result.
+  it("EP25c: a fatal failure raised by cancellation teardown wins by identity", function* () {
+    const durable = new DurablePersistenceError("close", new Error("planted-teardown"));
+    const enteredTeardown = withResolvers<void>();
+    const released = withResolvers<void>();
+    const reached = withResolvers<void>();
+    const finalized: string[] = [];
+
+    const observed = yield* scoped(function* () {
+      yield* Execution.around({
+        *document([props], next) {
+          reached.resolve();
+          yield* suspend();
+          return yield* next(props);
+        },
+      });
+
+      const execution = yield* executeInstalled(
+        { ...inlineSource(DOC), stream: new InMemoryStream() },
+        [
+          {
+            *install(): Operation<void> {
+              yield* ensure(function* () {
+                finalized.push("cleanup");
+                enteredTeardown.resolve();
+                yield* released.operation;
+                throw durable;
+              });
+            },
+          },
+        ],
+      );
+      yield* reached.operation;
+
+      const consumer = yield* spawn(function* () {
+        yield* execution;
+      });
+      yield* sleep(1);
+      const halting = yield* spawn(function* () {
+        yield* consumer.halt();
+      });
+      // Cancellation is now inside teardown; let the finalizer raise.
+      yield* enteredTeardown.operation;
+      released.resolve();
+      yield* halting;
+
+      const first = yield* execution;
+      // Again: nothing restarts, nothing refinalizes.
+      const second = yield* execution;
+      return [first, second];
+    });
+
+    for (const result of observed) {
+      expect(result.ok).toBe(false);
+      expect(result.ok ? undefined : result.error).toBe(durable);
+    }
     expect(finalized).toEqual(["cleanup"]);
   });
 
