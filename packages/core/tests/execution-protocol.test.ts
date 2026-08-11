@@ -20,6 +20,7 @@ import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import type { Api } from "@effectionx/context-api";
 import { DurablePersistenceError, InMemoryStream } from "@executablemd/durable-streams";
+import { FilesInvariantError } from "@executablemd/runtime";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { Result } from "effection";
 import {
@@ -628,6 +629,9 @@ describe("Tier EP — the execution protocol", () => {
   // replaced. A fatal failure is reported by identity from wherever it came.
   it("EP27: teardown reconciles with the document outcome by precedence", function* () {
     const durable = new DurablePersistenceError("yield", new Error("planted"));
+    const otherDurable = new DurablePersistenceError("close", new Error("planted-second"));
+    const filesFatal = new FilesInvariantError("protocol");
+    const otherFilesFatal = new FilesInvariantError("protocol");
     const cleanup = new Error("INSTALLATION-CLEANUP");
 
     const cases: Array<{
@@ -669,6 +673,40 @@ describe("Tier EP — the execution protocol", () => {
         says: "a fatal teardown outranks an ordinary document failure",
         fail: new Error("DOCUMENT-FAILED"),
         teardown: durable,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "the document's durability failure precedes the teardown's",
+        fail: durable,
+        teardown: otherDurable,
+        expected: (result) => {
+          // Same kind on both sides: the one that happened first wins, and it
+          // is the exact object rather than a rebuilt one.
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "the document's Files failure precedes the teardown's",
+        fail: filesFatal,
+        teardown: otherFilesFatal,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(filesFatal);
+        },
+      },
+      {
+        says: "durability outranks Files wherever each came from",
+        fail: filesFatal,
+        teardown: durable,
+        expected: (result) => {
+          expect(result.ok ? undefined : result.error).toBe(durable);
+        },
+      },
+      {
+        says: "a document durability failure outranks a Files teardown",
+        fail: durable,
+        teardown: filesFatal,
         expected: (result) => {
           expect(result.ok ? undefined : result.error).toBe(durable);
         },
