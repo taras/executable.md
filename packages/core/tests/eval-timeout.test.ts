@@ -56,7 +56,7 @@ describe("Tier T7 — timeout modifier", () => {
     expect(parseDuration("1000")).toBe(1000);
   });
 
-  it("timeout modifier with default 30s", function* () {
+  it("timeout modifier with no declared duration", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "test.md": "```js timeout eval\nconst x = 1;\n```\n",
@@ -89,6 +89,36 @@ describe("Tier T7 — timeout modifier", () => {
     const output = yield* collect(yield* execute({ path: "test.md", stream }));
 
     expect(output).toContain("timed out after 25ms");
+  });
+
+  it("T56: a timeout modifier that names no duration falls back to the run's", function* () {
+    const stream = new InMemoryStream();
+    yield* Config.around({ timeout: () => 25 }, { at: "min" });
+    yield* useStubFs({
+      "test.md": "```bash timeout exec\nsleep 2\n```\n",
+    });
+
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+
+    expect(output).toContain("timed out after 25ms");
+  });
+
+  /**
+   * An eval block reaches no Process Api, so the only thing that can bound it
+   * is the modifier's own timebox. That is what makes this the case for the
+   * fallback itself rather than for what a command inherits.
+   */
+  it("T57: the timebox of a modifier that names no duration is the run's timeout", function* () {
+    const stream = new InMemoryStream();
+    yield* Config.around({ timeout: () => 25 }, { at: "min" });
+    yield* useStubFs({
+      "test.md": '```ts timeout eval\nyield* sleep(300);\noutput("SLEPT");\n```\n',
+    });
+
+    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+
+    expect(output).toContain("eval block timed out after 25ms");
+    expect(output).not.toContain("SLEPT");
   });
 
   it("T55: a block's declared duration outranks a shorter contextual one", function* () {

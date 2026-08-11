@@ -689,22 +689,28 @@ completes.
 **`timeout`** — cancels the block if it does not complete within the
 specified duration. Uses `timebox()` from `@effectionx/timebox`, which
 returns a discriminated union (`Timeboxed<T>`) instead of throwing.
-Accepted units: `ms`, `s`, `m`. Default: `30s`.
+Accepted units: `ms`, `s`, `m`.
 
-The declared duration is also the contextual timeout for what the block
-runs, installed at `min` for the chain's scope so it outranks an ambient
-value and a nested block still overrides it. A command, request, or prompt
-inside the block is therefore bounded by what the block asked for rather
-than by the ambient default. The timebox starts first and stays the
-authority over the block itself.
+A declared duration is also the contextual timeout for what the block runs,
+installed at `min` for the chain's scope so it outranks an ambient value and
+a nested block still overrides it. A command, request, or prompt inside the
+block is therefore bounded by what the block asked for rather than by the
+ambient default. The timebox starts first and stays the authority over the
+block itself.
+
+A `timeout` that names no duration declares nothing: it installs no
+contextual value and its own timebox is the run's timeout — what
+`xmd run --timeout` sets, or the 120-second default. Both halves of the
+block are then bounded by the same value the rest of the run is.
 
 ```typescript
 export const timeoutFactory: ModifierFactory = (params) =>
   (_args, next) => (function* () {
-    const ms = parseDuration(params ?? "30s");
+    const ms = params ? parseDuration(params) : yield* contextualTimeout;
+    const declared = params || `${ms}ms`;
     const result = yield* timebox(ms, () => next());
     if (result.timeout) {
-      throw new Error(`eval block timed out after ${params ?? "30s"}`);
+      throw new Error(`eval block timed out after ${declared}`);
     }
     return result.value;
   })();
@@ -7327,7 +7333,7 @@ visible warning blocks, gather into a separate error report).
 | I2 | `eval` returns empty output | `result.output === ""`, `exitCode === 0` |
 | I3 | `persist eval` composes | `persist` makes `persistent` answer true, `eval` reads it |
 | I4 | `timeout=5s eval` composes | Timeout cancels after 5s if block hangs |
-| I5 | `timeout eval` default | Default timeout is 30s |
+| I5 | `timeout eval` names no duration | Bounded by the run's contextual timeout |
 | I6 | `persist timeout=10s eval` | Three modifiers compose: persist → timeout → eval |
 | I7 | `silent eval` | Silent wraps eval — both run, output empty |
 
@@ -7377,7 +7383,7 @@ visible warning blocks, gather into a separate error report).
 | M3 | `parseDuration` handles `ms` | `"500ms"` → 500 |
 | M4 | `parseDuration` handles `s` | `"30s"` → 30000 |
 | M5 | `parseDuration` handles `m` | `"2m"` → 120000 |
-| M6 | Default timeout is 30s | `timeoutFactory(undefined)` → 30000ms |
+| M6 | `timeout` names no duration | `timeoutFactory(undefined)` boxes at the contextual timeout |
 | M7 | Exec block declares no duration | Bounded by the contextual timeout, not a fixed 30s |
 | M8 | Block declares a longer duration | The block's duration outranks a shorter contextual one |
 | M9 | `xmd run --timeout` reaches a block | A block with no duration of its own is bounded by the CLI value |

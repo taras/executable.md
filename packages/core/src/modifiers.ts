@@ -18,7 +18,7 @@ import type { Middleware } from "@effectionx/middleware";
 import { combine } from "@effectionx/middleware";
 import { Config } from "@executablemd/runtime";
 import { Component, codeBlock } from "./component-api.ts";
-import { DEFAULT_DURATION, parseDuration } from "./modifiers/timeout.ts";
+import { parseDuration } from "./modifiers/timeout.ts";
 import type { CodeBlockContext, CodeBlockResult, Modifier } from "./types.ts";
 
 /**
@@ -148,10 +148,10 @@ export function composeModifierChain(
   // What a block gives itself to finish in is also what it gives the
   // operations it runs. `timeoutFactory`'s timebox starts first and stays the
   // authority over the block; this is what stops a command, a request, or a
-  // prompt inside it from being cut off at the ambient default instead.
+  // prompt inside it from being cut off at the ambient default instead. A block
+  // that names no duration installs nothing and inherits the run's.
   const declared = modifiers.find((modifier) => modifier.name === "timeout");
-  const declaredMs =
-    declared === undefined ? undefined : parseDuration(declared.params ?? DEFAULT_DURATION);
+  const declaredMs = declared?.params ? parseDuration(declared.params) : undefined;
 
   // Return a thunk that provides the code block contextually for the
   // duration of the chain, then runs the composed middleware.

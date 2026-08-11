@@ -171,8 +171,10 @@ explicit per-call timeout short-circuits that resolution, so an invalid
 contextual value is never consulted.
 
 An executable code block supplies no per-call timeout, so `exec` blocks are
-bounded by this value. A `timeout` modifier declares it for its own chain, which
-is how a document gives one block longer than the rest of the run has.
+bounded by this value. A `timeout` modifier that names a duration declares it
+for its own chain, which is how a document gives one block longer than the rest
+of the run has; one that names none falls back to this value like everything
+else.
 
 ## Permissions
 

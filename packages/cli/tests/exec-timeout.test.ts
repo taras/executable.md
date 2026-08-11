@@ -37,6 +37,15 @@ const RAISED = [
   "",
 ].join("\n");
 
+const INHERITED = [
+  "# Doc",
+  "",
+  "```bash timeout exec",
+  "sleep 3 && echo INHERITED_DONE",
+  "```",
+  "",
+].join("\n");
+
 describe("Tier XT — CLI timeout for code blocks", () => {
   it("XT1: --timeout bounds a block that declares no duration", function* () {
     yield* useDocument(SLOW, function* (dir) {
@@ -55,6 +64,16 @@ describe("Tier XT — CLI timeout for code blocks", () => {
       }).join();
       expect(stdout).toContain("RAISED_DONE");
       expect(stdout).not.toContain("timed out");
+    });
+  });
+
+  it("XT3: a timeout modifier that names no duration inherits --timeout", function* () {
+    yield* useDocument(INHERITED, function* (dir) {
+      const { stdout } = yield* runCli(["run", "doc.md", "--timeout", "1", "--raw"], {
+        cwd: dir,
+      }).join();
+      expect(stdout).toContain("timed out after 1000ms");
+      expect(stdout).not.toContain("INHERITED_DONE");
     });
   });
 });

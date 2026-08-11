@@ -11,12 +11,10 @@
 
 import { timebox } from "@effectionx/timebox";
 import { ephemeral } from "@executablemd/durable-streams";
+import { timeout as contextualTimeout } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import type { ModifierFactory } from "../modifiers.ts";
 import type { CodeBlockResult } from "../types.ts";
-
-/** The duration a `timeout` modifier that names none declares. */
-export const DEFAULT_DURATION = "30s";
 
 /**
  * Parse a duration string into milliseconds.
@@ -43,8 +41,9 @@ export function parseDuration(s: string): number {
 /**
  * Wrapping modifier that constrains block execution time.
  *
- * Usage: `timeout=30s eval` or `timeout=500ms eval`
- * Default: 30s if no params provided.
+ * Usage: `timeout=30s eval` or `timeout=500ms eval`. A block that names no
+ * duration falls back to the run's contextual timeout — what
+ * `xmd run --timeout` sets — rather than to a number of its own.
  *
  * The timebox() call is an Operation (yields Effect values), so it
  * must be bridged into the Workflow context via ephemeral(). The
@@ -53,12 +52,13 @@ export function parseDuration(s: string): number {
  */
 export const timeoutFactory: ModifierFactory = (params) => (_args, next) =>
   (function* () {
-    const duration = params ?? DEFAULT_DURATION;
+    const ms = params ? parseDuration(params) : yield* ephemeral(contextualTimeout);
+    const declared = params || `${ms}ms`;
     const result = yield* ephemeral(
-      timebox(parseDuration(duration), () => next() as unknown as Operation<CodeBlockResult>),
+      timebox(ms, () => next() as unknown as Operation<CodeBlockResult>),
     );
     if (result.timeout) {
-      throw new Error(`eval block timed out after ${duration}`);
+      throw new Error(`eval block timed out after ${declared}`);
     }
     return result.value;
   })();
