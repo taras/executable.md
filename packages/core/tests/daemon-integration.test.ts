@@ -19,6 +19,7 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { race, sleep } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { Stdio } from "@effectionx/process";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useDaemonTimeline } from "./daemon-timeline.ts";
@@ -93,7 +94,14 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
+      let displayed = "";
+      const decoder = new TextDecoder();
+      yield* Stdio.around({
+        *stdout([bytes]) {
+          displayed += decoder.decode(bytes);
+        },
+      });
+      yield* collect(
         yield* execute({
           path: path.join(tmpDir, "doc.md"),
           stream,
@@ -101,7 +109,8 @@ describe("Tier Q — Daemon integration", () => {
         }),
       );
 
-      expect(output).toContain("probe");
+      // The probe's own text reached the reader as it ran (#441).
+      expect(displayed).toContain("probe");
       expect(timeline).toEqual(["daemon:start", "daemon:stop", "probe"]);
     } finally {
       cleanup(tmpDir);
@@ -138,7 +147,14 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
+      let displayed = "";
+      const decoder = new TextDecoder();
+      yield* Stdio.around({
+        *stdout([bytes]) {
+          displayed += decoder.decode(bytes);
+        },
+      });
+      yield* collect(
         yield* execute({
           path: path.join(tmpDir, "doc.md"),
           stream,
@@ -146,7 +162,8 @@ describe("Tier Q — Daemon integration", () => {
         }),
       );
 
-      expect(output).toContain("probe");
+      // The probe's own text reached the reader as it ran (#441).
+      expect(displayed).toContain("probe");
       expect(timeline).toEqual(["daemon:start", "daemon:stop", "probe"]);
     } finally {
       cleanup(tmpDir);

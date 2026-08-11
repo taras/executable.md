@@ -17,6 +17,8 @@ interface EachRun {
   segments: Segment[];
   output: string;
   env: Record<string, unknown> | undefined;
+  /** Set when a checked command failure ended the expansion (#441). */
+  failure: string | undefined;
 }
 
 function runEach(
@@ -47,8 +49,19 @@ function runEach(
       yield* Component.around({ env: () => testEnv }, { at: "min" });
       envValues = testEnv.values;
     }
-    const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
-    return { segments, output: renderSegments(segments), env: envValues };
+    // A checked command failure ends the expansion (#441); the environment is
+    // this frame's either way, so what a run bound stays readable.
+    try {
+      const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      return { segments, output: renderSegments(segments), env: envValues, failure: undefined };
+    } catch (error) {
+      return {
+        segments: [],
+        output: "",
+        env: envValues,
+        failure: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 }
 
@@ -134,9 +147,8 @@ describe("Tier Each — native iteration directive", () => {
       codeResult: { output: "partial\n", exitCode: 1, stderr: "boom" },
     });
     expect(run.env?.captured).toBeUndefined();
-    expect(errorMessages(run.segments)).toHaveLength(2);
-    expect(errorMessages(run.segments)[0]).toContain("Command failed (exit 1): boom");
-    expect(run.segments.every((segment) => segment.type === "error")).toBe(true);
+    expect(run.failure).toContain("Command failed (exit 1): boom");
+    expect(run.segments).toEqual([]);
   });
 
   it("E9: missing in is rejected", function* () {
