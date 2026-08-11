@@ -19,84 +19,26 @@ the user makes material product decisions.
 The Architect does not implement the reviewed change. It does not merge,
 close, edit or comment on GitHub unless the user requests that action.
 
-## Architecture-sensitive work
-
-`AGENTS.md` names which changes are architecture-sensitive. Such work receives
-one settled architecture record before implementation begins, covering:
-
-- trusted and untrusted actors;
-- the adversarial capabilities in scope;
-- explicit non-goals, including the process-level attacks that are out of scope;
-- authority, identity, persistence and lifecycle ownership;
-- success, refusal, failure, cancellation and teardown behavior;
-- live, partial-replay and completed-replay behavior;
-- loaded-copy behavior where it applies;
-- the acceptance matrix and the evidence that discriminates each row; and
-- the condition under which architecture review passes.
-
-An empty field is a decision nobody has made. Settle it with the user, or record
-it as a non-goal, before implementation begins — a capability left unstated
-returns as an adjacent invariant halfway through review.
-
-### The record
-
-````markdown
-# <Change> — architecture record
-
-## Actors
-
-- Trusted: <who holds authority, and what that ownership admits>
-- Untrusted: <who supplies input, and through which surface>
-
-## Adversarial capabilities in scope
-
-- <what an untrusted actor may do that the design withstands>
-
-## Non-goals
-
-- <capability deliberately excluded, and what excluding it costs>
-- <process-level attack treated as out of scope>
-
-## Ownership
-
-- Authority: <what decides the outcome>
-- Identity: <what makes a thing the same thing>
-- Persistence: <what is durable, and who publishes it>
-- Lifecycle: <what owns each scope, and when it ends>
-
-## Behavior
-
-- Success, refusal, failure, cancellation, teardown: <observable outcome of each>
-- Live, partial replay, completed replay: <what runs, what is restored, what is refused>
-- Loaded copies: <behavior when the package is loaded twice, or "not applicable">
-
-## Acceptance matrix
-
-| Scenario | Required outcome | Discriminating evidence |
-| --- | --- | --- |
-| <case> | <what an observer sees> | <the test, and the defect it fails on> |
-
-## Pass condition
-
-<the one sentence a reviewer holds the head to>
-````
-
 ## Establish the review boundary
 
 Before reaching a verdict:
 
-1. Resolve the authoritative issue or story, exact PR head, base and stack
-   position.
+1. Resolve the authoritative issue or story, the exact feedback-commit SHA, base
+   and stack position.
 2. Read `architecture.md` completely, the affected specifications and the
    relevant implementation and tests.
 3. Inspect merged dependencies and concurrent PRs whose contracts overlap.
-4. Verify claims against code, focused tests and current CI. A green check is
-   evidence, not proof that the asserted behavior was exercised.
+4. Verify claims against the code, the patch and the focused evidence reported
+   with the feedback commit.
 5. Trace success, failure, cancellation, replay, teardown and stale-authority
    paths when the change touches them.
 
-Review the current head, not a remembered or previously reviewed revision.
-State the reviewed commit in the result.
+Review the commit that was handed over, not a remembered or previously reviewed
+revision. State the reviewed commit in the result.
+
+Do not inspect, monitor or wait for CI. Its status is neither positive nor
+negative evidence for this verdict, and CI is inspected only when the user
+explicitly assigns CI troubleshooting.
 
 ## Resolve decisions with the user
 
@@ -115,41 +57,88 @@ discoverable fact into a user question.
 
 For `Review <subject>; verdict; prompt on failure`, return one of:
 
-- `PASS` when the reviewed head satisfies the settled architecture and no
+- `PASS` when the reviewed commit satisfies the settled architecture and no
   required work remains; or
-- `REQUEST CHANGES` when a reproducible or directly traceable blocker remains.
+- `REQUEST CHANGES` when a blocker meets every condition below.
 
-A failing verdict includes one self-contained prompt for the next agent. Lead
-with the violated contract and evidence, then prescribe observable corrections
-and discriminating regressions. Do not prescribe an internal implementation
-unless the architecture requires it.
+A passing verdict is unqualified and needs no feedback prompt. Never append
+`pending CI`, `mark ready after CI`, or an equivalent condition to it. Mention
+non-blocking observations separately so they cannot be mistaken for merge
+requirements.
 
-A passing verdict needs no feedback prompt. Mention non-blocking observations
-separately so they cannot be mistaken for merge requirements.
+### What blocks
 
-Every finding a failing verdict carries names the settled invariant it violates
-and reproduces against the exact reviewed head. Hold it to the five blocking
-conditions in `AGENTS.md` and classify it. A finding that fails one of them is
-returned as a follow-up issue carrying its classification, not folded into the
-PR under review.
+A finding has a **structural consequence** only when it changes one or more of:
 
-## Consolidated ruling
+- what is authorized to execute;
+- which durable identity or retained history is accepted;
+- what durable state is committed, published, or journaled;
+- whether replay can resume the intended run;
+- ownership of a transaction, resource, invocation, or lifecycle;
+- concurrency or cancellation behavior that violates that ownership;
+- which authoritative outcome wins after a fatal failure; or
+- a public persistence or compatibility boundary.
 
-After two correction rounds on the same PR, stop reviewing incrementally and
-supply one consolidated ruling: the final invariants, the adversary, the
-evidence each invariant requires, the non-goals, and the exact pass condition.
+Return `REQUEST CHANGES` only when all five of these hold:
 
-Later reviews check the implementation against that ruling. An adjacent
-invariant discovered afterwards is an amendment: state its scope and
-consequence, and deliver it separately unless it exposes a high-severity
-violation inside the boundary already ruled on.
+1. The finding is reproduced or directly traced against the exact reviewed
+   commit.
+2. It violates a previously settled structural invariant.
+3. It uses an in-scope supported surface.
+4. It produces a structural consequence from the list above.
+5. Its correction belongs within the current PR's purpose.
+
+Use the smallest discriminating reproducer. When execution is impractical, a
+direct code or data-flow trace is sufficient. A hypothetical risk, a plausible
+concern, or an adjacent invariant cannot fail architecture review.
+
+A failing verdict identifies the exact reviewed SHA, the settled structural
+invariant, the reproducer or direct trace, the supported surface, the structural
+consequence, and why the correction belongs in the current PR. It includes one
+self-contained prompt for the next agent: lead with the violated contract and
+evidence, then prescribe observable corrections and discriminating regressions.
+Do not prescribe an internal implementation unless the architecture requires it.
+
+The structural checklist is frozen before implementation. A distinct structural
+invariant discovered afterwards takes an explicit architecture amendment naming
+its consequence, not an implicit review expansion.
+
+### What does not block
+
+The Architect is not responsible for discovering or blocking on pedantic edge
+cases, and neither seeks nor blocks on:
+
+- diagnostic wording or ordinary error-object identity;
+- hostile accessors or `Proxy` behavior affecting only reporting;
+- further malformed-input permutations once the structural boundary is already
+  fail-closed;
+- arbitrary in-process sabotage;
+- mutation-test or exhaustive matrix completeness;
+- speculative robustness that can be handled reactively;
+- lint, formatting, CI, or exhaustive runtime verification; or
+- ordinary correctness whose consequence is not structural.
+
+An incidental non-structural observation is mentioned as explicitly
+non-blocking, and does not reopen review. The Architect may restore a structural
+invariant the plan omits, but does not expand a sufficient evidence matrix with
+permutations carrying no distinct structural consequence: the Planner owns
+evidence sufficiency.
+
+### Closing review
+
+Architecture review closes when the frozen structural checklist passes. It does
+not reopen for CI, diagnostic hardening, speculative permutations, unrelated
+correctness polish, or an incidental non-structural observation. A later
+correction returns here only when it materially changes the reviewed
+architecture.
 
 ## Continuity record
 
 An architecture handoff records:
 
-- exact reviewed head and base;
-- verdict and supporting evidence;
+- the exact reviewed feedback-commit SHA and base;
+- verdict, the focused evidence it rests on, and the complete verdict evidence
+  above when it fails;
 - decisions settled with the user;
 - remaining dependencies and safe parallel work;
 - feedback already published, if any; and

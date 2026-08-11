@@ -73,9 +73,14 @@ is the post-merge proof, and a failure there opens a `ci-main-red` issue.
 
 ## Verification
 
-CI runs the complete Deno, Node, and Bun suites. Local verification is for a
-short feedback loop: run the smallest tests that exercise the behavior being
-changed, then rely on CI for exhaustive coverage.
+Verification happens at two boundaries. **Implementation feedback** runs the
+smallest evidence that discriminates the change, so a reviewing role receives a
+stable commit quickly. **Delivery** runs the exhaustive battery and the required
+CI checks before merge. A feedback verdict answers whether one commit satisfies
+the settled plan or architecture; it does not answer whether the branch is ready
+to merge.
+
+### Test selection
 
 Use one of these forms while implementing:
 
@@ -90,19 +95,44 @@ deno task test --related=packages/core/src/expand.ts
 deno task test packages/core/tests/expand.test.ts
 ```
 
+Choose in this order: a known regression or integration test when the changed
+boundary is known; otherwise `deno task test --changed` for uncommitted work;
+and `deno task test --changed=origin/main` when branch-level changes belong in
+the selection.
+
 Prefer explicit test files when the behavior crosses a boundary the module
 graph cannot see, such as a subprocess, fixture, generated file, or dynamic
 import. `--related` and `--changed` select transitively through imports; they do
 not prove that every black-box consumer has been found. Add each known
 integration or regression test explicitly in that case.
 
-Before committing changes to source or tests, run `deno task lint`, `deno task
-check`, `deno task check:jsr`, and the affected Deno tests. Do not run the full
-test suite under each runtime merely for confidence: the `test-deno`,
-`test-node`, and `test-bun` CI jobs own that exhaustive pass. Run a full suite
-locally only when the change affects test discovery, a runtime adapter, shared
-test setup, or another boundary that makes affected-test selection incomplete,
-or when the user asks for it.
+### Feedback commits
+
+A **feedback commit** is the stable revision offered to a Planner or Architect
+once the smallest relevant affected tests pass. Commit promptly when that
+focused evidence passes, and hand over the exact commit SHA together with every
+focused command run. The reviewing role inspects that exact commit. When a
+focused test fails, fix it and rerun it before creating the feedback commit.
+
+`deno task lint`, `deno task check`, `deno task check:jsr`, the complete local
+suite, and CI are not prerequisites for a feedback commit. Waiting for them
+withholds the commit the feedback exists to be given against.
+
+The specialized procedures in this document are not ordinary confidence checks,
+and each still applies when a change touches what it covers: dependency layout
+and mutation, release targets and the release specification, generated
+artifacts, cache purity and `deno task verify:clean`, flakes, and `main` health.
+
+### Delivery verification
+
+A **delivery gate** is the verification required before merge. Branch protection
+and the required CI checks are authoritative there.
+
+Do not run the full test suite under each runtime merely for confidence: the
+`test-deno`, `test-node`, and `test-bun` CI jobs own that exhaustive pass. Run a
+full suite locally only when the change affects test discovery, a runtime
+adapter, shared test setup, or another boundary that makes affected-test
+selection incomplete, or when the user asks for it.
 
 To reproduce the complete applicable battery locally, one command runs it
 concurrently:
@@ -158,9 +188,9 @@ The complete battery consists of:
 4. **JSR publishability**: `deno task check:jsr` — must end with
    `Success Dry run complete`
 
-Do not commit if a local check fails. Fix the issue first, then re-run the
-failed check and every affected test. CI remains responsible for the complete
-battery unless the change meets one of the full-suite conditions above.
+A failing check in the battery is fixed before the branch is offered for merge:
+re-run the failed check and every affected test. CI remains responsible for the
+complete battery unless the change meets one of the full-suite conditions above.
 
 Each command derives its own scope, so a new package under `packages/` — and a
 new test file under any member's `tests/` — is covered without editing anything
@@ -275,10 +305,11 @@ here:
 ## PR Process
 
 1. Use .github/pull_request_template.md
-2. After PR is open, monitor PR for
-   1. CI failures
-   2. Comments with feedback
-   3. Integrate changes feedback appears
+2. Feedback review runs against one exact commit SHA and is independent of CI.
+   Neither requesting a verdict nor returning one waits for a check to finish.
+3. After the PR is open, delivery belongs to the Implementor or maintainer:
+   required checks, CI failures, and review comments. Integrate feedback as it
+   appears.
 
 ## Agent Roles
 
@@ -312,68 +343,74 @@ Conversation memory is not an authoritative project record. Consequential
 decisions belong in architecture, specifications, issues, PR comments or named
 handoff artifacts, as authorized by the user.
 
-## Architecture-sensitive review
+## Review boundaries
 
-A change is architecture-sensitive when it affects authority or trusted-host
-ownership; durable identity, admission or publication; replay and
-retained-history compatibility; concurrency, cancellation, resource lifetime or
-teardown; failure precedence or exact identity; loaded-package-copy composition;
-or a public middleware contract.
+An ordinary implementation verdict reviews one exact feedback-commit SHA against
+the settled contract, the patch, the implementation and the focused evidence
+reported with it. It does not inspect, monitor or wait for CI, and CI status is
+neither positive nor negative evidence for it. A passing verdict is `PASS` —
+never `PASS pending CI`, `mark ready after CI`, or an equivalent condition. CI
+is inspected only when the user explicitly assigns CI troubleshooting.
 
-Such a change carries one settled architecture record before implementation
-begins. The [Architect](.agents/architect.md) produces it, and that contract
-states what it holds: the actors, the adversarial capabilities in scope, the
-explicit non-goals, the ownership boundaries, the behavior across success,
-failure, cancellation, teardown and replay, the acceptance matrix, and the
-condition under which architecture review passes.
+### Structural consequences
 
-### When a finding blocks
+An architecture finding has a **structural consequence** only when it changes
+one or more of:
 
-A finding blocks the current PR when all five of these are true:
+- what is authorized to execute;
+- which durable identity or retained history is accepted;
+- what durable state is committed, published, or journaled;
+- whether replay can resume the intended run;
+- ownership of a transaction, resource, invocation, or lifecycle;
+- concurrency or cancellation behavior that violates that ownership;
+- which authoritative outcome wins after a fatal failure; or
+- a public persistence or compatibility boundary.
 
-1. It reproduces against the exact reviewed head.
-2. It violates a named, already-settled invariant.
-3. It uses an in-scope input or supported public surface.
-4. It has an observable authority, durability, replay, lifecycle or
-   public-completion consequence.
-5. Its correction belongs within the PR's existing purpose.
+The Architect returns `REQUEST CHANGES` only when all five of these hold:
 
-Classify every finding as one of:
+1. The finding is reproduced or directly traced against the exact reviewed
+   commit.
+2. It violates a previously settled structural invariant.
+3. It uses an in-scope supported surface.
+4. It produces a structural consequence from the list above.
+5. Its correction belongs within the current PR's purpose.
 
-- **architecture blocker** — changes what executes, what history or identity is
-  accepted, what durable state is published, or what authoritative outcome wins;
-- **correctness blocker** — violates an explicit public contract on a supported
-  path; or
-- **hardening follow-up** — extends the threat model, requires arbitrary process
-  sabotage, affects only non-authoritative diagnostics, or falls outside the
-  PR's purpose.
+The verdict names every one of them: the reviewed SHA, the settled invariant,
+the reproducer or direct trace, the supported surface, the structural
+consequence, and why the correction belongs in this PR. A hypothetical risk, a
+plausible concern, or an adjacent invariant cannot fail architecture review.
 
-A finding that fails one of the five conditions becomes a follow-up issue rather
-than an unstated extension of the contract the PR is held to. These two-word
-names classify review findings; `architecture.md`'s *blocker* — an execution
-that needs input — keeps its own meaning.
+The structural checklist is frozen before implementation. A distinct structural
+invariant added afterwards takes an explicit architecture amendment naming its
+consequence, not an implicit review expansion.
 
-### Closing the review
+### Finite evidence
 
-An accepted architecture ruling is checked against, not extended. A new material
-invariant requires an explicit amendment stating its scope and consequence, and
-is delivered separately unless it exposes a high-severity violation inside the
-current boundary.
+The Planner owns the evidence sufficient to prove the settled acceptance
+criteria: how much implementation detail each criterion needs, the
+representative scenarios, the focused tests, and when one regression proves a
+criterion. That acceptance and evidence matrix is frozen before implementation.
 
-After two correction rounds the Architect supplies one consolidated ruling:
-final invariants, the adversary, the required evidence, the non-goals and the
-exact pass condition. The Implementor reports against that checklist at one
-exact head. The final reviewer either identifies a checklist violation with a
-reproducer or passes the PR. Documentation cleanup and speculative hardening do
-not restart architecture review.
+The Implementor executes the frozen matrix. When implementation evidence shows
+the matrix cannot prove a criterion, the Implementor returns that evidence
+rather than expanding acceptance independently. The Architect may restore a
+structural invariant the plan omits, but does not expand a sufficient matrix
+with permutations that carry no distinct structural consequence.
 
-Prefer one authority or lifecycle boundary per prerequisite PR while `main` can
-stay coherent. Independent invariants are not combined because one review loop
-found them together.
+Once implementation begins, a newly imagined edge case blocks only when it
+proves an existing criterion unmet, or carries a distinct structural consequence
+requiring an explicit architecture amendment.
 
-### What these rules do not license
+### Follow-ups and closure
 
-An unusual input is not irrelevant for being unusual. A green check is not
-architecture evidence. A demonstrated high-severity defect blocks however late
-it appears. An ordinary PR is not threat-modeled — this section governs the
-changes named at the top of it and nothing else.
+A non-blocking observation does not automatically become an issue. The Planner
+decides whether recurrence likelihood, user impact, or expected remediation
+value makes it worth tracking; otherwise the behavior stays for reactive
+maintenance.
+
+Architect review closes when the frozen structural checklist passes. Planner
+review closes when the frozen acceptance criteria and the selected evidence
+pass. Neither role reopens review for CI, diagnostic hardening, speculative
+permutations, unrelated correctness polish, or an incidental non-structural
+observation. A later correction returns to a role only when it materially
+changes that role's reviewed contract.

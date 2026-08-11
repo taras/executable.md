@@ -51,13 +51,6 @@ they are verified. Delete this section when ordinary correctness is sufficient.
 
 - `<Rule>` — enforced by `<mechanism>` and checked by `<test>`.
 
-## Architecture-sensitive change
-
-<!-- Delete this section when none of AGENTS.md's triggers apply. -->
-
-- Settled architecture record: `<location and head>`
-- Pass condition this head is reported against: `<condition>`
-
 ## How to verify it
 
 <!--
