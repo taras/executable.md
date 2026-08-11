@@ -21,6 +21,7 @@
  */
 
 import type { Operation } from "effection";
+import { Stdio } from "@effectionx/process";
 import { API } from "../apis.ts";
 import type { StatResult } from "../apis.ts";
 import { SERVICE_HOSTNAME } from "../service.ts";
@@ -81,15 +82,19 @@ export function* useStubFs(files: Record<string, string>): Operation<void> {
  *
  * Recognizes `bash -c "echo ..."` and returns the echo'd text as stdout.
  * All other commands return the script text as stdout with exit code 0.
+ *
+ * It answers like a real child: the text is written to the display channel as
+ * it "arrives", and it is retained in the outcome only when the caller asked
+ * for retention. A stub that always returned strings would let a document
+ * render output the contract says was already displayed.
  */
 export function* useEchoExec(): Operation<void> {
   yield* API.Process.around({
     *exec([options], _next) {
       const script = (options.command[2] ?? "").trim();
-      if (script.startsWith("echo ")) {
-        return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
-      }
-      return { exitCode: 0, stdout: script + "\n", stderr: "" };
+      const text = script.startsWith("echo ") ? script.slice(5) + "\n" : script + "\n";
+      yield* Stdio.operations.stdout(encoder.encode(text));
+      return retained(options, { exitCode: 0, stdout: text, stderr: "" });
     },
   });
 }
@@ -101,8 +106,22 @@ export function* useEchoExec(): Operation<void> {
  */
 export function* useFailingExec(exitCode: number, stderr = "command failed"): Operation<void> {
   yield* API.Process.around({
-    *exec(_args, _next) {
-      return { exitCode, stdout: "", stderr };
+    *exec([options], _next) {
+      yield* Stdio.operations.stderr(encoder.encode(stderr));
+      return retained(options, { exitCode, stdout: "", stderr });
     },
   });
+}
+
+const encoder = new TextEncoder();
+
+/** What the caller asked to keep, so a stub cannot retain more than a child would. */
+function retained(
+  options: { retain?: boolean },
+  outcome: { exitCode: number; stdout: string; stderr: string },
+): { exitCode: number; stdout: string | undefined; stderr: string | undefined } {
+  if (options.retain === false) {
+    return { exitCode: outcome.exitCode, stdout: undefined, stderr: undefined };
+  }
+  return outcome;
 }

@@ -15,24 +15,66 @@ import { useStubFs, useFailingExec } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
 import { forEach } from "@effectionx/stream-helpers";
 import type { Operation } from "effection";
+import { scoped } from "effection";
+import { Stdio } from "@effectionx/process";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { asText } from "./helpers.ts";
 
+/**
+ * A stand-in child that behaves like one: it writes its output to the display
+ * channel as it "runs", and hands back only what the caller asked to retain.
+ */
+/** What the host's channels received while `body` ran. */
+function* displayed<T>(
+  body: () => Operation<T>,
+): Operation<{ value: T; stdout: string; stderr: string }> {
+  let stdout = "";
+  let stderr = "";
+  const decoder = new TextDecoder();
+  return yield* scoped(function* () {
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        stdout += decoder.decode(bytes);
+      },
+      *stderr([bytes]) {
+        stderr += decoder.decode(bytes);
+      },
+    });
+    const value = yield* body();
+    return { value, stdout, stderr };
+  });
+}
+
+/** The message a run failed with, for a document the contract says must fail. */
+function* failure(body: () => Operation<unknown>): Operation<string> {
+  try {
+    yield* body();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("expected the run to fail");
+}
+
 function* useStubExec(): Operation<void> {
   yield* API.Process.around({
     *exec([options], _next) {
-      // Simple mock exec — just return the command as stdout
       const cmd = options.command.join(" ");
+      const say = function* (text: string) {
+        yield* Stdio.operations.stdout(new TextEncoder().encode(text));
+        return options.retain === false
+          ? { exitCode: 0, stdout: undefined, stderr: undefined }
+          : { exitCode: 0, stdout: text, stderr: "" };
+      };
       if (cmd.includes("bash -c")) {
         const script = (options.command[2] ?? "").trim();
         if (script.startsWith("echo ")) {
-          return { exitCode: 0, stdout: script.slice(5) + "\n", stderr: "" };
+          return yield* say(script.slice(5) + "\n");
         }
         if (script === "ls ./src") {
-          return { exitCode: 0, stdout: "main.ts\nutils.ts\n", stderr: "" };
+          return yield* say("main.ts\nutils.ts\n");
         }
-        return { exitCode: 0, stdout: script + "\n", stderr: "" };
+        return yield* say(script + "\n");
       }
       return { exitCode: 0, stdout: "", stderr: "" };
     },
@@ -254,23 +296,22 @@ describe("Tier B — durable import", () => {
 
 describe("Tier D — code execution and modifiers", () => {
   // D1: bash exec golden run
-  it("D1: bash exec golden run — stdout in output, exec in journal", function* () {
+  it("D1: bash exec golden run — stdout displayed, exec in journal", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": ["```bash exec", "echo hello", "```"].join("\n"),
     });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const result = run.value;
 
-    expect(result).toContain("hello");
+    // A foreground block's output reached the reader as it ran, and the
+    // document does not say it again (#441).
+    expect(run.stdout).toContain("hello");
+    expect(result).not.toContain("hello");
 
     // Verify journal
     const events = stream.snapshot();
@@ -311,25 +352,22 @@ describe("Tier D — code execution and modifiers", () => {
     );
 
     expect(secondResult).toBe(firstResult);
-    expect(secondResult).toContain("hello");
+    // Replay reproduces the document, and a forwarded block contributes no
+    // document text either time (#441).
+    expect(secondResult).not.toContain("hello");
   });
 
-  // D3: non-zero exit code → ErrorSegment in output
-  it("D3: non-zero exit code → error in output", function* () {
+  // D3: a nonzero exit is a checked failure, with or without <Output> (#441)
+  it("D3: non-zero exit code → the run fails", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": ["```bash exec", "failing-command", "```"].join("\n") });
     yield* useFailingExec(1, "command not found");
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    expect(result.includes("ERROR") || result.includes("failed")).toBeTruthy();
+    expect(message).toContain("Command failed (exit 1)");
   });
 
   // D3b: the same rule for a command that printed before it failed (#307), run
@@ -341,18 +379,16 @@ describe("Tier D — code execution and modifiers", () => {
       "README.md": ["```bash exec", "echo partial; exit 1", "```"].join("\n"),
     });
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return yield* failure(function* () {
+        return yield* collect(yield* execute({ path: "README.md", stream }));
+      });
+    });
 
-    expect(result).toContain("partial");
-    expect(result).toContain("Command failed (exit 1)");
-    expect(result.indexOf("partial")).toBeLessThan(result.indexOf("Command failed"));
+    // What the command printed before it failed reached the reader; the run
+    // then fails rather than rendering the diagnostic and carrying on (#441).
+    expect(run.stdout).toContain("partial");
+    expect(run.value).toContain("Command failed (exit 1)");
   });
 
   // D4: multi-line command — full script passed to -c
@@ -396,22 +432,21 @@ describe("Tier D — code execution and modifiers", () => {
     yield* API.Process.around({
       *exec([options], _next) {
         if (options.command[0] === "python" && options.command[1] === "-c") {
-          return { exitCode: 0, stdout: "hello\n", stderr: "" };
+          yield* Stdio.operations.stdout(new TextEncoder().encode("hello\n"));
+          return options.retain === false
+            ? { exitCode: 0, stdout: undefined, stderr: undefined }
+            : { exitCode: 0, stdout: "hello\n", stderr: "" };
         }
         return { exitCode: 1, stdout: "", stderr: "unexpected command" };
       },
     });
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
 
-    expect(result).toContain("hello");
+    expect(run.stdout).toContain("hello");
+    expect(run.value).not.toContain("hello");
 
     // Verify command in journal
     const events = stream.snapshot();
@@ -491,17 +526,15 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useFailingStdoutExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return yield* failure(function* () {
+        return yield* collect(yield* execute({ path: "README.md", stream }));
+      });
+    });
 
-    expect(result).not.toContain("secret");
-    expect(result).toContain("Command failed (exit 3): why");
+    // Silence hides both channels; it does not excuse the exit code.
+    expect(run.stdout).toBe("");
+    expect(run.value).toContain("Command failed (exit 3): why");
   });
 
   it("D6c: a failing silent exec in documentation aborts before the next block", function* () {
@@ -544,12 +577,16 @@ describe("Tier D — code execution and modifiers", () => {
     });
     yield* useFailingStdoutExec();
 
-    const firstResult = asText(yield* collect(yield* execute({ path: "README.md", stream })));
-    const secondResult = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    const firstMessage = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
+    const secondMessage = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    expect(secondResult).toBe(firstResult);
-    expect(secondResult).toContain("Command failed (exit 3): why");
-    expect(secondResult).not.toContain("secret");
+    expect(secondMessage).toBe(firstMessage);
+    expect(secondMessage).toContain("Command failed (exit 3): why");
+    expect(secondMessage).not.toContain("secret");
   });
 
   // D15: unknown modifier in chain → error
@@ -599,7 +636,17 @@ describe("Tier D — code execution and modifiers", () => {
   it("D17: custom modifier registration — handler runs in chain", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
-      "README.md": ["```bash uppercase exec", "echo hello", "```"].join("\n"),
+      // A forwarded block renders nothing, so the text a modifier transforms
+      // comes from the region that asked for it (#441).
+      "README.md": [
+        '<Capture as="shouted">',
+        "```bash uppercase exec",
+        "echo hello",
+        "```",
+        "</Capture>",
+        "",
+        "{shouted}",
+      ].join("\n"),
     });
     yield* useStubExec();
 
@@ -689,20 +736,17 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const run = yield* displayed(function* () {
+      return asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    });
+    const result = run.value;
 
     // Check output contains expected content
     expect(result).toContain("# My Project");
     expect(result).toContain("hi Hello, world!");
-    expect(result).toContain("main.ts");
-    expect(result).toContain("utils.ts");
+    // The listing was displayed as the command produced it, not rendered.
+    expect(run.stdout).toContain("main.ts");
+    expect(run.stdout).toContain("utils.ts");
 
     // Check journal has events
     const events = stream.snapshot();
@@ -1089,7 +1133,7 @@ describe("execute", () => {
     expect(secondResult).toBe(firstResult);
     expect(secondResult).toContain("# Test");
     expect(secondResult).toContain("Hello, world!");
-    expect(secondResult).toContain("output");
+    expect(secondRun.stdout).toContain("output");
 
     // No new events should be appended during replay
     expect(stream.snapshot().length).toBe(goldenEventCount);
@@ -1175,7 +1219,7 @@ describe("execute", () => {
     );
 
     expect(result).toContain("BEFORE");
-    expect(result).toContain("inside");
+    expect(run.stdout).toContain("inside");
     expect(result).toContain("AFTER");
   });
 });
