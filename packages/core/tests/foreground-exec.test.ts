@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useStubFs } from "@executablemd/runtime/test";
-import { FOREGROUND, VALUE_ROOT, route } from "../src/foreground.ts";
+import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
 import { API } from "@executablemd/runtime";
 
@@ -374,17 +374,18 @@ describe("Tier FG — foreground execution", () => {
   });
 
   /**
-   * A value root's stdout carries its JSON result, so a command's stdout is
-   * shown on the channel that is free. It is still the child's stdout, and a
-   * record that called it stderr would not be the child's result.
+   * The one thing that states which channel a chunk came from is the operation
+   * the adapter called. Nothing here hands one channel's bytes to the other
+   * channel's operation, so a host may show them wherever it likes without the
+   * record having to reconstruct an origin it never lost.
    */
-  it("FG13: a value root displays stdout on stderr and records it as stdout", function* () {
+  it("FG13: each channel is forwarded and recorded on the channel it was written to", function* () {
     const encoder = new TextEncoder();
     let kept: ForegroundOutput | undefined;
 
     const seen = yield* watching(function* (seen) {
       yield* scoped(function* () {
-        const finished = yield* route(VALUE_ROOT, true);
+        const finished = yield* route(FOREGROUND, true);
         yield* Stdio.operations.stdout(encoder.encode("from-stdout\n"));
         yield* Stdio.operations.stderr(encoder.encode("from-stderr\n"));
         kept = finished();
@@ -392,10 +393,10 @@ describe("Tier FG — foreground execution", () => {
       return seen;
     });
 
-    // Displayed where a value root can afford to show it.
-    expect(seen.stderr).toContain("from-stdout");
-    expect(seen.stdout).toBe("");
-    // Recorded as what the child actually wrote.
+    // Displayed on its own channel; which stream that is belongs to the host.
+    expect(seen.stdout).toBe("from-stdout\n");
+    expect(seen.stderr).toBe("from-stderr\n");
+    // And recorded as what the child actually wrote.
     expect(kept?.retainedStdout).toBe("from-stdout\n");
     expect(kept?.retainedStderr).toBe("from-stderr\n");
   });
@@ -496,13 +497,14 @@ describe("Tier FG — foreground execution", () => {
   });
 
   /**
-   * The two channels are forwarded by concurrent tasks, so "this byte is a
-   * redirect" cannot be a fact about the route as a whole. Here a downstream
-   * handler holds the redirected stdout while a genuine stderr chunk arrives
-   * behind it: shared classification would call that chunk somebody else's
-   * stdout and drop it from the record, silently, and only under load.
+   * The two channels are forwarded by concurrent tasks, so what a route knows
+   * about one emission can never be a fact it holds for the run. Here a
+   * downstream handler holds a stdout chunk while a genuine stderr chunk
+   * arrives behind it: any classification shared between the channels would
+   * describe the held chunk while recording the other, silently, and only
+   * under load.
    */
-  it("FG18: a held-up redirect cannot swallow a sibling's stderr", function* () {
+  it("FG18: a held-up chunk cannot take the other channel's bytes with it", function* () {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const release = withResolvers<void>();
@@ -514,7 +516,7 @@ describe("Tier FG — foreground execution", () => {
         // Downstream of the route, so it receives what the route forwards.
         yield* Stdio.around(
           {
-            *stderr([bytes], next) {
+            *stdout([bytes], next) {
               if (decoder.decode(bytes, { stream: false }).includes("out")) {
                 holding = true;
                 yield* release.operation;
@@ -525,29 +527,26 @@ describe("Tier FG — foreground execution", () => {
           { at: "min" },
         );
 
-        const finished = yield* route(VALUE_ROOT, true);
+        const finished = yield* route(FOREGROUND, true);
 
-        const redirect = yield* spawn(() => Stdio.operations.stdout(encoder.encode("out")));
-        // The redirect is inside the blocked handler before the sibling writes.
+        const held = yield* spawn(() => Stdio.operations.stdout(encoder.encode("out")));
+        // The stdout chunk is inside the blocked handler before stderr is written.
         yield* when(function* () {
           return holding;
         });
         yield* Stdio.operations.stderr(encoder.encode("err"));
         release.resolve();
-        yield* redirect;
+        yield* held;
 
         kept = finished();
       });
       return seen;
     });
 
-    // A value root keeps its own stdout free, and both reached the reader once.
-    expect(seen.stdout).toBe("");
-    expect(seen.stderr).toContain("out");
-    expect(seen.stderr).toContain("err");
-    expect(seen.stderr.match(/out/g) ?? []).toHaveLength(1);
-    expect(seen.stderr.match(/err/g) ?? []).toHaveLength(1);
-    // And the record still says which channel each came from.
+    // Each reached the reader once, on its own channel.
+    expect(seen.stdout).toBe("out");
+    expect(seen.stderr).toBe("err");
+    // And the record says which channel each came from.
     expect(kept?.retainedStdout).toBe("out");
     expect(kept?.retainedStderr).toBe("err");
   });
@@ -555,8 +554,8 @@ describe("Tier FG — foreground execution", () => {
   /**
    * `Stdio` middleware is documented as free to capture, transform, or redirect
    * what it forwards, so a host that hands on a copy of the bytes it was given
-   * is behaving correctly. A route that reads a chunk's origin off the payload
-   * loses it to exactly that host, and records a command's stdout as its stderr.
+   * is behaving correctly. A route that read anything off the payload would
+   * lose it to exactly that host.
    */
   it("FG19: an enclosing middleware may copy the bytes without confusing the channels", function* () {
     const encoder = new TextEncoder();
@@ -565,17 +564,20 @@ describe("Tier FG — foreground execution", () => {
 
     const seen = yield* watching(function* (seen) {
       yield* scoped(function* () {
-        // Installed before the route, so every emission the route forwards —
-        // including the one it redirects — arrives here first and goes on as a
-        // plain array holding the same bytes.
+        // Installed before the route, so every emission arrives here first and
+        // goes on as a plain array holding the same bytes.
         yield* Stdio.around({
+          *stdout([bytes], next) {
+            copies += 1;
+            return yield* next(new Uint8Array(bytes));
+          },
           *stderr([bytes], next) {
             copies += 1;
             return yield* next(new Uint8Array(bytes));
           },
         });
 
-        const finished = yield* route(VALUE_ROOT, true);
+        const finished = yield* route(FOREGROUND, true);
         yield* Stdio.operations.stdout(encoder.encode("out"));
         yield* Stdio.operations.stderr(encoder.encode("err"));
         kept = finished();
@@ -585,13 +587,88 @@ describe("Tier FG — foreground execution", () => {
 
     // The copying middleware really did see both emissions.
     expect(copies).toBe(2);
-    // A value root keeps its own stdout free, and each reached the reader once.
-    expect(seen.stdout).toBe("");
-    expect(seen.stderr).toContain("out");
-    expect(seen.stderr).toContain("err");
-    expect(seen.stderr.match(/out/g) ?? []).toHaveLength(1);
-    expect(seen.stderr.match(/err/g) ?? []).toHaveLength(1);
+    expect(seen.stdout).toBe("out");
+    expect(seen.stderr).toBe("err");
     // And the record is still the child's own two channels.
+    expect(kept?.retainedStdout).toBe("out");
+    expect(kept?.retainedStderr).toBe("err");
+  });
+
+  /**
+   * A context is addressed by name, so anything that can name one can read and
+   * write it. Middleware sits between a route and the host by design, and a
+   * record of what a child wrote — which crosses the secret gate before it
+   * persists — may not depend on state that any neighbour can set.
+   *
+   * The attack is the strongest form: capture whatever the route left in the
+   * context while its stdout is in flight, then install it again while genuine
+   * stderr goes past. It finds nothing, because the classification is the
+   * operation the adapter called and lives nowhere a neighbour can reach.
+   */
+  it("FG23: a same-name context cannot take a channel out of the record", function* () {
+    const Shadow = createContext<object | undefined>(
+      "@executablemd/core/foreground/redirecting",
+      undefined,
+    );
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    let captures = 0;
+    let replays = 0;
+    let stolen: object | undefined;
+    let kept: ForegroundOutput | undefined;
+    const arrived: string[] = [];
+
+    const seen = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* Stdio.around({
+          *stdout([bytes], next) {
+            // Whatever the route is holding while its own stdout is in flight.
+            stolen = yield* Shadow.get();
+            captures += 1;
+            return yield* next(bytes);
+          },
+          *stderr([bytes], next) {
+            if (decoder.decode(bytes, { stream: false }).includes("err")) {
+              yield* Shadow.set(stolen ?? {});
+              replays += 1;
+            }
+            return yield* next(bytes);
+          },
+        });
+
+        // Below the route: which operation an emission arrives on here is the
+        // only statement of where it came from, so nothing may change it.
+        yield* Stdio.around(
+          {
+            *stdout([bytes], next) {
+              arrived.push(`stdout:${decoder.decode(bytes, { stream: false })}`);
+              return yield* next(bytes);
+            },
+            *stderr([bytes], next) {
+              arrived.push(`stderr:${decoder.decode(bytes, { stream: false })}`);
+              return yield* next(bytes);
+            },
+          },
+          { at: "min" },
+        );
+
+        const finished = yield* route(FOREGROUND, true);
+        yield* Stdio.operations.stdout(encoder.encode("out"));
+        yield* Stdio.operations.stderr(encoder.encode("err"));
+        kept = finished();
+      });
+      return seen;
+    });
+
+    // The attempt really was made, on both halves.
+    expect(captures).toBe(1);
+    expect(replays).toBe(1);
+    // Every emission reached the boundary on the channel it was written to, so
+    // there is no point at which an origin could have been lost.
+    expect(arrived).toEqual(["stdout:out", "stderr:err"]);
+    // Display is untouched, and the record still holds both channels.
+    expect(seen.stdout).toBe("out");
+    expect(seen.stderr).toBe("err");
     expect(kept?.retainedStdout).toBe("out");
     expect(kept?.retainedStderr).toBe("err");
   });

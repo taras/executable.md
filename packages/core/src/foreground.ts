@@ -26,11 +26,13 @@ import { Stdio } from "@effectionx/process";
 /**
  * What happens to one channel of a foreground command.
  *
- * `diagnostic` displays the channel on stderr. A value root's stdout carries
- * its JSON result and nothing else, so a command's progress is shown beside it
- * rather than in it — visible, and never mistaken for the result.
+ * Every value here answers "does this channel reach the host, and does anything
+ * else want it?" — never "which of the host's streams does it land on". A
+ * channel is only ever forwarded on the one it was written to, taken into a
+ * binding, or dropped. Which stream a host then shows it on is the host's, and
+ * a value root's diagnostic channel is decided there.
  */
-export type Routing = "forward" | "capture" | "hidden" | "diagnostic";
+export type Routing = "forward" | "capture" | "hidden";
 
 export interface ForegroundRouting {
   /** How stdout reaches the reader, or the binding that asked for it. */
@@ -41,9 +43,6 @@ export interface ForegroundRouting {
 
 /** An ordinary foreground block: both channels reach the reader as they arrive. */
 export const FOREGROUND: ForegroundRouting = { stdout: "forward", stderr: "forward" };
-
-/** A value root: stdout is the result's, so a command's stdout is shown beside it. */
-export const VALUE_ROOT: ForegroundRouting = { stdout: "diagnostic", stderr: "forward" };
 
 /**
  * The routing a structure declared, or `undefined` where none did.
@@ -78,27 +77,6 @@ export function withRouting<T>(
   });
 }
 
-/**
- * The route whose stdout is passing through stderr on this task, if any.
- *
- * A redirect is a fact about one emission, not about the route as a whole and
- * not about the bytes: middleware between a route and the host is entitled to
- * capture, transform, or redirect what it forwards, so anything carried in the
- * payload is gone the moment a legitimate handler copies it. It lives here
- * instead, in a scope the redirecting task opens and closes around its own
- * call. `Stdio` handlers run in the scope of whoever called the operation, so
- * a channel forwarded by a sibling task never sees it — which is what keeps a
- * redirect held up in downstream middleware from swallowing a sibling's stderr.
- *
- * The value is the route's own token rather than `true`: a context is addressed
- * by name, and a record of what a child wrote should not be suppressible by
- * anything that can guess the name.
- */
-const Redirecting: Context<object | undefined> = createContext<object | undefined>(
-  "@executablemd/core/foreground/redirecting",
-  undefined,
-);
-
 /** What one block's output did, once it has finished. */
 export interface ForegroundOutput {
   /** stdout a `<Capture as>` region asked for; empty otherwise. */
@@ -123,15 +101,14 @@ export interface ForegroundOutput {
  * - a run that keeps no record accumulates nothing, so a capture's stderr —
  *   diagnostic, and possibly enormous — is forwarded and forgotten.
  *
- * A channel is classified by where the child wrote it, before any display
- * decision. A value root displays its commands' stdout on the host's stderr,
- * and that redirection re-enters this Api, so the stderr handler has to tell a
- * child's own stderr from stdout passing through on its way to a free channel.
- * The origin is the redirecting task's own, held in a scope this route opens
- * around its call and never in the bytes it forwards: the two channels are
- * forwarded by concurrent tasks, and enclosing middleware may hand on a copy of
- * what it was given. Neither a sibling's progress nor a byte-preserving
- * transformation can make one channel look like the other.
+ * A channel is what the child wrote it on, and this reads that from the only
+ * thing that states it: the operation the adapter called. Nothing here ever
+ * hands one channel's bytes to the other channel's operation, so there is no
+ * later point at which an origin could have been lost and would have to be
+ * recovered — not from the payload, which middleware may copy or transform, and
+ * not from contextual state, which is addressed by name and belongs to whoever
+ * can name it. Showing one channel on another stream is a host's decision about
+ * its own streams, taken at the display boundary below this.
  *
  * Each channel decodes with its own streaming decoder, and each chunk is
  * decoded once and reused, so a code point split across chunks survives and one
@@ -145,8 +122,6 @@ export function* route(
   let captured = "";
   let retainedStdout = "";
   let retainedStderr = "";
-  // This route's own, so nothing outside it can claim one of its emissions.
-  const mine = {};
   const fromStdout = new TextDecoder();
   const fromStderr = new TextDecoder();
   const wanted = retain || selected.stdout === "capture";
@@ -166,20 +141,10 @@ export function* route(
       if (selected.stdout === "hidden") {
         return;
       }
-      if (selected.stdout === "diagnostic") {
-        // Shown on the channel a value root leaves free. It is still the
-        // child's stdout: recorded as such above, and announced here for the
-        // length of this one call so the stderr handler does not record it
-        // again. The scope closes with the call, whatever it forwards.
-        return yield* scoped(function* () {
-          yield* Redirecting.set(mine);
-          return yield* Stdio.operations.stderr(bytes);
-        });
-      }
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
-      if (retain && (yield* Redirecting.get()) !== mine) {
+      if (retain) {
         retainedStderr += fromStderr.decode(bytes, { stream: true });
       }
       if (selected.stderr === "hidden") {

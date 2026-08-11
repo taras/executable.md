@@ -1131,10 +1131,11 @@ another:
 
 - **Routing** is what a reader sees. An ordinary block forwards both channels;
   a `<Capture as>` region takes stdout into the captured value and leaves
-  stderr diagnostic; `silent` displays neither; a value root shows a command's
-  stdout beside its JSON result rather than in it. Routing is visible in
-  document structure, never selected by a root-level presentation declaration
-  or by which runtime is executing.
+  stderr diagnostic; `silent` displays neither. Routing answers "does this
+  channel reach the host, and does anything else want it" — never "which of the
+  host's streams does it land on". It is visible in document structure, never
+  selected by a root-level presentation declaration or by which runtime is
+  executing.
 - **Retention** is what the run keeps. The host path that starts a run states
   it; nothing infers it from which stream implementation a journal happens to
   use, or from whether a pathname was named. A run that keeps no diagnostic
@@ -1166,13 +1167,24 @@ commands that produced them; programmatic execution retains unless its trusted
 caller selects transient execution. A shared runner never decides this from what
 it was given.
 
-A channel is classified by where the child wrote it, before any display decision
-and independently of what any middleware does to the bytes afterwards. Where one
-channel is displayed on the other — a value root shows a command's stdout beside
-its JSON result — the redirect is announced in the redirecting task's own scope
-for the length of that one call. It is not a property of the bytes, which
-middleware may legitimately copy or transform, and not a property of the run,
-whose two channels are forwarded concurrently.
+A chunk's source channel is stated once, by the adapter, as the operation it
+forwards on — and it is never restated. No execution path hands one channel's
+bytes to the other channel's operation, so there is no later point at which the
+origin could be lost and would have to be recovered. This matters because the
+recovery mechanisms are all unsound: the payload is a byte buffer middleware may
+legitimately copy or transform; contextual state is addressed by name and
+belongs to anything that can name it, which durable authority may not depend on;
+and state held for the run cannot describe one emission while two channels are
+forwarded concurrently.
+
+Which of the host's streams a channel is shown on is the host's own decision,
+taken at the display boundary beneath the document. A value root's stdout
+carries its JSON result, so the command line shows a command's stdout on the
+stream the result leaves free — visible, never mistaken for the result, and
+recorded as the child's stdout because that is the channel it was written to.
+Between the adapter and that boundary, the process stdio chain is the composable
+display path and nothing else: middleware there may show, hide, or transform,
+and can no more alter the record than it can alter what the child wrote.
 
 Forwarding, completion, cancellation and teardown belong to the executable
 block's own Effection scope. Cancelling the block stops the child and the tasks

@@ -929,7 +929,11 @@ into the document at completion.
 | ordinary `exec` | forwarded live | forwarded live |
 | inside `<Capture as>` | collected into the captured value | forwarded live |
 | `silent exec` | neither | neither |
-| value root | shown on stderr, so the result's channel stays JSON-only | forwarded live |
+
+Routing decides whether a channel reaches the host, not which of the host's
+streams it lands on. That second question is the host's: under `xmd run` a value
+root's stdout carries the JSON result, so the command line shows a command's
+stdout on the stream the result leaves free, and stdout stays JSON-only.
 
 Capture is structural, not a modifier: a `<Capture as>` region may hold prose,
 components and several blocks, and every foreground block inside it writes its
@@ -970,14 +974,14 @@ record intact: not showing something and not knowing it are different decisions.
 Retained output crosses the pre-persistence secret gate; output that is not
 retained is never accumulated for a scanner to inspect.
 
-**Channels.** A channel is what the child wrote it on. Where one channel is
-displayed on the other — a value root shows a command's stdout on stderr — the
-result still reports each channel as the child produced it. The origin of a
-redirected chunk is the redirecting task's own for the length of that one call:
-it is not carried in the bytes, which host middleware may copy or transform on
-the way past, and not held for the run, whose channels are forwarded
-concurrently. Each channel decodes independently, so a character split across
-two chunks survives interleaving with the other channel.
+**Channels.** A channel is what the child wrote it on, stated once by the
+adapter as the operation it forwards on. No execution path hands one channel's
+bytes to the other channel's operation, so the origin is never lost and is never
+recovered from the payload, from contextual state, or from state held for the
+run. A host showing one channel on another of its streams changes nothing about
+the result: each channel is reported as the child produced it. Each channel
+decodes independently, so a character split across two chunks survives
+interleaving with the other channel.
 
 **Failure.** A nonzero exit is a checked failure. The ambient printing mode may
 decide how it is reported, never that the run succeeded: later executable
@@ -7365,7 +7369,7 @@ visible warning blocks, gather into a separate error report).
 | FG10 | A same-name Context | Cannot suppress a record the host asked for |
 | FG11 | A same-name Context | Cannot make a transient run retain output |
 | FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
-| FG13 | A value root | Displays stdout on stderr and records it as stdout |
+| FG13 | Two channels | Each is forwarded and recorded on the channel it was written to |
 | FG14 | A code point split across chunks | Survives interleaving with the other channel |
 | FG15 | A journaled capture | The binding and the record agree byte for byte |
 | FG16 | A real child splitting a code point | Each channel decodes its own; neither disturbs the other |
@@ -7373,8 +7377,9 @@ visible warning blocks, gather into a separate error report).
 | FG16b | `exec({ retain: false })` | Reports the status; keeps neither channel |
 | FG16c | Quiet subprocess output | Hidden from the host, still reported to its caller |
 | FG17 | A resumed journaled capture | Rebuilds its binding without running the child again |
-| FG18 | A redirect held up in downstream middleware | Cannot swallow a sibling's stderr |
+| FG18 | A chunk held up in downstream middleware | Cannot take the other channel's bytes with it |
 | FG19 | Enclosing middleware that copies the bytes | Cannot make one channel look like the other |
+| FG23 | A same-name context set by neighbouring middleware | Cannot take a channel out of the record |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |
@@ -8768,6 +8773,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV17 | Replay | Golden run and replay produce the same value and output with no re-execution |
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
+| VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |
 
 ---
 

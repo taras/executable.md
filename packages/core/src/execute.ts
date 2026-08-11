@@ -117,7 +117,7 @@ import type { CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import { declaredRouting, FOREGROUND, route, VALUE_ROOT, withRouting } from "./foreground.ts";
+import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
@@ -1485,17 +1485,17 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     if (root.returns !== undefined) {
-      // stdout belongs to the result here, so a command's stdout is displayed
-      // beside it rather than in it (#441).
-      return yield* withRouting(VALUE_ROOT, () =>
-        runValueRoot(
-          root,
-          root.returns as ReturnsSchema,
-          validatedProps,
-          counter,
-          streamed,
-          rootPath,
-        ),
+      // A command's channels are forwarded as the child wrote them. stdout
+      // belongs to the result here, so a host that prints the result on its own
+      // stdout shows a command's stdout on the stream it leaves free — that is
+      // a decision about the host's streams, and it is taken there.
+      return yield* runValueRoot(
+        root,
+        root.returns as ReturnsSchema,
+        validatedProps,
+        counter,
+        streamed,
+        rootPath,
       );
     }
 

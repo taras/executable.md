@@ -42,6 +42,7 @@ import {
 } from "@executablemd/durable-streams";
 
 import { forEach } from "@effectionx/stream-helpers";
+import { Stdio } from "@effectionx/process";
 import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { inspect } from "node:util";
@@ -640,6 +641,23 @@ function* runDocument(
   // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
   // alone. Reading the mode costs no document effects.
   const valueRoot = !mode.testing && (yield* readsValue(root));
+
+  if (valueRoot) {
+    // This run's stdout carries the JSON result and nothing else, so a
+    // command's stdout is shown on the stream that is free. Which of this
+    // process's streams a channel lands on is this process's own business, and
+    // it is settled here, at the boundary that owns them: the document forwards
+    // a command's channels as the child wrote them, and the record says which
+    // channel each byte came from however they are displayed.
+    yield* Stdio.around(
+      {
+        *stdout([bytes]) {
+          process.stderr.write(bytes);
+        },
+      },
+      { at: "min" },
+    );
+  }
 
   // Native service authority belongs only to document execution. Help,
   // document inspection, and the agent worker never enter this scope.
