@@ -8,6 +8,7 @@ import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { expect } from "@executablemd/test-support/expect";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { Stdio } from "@effectionx/process";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -47,6 +48,13 @@ describe("Tier T10 — eval-scope hierarchy", () => {
     });
     yield* useEchoExec();
 
+    let displayed = "";
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+    });
     const output = asText(
       yield* collect(
         yield* execute({
@@ -56,9 +64,9 @@ describe("Tier T10 — eval-scope hierarchy", () => {
       ),
     );
 
-    // Exec output should be present
-    expect(output).toContain("hello");
-    // No errors
+    // The command's output reached the reader; the eval blocks around it are
+    // unaffected (#441).
+    expect(displayed).toContain("hello");
     expect(output).not.toContain("ERROR");
   });
 });

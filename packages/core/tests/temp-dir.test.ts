@@ -8,6 +8,7 @@
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { Stdio } from "@effectionx/process";
 import {
   ensure,
   race,
@@ -56,16 +57,33 @@ function writeDocument(dir: string, source: string): Operation<void> {
 }
 
 /** One bounded run, so the document scope closes before effects are read. */
+/**
+ * One run, reported as what a reader saw.
+ *
+ * These cases learn which directory a command ran in from the command itself,
+ * and a foreground command writes to the reader rather than into the document
+ * (#441), so the display is where that answer arrives.
+ */
 function run(dir: string): Operation<Json> {
   return scoped(function* () {
     yield* useHostFiles();
-    return yield* collect(
-      yield* execute({
-        path: join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-        componentDirs: [dir],
-      }),
+    let displayed = "";
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+    });
+    const rendered = String(
+      yield* collect(
+        yield* execute({
+          path: join(dir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [dir],
+        }),
+      ),
     );
+    return `${rendered}\n${displayed}`;
   });
 }
 
@@ -408,9 +426,19 @@ describe("Tier TD — TempDir", () => {
     const first = String(
       yield* scoped(function* () {
         yield* useHostFiles();
-        return yield* collect(
-          yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+        let displayed = "";
+        const decoder = new TextDecoder();
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            displayed += decoder.decode(bytes);
+          },
+        });
+        const rendered = String(
+          yield* collect(
+            yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+          ),
         );
+        return `${rendered}\n${displayed}`;
       }),
     );
     const [recordedDirectory] = directories(first);
