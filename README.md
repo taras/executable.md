@@ -254,6 +254,33 @@ deno task test                                   # run the test suite
 deno task verify                                 # the whole applicable battery, concurrently
 ```
 
+### Implementation feedback
+
+Feedback on an implementation is given against a **feedback commit**: the stable
+revision an implementor commits as soon as the smallest affected evidence
+passes. Pick that evidence in order — a known regression or integration test
+when the changed boundary is known, otherwise `deno task test --changed`, and
+`deno task test --changed=origin/main` when branch-level changes belong in the
+selection. A subprocess, fixture, generated file, or dynamic import is invisible
+to import-based selection, so name each known test for it explicitly. The
+handoff carries the exact commit SHA and every focused command run.
+
+Lint, typecheck, the JSR dry run, the full suite, and CI are not prerequisites
+for that commit. They are the delivery gate: required CI and branch protection
+decide when the branch merges, and CI failures are delivery work.
+
+Review is bounded at both ends. An architecture review blocks only on a
+structural consequence — what executes, what durable identity or history is
+accepted, what durable state is published, whether replay resumes, ownership of
+a resource or lifecycle, or a public persistence boundary — reproduced or
+directly traced at the exact reviewed commit. Everything the plan must prove is
+the planner's to fix in advance as a frozen evidence matrix. Each review closes
+against its frozen list rather than against newly imagined permutations.
+
+`AGENTS.md` holds the complete review and specialized-verification contract.
+
+### Dependency layout
+
 `deno task setup` is the only thing that installs. Builds and checks read what
 it prepared and leave what this repository owns — tracked files, `node_modules`,
 `deno.lock` — exactly as they found it, so they compose instead of undoing one

@@ -16,6 +16,8 @@ the design while coding.
   recommendation before finalizing the plan.
 - Produce steps that each have an observable outcome, ownership boundary and
   verification.
+- Freeze the acceptance criteria and the evidence that proves them before
+  implementation begins.
 - Give the Implementor all accepted decisions, constraints and acceptance
   evidence needed to work without guessing.
 
@@ -68,13 +70,46 @@ The plan records:
 - ordered implementation steps;
 - success, failure, cancellation and teardown behavior;
 - test scenarios and the defects each catches;
+- the frozen acceptance criteria and evidence matrix;
 - specification and architecture updates;
-- verification commands;
+- the focused commands that produce feedback evidence, kept separate from the
+  delivery verification required before merge;
 - PR stack and dependency order; and
 - risks, recovery and unresolved blockers.
 
 The Implementor handoff restates the plan's required behavior without relying
-on a conversation or the Planner's private reasoning.
+on a conversation or the Planner's private reasoning. It names the frozen
+evidence matrix, the focused tests that satisfy it, and the feedback-commit
+contract: commit as soon as that evidence passes, and hand back the exact SHA
+with every focused command run.
+
+## Evidence sufficiency
+
+The Planner owns the finite implementation and evidence threshold for the
+settled acceptance criteria, and decides:
+
+- how much implementation detail each criterion needs, leaving ordinary
+  mechanics to the Implementor;
+- which scenarios are representative;
+- which focused tests prove them; and
+- when one regression is enough.
+
+That matrix is frozen before implementation. The Implementor executes it and
+returns evidence that it cannot prove a criterion rather than expanding
+acceptance independently. The Architect may restore a structural invariant the
+plan omits, but does not add permutations carrying no distinct structural
+consequence.
+
+Once implementation begins, a newly imagined edge case becomes blocking only
+when it proves an existing criterion unmet, or carries a distinct structural
+consequence requiring an explicit architecture amendment. Otherwise it is
+non-blocking and does not quietly become a new criterion.
+
+A non-blocking observation does not automatically become an issue. Decide
+whether recurrence likelihood, user impact, or expected remediation value makes
+it worth tracking; otherwise the behavior stays for reactive maintenance.
+
+The Planner does not redefine product behavior or structural architecture.
 
 ## Reviewing a plan or implementation proposal
 
@@ -86,7 +121,22 @@ Return `PASS` when implementation can begin without guessing. On failure,
 return `REQUEST CHANGES` and one ready-to-send revision prompt that names the
 missing decisions, evidence and required plan changes.
 
+Reviewing an implementation is the same act against the frozen matrix. Resolve
+the exact feedback-commit SHA and the focused commands reported with it, review
+that commit, and accept when the frozen acceptance criteria and selected
+evidence pass. Do not inspect, monitor or wait for CI: its status is neither
+positive nor negative evidence for this verdict, and it is inspected only when
+the user explicitly assigns CI troubleshooting. A passing verdict is `PASS` —
+never `PASS pending CI` or an equivalent condition.
+
+Planning review closes when the frozen criteria and evidence pass. It does not
+reopen for CI, diagnostic hardening, speculative permutations, unrelated
+correctness polish, or a non-blocking observation. A later correction returns
+here only when it materially changes the reviewed plan.
+
 ## Continuity record
 
 End every planning handoff with the exact base, produced artifact paths,
-settled decisions, unresolved blockers and the next Implementor action.
+settled decisions, unresolved blockers and the next Implementor action. An
+implementation review records the exact reviewed SHA and the focused commands
+it rests on.

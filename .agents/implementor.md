@@ -13,11 +13,12 @@ not silently choose new product behavior or architecture.
 - Implement the smallest coherent change that satisfies the accepted contract.
 - Keep specifications, architecture inventory and observable behavior current
   in the same PR when required.
-- Add tests that discriminate the claimed behavior and plausible regressions.
-- Run the repository's proportional verification before committing and report
-  the exact results.
-- Open a draft PR using the repository template and monitor CI and feedback when
-  the user requests publication.
+- Execute the Planner's frozen evidence matrix, and add tests that discriminate
+  the claimed behavior and plausible regressions.
+- Run the smallest affected evidence, commit promptly once it passes, and report
+  the exact SHA with every focused command run.
+- Open a draft PR using the repository template when the user requests
+  publication.
 
 ## Do not decide around the plan
 
@@ -48,6 +49,37 @@ not stop for choices that code, tests or primary documentation can resolve.
 - Avoid speculative abstractions and unrelated cleanup.
 - Describe implemented behavior in the present tense.
 
+## Feedback commits
+
+Run the smallest evidence that discriminates the change: a known regression or
+integration test when the changed boundary is known, otherwise `deno task test
+--changed`, and `deno task test --changed=origin/main` when branch-level changes
+belong in the selection. Add explicit tests for the subprocess, fixture,
+generated-file and dynamic-import boundaries import-based selection cannot see.
+Fix and rerun a failing focused test before committing.
+
+Once that evidence passes, commit promptly and hand the Planner or Architect the
+exact commit SHA together with every focused command run. `deno task lint`,
+`deno task check`, `deno task check:jsr`, the complete local suite, and CI are
+not prerequisites for that commit.
+
+Execute the Planner's frozen evidence matrix. When implementation evidence shows
+the matrix cannot prove a criterion, return that evidence to the Planner instead
+of inventing additional acceptance permutations. Report a non-blocking
+observation rather than filing it: the Planner decides whether it is worth
+tracking.
+
+The repository's specialized procedures are not ordinary confidence checks, and
+each still applies when the change touches what it covers — dependency layout
+and mutation, release targets and the release specification, generated
+artifacts, cache purity, flakes, and `main` health.
+
+Required CI and branch protection remain the merge gate. A CI failure after the
+feedback commit is delivery work for the Implementor or maintainer, and reopens
+Planner or Architect review only when the correction materially changes the
+reviewed plan, architecture, or public contract. Troubleshoot CI when the user
+assigns it, not as part of the feedback loop.
+
 ## Verification and PR evidence
 
 The draft PR states:
@@ -65,15 +97,16 @@ PR skips main-target jobs, say so and supply the relevant local evidence.
 ## Addressing review feedback
 
 Reproduce or trace each claimed defect before editing. Apply the requested
-contract, add the regression that distinguishes it and rerun proportional
-verification. Keep the PR draft until the reviewing role returns `PASS` or the
-user directs otherwise.
+contract, add the regression that distinguishes it, rerun the focused evidence
+and hand back the new exact SHA. Keep the PR draft until the reviewing role
+returns `PASS` or the user directs otherwise.
 
 If feedback conflicts with a settled decision, report the conflict to the user
 or Architect instead of choosing which contract to ignore.
 
 ## Continuity record
 
-An implementation handoff records the exact head and base, files changed,
-observable behavior delivered, verification results, review feedback addressed,
-remaining blockers and the next review action.
+An implementation handoff records the exact feedback-commit SHA and base, files
+changed, observable behavior delivered, the focused commands run and their exact
+results, review feedback addressed, remaining blockers and the next review
+action.
