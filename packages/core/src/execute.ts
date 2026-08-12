@@ -96,12 +96,13 @@ import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
+  composeBoundExecChain,
   composeModifierChain,
   buildCommand,
   createModifierRegistry,
   useCodeBlock,
 } from "./modifiers.ts";
-import type { BoundExecChain, ModifierFactory } from "./modifiers.ts";
+import type { BoundExecChain, CodeBlockWorkflow, ModifierFactory } from "./modifiers.ts";
 import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
@@ -114,7 +115,7 @@ import {
   selectComponent,
   unresolvedMessage,
 } from "./components/select.ts";
-import type { CodeBlockResult, EvalEnv } from "./types.ts";
+import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
@@ -1083,7 +1084,31 @@ function admitRootSelection(event: Yield, root: RootDocumentSource): void {
 function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
   return (_params) => (_args, _next) =>
     (function* () {
+      // An ordinary block reads its context through the public operation, so
+      // `codeBlock` middleware composes here exactly as it always has.
       const context = yield* useCodeBlock();
+      return yield* execTerminal(retainProcessOutput, context, false);
+    })();
+}
+
+/**
+ * Run one command and report what it settled to.
+ *
+ * The context is an argument rather than something read back from the scope:
+ * a bound command is executed against the context canonical core retained, so
+ * public `codeBlock` middleware cannot change which command runs, weaken the
+ * routing that keeps its channels off the reader's terminal, or decide whether
+ * this execution is bound at all. `bound` is the same fact, held the same way —
+ * it is what canonical core knew when it composed the chain, and it appears
+ * nowhere a handler could add or remove it.
+ */
+function* execTerminal(
+  retainProcessOutput: boolean,
+  context: CodeBlockContext,
+  bound: boolean,
+): CodeBlockWorkflow {
+  {
+    {
       const command = buildCommand(context.language, context.content);
       // Resolved here, where the block is, and handed to the Process operation
       // explicitly: an enclosing `timeout=` has already made this its own value,
@@ -1093,7 +1118,6 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
       // lexically, and a modifier inside the chain may have narrowed it. A bound
       // block is not a display at all — its outcome is data the document reads —
       // so it shows neither channel and takes its region's routing from nothing.
-      const bound = context.bound === true;
       const selected = bound
         ? BINDING_ROUTING
         : ((yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND);
@@ -1156,7 +1180,8 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
             }
           : {}),
       };
-    })();
+    }
+  }
 }
 
 /** A bound block displays neither channel: its outcome is read, not shown. */
@@ -1732,6 +1757,7 @@ function* executeDocument(
   const boundChain: BoundExecChain = {
     exec: createExecFactory(retainProcessOutput),
     timeout: timeoutFactory,
+    terminal: (context) => execTerminal(retainProcessOutput, context, true),
   };
   registry.set("exec", boundChain.exec);
   registry.set("silent", silentFactory);
@@ -1807,16 +1833,18 @@ function* executeDocument(
             );
           },
           *applyModifiers([modifiers, context], _next) {
-            const chain = composeModifierChain(modifiers, context, registry, boundChain);
+            const chain = composeModifierChain(modifiers, context, registry);
             return yield* chain();
           },
           // The terminal for one bound block: it composes against the context
           // that block was issued with, so what a handler delegated decides
           // nothing about what runs, and the outcome goes back to the issuing
           // expansion rather than through this operation's return value.
-          *applyBoundModifiers([modifiers, request], _next) {
-            yield* claimBoundExec(request, (context) => {
-              const chain = composeModifierChain(modifiers, context, registry, boundChain);
+          *applyBoundModifiers([_modifiers, request], _next) {
+            // The delegated array is inspectable data and nothing more: what
+            // runs is the chain the request retained.
+            yield* claimBoundExec(request, (authored, context) => {
+              const chain = composeBoundExecChain(authored, context, registry, boundChain);
               return chain() as unknown as Operation<CodeBlockResult>;
             });
           },

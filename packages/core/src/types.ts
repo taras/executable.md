@@ -135,17 +135,6 @@ export interface CodeBlockContext {
    * routine. The block context is what already crosses that boundary intact.
    */
   routing?: import("./foreground.ts").ForegroundRouting;
-  /**
-   * Whether this block's process outcome is bound by an `as="name"`
-   * annotation (§3.6).
-   *
-   * Carried by value for the same reason routing is: the annotation is
-   * lexical to expansion, while the block runs inside the durable routine.
-   * The name itself stays with the expansion that binds it — the terminal
-   * needs only to know that both channels are wanted and that neither is
-   * displayed.
-   */
-  bound?: boolean;
 }
 
 export interface CodeBlockResult {

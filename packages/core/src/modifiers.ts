@@ -85,6 +85,14 @@ export interface BoundExecChain {
   exec: ModifierFactory;
   /** The built-in `timeout` middleware. */
   timeout: ModifierFactory;
+  /**
+   * Run the built-in exec terminal against a context, as a bound command.
+   *
+   * Composition uses this rather than the registry's `exec` entry, so the
+   * command runs against the context canonical core retained rather than one
+   * public `codeBlock` middleware could answer with.
+   */
+  terminal(context: CodeBlockContext): CodeBlockWorkflow;
 }
 
 /**
@@ -119,22 +127,11 @@ export function composeModifierChain(
   modifiers: Modifier[],
   context: CodeBlockContext,
   registry: ModifierRegistry,
-  bound?: BoundExecChain,
 ): () => CodeBlockWorkflow {
   // deno-lint-ignore require-yield
   const terminal: () => CodeBlockWorkflow = function* () {
     throw new Error("No terminal modifier (exec/eval) in chain");
   };
-
-  if (context.bound === true) {
-    const refusal = refuseUnauthorizedBinding(modifiers, registry, bound);
-    if (refusal !== undefined) {
-      // deno-lint-ignore require-yield
-      return function* () {
-        throw new Error(refusal);
-      };
-    }
-  }
 
   const terminalNames = new Set(["exec", "eval", "daemon", "service"]);
   const firstTerminal = modifiers.find((modifier) => terminalNames.has(modifier.name));
@@ -198,6 +195,59 @@ export function composeModifierChain(
 }
 
 /**
+ * Compose the chain for one bound command (spec §3.6).
+ *
+ * Everything here comes from what canonical core retained when it issued the
+ * request: the authored modifiers, the context the block was expanded with, and
+ * the built-in middleware this execution installed. Nothing a handler delegated
+ * takes part, so a chain that lost a word, gained one, or was handed a different
+ * command runs no differently from the one the document actually wrote.
+ *
+ * The registry is still consulted, and only to ask whether each authored word
+ * still names the built-in it must name. A caller that registered a replacement
+ * has taken that name away, so the block is refused rather than quietly composed
+ * from the built-in the document no longer names.
+ */
+export function composeBoundExecChain(
+  authored: readonly Modifier[],
+  context: CodeBlockContext,
+  registry: ModifierRegistry,
+  bound: BoundExecChain,
+): () => CodeBlockWorkflow {
+  const refusal = refuseUnauthorizedBinding(authored, registry, bound);
+  if (refusal !== undefined) {
+    // deno-lint-ignore require-yield
+    return function* () {
+      throw new Error(refusal);
+    };
+  }
+
+  const terminal: () => CodeBlockWorkflow = () => bound.terminal(context);
+  // The built-in identities, not the registry's answers: the check above says
+  // the names still resolve to these, and composing from them is what makes
+  // that true rather than merely tested.
+  const wrapping = authored.slice(0, -1).map((modifier) => bound.timeout(modifier.params));
+  const composed = combine(wrapping);
+
+  return function* () {
+    return yield* ephemeral(
+      scoped(function* () {
+        yield* Component.around(
+          {
+            // deno-lint-ignore require-yield
+            *codeBlock(_args, _next) {
+              return context;
+            },
+          },
+          { at: "min" },
+        );
+        return yield* composed([], terminal) as unknown as Operation<CodeBlockResult>;
+      }),
+    );
+  };
+}
+
+/**
  * Why a bound block's chain is not the one it is allowed to have.
  *
  * Every word is resolved through the registry the document will actually run,
@@ -207,13 +257,10 @@ export function composeModifierChain(
  * been composed, so neither it nor a process runs.
  */
 function refuseUnauthorizedBinding(
-  modifiers: Modifier[],
+  modifiers: readonly Modifier[],
   registry: ModifierRegistry,
-  bound: BoundExecChain | undefined,
+  bound: BoundExecChain,
 ): string | undefined {
-  if (bound === undefined) {
-    return '`as="name"` requires the built-in exec terminal, which this execution did not install.';
-  }
   const terminal = modifiers.at(-1);
   if (terminal === undefined || registry.get(terminal.name) !== bound.exec) {
     return '`as="name"` is supported only with the `exec` terminal.';

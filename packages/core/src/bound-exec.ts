@@ -24,7 +24,7 @@
  */
 
 import type { Operation } from "effection";
-import type { CodeBlockContext, CodeBlockResult, ExecResult } from "./types.ts";
+import type { CodeBlockContext, CodeBlockResult, ExecResult, Modifier } from "./types.ts";
 
 /** A protocol violation by whoever is composed around a bound command. */
 export class BoundExecProtocolError extends Error {
@@ -56,13 +56,30 @@ class BoundBlock {
   failure: { raised: unknown } | undefined;
 
   /**
-   * The context canonical core composes with.
+   * The chain the document wrote and the context it was expanded with.
    *
-   * Carries the bound fact and is never handed out. A handler holds the request
-   * instead, so there is nothing for it to strip: rewriting what it delegates
-   * changes the value this block is executed with not at all.
+   * Snapshotted here and never handed out: a handler holds the request instead,
+   * so rewriting what it delegates — dropping a refused word from the array,
+   * mutating a modifier in place afterwards, replacing the command — changes
+   * what this block executes not at all. Both are frozen because the arrays and
+   * objects the scanner produced go on being reachable from the segment.
    */
-  constructor(readonly context: CodeBlockContext) {}
+  readonly authored: readonly Modifier[];
+
+  constructor(
+    modifiers: readonly Modifier[],
+    readonly context: CodeBlockContext,
+  ) {
+    this.authored = Object.freeze(
+      modifiers.map((modifier) =>
+        Object.freeze(
+          modifier.params === undefined
+            ? { name: modifier.name }
+            : { name: modifier.name, params: modifier.params },
+        ),
+      ),
+    );
+  }
 }
 
 class CanonicalBoundRequest implements CodeBlockContext {
@@ -134,19 +151,19 @@ export interface IssuedBoundExec {
  * Compose and run the authorized chain for one issued request, once.
  *
  * Canonical core's terminal calls this with whatever middleware delegated. The
- * chain is composed against the context that block was *issued* with, so a
- * rewritten, copied or fabricated request runs nothing rather than running
- * something else. `run` is canonical core's own composition: it is reached only
+ * chain and the context are the ones that block was *issued* with, so a
+ * rewritten, copied or fabricated request — and a delegated modifier array with
+ * a refused word removed — runs nothing rather than running something else. `run` is canonical core's own composition: it is reached only
  * from here, so a handler that does not delegate never reaches it.
  */
 export function* claimBoundExec(
   request: unknown,
-  run: (context: CodeBlockContext) => Operation<CodeBlockResult>,
+  run: (modifiers: readonly Modifier[], context: CodeBlockContext) => Operation<CodeBlockResult>,
 ): Operation<void> {
   const block = CanonicalBoundRequest.claim(request);
   let result: CodeBlockResult;
   try {
-    result = yield* run(block.context);
+    result = yield* run(block.authored, block.context);
   } catch (error) {
     // Kept whether or not a handler catches what propagates: a failure
     // canonical execution raised is not middleware's to rescue.
@@ -158,9 +175,12 @@ export function* claimBoundExec(
   block.outcome = result.bound;
 }
 
-/** Issue one bound command. */
-export function issueBoundExec(context: CodeBlockContext): IssuedBoundExec {
-  const block = new BoundBlock(context);
+/** Issue one bound command, retaining the chain the document wrote for it. */
+export function issueBoundExec(
+  modifiers: readonly Modifier[],
+  context: CodeBlockContext,
+): IssuedBoundExec {
+  const block = new BoundBlock(modifiers, context);
   return {
     request: new CanonicalBoundRequest(block),
     settlement(): BoundSettlement {

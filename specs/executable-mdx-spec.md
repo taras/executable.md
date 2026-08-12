@@ -1064,20 +1064,42 @@ block refuses it before that middleware or a process runs. Registration is
 otherwise unaffected — an ordinary block still reaches a registered modifier by
 name, that one included.
 
-Neither the fact that authorizes that chain nor the outcome it settles to
-travels as block data. `Component.applyModifiers` is a supported override
-surface, so what passes through it is middleware's to rewrite: a handler that
-removed the bound fact would have the block composed as an ordinary one, and one
-that answered with a result of its own would decide what the document read. A
-bound block is therefore asked for through `applyBoundModifiers`, with a request
-canonical execution issues and claims. Middleware composes around it exactly as
-it does around an ordinary block — it may observe the request, refuse it by
-throwing, and delegate it — while canonical execution composes the chain against
-the context the block was issued with and reports the outcome to the expansion
-that issued it. A request that was not issued by canonical execution, or one
-already claimed, runs nothing at all; a handler that does not delegate leaves
-the command unrun and nothing bound; whatever a handler returns is not read; and
-a failure canonical execution raised stays raised even if a handler catches it.
+Neither the chain that is authorized, the context it runs against, nor the
+outcome it settles to travels as block data. `Component.applyModifiers` and
+`Component.codeBlock` are supported override surfaces, so what passes through
+them is middleware's to rewrite: a handler that dropped the refused word from a
+chain would have `silent exec as="probe"` run and bind, one that answered with
+another block would change which command ran and whether its channels stayed off
+the reader's terminal, and one that answered with a result of its own would
+decide what the document read.
+
+A bound block is therefore asked for through `applyBoundModifiers`, with a
+request canonical execution issues and claims. The request retains the authored
+modifiers and the block context as they stood when it was issued. Middleware
+composes around the operation exactly as it does around an ordinary block — it
+may observe the request, refuse it by throwing, and delegate it — while
+canonical execution authorizes and composes the retained chain, runs it against
+the retained context, and reports the outcome to the expansion that issued the
+request. The delegated modifier array is inspectable data and decides nothing,
+in-place edits to it after issue decide nothing, and the command a `codeBlock`
+handler answers with is not the command that runs. A request that was not issued
+by canonical execution, or one already claimed, runs nothing at all; a handler
+that does not delegate leaves the command unrun and nothing bound; whatever a
+handler returns is not read; and a failure canonical execution raised stays
+raised even if a handler catches it.
+
+Where canonical execution and the middleware around it each fail, the two are
+ranked by kind before position, as an invocation is ranked against its teardown
+(§6.11): a durability failure wins by exact identity wherever it arose, then a
+Files infrastructure failure on the same terms, then the earlier canonical
+ordinary failure. A later ordinary failure a handler raises replaces only
+canonical success — including the case where a handler refused before canonical
+execution ever ran, which is a canonical success in nothing but name: no command
+ran, and nothing is bound.
+
+Ordinary blocks keep every one of these surfaces: `applyModifiers`
+instrumentation and full overrides, and a `codeBlock` handler that decides what
+an unbound block runs, all behave exactly as they did.
 
 A binding is not a retention decision. Both channels are buffered for the
 current binding whether or not the host asked for a record, and that buffer adds
@@ -7566,6 +7588,12 @@ visible warning blocks, gather into a separate error report).
 | FG36 | A handler that short-circuits or invents an outcome | Neither creates a bound command: no process starts, nothing is bound, and what a handler returns is not read |
 | FG37 | Ordinary instrumentation and overrides | An `applyModifiers` handler still observes an unbound block, and a full override still decides its result |
 | FG38 | Both authorized chains under a handler | `exec as` and `timeout= exec as` each bind what their command settled to while a public handler composes around them |
+| FG39 | A rewritten or mutated modifier array | A delegated array with the refused word removed, and an in-place edit after issue, each change nothing: the authored chain is still refused and no process starts |
+| FG40 | `codeBlock` middleware | Cannot replace a bound command or weaken its routing; the authored command runs, its outcome is bound, and neither channel is displayed — while an ordinary block still obeys the same handler |
+| FG41 | A later durability failure | Outranks a canonical refusal and escapes |
+| FG42 | A later Files infrastructure failure | Outranks a canonical refusal and escapes |
+| FG43 | A later ordinary failure | Does not replace the canonical one the document reports |
+| FG44 | `applyBoundModifiers` | Is exported from the package root like every other direct operation |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |

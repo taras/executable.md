@@ -1533,18 +1533,27 @@ what a document ends up believing: that the block is bound — which is what
 holds its chain to the built-in exec terminal and the built-in `timeout` — and
 what the process settled to. Neither is block data.
 
-`Component.applyModifiers` is a supported override surface, and what passes
-through it is middleware's to rewrite or to answer. So a bound block is asked
-for through `applyBoundModifiers`, with a one-use request canonical core issues
-and claims. Public middleware composes around it on the same terms it composes
+`Component.applyModifiers` and `Component.codeBlock` are supported override
+surfaces, and what passes through them is middleware's to rewrite or to answer.
+So a bound block is asked for through `applyBoundModifiers`, with a one-use
+request canonical core issues and claims. The request retains the authored
+modifier chain and the block context; both are frozen when it is issued. Public
+middleware composes around the operation on the same terms it composes
 anywhere: it may observe the request, refuse by throwing, and delegate. It
-cannot produce the command. Canonical core composes the chain against the
-context the block was issued with, so a rewritten, copied or fabricated request
-runs nothing rather than running something else; the outcome goes to the
+cannot produce the command. Canonical core authorizes and composes the retained
+chain and runs it against the retained context, so a rewritten, mutated, copied
+or fabricated request — and a `codeBlock` handler answering with another block —
+runs nothing rather than running something else. The outcome goes to the
 expansion that issued the request rather than through the operation's return
 value; a handler that does not delegate leaves the command unrun and nothing
 bound; and a failure canonical execution raised stays raised whether or not a
 handler catches it.
+
+Where canonical execution and the middleware around it each failed, the two are
+ranked on the terms an invocation is ranked against its teardown: a durability
+failure wins by exact identity wherever it arose, then a Files infrastructure
+failure, then the earlier canonical ordinary failure. A later ordinary failure
+replaces only canonical success.
 
 Authorization inside that chain is by factory identity, not by registered name.
 A registry answers a name with whatever was registered under it, so admitting

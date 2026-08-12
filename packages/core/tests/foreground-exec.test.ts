@@ -30,6 +30,9 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { Component } from "../src/component-api.ts";
+import { applyBoundModifiers as publicApplyBoundModifiers } from "../mod.ts";
+import { DurablePersistenceError } from "@executablemd/durable-streams";
+import { FilesProviderUnavailableError } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
@@ -1287,5 +1290,229 @@ describe("Tier FG — bound command results", () => {
     // The handler saw both blocks, and both bound what their command settled to.
     expect(delegated).toHaveLength(2);
     expect(run.output).toContain("[1|one][2|two]");
+  });
+  /**
+   * The chain is the document's, and it is fixed when the request is issued.
+   * A handler that drops the refused word from the array it delegates — or
+   * edits a modifier in place after the fact — is describing a block nobody
+   * wrote, and `exec` would run and bind [0] where the authored chain refuses.
+   */
+  it("FG39: a rewritten or mutated modifier array cannot remove a refused word", function* () {
+    const source = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const dropped = { count: 0 };
+    const sliced = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(dropped);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            return yield* next(modifiers.slice(1), request);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(sliced.output).toContain("only the built-in `timeout` modifier");
+    expect(dropped.count).toBe(0);
+    expect(sliced.output).toContain("{probe.exitCode}");
+
+    const edited = { count: 0 };
+    const mutated = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(edited);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            // The array the document was scanned into, edited in place after
+            // the request was issued.
+            const first = modifiers[0];
+            if (first) {
+              first.name = "timeout";
+              first.params = "30s";
+            }
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(mutated.output).toContain("only the built-in `timeout` modifier");
+    expect(mutated.output).toContain('Got: "silent"');
+    expect(edited.count).toBe(0);
+    expect(mutated.output).toContain("{probe.exitCode}");
+  });
+
+  /**
+   * `Component.codeBlock` is how an ordinary block's terminal learns what to
+   * run, and it composes publicly. A bound command is executed against the
+   * context canonical core retained, so a handler answering with another block
+   * changes neither which command runs nor whether its channels stay off the
+   * reader's terminal.
+   */
+  it("FG40: codeBlock middleware cannot replace a bound command or its routing", function* () {
+    const hijack = {
+      language: "bash",
+      content: "echo hijacked",
+      blockId: "hijacked",
+    };
+
+    const bound = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *codeBlock(_args, _next) {
+            return hijack;
+          },
+        });
+        return yield* runDocument(
+          [
+            '```bash exec as="probe"',
+            "printf authored; exit 5",
+            "```",
+            "",
+            "[{probe.exitCode}|{probe.stdout}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false },
+        );
+      });
+      return { output: run.output, seen };
+    });
+
+    // The authored command ran and its outcome is what was bound.
+    expect(bound.output).toContain("[5|authored]");
+    expect(bound.output).not.toContain("hijacked");
+    // Routing is the retained one too: neither channel reached the reader.
+    expect(bound.seen.stdout).toBe("");
+    expect(bound.seen.stderr).toBe("");
+
+    // The same handler still decides an ordinary block, where reading the
+    // context through the public operation is the whole contract.
+    const ordinary = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *codeBlock(_args, _next) {
+            return hijack;
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo authored", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return seen;
+    });
+
+    expect(ordinary.stdout).toContain("hijacked");
+    expect(ordinary.stdout).not.toContain("authored");
+  });
+
+  /**
+   * A durability failure says the journal no longer describes this run, so it
+   * is not something a modifier refusal that happened first gets to outrank —
+   * nor something a handler can bury by raising it after catching one.
+   */
+  it("FG41: a later durability failure outranks a canonical refusal", function* () {
+    const source = ['```bash silent exec as="probe"', "echo ran", "```", "", "after", ""].join(
+      "\n",
+    );
+
+    const failure = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // The authorization refusal, caught and answered with a failure
+              // of a kind no printing boundary may absorb.
+            }
+            throw new DurablePersistenceError("yield", new Error("planted"));
+          },
+        });
+        try {
+          yield* runDocument(source, { retainProcessOutput: false });
+          return "";
+        } catch (error) {
+          return error instanceof Error ? error.name : String(error);
+        }
+      });
+    });
+
+    expect(failure).toBe("DurablePersistenceError");
+  });
+
+  it("FG42: a later Files infrastructure failure outranks a canonical refusal", function* () {
+    const source = ['```bash silent exec as="probe"', "echo ran", "```", "", "after", ""].join(
+      "\n",
+    );
+
+    const failure = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // Same shape, the other fatal kind.
+            }
+            throw new FilesProviderUnavailableError();
+          },
+        });
+        try {
+          yield* runDocument(source, { retainProcessOutput: false });
+          return "";
+        } catch (error) {
+          return error instanceof Error ? error.name : String(error);
+        }
+      });
+    });
+
+    expect(failure).toBe("FilesProviderUnavailableError");
+  });
+
+  it("FG43: a later ordinary failure does not replace a canonical one", function* () {
+    const source = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // Caught, and answered with an ordinary failure of its own.
+            }
+            throw new Error("middleware said so");
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    // What canonical execution refused is what the document reports.
+    expect(run.output).toContain("only the built-in `timeout` modifier");
+    expect(run.output).not.toContain("middleware said so");
+    expect(run.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG44: applyBoundModifiers is part of the package's public surface", function* () {
+    expect(typeof publicApplyBoundModifiers).toBe("function");
+    expect(publicApplyBoundModifiers).toBe(Component.operations.applyBoundModifiers);
   });
 });

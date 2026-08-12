@@ -52,6 +52,7 @@ export type { ComponentApi } from "./src/component-api.ts";
 export {
   Component,
   importComponent,
+  applyBoundModifiers,
   applyModifiers,
   raise,
   env,

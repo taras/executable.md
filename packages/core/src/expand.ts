@@ -50,6 +50,7 @@ import {
   durabilityFailure,
   ErrorMode,
   fatalCause,
+  filesFatalFailure,
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
@@ -909,7 +910,6 @@ export function* expandSegments(
           blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
           componentName: parentMeta["componentName"] as string | undefined,
           routing: yield* declaredRouting(),
-          ...(bindingName === undefined ? {} : { bound: true }),
         };
 
         if (bindingName !== undefined) {
@@ -933,7 +933,7 @@ export function* expandSegments(
           // ordinary block, and neither the fact that authorizes the chain nor
           // the outcome it settles to passes through its hands. What comes back
           // from the operation is not read at all.
-          const issued = issueBoundExec(context);
+          const issued = issueBoundExec(segment.modifiers, context);
           let thrown: { raised: unknown } | undefined;
           try {
             yield* applyBoundModifiers(segment.modifiers, issued.request);
@@ -941,21 +941,23 @@ export function* expandSegments(
             thrown = { raised: error };
           }
           const settled = issued.settlement();
-          const failure =
+          const canonical =
             settled.status === "raised"
-              ? settled.raised
-              : settled.status === "absent"
-                ? (thrown?.raised ?? settled.refusal)
-                : thrown?.raised;
+              ? { raised: settled.raised }
+              : settled.status === "absent" && thrown === undefined
+                ? { raised: settled.refusal }
+                : undefined;
+          const failure = rankBoundFailure(canonical, thrown);
           if (failure !== undefined) {
-            const fatal = fatalCause(failure);
+            const fatal = fatalCause(failure.raised);
             if (fatal !== undefined) {
               throw fatal;
             }
             result.push(
               yield* raise({
                 type: "error",
-                message: failure instanceof Error ? failure.message : String(failure),
+                message:
+                  failure.raised instanceof Error ? failure.raised.message : String(failure.raised),
                 source: segment.content,
               }),
             );
@@ -1086,6 +1088,38 @@ function* checkedCommandFailure(
     yield* ErrorMode.set("output");
     return yield* raise(segment);
   });
+}
+
+/**
+ * Which failure a bound block reports when canonical execution and the
+ * middleware around it each produced one.
+ *
+ * Ranked by kind before position, exactly as an invocation is ranked against
+ * its teardown (§6.11): a durability failure says the journal no longer
+ * describes this run, and a Files infrastructure failure says the document
+ * filesystem never answered. Neither becomes a printed error because a handler
+ * raised something afterwards, and neither is outranked by an ordinary failure
+ * that happened first.
+ *
+ * Below those two, canonical execution is the earlier failure and stays
+ * authoritative: a handler that catches what canonical execution raised and
+ * throws its own does not thereby substitute it. A later ordinary failure is
+ * reported only where canonical execution had nothing to report — which
+ * includes a handler refusing before canonical execution ever ran.
+ */
+function rankBoundFailure(
+  canonical: { raised: unknown } | undefined,
+  later: { raised: unknown } | undefined,
+): { raised: unknown } | undefined {
+  const durable = durabilityFailure(canonical?.raised) ?? durabilityFailure(later?.raised);
+  if (durable !== undefined) {
+    return { raised: durable };
+  }
+  const files = filesFatalFailure(canonical?.raised) ?? filesFatalFailure(later?.raised);
+  if (files !== undefined) {
+    return { raised: files };
+  }
+  return canonical ?? later;
 }
 
 /**
