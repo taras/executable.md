@@ -216,6 +216,14 @@ export interface ComponentFailure {
   readonly name: string;
   readonly position?: Readonly<SourcePosition>;
   readonly error: Error;
+  /**
+   * Whose work failed. `"content"` is the content the caller wrote and this
+   * invocation projected, which the component neither authored nor recovered
+   * from; anything else is the component's own. A `printErrors(fn)` declaration
+   * speaks for the component, so it decides the second and delegates the first
+   * to the region the content is written in (§6.8.1).
+   */
+  readonly origin?: "content";
 }
 
 /**

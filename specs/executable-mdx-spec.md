@@ -2092,10 +2092,15 @@ expression:
 - the function's return value is not processed and a declared return is not
   validated;
 - no `as` binding is created;
-- left uncaught, the whole invocation is replaced by the original error
-  segments — the same objects, with their metadata and source order intact —
-  and partial content plus any wrapper the function would have produced are
-  discarded;
+- left uncaught under `print`, the whole invocation is replaced by the original
+  error segments — the same objects, with their metadata and source order
+  intact — and partial content plus any wrapper the function would have
+  produced are discarded;
+- left uncaught under `output` or `throw` there is no invocation left to
+  replace: the failure the region already decided propagates, and what the
+  content rendered before it stopped goes to the region the element is written
+  in (§6.9 Partial output). The wrapper the function would have produced is
+  discarded there too;
 - later document siblings continue under `print` and stop under `output` or
   `throw`, as they do for any other first error.
 
@@ -4739,6 +4744,18 @@ that handles a failure from the invocation tree beneath it, exactly once. The
 boundary sits outside the whole invocation, which is what lets it see a failure
 that happens while the invocation is being dismantled.
 
+The two differ over one thing, and it is who is speaking. `<PrintErrors>` is
+written by the author of the region it encloses, so it decides everything
+written there, including the content an element in it projects.
+`printErrors(fn)` is written by the author of one component, and speaks for what
+that component does — not for the text a caller wrote inside it. **Content a
+caller projects is governed by the region the element is written in.** It
+expands under that region's error mode rather than the component's, and a
+failure of it the component does not recover from passes outward rather than
+being printed, whenever that region does not print. Asking for a working
+directory, a parsed value, or a written file therefore never reopens a path an
+`<Output>` region closed (§6.11).
+
 A boundary does two things, and they are the same decision: it sets `print` for
 its region (§6.9), and it turns a failure that reaches it into one printed error
 whose `cause` is the complete original failure. The mode is a context value, so
@@ -4754,8 +4771,12 @@ Some failures are classified before any of this and are never printed: a
 durability failure, a failure a `throw` decision already selected, the content
 transport that restores already-reported segments, and a schema printed error
 that already has a structured representation. Cancellation is not a printed
-error either. A failure an `output` decision selected is not in that list: the
-region it left has already stopped, so printing it resumes nothing.
+error either. A failure an `output` decision selected is not in that list, but
+where it may be printed follows from who declared the boundary: the region it
+left has already stopped, so printing it at a `<PrintErrors>` resumes only what
+that boundary's own author gated. Printing it at a component's own declaration,
+in a region that does not print, would resume what the *region's* author gated —
+so that one passes outward instead.
 
 ### 6.9 Component-declared output: `<Output>`
 
@@ -4837,6 +4858,12 @@ after a region still runs. The required sequencing:
   after it begins: not the rest of the region, not a later region, not the
   documentation between them. A body that declares no `<Output>` is unaffected —
   it runs under whatever mode encloses it, and at a root that is `print`.
+- Content written in the region and projected through an element in it is part
+  of the region, wherever the component projecting it puts the result. The first
+  error in it stops the rest of that content, fails the run, and no sibling after
+  the element begins — whether the element is `<If>`, a `<TempDir>`, or any other
+  component. A component the region invokes cannot decide otherwise for it
+  (§6.8.1); the region's own author decides, with `<PrintErrors>`.
 - A root containing `<Output>` buffers its selection and emits it once. A run
   that fails emits what its regions rendered before the failure, and an empty
   selection emits nothing.
@@ -4850,6 +4877,7 @@ Each construct installs one mode for its own region, and the nearest one governs
 | an `<Output>` region | `output` |
 | documentation, and a value root | `throw` |
 | a `<PrintErrors>` region, or a `printErrors(fn)` invocation | `print`, except over `throw` |
+| content a caller projects into an invocation | the mode where the content is written |
 
 Because a mode is read from the enclosing structure, wrapping a printing
 boundary around a component whose own body declares `<Output>` changes nothing
@@ -4857,6 +4885,13 @@ inside that component: its region installs `output` for itself, stops at its
 failure, and the boundary prints the failure that left it rather than resuming
 it. A region's author gates what follows a failure behind it, and no caller
 undoes that gate.
+
+The last row is the same rule read from the other side. A `printErrors(fn)`
+invocation is the only thing that makes the mode inside an invocation differ
+from the mode at its element, and the content it projects was written where the
+element is, not where the component's author was — so that content keeps the
+mode of the region it is written in. A component's declaration governs the
+component's own work.
 
 **Reporting and deciding are separate.** `Component.raise` is where an error is
 reported: its middleware chain observes each `ErrorSegment` once, where the
@@ -4906,6 +4941,15 @@ something other than document text passes none: a binding (`as=`, `<Capture as>`
 (`renderChildren`, `render`, `useContent`), and documentation each keep a
 private buffer. A failure part-way through one of those adds nothing to the
 document.
+
+`content()` keeps a private buffer for the same reason — a component may render
+something else in place of what it asked for — with one exception, which is the
+case where there is nothing else. When the projection fails and the component
+does not recover, the invocation contributes nothing of its own, so what the
+content rendered before it stopped is handed to the region the element is
+written in. Nothing is rendered twice: a component that recovers, or that
+returns, owns the text and hands over none of it, and an invocation captured
+with `as` owns no region to hand it to.
 
 #### Root and component consistency
 
@@ -5101,6 +5145,27 @@ remove the directory through structured concurrency, and there is no `retain`
 prop and no retention after failure. A future execution-level inspection policy
 may keep scoped resources without changing this component's contract.
 
+#### What a failure inside means
+
+`<TempDir>` gives its content a working directory. It does not give it an error
+mode: what a failure inside one means is decided by the region the element is
+written in, exactly as if the same blocks had been written without it (§6.8.1).
+
+At a root with no `<Output>` the region prints, so an ordinary failure inside is
+a printed error and the document carries on — the shape §6.9's `print` mode
+describes, and the reason a `<TempDir>` around a step is not a change of
+contract.
+
+Inside an `<Output>` region the region fails closed, so the first ordinary
+failure inside a `<TempDir>` fails the run. What the content rendered before and
+including the failing command is preserved, the rest of the content does not
+start, and no sibling after `</TempDir>` starts — so a failed preview cannot be
+followed by an elicitation or a publish. Continuing is available where it always
+was: `<PrintErrors>` at the scope the author means.
+
+The directory is removed either way. Cleanup belongs to the invocation, not to
+the outcome, and it completes on success, on failure, and on cancellation.
+
 #### Where the directory comes from
 
 `<TempDir>` creates nothing itself. It asks the installed `API.Files` provider
@@ -5150,7 +5215,8 @@ siblings run on top of work that never happened, so `StaleInputError` joins
 `DocumentationError` as an error the engine's generic catches rethrow rather
 than convert — including through a teardown aggregate, which must not launder
 it into an ordinary failure. Ordinary failures inside a `<TempDir>` are
-unaffected and remain printed errors.
+unaffected: they are still decided by the region the element is written in, and
+this rule adds only that no error mode may decide a stale replay.
 
 **Divergence errors are rethrown on the same terms.** A `DivergenceError`, a
 `TerminalDivergenceError` or its `EarlyReturnDivergenceError` specialization,
@@ -7483,7 +7549,9 @@ visible warning blocks, gather into a separate error report).
 | TD11 | Retention ends | A captured directory is gone once the execution that owned it finishes |
 | TD12 | Prop validation | An undeclared prop is rejected by ordinary validation |
 | TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a printing error mode, and the block after `</TempDir>` never runs |
-| TD14 | Ordinary failures are unchanged | A failing block inside a `<TempDir>` still renders a printed error and the following sibling still runs |
+| TD14 | Ordinary failures at a printing root | A failing block inside a `<TempDir>` still renders a printed error and the following sibling still runs |
+| TD17 | Ordinary failures inside `<Output>` | The run fails, the failing command's own output is preserved, and neither the rest of the content nor the sibling after `</TempDir>` starts — with the directory still removed |
+| TD17b | The same region under `<PrintErrors>` | The author's explicit boundary continues instead: the error is rendered, both probes run, and the directory is still removed |
 | TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
 | TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
 | TD18 | Provider-backed acquisition | Creation, the canonical path, and removal are one provider acquisition; with no provider installed the component fails the execution before rendering anything |
