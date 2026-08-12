@@ -14,7 +14,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { createContext, ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Stdio } from "@effectionx/process";
@@ -402,6 +402,78 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
   // A printing root used to render this failure and run the next block. A
   // foreground command's nonzero exit is checked now: printing may decide how
   // it is reported, never that the run succeeded (#441).
+  /**
+   * Recovery authority comes from an element the document was written with, and
+   * travels to the region's own expansion as an argument. Effection resolves a
+   * context by name, so a separately created context with the same name is the
+   * same binding: an enclosing caller could otherwise set one and turn a run
+   * that failed into a run that succeeded, without the document containing the
+   * construct that authorizes it. The name is written out rather than imported,
+   * which is what makes this an attack instead of a demonstration.
+   */
+  it("OM5g: a counterfeit printsCheckedFailures context cannot keep the run", function* () {
+    const Counterfeit = createContext<boolean>("component.printsCheckedFailures", false);
+
+    const result = yield* scoped(function* () {
+      yield* Counterfeit.set(true);
+      // It really is set for everything the run does.
+      expect(yield* Counterfeit.get()).toBe(true);
+      return yield* run({
+        "doc.md": [
+          "```bash exec",
+          "FAIL",
+          "```",
+          "",
+          "MARKER",
+          "",
+          "```bash exec",
+          "echo LATER",
+          "```",
+        ].join("\n"),
+      });
+    });
+
+    // The document contains no error-handling construct, so it fails.
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    // Nothing after the failure ran or rendered.
+    expect(result.output).not.toContain("MARKER");
+    expect(result.displayed).not.toContain("LATER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+    // And no counterfeit value reached the outcome.
+    expect(JSON.stringify(result.events)).not.toContain("printsCheckedFailures");
+  });
+
+  /**
+   * The positive control for OM5g: the same failing command, the same later
+   * work, and a real `<PrintErrors>` element around it.
+   */
+  it("OM5h: a real <PrintErrors> region prints the checked failure and continues", function* () {
+    const result = yield* run({
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</PrintErrors>",
+        "",
+        "MARKER",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    // Printed where the document asked for it, and the run went on.
+    expect(result.output).toContain("Command failed");
+    expect(result.output).toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
+  });
+
   it("OM5f: a checked command failure fails a root without <Output>", function* () {
     const result = yield* run({
       "doc.md": ["```bash exec", "FAIL", "```", "", "```bash exec", "echo LATER", "```"].join("\n"),
@@ -511,6 +583,41 @@ describe("Tier OM — the failed document is a determined outcome", () => {
     expect(second.output).not.toContain("BEFORE");
     expect(String(second.error)).toContain(String(first.error));
     // Replay ran no command again: the recorded outcome answered for the run.
+    expect(commands(stream.snapshot())).toHaveLength(commandsAfterFirst);
+  });
+
+  /**
+   * The other half of OM7: an outcome the document explicitly recovered replays
+   * as recovered, from the record and without the command. Both outcomes are
+   * determined on the first run, and replay reproduces the one that was
+   * determined rather than deciding again.
+   */
+  it("OM7b: replays an explicitly recovered outcome without running the command", function* () {
+    const files = {
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</PrintErrors>",
+        "",
+        "MARKER",
+      ].join("\n"),
+    };
+    const stream = new InMemoryStream();
+
+    const first = yield* run(files, stream);
+    const commandsAfterFirst = commands(stream.snapshot()).length;
+    const second = yield* run(files, stream);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.output).toBe(first.output);
+    expect(second.output).toContain("Command failed");
+    expect(second.output).toContain("MARKER");
+    // The recorded outcome answered for the run; nothing started again.
     expect(commands(stream.snapshot())).toHaveLength(commandsAfterFirst);
   });
 

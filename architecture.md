@@ -1179,6 +1179,21 @@ another:
   Later executable work does not start, and the run fails without any
   `<Output>` declaration. `<Output>` governs rendered document selection only.
 
+Recovery is the one exception, and its authority has a single origin: an
+explicit error-handling construct written in the document. `<PrintErrors>` is
+that construct — a region that says the failures inside it are printed and the
+document continues. A root that prints errors by default has not asked for
+anything, and does not get to call a failed run a success.
+
+That authority travels by execution-owned structure: the element hands it to the
+expansion of its own body as an argument, and expansion carries it through that
+document frame and across the invocations the region's own text makes. Ambient
+replaceable state never decides it. Contexts resolve by name, so a separately
+created context with the same name is the same binding, and anything able to
+name one could otherwise turn a failed run into a successful one from outside
+the document — which is precisely the authority a document's own text is
+supposed to hold.
+
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
 enclosing middleware, not before. Two consequences follow, and both are

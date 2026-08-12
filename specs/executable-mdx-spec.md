@@ -1018,6 +1018,14 @@ blocks do not run and the execution fails, with no `<Output>` declaration
 required. `<Output>` selects rendered document content and nothing else.
 `silent` hides output; it does not convert a failure into success.
 
+Exactly one thing recovers a checked failure: an explicit error-handling
+construct written in the document, which is `<PrintErrors>`. Its authority is
+carried by execution-owned structure — the element hands it to the expansion of
+its own body, which carries it through that document frame and across the
+invocations the region's own text makes. Ambient replaceable state never
+determines it: contexts resolve by name, so a same-name binding created outside
+the document must not be able to turn a failed run into a successful one.
+
 ### 3.7 What is the command?
 
 The content of the code block is the command. The language determines
@@ -1047,7 +1055,9 @@ Later executable blocks do not run, the execution fails, and no `<Output>`
 declaration is required. A `<PrintErrors>` region is the construct that
 deliberately handles one — inside it the failure is printed and the region
 continues, which is what makes printing an explicit act rather than the default
-a root falls into.
+a root falls into. That recovery is authorized by the element itself and reaches
+its body as an argument, never as ambient state something outside the document
+could set (§3.6).
 
 **`silent exec`** — `exec` runs the command and journals the result as usual.
 `silent` displays neither channel. A non-zero exit is still a failure: `silent`
@@ -7853,9 +7863,12 @@ platform's.
 | OM1–OM2 | A region fails the run | A root region and a component region each emit what they rendered first, fail, and start nothing after the failure |
 | OM3 | A command that printed before it failed | The stdout stays visible and the document stops there (#307/#310) |
 | OM4 | Later regions and documentation | Neither the documentation after a failing region nor the region after that begins |
-| OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a root without `<Output>` still prints |
+| OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a checked command failure fails a root without `<Output>` |
+| OM5g | A counterfeit `printsCheckedFailures` context | Cannot keep a run a document never authorized: the run fails, the marker is absent, and the later block never starts |
+| OM5h | A real `<PrintErrors>` region | Prints the same checked failure and the document continues |
 | OM6–OM6c | The live failure | The original object, a settled printed error's `DocumentationError` with its mode, and a body-plus-teardown aggregate each reach the completion intact |
 | OM7 | Replay | The same partial output and failure, with no command run again |
+| OM7b | Replay of a recovered outcome | An explicitly recovered run replays as recovered, with no command run again |
 | OM8 | The close | The root closes `ok` around a recorded `err` outcome |
 | OM9/OM10 a–e | Every visible producer | `<If>`, `<Loop>`, `<Each>`, projected `<Content />` and an answered `<Answers>` body each keep their prefix on failure and render exactly once on success |
 | OM11a–OM11e | Private buffers | A `<Capture as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |

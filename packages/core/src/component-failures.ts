@@ -22,8 +22,7 @@
 import { Component, raise } from "./component-api.ts";
 import { attributeCause, ErrorMode } from "./errors.ts";
 import type { ComponentFailure, ErrorSegment, FunctionComponent } from "./types.ts";
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
+import type { Operation } from "effection";
 
 /**
  * The declaration a component wears to say it continues after failing.
@@ -42,18 +41,6 @@ import type { Context, Operation } from "effection";
  * component's name is a different function object and inherits nothing.
  */
 const PRINTS_ERRORS = "executablemd.core.printsErrors";
-
-/**
- * Whether a region asked to print the failures inside it.
- *
- * A root prints errors by default, which is not the same as asking to: a
- * foreground command's nonzero exit ends a run that never asked, and is printed
- * where a document said to print.
- */
-export const PrintsCheckedFailures: Context<boolean> = createContext<boolean>(
-  "component.printsCheckedFailures",
-  false,
-);
 
 /**
  * Continue after this component fails, reporting the failure as a printed error.
@@ -112,9 +99,6 @@ export function* usePrintErrors(declaredBy: "region" | "component" = "region"): 
   if (site !== "throw") {
     yield* ErrorMode.set("print");
   }
-  // An explicit request to print, which a checked command failure honors: the
-  // document asked to handle it here rather than end (#441).
-  yield* PrintsCheckedFailures.set(true);
   yield* Component.around({
     *handleFailure([failure], next): Operation<ErrorSegment> {
       if (declaredBy === "component" && failure.origin === "content" && site !== "print") {
