@@ -302,9 +302,21 @@ and Bun entrypoints parse the grammar and refuse.
 
 What the command does *not* supply is a checkout to run in or a way to reach a
 repository component: the run's Workspace starts empty until #293, and a pinned
-definition installs no component search path, so the stage components beside this
-one resolve to nothing under `xmd workflow start` and are exercised under
-`xmd run`.
+definition is executed with no repository component search path, so the stage
+components beside this one — `InstructionFiles`, `Discovery`, `UserCheckpoint`,
+`Planning`, `Implementation` — resolve to nothing under `xmd workflow start` and
+`xmd workflow resume`, and are exercised under `xmd run` instead.
+
+That gap belongs to #301, in the "compose and certify" table below. It owes the
+authority and identity outcome rather than a spelling: `InstructionFiles`,
+`Discovery`, `UserCheckpoint`, `Planning`, and `Implementation` become reachable
+under `xmd workflow start` and `xmd workflow resume` from component code the
+trusted host authorized, with workflow-definition identity and retained-history
+admission accounting for that code, so resume and replay cannot substitute
+mutable checkout content for it and unauthorized or incompatible code is refused
+before it runs. `xmd run` resolution is unchanged, and no generic repository
+component search path is introduced for workflow execution. The mechanism is
+#301's to design, and it remains subject to architecture review there.
 
 **2. Repository and deterministic Git composition.**
 
@@ -369,7 +381,7 @@ replay expands the same fragment without asking the Agent again.
 | namespaced document props | #305 | shipped |
 | synchronize this living target with settled contracts | #292 | this change |
 | prove the shipped planning-document logic | #290 | open |
-| compose the supervised workflow | #301 | open |
+| compose the supervised workflow, and make its stage components reachable under `start` and `resume` | #301 | open |
 | resume from explicit durable signals | #300 | open |
 | default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
 | certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
