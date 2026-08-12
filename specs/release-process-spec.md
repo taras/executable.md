@@ -234,30 +234,113 @@ gh attestation verify ./xmd-<target> -R taras/executable.md
 
 ## 6. Adding a new package
 
-npm exposes trusted-publisher settings only on a package that already exists,
-and the workflows carry no npm token, so bootstrap a new package by hand once:
+A tagged release cannot publish a package that does not yet exist on npm and
+carry a trusted publisher, and npm documents those two in that order: "the
+package you're configuring must already exist on the npm registry"
+(`npm help trust`, npm 11.17). The workflows carry no npm token, so the first
+record is made by hand, once.
+
+That documented order is the supported one, and this procedure follows it. It is
+not a claim about what the registry will refuse: #276 records `npm trust github`
+succeeding for `@executablemd/web` while the registry still answered 404 for the
+package itself. What that configuration then did through a real first tagged
+publish was never established, so nothing here relies on it.
+
+`components/BootstrapNpmPackage.md` is that procedure. It publishes an empty
+`0.0.0-bootstrap.0` reservation under the `bootstrap` dist-tag, then configures
+GitHub Actions as the package's trusted publisher with the values in §4's table.
+It never publishes `latest` — the first tagged release does that.
+
+The reservation is empty because the real artifact cannot be the record that
+makes publishing possible. A package declaring `workspace:*` dependencies
+resolves its siblings from the registry at build time, so its first artifact
+cannot be built until those siblings are published — and they cannot be
+published to a package that does not exist. An artifact with no dependencies at
+all has no such cycle, which is what lets a package declaring siblings —
+`@executablemd/acp` and `@executablemd/test-agent` among them — be bootstrapped
+at all.
+
+`0.0.0-bootstrap.0` is never a release version, so `publish-one.yml`'s
+already-published guard never matches it: the first tagged release publishes its
+own version normally and npm points `latest` at it. The `bootstrap` dist-tag
+stays where it is.
 
 1. Create its directory under `packages/` with a `deno.json` (name under
    `@executablemd`) and a `package.json` declaring its dependencies
    (`workspace:*` for internal siblings). The root `deno.json` covers it through
    the `packages/*` workspace glob, so membership needs no edit. Run
    `deno task gen:publish-workflow` and commit the regenerated orchestrator.
-2. Publish its first version by hand as a logged-in `@executablemd` scope
-   owner:
+2. Reserve the name and install the trusted publisher, as an `@executablemd`
+   scope owner on npm 11.15 or newer:
    ```sh
-   deno run -A scripts/build-npm.ts <package-dir> <version>
-   ( cd <package-dir>/npm && npm publish --access public )
+   npm login
+   deno task xmd run README.md#Bootstrap --props-package packages/<name>
    ```
-   This covers a package with no `workspace:*` dependencies. A package that
-   declares them cannot build its first artifact until those sibling versions
-   are on npm, because the build resolves siblings from the registry. That
-   bootstrap is tracked in #152 rather than specified here.
-3. Configure its trusted publisher with the table in §4.
-4. Create the package on jsr.io under the `@executablemd` scope and link it to
+   `README.md#Bootstrap` is the entry point; it invokes
+   `components/BootstrapNpmPackage.md`, which is also runnable directly. Naming no
+   package reserves nothing, so the target composes into a whole-README run
+   without reaching the registry.
+   Run it **without `--journal` and without `--verbose`**. The document elicits
+   a one-time code and interpolates it into the publish and trust commands; a
+   journal file records both the answer itself and those commands, and
+   `--verbose` reports the same records to stderr. Rendered output carries only
+   what a command printed, so neither flag is needed and both would persist the
+   code.
+3. Create the package on jsr.io under the `@executablemd` scope and link it to
    this repository, **before** the first tagged release that includes it.
    `deno publish` fails for a package that does not exist on JSR, and the JSR
    job publishes the workspace as a unit — so one uncreated package fails the
    release for every package.
+
+### What the document checks, and re-running it
+
+The document verifies before it works, and renders what it verified:
+
+- the operator is logged in, from `npm whoami`;
+- npm is 11.15 or newer, from `npm --version`;
+- `{props.package}` is a workspace member whose `package.json` and `deno.json`
+  both exist and agree on an `@executablemd` name.
+
+npm supplies those values and the document compares them, so a failure stops the
+run before the registry is inspected, before the artifact exists, and before a
+one-time code is requested.
+
+The reservation artifact is written as Markdown rather than assembled by a
+shell: `<File>` writes the `package.json` and `README.md` into a temporary
+working directory, and `npm pack --dry-run` previews that exact directory before
+anything is published from it. Every registry read is an `exec as="…"` block, so
+what the command settled to — exit code and both channels — is bound as a value:
+npm reports a package it does not carry by exiting non-zero, and here that is an
+answer rather than a failure. The comparison happens in the document and `<If>`
+selects what happens next, so what the document decided is readable in what it
+rendered.
+
+The one-time password is requested only when something will be written, and only
+after the preview succeeds. A run that refuses asks for nothing, and a re-run
+against a package that is already reserved and already trusted asks for nothing
+either — it reads the registry, reports the end state, and stops. A package that
+needs only one of the two halves is asked for a code but builds no artifact,
+since there is nothing to publish for a preview to show.
+
+Re-running is safe, and the two halves are skipped independently:
+
+- a package already at `0.0.0-bootstrap.0` under the `bootstrap` dist-tag is not
+  published again;
+- a trusted publisher already matching §4's table exactly — GitHub Actions,
+  `taras/executable.md`, `publish-packages.yml`, `npm-publish`, and publish as
+  its only permission — is not created again.
+
+Neither half is repaired. The registry "only supports one configuration per
+package… If you attempt to create a new trust relationship when one already
+exists, it will result in an error" (`npm help trust`, npm 11.17), so a
+configuration that differs from §4's table stops the document, which reports
+what it found and revokes nothing; replacing one is a deliberate
+`npm trust revoke` by a scope owner, and the document prints that command with
+the trust id it read. A version other than `0.0.0-bootstrap.0`,
+or a `bootstrap` dist-tag pointing elsewhere, stops it the same way. Both
+refusals happen before the code is requested, and the registry state is checked
+again afterwards, because the operator is away generating a code while it can
+change.
 
 ## 7. Recovery
 
@@ -396,14 +479,3 @@ A publishable `@executablemd/web` is an atomic configuration state: public
 inclusion of `generated/client-bundle.ts` in both published artifacts. The
 configuration elements change atomically; the package is never published
 without its browser asset and never published while private.
-
-`packages/web` is currently private. It carries no release hook, no `deno.json`
-`name` or `exports`, and no npm or JSR publish job (§3).
-
-## 9. Consumer note
-
-`@executablemd/core`, `@executablemd/runtime`, `@executablemd/testing`,
-`@executablemd/cli`, and `@executablemd/test-agent` depend on effection's 4.x
-prerelease, which npm's peer
-resolver rejects against `@effectionx/*` (`^3 || ^4`). Installing them
-requires `--legacy-peer-deps` until effection 4 is stable.
