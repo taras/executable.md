@@ -1559,4 +1559,52 @@ describe("Tier OM — a printed error crosses an invocation as data", () => {
     expect(result.ok).toBe(false);
     expect(result.output).not.toContain("TAIL");
   });
+  /**
+   * A bound command's status is data, so an `<Output>` region reads it and goes
+   * on. The same command without the annotation is the checked failure it has
+   * always been (#447) — one case, because the difference between them is the
+   * whole point.
+   */
+  it("OM20: a bound command continues inside <Output>; the same one unbound stops it", function* () {
+    const bound = yield* run({
+      "doc.md": [
+        "<Output>",
+        "",
+        '```bash exec as="probe"',
+        "FAIL",
+        "```",
+        "",
+        "status={probe.exitCode}",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+        "",
+        "</Output>",
+      ].join("\n"),
+    });
+
+    expect(bound.ok).toBe(true);
+    expect(bound.output).toContain("status=1");
+    expect(commands(bound.events).some((name) => name.includes("LATER"))).toBe(true);
+
+    const unbound = yield* run({
+      "doc.md": [
+        "<Output>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+        "",
+        "</Output>",
+      ].join("\n"),
+    });
+
+    expect(unbound.ok).toBe(false);
+    expect(commands(unbound.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
 });

@@ -18,6 +18,7 @@ import { createContext } from "effection";
 import type { Context, Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
+import type { BoundExecRequest } from "./bound-exec.ts";
 import type {
   CodeBlockContext,
   CodeBlockResult,
@@ -37,6 +38,17 @@ export interface ComponentApi {
   /** `"__root__"` imports the root document. */
   importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition>;
   applyModifiers(modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult>;
+  /**
+   * Run one `exec as="name"` block (spec §3.6).
+   *
+   * Bound execution is its own operation because a bound block is authorized
+   * differently: its chain may hold only the built-in exec terminal and the
+   * built-in `timeout`, and what it binds must be what that terminal obtained
+   * from the settled process. A handler may observe the request, refuse it by
+   * throwing, and delegate it. It returns nothing, and nothing it returns is
+   * read — the outcome goes to the expansion that issued the request.
+   */
+  applyBoundModifiers(modifiers: Modifier[], block: BoundExecRequest): Operation<void>;
   /**
    * Report an ErrorSegment under the ambient error mode (spec §6.9).
    *
@@ -157,6 +169,13 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
         `with Component.around({ applyModifiers }, { at: "min" }) before expansion.`,
     );
   },
+  // deno-lint-ignore require-yield
+  *applyBoundModifiers(_modifiers: Modifier[], block: BoundExecRequest): Operation<void> {
+    throw new Error(
+      `Component.applyBoundModifiers() has no provider for block "${block.blockId}". Install ` +
+        `one with Component.around({ applyBoundModifiers }, { at: "min" }) before expansion.`,
+    );
+  },
   *raise(error: ErrorSegment): Operation<ErrorSegment> {
     return yield* settle(error);
   },
@@ -217,6 +236,8 @@ export const importComponent: Operations<ComponentApi>["importComponent"] =
   Component.operations.importComponent;
 export const applyModifiers: Operations<ComponentApi>["applyModifiers"] =
   Component.operations.applyModifiers;
+export const applyBoundModifiers: Operations<ComponentApi>["applyBoundModifiers"] =
+  Component.operations.applyBoundModifiers;
 export const raise: Operations<ComponentApi>["raise"] = Component.operations.raise;
 export const env: Operations<ComponentApi>["env"] = Component.operations.env;
 export const evalScope: Operations<ComponentApi>["evalScope"] = Component.operations.evalScope;

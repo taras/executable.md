@@ -15,7 +15,7 @@
  * handler, what the boundary receives is what the command emitted, and that is
  * all such a case asserts.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -28,9 +28,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { Component } from "../src/component-api.ts";
+import { applyBoundModifiers as publicApplyBoundModifiers } from "../mod.ts";
+import { DurablePersistenceError } from "@executablemd/durable-streams";
+import { FilesProviderUnavailableError } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
+import type { ModifierFactory } from "../src/modifiers.ts";
 import { API } from "@executablemd/runtime";
 
 interface Seen {
@@ -76,7 +82,11 @@ function* useDirectory(): Operation<string> {
 
 function* runDocument(
   source: string,
-  options: { retainProcessOutput?: boolean; stream?: InMemoryStream } = {},
+  options: {
+    retainProcessOutput?: boolean;
+    stream?: InMemoryStream;
+    modifiers?: Record<string, ModifierFactory>;
+  } = {},
 ): Operation<{ output: string; stream: InMemoryStream }> {
   const stream = options.stream ?? new InMemoryStream();
   yield* useStubFs({ "doc.md": source });
@@ -88,6 +98,7 @@ function* runDocument(
         ...(options.retainProcessOutput === undefined
           ? {}
           : { retainProcessOutput: options.retainProcessOutput }),
+        ...(options.modifiers === undefined ? {} : { modifiers: options.modifiers }),
       }),
     ),
   );
@@ -812,5 +823,696 @@ describe("Tier FG — foreground execution", () => {
     expect(kept?.retainedStderr?.length).toBe("outerr".length);
     expect(seen.stderr).toContain("out");
     expect(seen.stderr).toContain("err");
+  });
+});
+
+/**
+ * Tier FG — a command whose failure is an answer (spec §3.6, #447).
+ *
+ * `exec as="name"` binds what the process settled to, so these cases ask the
+ * three questions that separates a binding from every other use of the same
+ * bytes: what the document reads, what a reader is shown, and what the run
+ * keeps. A binding is none of the other two — it never displays a channel and
+ * never adds one to a record the host did not ask for.
+ */
+describe("Tier FG — bound command results", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** How many children a run started, whatever else the case installs. */
+  function* counting(starts: { count: number }): Operation<void> {
+    yield* API.Process.around({
+      *exec([options], next) {
+        starts.count += 1;
+        return yield* next(options);
+      },
+    });
+  }
+
+  it("FG27: a nonzero command binds its outcome, shows nothing, and the run goes on", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "printf out; printf err >&2; exit 7",
+      "```",
+      "",
+      "```js eval",
+      "output(`code=${probe.exitCode} out=${probe.stdout} err=${probe.stderr}`);",
+      "```",
+      "",
+      "```bash exec",
+      "echo after",
+      "```",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(function* (seen) {
+      const { output, stream } = yield* runDocument(source, { retainProcessOutput: false });
+      return { seen, output, stream };
+    });
+
+    // The document decided what the nonzero status meant, and kept going.
+    expect(run.output).toContain("code=7 out=out err=err");
+    // Neither channel was displayed, and the block rendered nothing itself.
+    expect(run.seen.stdout).not.toContain("out");
+    expect(run.seen.stderr).not.toContain("err");
+    expect(run.output).not.toContain("Command failed");
+    // The block after it is an ordinary foreground block again.
+    expect(run.seen.stdout).toContain("after");
+    // And a binding is not a retention decision: this run keeps the status
+    // alone, exactly as it would have without one.
+    const outcome = execOutcome(run.stream);
+    expect(outcome?.exitCode).toBe(7);
+    expect(outcome?.stdout).toBe(undefined);
+    expect(outcome?.stderr).toBe(undefined);
+  });
+
+  it("FG28: a resumed retained run rebuilds the same binding without running again", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "printf recorded-out; printf recorded-err >&2; exit 3",
+      "```",
+      "",
+      "[{probe.exitCode}|{probe.stdout}|{probe.stderr}]",
+      "",
+    ].join("\n");
+
+    const starts = { count: 0 };
+    const first = new InMemoryStream();
+    const live = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(source, { retainProcessOutput: true, stream: first });
+      });
+    });
+
+    expect(starts.count).toBe(1);
+    expect(live.output).toContain("[3|recorded-out|recorded-err]");
+    // The record holds both channels, because this host asked for a record.
+    const kept = execOutcome(first);
+    expect(kept?.stdout).toBe("recorded-out");
+    expect(kept?.stderr).toBe("recorded-err");
+
+    const events = first.snapshot();
+    expect(events.at(-1)?.type).toBe("close");
+    const partial = new InMemoryStream(events.slice(0, -1));
+
+    const resumed = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(source, { retainProcessOutput: true, stream: partial });
+      });
+      return { output: run.output, seen };
+    });
+
+    // Same fields, from the record; no second child, and nothing displayed.
+    expect(starts.count).toBe(1);
+    expect(resumed.output).toContain("[3|recorded-out|recorded-err]");
+    expect(resumed.seen.stdout).toBe("");
+    expect(resumed.seen.stderr).toBe("");
+  });
+
+  it("FG29: a command that cannot start fails and binds nothing", function* () {
+    const source = ['```bash exec as="probe"', "true", "```", "", "[{probe.exitCode}]", ""].join(
+      "\n",
+    );
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* API.Process.around({
+          // deno-lint-ignore require-yield
+          *exec() {
+            throw new Error("no such executable");
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    // The failure is the block's, decided by the region's error mode as any
+    // other is — and the reference below it never resolved, because nothing
+    // was bound.
+    expect(run.output).toContain("no such executable");
+    expect(run.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG30: a timeout stays a failure and binds nothing", function* () {
+    const dir = yield* useDirectory();
+    const source = [
+      '```bash timeout=25ms exec as="probe"',
+      `sleep 5; touch ${path.join(dir, "finished")}`,
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(() => runDocument(source, { retainProcessOutput: false }));
+
+    // A timeout wins as a failure, so the command has no settled status to
+    // bind: the reference below it stands unresolved.
+    expect(run.output).toContain("timed out after 25ms");
+    expect(run.output).toContain("{probe.exitCode}");
+    expect(yield* exists(path.join(dir, "finished"))).toBe(false);
+  });
+
+  it("FG31: a refused annotation or modifier starts no process", function* () {
+    const refused = [
+      ['```bash silent exec as="probe"', "only the built-in `timeout` modifier"],
+      ['```js eval as="probe"', "supported only with the `exec` terminal"],
+      ["```bash exec as=probe", "double quotes"],
+      ['```bash exec as="probe" as="other"', "not several"],
+      ['```bash exec as="probe" silent', "must be the last word"],
+      ['```bash exec as="1nope"', "valid JavaScript identifier"],
+    ];
+
+    for (const [fence, expected] of refused) {
+      const starts = { count: 0 };
+      const source = [fence!, "echo ran", "```", ""].join("\n");
+      const run = yield* watching(function* () {
+        return yield* scoped(function* () {
+          yield* counting(starts);
+          return yield* runDocument(source, { retainProcessOutput: false });
+        });
+      });
+
+      expect(run.output).toContain(expected!);
+      expect(starts.count).toBe(0);
+    }
+  });
+  /**
+   * Authorization is by identity, not by the word the document wrote. A
+   * registered modifier may carry any name — `timeout` included — and the
+   * registry answers that name with whatever was registered last, so a bound
+   * block that admitted middleware by name would let a replacement run around a
+   * command whose status it exists to settle.
+   */
+  it("FG32: a registered replacement named timeout cannot wrap a bound exec", function* () {
+    let wrapped = 0;
+    const custom: ModifierFactory = (_params) => (_args, next) =>
+      (function* () {
+        wrapped += 1;
+        return yield* next();
+      })();
+
+    const starts = { count: 0 };
+    const bound = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(
+          [
+            '```bash timeout=30s exec as="probe"',
+            "echo ran",
+            "```",
+            "",
+            "[{probe.exitCode}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false, modifiers: { timeout: custom } },
+        );
+      });
+    });
+
+    // Refused: the replacement never ran, no child started, nothing was bound.
+    expect(bound.output).toContain("only the built-in `timeout` modifier");
+    expect(wrapped).toBe(0);
+    expect(starts.count).toBe(0);
+    expect(bound.output).toContain("{probe.exitCode}");
+
+    // The same registration is ordinary middleware for an ordinary block.
+    const unbound = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(["```bash timeout=30s exec", "echo ran", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+          modifiers: { timeout: custom },
+        });
+      });
+      return seen;
+    });
+
+    expect(wrapped).toBe(1);
+    expect(starts.count).toBe(1);
+    expect(unbound.stdout).toContain("ran");
+  });
+
+  it("FG33: the built-in timeout still wraps a bound exec", function* () {
+    const run = yield* watching(function* (seen) {
+      const { output } = yield* runDocument(
+        [
+          '```bash timeout=30s exec as="probe"',
+          "printf bounded; exit 4",
+          "```",
+          "",
+          "[{probe.exitCode}|{probe.stdout}]",
+          "",
+        ].join("\n"),
+        { retainProcessOutput: false },
+      );
+      return { output, seen };
+    });
+
+    expect(run.output).toContain("[4|bounded]");
+    expect(run.seen.stdout).not.toContain("bounded");
+  });
+
+  /**
+   * The terminal is authorized the same way: a registration that took the name
+   * `exec` is not the exec terminal a binding contract names.
+   */
+  it("FG34: a registered replacement named exec cannot terminate a bound block", function* () {
+    let ran = 0;
+    // deno-lint-ignore require-yield
+    const custom: ModifierFactory = (_params) => (_args, _next) =>
+      (function* () {
+        ran += 1;
+        return { output: "", exitCode: 0, stderr: "" };
+      })();
+
+    const starts = { count: 0 };
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(
+          ['```bash exec as="probe"', "echo ran", "```", "", "[{probe.exitCode}]", ""].join("\n"),
+          { retainProcessOutput: false, modifiers: { exec: custom } },
+        );
+      });
+    });
+
+    expect(run.output).toContain("supported only with the `exec` terminal");
+    expect(ran).toBe(0);
+    expect(starts.count).toBe(0);
+    expect(run.output).toContain("{probe.exitCode}");
+  });
+  /**
+   * `Component.applyModifiers` is a supported public override surface, so what
+   * passes through it is middleware's to rewrite. That is exactly why neither
+   * the fact that authorizes a bound block nor the outcome it settles to may
+   * travel that way: a handler that stripped the fact would have the block
+   * composed as an ordinary one — `silent exec as="probe"` composing and
+   * starting a child — and a handler that invented a result would decide what
+   * the document read.
+   */
+  it("FG35: a handler cannot make a refused chain run by rewriting what it delegates", function* () {
+    const rewritten = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+    const starts = { count: 0 };
+    let delegated = 0;
+
+    const copied = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        // The reproduction: take the block apart and hand over an ordinary
+        // object carrying the same public members.
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            delegated += 1;
+            return yield* next(modifiers, { ...request });
+          },
+        });
+        return yield* runDocument(rewritten, { retainProcessOutput: false });
+      });
+    });
+
+    expect(delegated).toBe(1);
+    expect(copied.output).toContain("canonical execution did not issue");
+    expect(starts.count).toBe(0);
+    expect(copied.output).toContain("{probe.exitCode}");
+
+    // And delegating the genuine request does not smuggle the chain past the
+    // authorization either: `silent` is still not middleware a binding accepts.
+    const genuine = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(rewritten, { retainProcessOutput: false });
+      });
+    });
+
+    expect(genuine.output).toContain("only the built-in `timeout` modifier");
+    expect(starts.count).toBe(0);
+    expect(genuine.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG36: a handler cannot manufacture a bound outcome", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+    const starts = { count: 0 };
+
+    // Short-circuited: the operation returns without delegating, so canonical
+    // execution never ran and there is no outcome to bind.
+    const quiet = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyBoundModifiers(_args, _next) {},
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(quiet.output).toContain("returned without delegating");
+    expect(starts.count).toBe(0);
+    expect(quiet.output).toContain("{probe.exitCode}");
+
+    // Fabricated: a handler answering with an outcome of its own decides
+    // nothing, because what it returns is never read.
+    const invented = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyBoundModifiers(_args, _next) {
+            return {
+              output: "",
+              exitCode: 0,
+              stderr: "",
+              bound: { exitCode: 0, stdout: "invented", stderr: "" },
+            } as unknown as void;
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(invented.output).not.toContain("invented");
+    expect(invented.output).toContain("returned without delegating");
+    expect(starts.count).toBe(0);
+    expect(invented.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG37: ordinary instrumentation and overrides are unaffected", function* () {
+    const seenBlocks: string[] = [];
+
+    const instrumented = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* Component.around({
+          *applyModifiers([modifiers, block], next) {
+            seenBlocks.push(block.content.trim());
+            return yield* next(modifiers, block);
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo watched", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return seen;
+    });
+
+    expect(seenBlocks).toEqual(["echo watched"]);
+    expect(instrumented.stdout).toContain("watched");
+
+    // A full override still decides an ordinary block's result.
+    const overridden = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyModifiers(_args, _next) {
+            return { output: "substituted\n", exitCode: 0, stderr: "" };
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo never-run", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return { output: run.output, seen };
+    });
+
+    expect(overridden.output).toContain("substituted");
+    expect(overridden.seen.stdout).not.toContain("never-run");
+  });
+
+  it("FG38: the authorized chains still produce the bound outcome under a handler", function* () {
+    const delegated: string[] = [];
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            delegated.push(request.blockId);
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(
+          [
+            '```bash exec as="plain"',
+            "printf one; exit 1",
+            "```",
+            "",
+            '```bash timeout=30s exec as="bounded"',
+            "printf two; exit 2",
+            "```",
+            "",
+            "[{plain.exitCode}|{plain.stdout}][{bounded.exitCode}|{bounded.stdout}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false },
+        );
+      });
+    });
+
+    // The handler saw both blocks, and both bound what their command settled to.
+    expect(delegated).toHaveLength(2);
+    expect(run.output).toContain("[1|one][2|two]");
+  });
+  /**
+   * The chain is the document's, and it is fixed when the request is issued.
+   * A handler that drops the refused word from the array it delegates — or
+   * edits a modifier in place after the fact — is describing a block nobody
+   * wrote, and `exec` would run and bind [0] where the authored chain refuses.
+   */
+  it("FG39: a rewritten or mutated modifier array cannot remove a refused word", function* () {
+    const source = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const dropped = { count: 0 };
+    const sliced = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(dropped);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            return yield* next(modifiers.slice(1), request);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(sliced.output).toContain("only the built-in `timeout` modifier");
+    expect(dropped.count).toBe(0);
+    expect(sliced.output).toContain("{probe.exitCode}");
+
+    const edited = { count: 0 };
+    const mutated = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(edited);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            // The array the document was scanned into, edited in place after
+            // the request was issued.
+            const first = modifiers[0];
+            if (first) {
+              first.name = "timeout";
+              first.params = "30s";
+            }
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(mutated.output).toContain("only the built-in `timeout` modifier");
+    expect(mutated.output).toContain('Got: "silent"');
+    expect(edited.count).toBe(0);
+    expect(mutated.output).toContain("{probe.exitCode}");
+  });
+
+  /**
+   * `Component.codeBlock` is how an ordinary block's terminal learns what to
+   * run, and it composes publicly. A bound command is executed against the
+   * context canonical core retained, so a handler answering with another block
+   * changes neither which command runs nor whether its channels stay off the
+   * reader's terminal.
+   */
+  it("FG40: codeBlock middleware cannot replace a bound command or its routing", function* () {
+    const hijack = {
+      language: "bash",
+      content: "echo hijacked",
+      blockId: "hijacked",
+    };
+
+    const bound = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *codeBlock(_args, _next) {
+            return hijack;
+          },
+        });
+        return yield* runDocument(
+          [
+            '```bash exec as="probe"',
+            "printf authored; exit 5",
+            "```",
+            "",
+            "[{probe.exitCode}|{probe.stdout}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false },
+        );
+      });
+      return { output: run.output, seen };
+    });
+
+    // The authored command ran and its outcome is what was bound.
+    expect(bound.output).toContain("[5|authored]");
+    expect(bound.output).not.toContain("hijacked");
+    // Routing is the retained one too: neither channel reached the reader.
+    expect(bound.seen.stdout).toBe("");
+    expect(bound.seen.stderr).toBe("");
+
+    // The same handler still decides an ordinary block, where reading the
+    // context through the public operation is the whole contract.
+    const ordinary = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *codeBlock(_args, _next) {
+            return hijack;
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo authored", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return seen;
+    });
+
+    expect(ordinary.stdout).toContain("hijacked");
+    expect(ordinary.stdout).not.toContain("authored");
+  });
+
+  /**
+   * A durability failure says the journal no longer describes this run, so it
+   * is not something a modifier refusal that happened first gets to outrank —
+   * nor something a handler can bury by raising it after catching one.
+   */
+  it("FG41: a later durability failure outranks a canonical refusal", function* () {
+    const source = ['```bash silent exec as="probe"', "echo ran", "```", "", "after", ""].join(
+      "\n",
+    );
+
+    const failure = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // The authorization refusal, caught and answered with a failure
+              // of a kind no printing boundary may absorb.
+            }
+            throw new DurablePersistenceError("yield", new Error("planted"));
+          },
+        });
+        try {
+          yield* runDocument(source, { retainProcessOutput: false });
+          return "";
+        } catch (error) {
+          return error instanceof Error ? error.name : String(error);
+        }
+      });
+    });
+
+    expect(failure).toBe("DurablePersistenceError");
+  });
+
+  it("FG42: a later Files infrastructure failure outranks a canonical refusal", function* () {
+    const source = ['```bash silent exec as="probe"', "echo ran", "```", "", "after", ""].join(
+      "\n",
+    );
+
+    const failure = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // Same shape, the other fatal kind.
+            }
+            throw new FilesProviderUnavailableError();
+          },
+        });
+        try {
+          yield* runDocument(source, { retainProcessOutput: false });
+          return "";
+        } catch (error) {
+          return error instanceof Error ? error.name : String(error);
+        }
+      });
+    });
+
+    expect(failure).toBe("FilesProviderUnavailableError");
+  });
+
+  it("FG43: a later ordinary failure does not replace a canonical one", function* () {
+    const source = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            try {
+              yield* next(modifiers, request);
+            } catch {
+              // Caught, and answered with an ordinary failure of its own.
+            }
+            throw new Error("middleware said so");
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    // What canonical execution refused is what the document reports.
+    expect(run.output).toContain("only the built-in `timeout` modifier");
+    expect(run.output).not.toContain("middleware said so");
+    expect(run.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG44: applyBoundModifiers is part of the package's public surface", function* () {
+    expect(typeof publicApplyBoundModifiers).toBe("function");
+    expect(publicApplyBoundModifiers).toBe(Component.operations.applyBoundModifiers);
   });
 });

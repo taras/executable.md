@@ -32,6 +32,7 @@ import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
 import { DocumentProtocolError, issueDocument } from "./document-request.ts";
+import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
@@ -95,12 +96,13 @@ import { Component, importComponent } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
+  composeBoundExecChain,
   composeModifierChain,
   buildCommand,
   createModifierRegistry,
   useCodeBlock,
 } from "./modifiers.ts";
-import type { ModifierFactory } from "./modifiers.ts";
+import type { BoundExecChain, CodeBlockWorkflow, ModifierFactory } from "./modifiers.ts";
 import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
@@ -113,11 +115,12 @@ import {
   selectComponent,
   unresolvedMessage,
 } from "./components/select.ts";
-import type { CodeBlockResult, EvalEnv } from "./types.ts";
+import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
+import type { ForegroundRouting } from "./foreground.ts";
 import { checkedFailureLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
@@ -1081,18 +1084,48 @@ function admitRootSelection(event: Yield, root: RootDocumentSource): void {
 function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
   return (_params) => (_args, _next) =>
     (function* () {
+      // An ordinary block reads its context through the public operation, so
+      // `codeBlock` middleware composes here exactly as it always has.
       const context = yield* useCodeBlock();
+      return yield* execTerminal(retainProcessOutput, context, false);
+    })();
+}
+
+/**
+ * Run one command and report what it settled to.
+ *
+ * The context is an argument rather than something read back from the scope:
+ * a bound command is executed against the context canonical core retained, so
+ * public `codeBlock` middleware cannot change which command runs, weaken the
+ * routing that keeps its channels off the reader's terminal, or decide whether
+ * this execution is bound at all. `bound` is the same fact, held the same way —
+ * it is what canonical core knew when it composed the chain, and it appears
+ * nowhere a handler could add or remove it.
+ */
+function* execTerminal(
+  retainProcessOutput: boolean,
+  context: CodeBlockContext,
+  bound: boolean,
+): CodeBlockWorkflow {
+  {
+    {
       const command = buildCommand(context.language, context.content);
       // Resolved here, where the block is, and handed to the Process operation
       // explicitly: an enclosing `timeout=` has already made this its own value,
       // and the Process Api itself defaults to nothing (spec §Config).
       const timeout = yield* ephemeral(timeoutExec);
       // Where this block's output goes: a `<Capture as>` region decided that
-      // lexically, and a modifier inside the chain may have narrowed it.
-      const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
+      // lexically, and a modifier inside the chain may have narrowed it. A bound
+      // block is not a display at all — its outcome is data the document reads —
+      // so it shows neither channel and takes its region's routing from nothing.
+      const selected = bound
+        ? BINDING_ROUTING
+        : ((yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND);
 
       const captured = selected.stdout === "capture";
       let live = "";
+      let liveStdout = "";
+      let liveStderr = "";
       const result = (yield createDurableOperation<Json>(
         {
           type: "exec",
@@ -1102,7 +1135,7 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
         function* (): Operation<Json> {
           // Routing and retention are established before the child exists, so
           // startup chunks are treated like every other byte.
-          const finished = yield* route(selected, retainProcessOutput);
+          const finished = yield* route(selected, retainProcessOutput, bound);
           // `retain: false`: this execution keeps what it decided to keep, on
           // the chain above, where silencing cannot hide it from a record.
           const execResult = yield* API.Process.operations.exec({
@@ -1113,6 +1146,8 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
           });
           const kept = finished();
           live = kept.captured;
+          liveStdout = kept.boundStdout ?? "";
+          liveStderr = kept.boundStderr ?? "";
           return {
             exitCode: execResult.exitCode,
             ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
@@ -1130,9 +1165,27 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
         output: captured ? (result.stdout ?? live) : "",
         exitCode: result.exitCode,
         stderr: result.stderr ?? "",
+        // The binding comes from the record when there is one and from this
+        // block's own buffers when there is not, on the same terms a capture's
+        // does — which is what lets a resumed run rebuild the outcome without
+        // starting the command again. It is a fresh object every time: what
+        // replay preserves is the field values.
+        ...(bound
+          ? {
+              bound: {
+                exitCode: result.exitCode,
+                stdout: result.stdout ?? liveStdout,
+                stderr: result.stderr ?? liveStderr,
+              },
+            }
+          : {}),
       };
-    })();
+    }
+  }
 }
+
+/** A bound block displays neither channel: its outcome is read, not shown. */
+const BINDING_ROUTING: ForegroundRouting = { stdout: "hidden", stderr: "hidden" };
 
 // `silent` suppresses output; it does not convert failure into success (#307).
 // The outcome it hands back is the inner chain's, so a silenced command that
@@ -1698,11 +1751,19 @@ function* executeDocument(
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
-  registry.set("exec", createExecFactory(retainProcessOutput));
+  // Held by identity as well as by name: a bound block is authorized against
+  // these exact factories, so a modifier registered under either name is a
+  // replacement rather than the middleware the binding contract names.
+  const boundChain: BoundExecChain = {
+    exec: createExecFactory(retainProcessOutput),
+    timeout: timeoutFactory,
+    terminal: (context) => execTerminal(retainProcessOutput, context, true),
+  };
+  registry.set("exec", boundChain.exec);
   registry.set("silent", silentFactory);
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
-  registry.set("timeout", timeoutFactory);
+  registry.set("timeout", boundChain.timeout);
   registry.set("daemon", daemonFactory);
   registry.set("ephemeral", ephemeralFactory);
   registry.set("service", serviceFactory);
@@ -1774,6 +1835,18 @@ function* executeDocument(
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
             return yield* chain();
+          },
+          // The terminal for one bound block: it composes against the context
+          // that block was issued with, so what a handler delegated decides
+          // nothing about what runs, and the outcome goes back to the issuing
+          // expansion rather than through this operation's return value.
+          *applyBoundModifiers([_modifiers, request], _next) {
+            // The delegated array is inspectable data and nothing more: what
+            // runs is the chain the request retained.
+            yield* claimBoundExec(request, (authored, context) => {
+              const chain = composeBoundExecChain(authored, context, registry, boundChain);
+              return chain() as unknown as Operation<CodeBlockResult>;
+            });
           },
           evalScope: () => rootEvalScope,
         },

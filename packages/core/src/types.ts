@@ -5,7 +5,7 @@
  * modifier system types, and shared interfaces.
  */
 
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 
 export type Json = DurableJson;
@@ -69,6 +69,15 @@ export interface ExecutableCodeBlock {
   content: string;
   modifiers: Modifier[];
   executable: true;
+  /**
+   * The `as="name"` annotation the info string carried, if it carried one.
+   *
+   * A binding annotation is not middleware: it is removed before modifier
+   * composition and names where this block's process outcome is bound (§3.6).
+   * A malformed annotation is the failure it describes, decided before the
+   * chain is composed and therefore before a process starts.
+   */
+  binding?: Result<string>;
 }
 
 export interface ExecOutputSegment {
@@ -104,6 +113,8 @@ export interface ParsedInfoString {
   language: string;
   modifiers: Modifier[];
   executable: boolean;
+  /** The binding annotation the info string carried, if it carried one. */
+  binding?: Result<string>;
 }
 
 export interface Modifier {
@@ -130,6 +141,12 @@ export interface CodeBlockResult {
   output: string;
   exitCode: number;
   stderr: string;
+  /**
+   * The process outcome a bound block binds. Absent unless the block carried
+   * an `as="name"` annotation; `output` is rendering transport and is never
+   * the binding.
+   */
+  bound?: ExecResult;
 }
 
 // Canonical draft-07 JSON Schema object (spec §5.1.1). Held as `JsonObject` so

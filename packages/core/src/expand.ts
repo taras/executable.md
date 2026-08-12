@@ -23,6 +23,7 @@ import type {
   ComponentDefinition,
   ComponentFailure,
   EvalEnv,
+  ExecutableCodeBlock,
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
@@ -33,6 +34,7 @@ import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
   Component,
+  applyBoundModifiers,
   applyModifiers,
   env,
   evalScope,
@@ -48,6 +50,7 @@ import {
   durabilityFailure,
   ErrorMode,
   fatalCause,
+  filesFatalFailure,
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
@@ -56,6 +59,7 @@ import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import CoreTest from "./components/Test.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
+import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -873,6 +877,15 @@ export function* expandSegments(
       }
 
       case "codeBlock": {
+        // Everything a binding annotation can be wrong about is decided here,
+        // before the chain is composed and therefore before a process starts.
+        const refusal = bindingRefusal(segment);
+        if (refusal !== undefined) {
+          result.push(yield* raise({ type: "error", message: refusal, source: segment.content }));
+          break;
+        }
+        const bindingName = segment.binding?.ok === true ? segment.binding.value : undefined;
+
         // Interpolate eval bindings into content before the modifier chain.
         // A binding environment may not be in scope (e.g., blocks outside
         // component expansion) — fall back to the original content.
@@ -898,6 +911,67 @@ export function* expandSegments(
           componentName: parentMeta["componentName"] as string | undefined,
           routing: yield* declaredRouting(),
         };
+
+        if (bindingName !== undefined) {
+          if (!evalEnv) {
+            result.push(
+              yield* raise({
+                type: "error",
+                message: '`as="name"` requires an evaluation environment.',
+                source: segment.content,
+              }),
+            );
+            break;
+          }
+          // A bound command's outcome is data the document decides on: the
+          // block renders nothing, displays neither channel, and a nonzero
+          // status is a field rather than a failure — including inside
+          // `<Output>`, where an ordinary command's would end the run (§3.6).
+          //
+          // Asked for through a request rather than by handing the block over:
+          // middleware composes around this exactly as it does around an
+          // ordinary block, and neither the fact that authorizes the chain nor
+          // the outcome it settles to passes through its hands. What comes back
+          // from the operation is not read at all.
+          const issued = issueBoundExec(segment.modifiers, context);
+          let thrown: { raised: unknown } | undefined;
+          try {
+            yield* applyBoundModifiers(segment.modifiers, issued.request);
+          } catch (error) {
+            thrown = { raised: error };
+          }
+          const settled = issued.settlement();
+          const canonical =
+            settled.status === "raised"
+              ? { raised: settled.raised }
+              : settled.status === "absent" && thrown === undefined
+                ? { raised: settled.refusal }
+                : undefined;
+          const failure = rankBoundFailure(canonical, thrown);
+          if (failure !== undefined) {
+            const fatal = fatalCause(failure.raised);
+            if (fatal !== undefined) {
+              throw fatal;
+            }
+            result.push(
+              yield* raise({
+                type: "error",
+                message:
+                  failure.raised instanceof Error ? failure.raised.message : String(failure.raised),
+                source: segment.content,
+              }),
+            );
+            break;
+          }
+          if (settled.status === "produced") {
+            evalEnv.values[bindingName] = {
+              exitCode: settled.outcome.exitCode,
+              stdout: settled.outcome.stdout,
+              stderr: settled.outcome.stderr,
+            };
+          }
+          break;
+        }
 
         try {
           const codeResult = yield* applyModifiers(segment.modifiers, context);
@@ -1014,6 +1088,55 @@ function* checkedCommandFailure(
     yield* ErrorMode.set("output");
     return yield* raise(segment);
   });
+}
+
+/**
+ * Which failure a bound block reports when canonical execution and the
+ * middleware around it each produced one.
+ *
+ * Ranked by kind before position, exactly as an invocation is ranked against
+ * its teardown (§6.11): a durability failure says the journal no longer
+ * describes this run, and a Files infrastructure failure says the document
+ * filesystem never answered. Neither becomes a printed error because a handler
+ * raised something afterwards, and neither is outranked by an ordinary failure
+ * that happened first.
+ *
+ * Below those two, canonical execution is the earlier failure and stays
+ * authoritative: a handler that catches what canonical execution raised and
+ * throws its own does not thereby substitute it. A later ordinary failure is
+ * reported only where canonical execution had nothing to report — which
+ * includes a handler refusing before canonical execution ever ran.
+ */
+function rankBoundFailure(
+  canonical: { raised: unknown } | undefined,
+  later: { raised: unknown } | undefined,
+): { raised: unknown } | undefined {
+  const durable = durabilityFailure(canonical?.raised) ?? durabilityFailure(later?.raised);
+  if (durable !== undefined) {
+    return { raised: durable };
+  }
+  const files = filesFatalFailure(canonical?.raised) ?? filesFatalFailure(later?.raised);
+  if (files !== undefined) {
+    return { raised: files };
+  }
+  return canonical ?? later;
+}
+
+/**
+ * Why this block's `as="name"` annotation binds nothing, if it binds nothing.
+ *
+ * This is the half of the refusal the source settles by itself: an annotation
+ * that never named a binding names nothing here either. Which middleware a
+ * bound block may be composed from is not a question about words — a registered
+ * modifier may carry any name — so it is decided against the resolved factories
+ * where the chain is composed, before either the middleware or a process runs.
+ */
+function bindingRefusal(segment: ExecutableCodeBlock): string | undefined {
+  const binding = segment.binding;
+  if (binding === undefined || binding.ok) {
+    return undefined;
+  }
+  return binding.error.message;
 }
 
 function captureError(message: string): ErrorSegment {
