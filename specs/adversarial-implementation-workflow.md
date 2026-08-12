@@ -85,9 +85,12 @@ Stopping *at* the boundary is a durable suspension rather than a construct. A
 checkpoint that reaches a person records its pending request and the Workspace
 frontier, releases the executor, and reports the run ID and stop reason;
 `xmd workflow resume` continues there once the answer is available. Neither the
-process nor the Agent sessions need to stay alive in between. That lifecycle is
-#366 for foreground start and resume and #367 for suspension, ownership, and
-stop-reason inspection, and neither is built. `<Stage>` is not the answer: it was
+process nor the Agent sessions need to stay alive in between. `xmd workflow
+start` and `xmd workflow resume` are shipped (#366), and a resume continues from
+the retained frontier; what is not built is the boundary itself — a checkpoint
+that releases the executor, the ownership that decides who may continue a run,
+and the stop-reason inspection that reports why it stopped are #367.
+`<Stage>` is not the answer: it was
 rejected as architecture, because the root document is the workflow and a durable
 run may continue through several document executions without inventing
 subdivisions between them (#298, closed).
@@ -122,19 +125,27 @@ The command selects the environment; the document describes the procedure.
 
 `xmd run` executes against the caller's current environment and promises no
 restoration. `xmd workflow start` creates a workflow run with one implicit root
-Workspace that supplies the filesystem, repository, process, and
-working-directory capabilities the stages use, retains the filtered journal, and
-returns when execution completes, suspends, fails, is cancelled, or is
-interrupted. `xmd workflow resume <run-id>` continues from the journal frontier
-under the retained definition and props. The same declarative components work in
-both; durability comes from the host rather than from a second spelling of
-`<File>` or `<Git.Commit>` (#366, unbuilt).
+Workspace, streams the document's output in the foreground, retains the filtered
+journal and the results of the commands it ran, and returns when execution
+completes, fails, or is interrupted. `xmd workflow resume <run-id>` continues
+from the journal frontier under the retained definition and props: completed
+durable effects restore their recorded results and partial work continues. Both
+are shipped (#366) on the Deno entrypoint and the compiled binary. The same
+declarative components work in both; durability comes from the host rather than
+from a second spelling of `<File>` or `<Git.Commit>`.
 
-Until that command exists, the first exercise runs one stage at a time under
-user control in one document execution and one existing working directory. The
-user inspects each result and manually starts the next stage. That manual
-boundary lets the exercise test the interview, handoff, plan, review, decision,
-and revision contracts before the retained lifecycle exists.
+What that root Workspace supplies today is the document's filesystem, and only
+that. A run's `<File>` and `<Glob>` operations resolve inside the run's own
+transactional filesystem, which starts empty: the repository, worktree, process,
+and Agent capabilities the stages use are the composition #293 and #302 still
+owe it. The definition is pinned to one committed Git object and a run installs
+no component search path, so a repository component beside the definition — every
+stage below — resolves to nothing under `xmd workflow start`. The stages that
+run today therefore run under `xmd run`, in one document execution and one
+existing working directory, with the user inspecting each result and starting the
+next stage. That manual boundary lets the exercise test the interview, handoff,
+plan, review, decision, and revision contracts while the retained environment
+around them is completed.
 
 The automated form treats execution as a loop. An iteration stops on the first
 applicable signal in this priority order:
@@ -150,10 +161,10 @@ would have been used without detecting or prioritizing them.
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
-`xmd workflow` the same question becomes a durable suspension that releases the
-executor and resumes later. Until start and resume exist, the user still
-supplies decisions between manually invoked stages whenever the work stopped at a
-boundary rather than at a question inside one document execution.
+`xmd workflow` the same question is to become a durable suspension that releases
+the executor and resumes later; the executor ownership that makes releasing one
+safe is #367 and is unbuilt, so today the question is answered inside the
+document execution that asked it, under whichever command started it.
 
 ### Runtime intervention
 
@@ -358,9 +369,22 @@ reaches the output stream; nothing after the failure does. Continuing after a
 failure is always explicit — a bounded repair turn the document shows, not
 recovery the engine performs on the author's behalf.
 
+Which region decides a failure follows from where the content was written, not
+from where it ran. Content a caller projects into a component keeps the error
+mode of the region the element sits in. A component's `printErrors(fn)`
+declaration speaks for the component's own work and never for the caller's text,
+so a projected-content failure the component does not recover from passes
+outward wherever that caller site does not print, and what the projection had
+already rendered belongs to the caller's region and reaches its output before
+the failure. Nothing is rendered twice: a component that recovers, or that
+returns, owns that text and hands over none of it (#446). A stage that wanted to
+survive a failed region asks for that at the scope it means, with
+`<PrintErrors>`.
+
 Printing an `output` decision is settled contract that the engine has not built
-yet: an outer `<PrintErrors>` currently ends the document execution instead
-(#327). No stage depends on it today.
+yet: an outer `<PrintErrors>` around a region that failed under `output` ends the
+document execution instead of printing it (#327). That limitation is distinct
+from the ownership rule above and remains open. No stage depends on it today.
 
 `throwOnError` on a `<Prompt>` is required for the same reason: without it a
 failed prompt records its failure and returns its text, raising nothing for the
@@ -437,9 +461,9 @@ agent transcripts or asking an agent to locate and read another agent's file.
 Retention exists. A workflow run owns one SQLite database holding its filtered
 journal and effect results, versioned Workspace roots and content, Repository and
 Worktree metadata, and Agent-session mappings, and it is found by public run ID
-alone (#291, closed). Every Workspace-local expansion publishes its mutation, the
+alone (#291, shipped). Every Workspace-local expansion publishes its mutation, the
 resulting logical Workspace root, and its filtered journal result in one
-transaction — all three commit or none does (#365, closed). Alongside the journal
+transaction — all three commit or none does (#365, shipped). Alongside the journal
 the run retains its immutable identity, one of six statuses, a nullable stop
 reason, replaceable retrieval metadata, and one document-execution record per
 start and per resume.
@@ -471,6 +495,34 @@ run wrote."
 Every committed journal event references the logical Workspace root current when
 it was written, and only committed event boundaries are checkpoints — which is
 what makes an event selectable for a compatible history fork later (#368).
+
+A command a stage runs is retained on the same terms. Routing, retention, and
+failure are three separate decisions. An ordinary executable block forwards
+stdout and stderr live as the run receives them and renders neither again at
+completion; what a reader sees is the document's own display policy. What the run
+*keeps* is the host path's decision, and `xmd workflow start` and
+`xmd workflow resume` retain both channels received at the per-exec boundary
+whatever that display policy was, because a resumed procedure reads back what a
+command printed rather than running it again to find out. `xmd run` retains a
+command's channels only when its diagnostic journal is requested. Retained text
+is what reached the run's boundary after the host's own stdio middleware, and it
+crosses the pre-persistence secret gate like any other journaled field.
+`Process.join()` may settle before the output pumps finish, so output written as
+they settle may not reach that boundary at all; effectionx #244 owns the stronger
+guarantee, and nothing here claims pump-complete retention until it is
+integrated.
+
+A nonzero exit is the third decision, and a document may take it as data instead.
+`exec as="name"` displays neither channel, renders nothing, and binds a fresh
+mutable `{ exitCode, stdout, stderr }`, so a nonzero exit is ordinary control-flow
+data rather than a raised checked failure. The bound value is the settled outcome
+built-in exec obtained: only the built-in `timeout` and the built-in `exec` may
+compose a bound command, authorized by the exact built-ins the execution
+installed rather than by the word the block wrote, and public modifier middleware
+may observe or refuse but can neither remove those authorization facts nor
+manufacture or replace the outcome. Binding is not retention: the buffers a
+binding needs belong to the expansion, and what the run keeps durably stays the
+host's decision.
 
 Most of what a stage produces is already journaled. `<Loop>` records every
 iteration it enters and one terminal `break`, `exhausted`, or `error` outcome,
@@ -544,6 +596,23 @@ Every file the workflow writes is consequently an ordinary durable XMD effect
 with its own expansion identity, journal result, and Workspace transaction —
 never a side effect of an agent process.
 
+Underneath the allowlist sits the same division for the engine itself: canonical
+core alone brings an execution or a document expansion into being and publishes
+its outcome (#432, #433). Public `Execution.execute` middleware is handed an
+opaque request and may inspect the options, narrow them, register an additive
+completion policy, install contextual behavior, refuse by throwing, and delegate;
+public `Execution.document` middleware may inspect the props, narrow or replace
+them, install contextual behavior, refuse, and delegate. Whatever either returns
+is ignored, so no handler can synthesize an execution, a document, an output
+stream, a success, or a failure. Each request is a one-use capability belonging
+to one invocation or one expansion: a reconstructed look-alike, a superseded
+request, another invocation's request, and a second delegation are each refused
+before any journal read, expansion, or append. The trusted preparation a workflow
+run needs is installed through the host boundary instead — ahead of every public
+document policy, the root import, and every authored effect — which is why
+security authority, retained identity, and outcome reconciliation never trust
+replaceable contextual state.
+
 Agent network access is denied, which is why a review prompt must render
 everything the reviewer has to judge rather than pointing at it.
 
@@ -564,9 +633,11 @@ implemented. `API.Files` and its host provider are: every document file operatio
 routes through that provider, which confines document paths to `Env.cwd` while the
 host namespace is stable. That claim is about traversal rather than about the
 filesystem being stable — a directory that is real when it is read could be
-replaced afterwards — and the transaction-bound provider that resolves the same
-paths inside a run-owned Workspace, where a document path never becomes a host
-path at all, is #227's second layer and is unbuilt.
+replaced afterwards. A workflow run installs the transaction-bound provider
+instead, and it is built: the same authored paths resolve inside the run's own
+filesystem, where a document path never becomes a host path at all, and each
+read, write, or search is one effect transaction. #227 stays open for the host
+provider's validate-then-use race rather than for the run's namespace.
 
 Scope cleanup releases live attachments; it does not delete run-owned state.
 Every run status is retained until an explicit `xmd workflow delete`, which
@@ -681,11 +752,13 @@ The user triggers each stage manually. Required content is rendered directly int
 later prompts from restored values, and generated artifacts do not appear in a
 checkout unless the user explicitly exports them.
 
-Until `xmd workflow start` exists, the exercise runs in one document execution
-and one existing working directory. The document logic — instruction discovery,
-the planner interview, plan convergence, the bounded repair turns, and the user
-gate — is executable on shipped syntax today; what is not yet executable is the
-retained environment around it and the durable environmental effects inside it.
+The exercise runs under `xmd run`, in one document execution and one existing
+working directory. The document logic — instruction discovery, the planner
+interview, plan convergence, the bounded repair turns, and the user gate — is
+executable on shipped syntax today. What a workflow run cannot yet give it is a
+checkout to work in and a way to reach these stages at all: the run's Workspace
+holds no repository until #293, and a pinned definition resolves no repository
+component beside it.
 
 The exercise succeeds when:
 
@@ -763,8 +836,8 @@ shipped behavior. They are recorded because the answers constrain what remains.
    already rendered.
 9. **How does a document read a prop?** Under the `props` namespace, in
    expression props and in text alike: `agent={props.planner}` and
-   `{props.instructions}`. Declaring a prop creates no bare binding (#305).
-   Authored bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` —
+   `{props.instructions}`. Declaring a prop creates no bare binding
+   (#305, shipped). Authored bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` —
    stay bare.
 10. **Where may a component body project its caller's content?** Anywhere it
     writes `<Content />`, including nested inside another invocation such as a
@@ -781,6 +854,11 @@ shipped behavior. They are recorded because the answers constrain what remains.
     workflow, and a durable run continues across document executions through
     suspension and `resume` rather than through a `<Stage>` construct (#298,
     closed as superseded).
+13. **How does a later invocation select the same workflow run without hidden
+    transcript state?** By public run ID alone. `xmd workflow resume <run-id>`
+    reuses the run's retained definition and props rather than whatever the
+    checkout holds now, and a document path locates a definition rather than
+    selecting a previous run (#366).
 
 ### Open
 
@@ -802,12 +880,11 @@ The exercise must resolve enough of these to implement one vertical slice:
 5. Which forge read returns a pull request's existing reviews, comments, and
    check results to a network-denied reviewer? `<PullRequest>`'s creation result
    is deliberately minimal, and no open issue owns that read.
-6. Which containment does the transaction-bound Files provider give a document
-   path inside a run-owned Workspace, and what still needs the host provider's
-   weaker traversal claim (#227)?
-7. How does a later invocation select and resume the same workflow run without
-   hidden transcript state, and which durable signals may schedule that
-   resumption (#366, #300)?
+6. Which host mechanism closes the validate-then-use race for each supported
+   runtime, now that a run-owned Workspace resolves a document path without
+   producing a host path at all (#227)?
+7. Which durable signals may schedule a resumption, and how is one arbitrated
+   against an iteration's own completion and direct user input (#300)?
 8. What does a planning loop that reaches `max` without a passing verdict do —
    return the failing plan, fail the stage, or return to the user (#290)? An
    exhausted loop is not a failure and produces no diagnostic, so the answer is

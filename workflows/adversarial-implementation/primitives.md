@@ -16,9 +16,43 @@ the output and the failure alike. Replay determinism means the journal does not
 lose the execution chain — replaying arrives at the same state, where execution
 can continue.
 
+Bringing one of those executions into being belongs to canonical core alone.
+Public `Execution.execute` middleware may inspect the options, narrow them,
+register an additive completion policy, install contextual behavior, refuse by
+throwing, and delegate; public `Execution.document` middleware may inspect the
+props, narrow or replace them, install contextual behavior, refuse, and
+delegate. Each is handed an opaque request that belongs to one invocation or one
+expansion and may be used once, and whatever a handler returns is ignored — so no
+composed layer produces an execution, a document, an output stream, a success,
+or a failure. A look-alike, a superseded request, another expansion's request,
+and a second delegation are each refused before any journal read, expansion, or
+append. What a run genuinely requires is installed by a trusted host through the
+host boundary, ahead of all public document policy, the root import, and every
+authored effect (#432, #433).
+
+An executable block is a foreground child, and three questions about one never
+answer each other. **Routing** is what a reader sees: an ordinary block forwards
+stdout and stderr live as the run receives them and renders neither into the
+document again at completion. **Retention** is what the run keeps, stated by the
+host path that starts it rather than inferred — `xmd workflow start` and
+`xmd workflow resume` retain both received channels because a resumed procedure
+reads a command's output back instead of re-running it, while `xmd run` retains
+them only for a diagnostic journal it was asked for. **Failure** is neither: a
+nonzero exit is a checked failure that a printing boundary may report but never
+excuse. A document may take that status as data instead — `exec as="name"`
+displays neither channel, renders nothing, and binds a fresh mutable
+`{ exitCode, stdout, stderr }`, so a nonzero exit raises nothing. Only the
+built-in `timeout` and the built-in `exec` may compose a bound block, authorized
+by the exact built-ins the execution installed rather than by the word the block
+wrote; public modifier middleware may observe the request or refuse it, and can
+neither remove those facts nor manufacture the outcome. Binding is not
+retention. `Process.join()` may settle before the output pumps finish, so
+nothing here claims pump-complete delivery or retention until effectionx #244 is
+integrated.
+
 Under `xmd workflow` those records are also retained and addressable. That is
 the difference between an execution journal and a run someone can come back to,
-and it exists now (#291, #365).
+and it exists now (#291, #365, #366).
 
 ## How a name resolves
 
@@ -61,12 +95,22 @@ structure and read where an error is raised:
 
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
-| `print` | is printed into the document; execution continues | the root; `<PrintErrors>` |
+| `print` | is printed into the document; execution continues | the root; `<PrintErrors>`; `printErrors(fn)` |
 | `output` | fails the document execution; `<PrintErrors>` can print instead | every `<Output>` region |
 | `throw` | fails the document execution, and no printing boundary replaces it | documentation; value roots |
 
 A failing region keeps what it had already rendered: that text reaches the
 output stream, and nothing after the failure does.
+
+Content a caller projects is read from the same table, at the row for the region
+the *element* is written in. A component's `printErrors(fn)` declaration speaks
+for that component's own work and never for the text a caller wrote inside it, so
+a projected failure the component does not recover from passes outward wherever
+the caller's region does not print, and what the projection rendered first goes
+to the caller's region — once, never twice, because a component that recovers or
+returns owns that text and hands over none of it (#446). Asking a component for a
+directory, a parsed value, or a written file therefore never reopens a path an
+`<Output>` region closed.
 
 A **text component**'s body is split by its `<Output>` boundary: the region
 inside runs under `output`, everything outside is documentation and runs under
@@ -81,11 +125,11 @@ document handle a failure instead of ending on it; both are defined and unbuilt.
 **Missing: printing an `output` decision.** The `output` row above is the
 settled contract, and the engine does not meet it yet — an outer
 `<PrintErrors>` around a region that failed under `output` ends the document
-execution instead of printing, whether the failure arose in the region itself or
-in content projected into it ([issue
-#327](https://github.com/taras/executable.md/issues/327)). Nothing in this
-workflow writes `<PrintErrors>`, so no stage depends on it today; a stage that
-wanted to survive a failed region would.
+execution instead of printing it ([issue
+#327](https://github.com/taras/executable.md/issues/327)). That is a limitation
+of the printing boundary, distinct from which region owns a projected failure,
+and it remains open. Nothing in this workflow writes `<PrintErrors>`, so no stage
+depends on it today; a stage that wanted to survive a failed region would.
 
 ## What the workflow already writes
 
@@ -126,9 +170,12 @@ reserved names, so a repository component may override each one:
    operation goes through the contextual `API.Files` provider, and there is no
    host default: the four CLI entrypoints install the host provider, which
    confines document paths to `Env.cwd` while the host namespace is stable
-   ([#227](https://github.com/taras/executable.md/issues/227)). The
-   transaction-bound provider that resolves the same paths inside a run-owned
-   Workspace is that issue's second layer and is unbuilt.
+   ([#227](https://github.com/taras/executable.md/issues/227)). A workflow run
+   installs the transaction-bound provider instead: the same authored paths
+   resolve inside the run's own filesystem, where there is no host path to escape
+   from, and each read, write, or search is one effect transaction. What #227
+   still owes is the host provider's validate-then-use race, not the run's
+   namespace.
 7. `<Parse>` renders its children, decodes the result as JSON, validates it
    against a draft-07 schema supplied as captured text or as a structured
    value, and binds the validated value through `as`. `<SafeParse>` performs
@@ -203,6 +250,28 @@ supplied material rather than a repository. `Implementation` has no such
 exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
 `<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
 
+Nine names in this workflow resolve to nothing today, and each is owed by one
+issue:
+
+| Name | Owed by |
+| --- | --- |
+| `<Agent.AddDir>` | #302 |
+| `<Expand>` | #369 |
+| `<Git.Add>` | #294 |
+| `<Git.Commit>` | #294 |
+| `<Git.Push>` | #370 |
+| `<Issue>` | #296 |
+| `<PullRequest>` | #295 |
+| `<Repository>` | #293 |
+| `<Worktree>` | #293 |
+
+Everything else the workflow writes resolves: `<If>`, `<Else>`, `<Loop>`,
+`<Break>`, `<Each>`, `<Capture>`, `<Output>` and `<Return>` as structural syntax;
+`<Elicit>`, `<File>`, `<Glob>`, `<Parse>` and `<SafeParse>` as core defaults;
+`<Agent>`, `<Session>` and `<Prompt>` as registered agent components; and
+`InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning` and
+`Implementation` as the repository components beside this file.
+
 ## What the workflow still needs
 
 The missing capability is not one component. It is the retained-Workspace
@@ -213,18 +282,29 @@ whose dependency order this workflow consumes in the same sequence.
 
 | Capability | Issue | Status |
 | --- | --- | --- |
-| open and look up one WorkflowRun database; append and replay the filtered journal | #291 | closed |
-| commit a Workspace mutation, its logical root, and the journal result atomically | #365 | closed |
-| foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | open — the next critical slice |
+| open and look up one WorkflowRun database; append and replay the filtered journal | #291 | shipped |
+| commit a Workspace mutation, its logical root, and the journal result atomically | #365 | shipped |
+| foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | shipped |
 | `status`, `list`, `history`, suspension, cancellation, deletion, single-executor ownership | #367 | open |
 | versioned history checkpoints and compatible forks | #368 | open |
 
-`xmd workflow start` is what makes this document a workflow rather than a script:
-it creates the run, gives it one implicit root Workspace, streams rendered output
-in the foreground, and returns when the execution completes, suspends, fails, is
-cancelled, or is interrupted. `resume` selects only by run ID and reuses the
+`xmd workflow start` is what makes this document a workflow rather than a script,
+and it exists: `xmd workflow start [--id] [--props-*] <definition>` creates the
+run from committed Git bytes, gives it one implicit retained root Workspace,
+binds `<File>` effects to that Workspace's transactions, denies services, streams
+the document's output in the foreground, reports run identity and status on
+standard error, and returns when the execution completes, fails, or is
+interrupted. `xmd workflow resume <run-id>` selects only by run ID and reuses the
 retained definition and props — a document path locates a definition and never
-selects a previous run.
+selects a previous run — replaying completed work and continuing the partial
+remainder. Both are Deno-entrypoint and compiled-binary capabilities; the Node
+and Bun entrypoints parse the grammar and refuse.
+
+What the command does *not* supply is a checkout to run in or a way to reach a
+repository component: the run's Workspace starts empty until #293, and a pinned
+definition installs no component search path, so the stage components beside this
+one resolve to nothing under `xmd workflow start` and are exercised under
+`xmd run`.
 
 **2. Repository and deterministic Git composition.**
 
@@ -266,9 +346,9 @@ head rather than performing a hidden push.
 
 | Capability | Issue | Status |
 | --- | --- | --- |
-| provider-correct filesystem containment | #227 | open — `API.Files` and the host provider are built |
+| provider-correct filesystem containment | #227 | open — `API.Files`, the host provider and the run's transaction-bound provider are built; the host validate-then-use race is what remains |
 | mandatory read-only workflow Agents and `<Agent.AddDir>` | #302 | open |
-| preflight and expand constrained Agent-generated XMD | #369 | open; public component name undecided |
+| `<Expand>`: preflight and expand constrained Agent-generated XMD | #369 | open; public component name undecided |
 | transactional Worker Shell | #363 | open; containment and transaction POCs complete |
 
 The read-only ceiling is the host's, not the document's, which is why no
@@ -286,7 +366,7 @@ replay expands the same fragment without asking the Agent again.
 
 | Capability | Issue | Status |
 | --- | --- | --- |
-| namespaced document props | #305 | closed |
+| namespaced document props | #305 | shipped |
 | synchronize this living target with settled contracts | #292 | this change |
 | prove the shipped planning-document logic | #290 | open |
 | compose the supervised workflow | #301 | open |

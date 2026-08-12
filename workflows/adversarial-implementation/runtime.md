@@ -2,9 +2,13 @@
 
 The command selects the environment; the document describes the procedure.
 `xmd run` uses the caller's current environment and promises no restoration.
-`xmd workflow start` creates a workflow run with one retained root Workspace,
-and that Workspace supplies the filesystem, repository, process, and
-working-directory capabilities every stage uses (#366, unbuilt).
+`xmd workflow start` creates a workflow run with one retained root Workspace
+(#366, shipped). That Workspace supplies the run's filesystem today: an
+authored path resolves inside the run's own transactional store rather than
+against a host directory, and `temporaryDirectory` is refused because a run has
+no host directory to hand out. The repository, worktree, process, and
+working-directory capabilities the stages want are composition it does not have
+yet (#293, #302).
 
 The same declarative components work in both. Durability comes from the host,
 not from a second spelling of `<File>` or `<Git.Commit>`.
@@ -33,8 +37,20 @@ and `xmd workflow start` uses the same generated `--props-*` arguments as
 ## What the run owns
 
 The workflow run owns its Workspace, its repositories and worktrees, its Agent
-sessions, and its filtered journal. Nothing required lives only in an Agent
-transcript, a host path, a provider handle, or a branch name.
+sessions, its filtered journal, and the results of the commands it ran. Nothing
+required lives only in an Agent transcript, a host path, a provider handle, or a
+branch name.
+
+That last one is the host's decision rather than the document's, and `start` and
+`resume` both make it the same way: a run retains the exit status and both
+channels each command's output arrived on at the per-exec boundary, whatever
+the document's display policy showed a reader, because a resumed procedure reads
+back what a command printed instead of running it again to find out. Routing is
+separate — an ordinary block forwards both channels live and renders neither
+again at completion — and so is failure, since a nonzero exit fails the run
+unless the document bound it. `Process.join()` may settle before the output
+pumps finish, so a tail written as they settle may never reach that boundary;
+effectionx #244 owns the stronger guarantee and nothing here claims it.
 
 - `<Repository>` authorizes the locator, resolves the base once, pins that
   commit, and creates the named primary checkout. Resolution happens once;
@@ -79,6 +95,17 @@ discarded and recreated. An Agent proposes changes by returning XMD, which a
 constrained evaluator preflights and expands as ordinary durable effects
 against the authoritative Workspace (#369).
 
+The engine keeps the same shape underneath. A workflow run reaches core as a
+trusted host installation: an admission core applies inside its own journal
+read, and a preparation it runs inside the durable root ahead of every public
+document policy, the root import, and every authored effect. Public middleware
+composed around an execution or a document expansion may inspect what it is
+given, narrow it, install contextual behavior, refuse, and delegate; whatever it
+returns is ignored, and it can neither bring an execution or an expansion into
+being nor publish an outcome (#432, #433). So what is composed around a run
+cannot widen its authority, exactly as what a prompt says cannot widen an
+Agent's.
+
 Agent network access is denied for this workflow, which is why a review prompt
 must render everything the reviewer has to judge rather than pointing at it.
 
@@ -100,8 +127,12 @@ An uncaught failure escaping the root is terminal too. Reusing that run's ID
 replays the retained failure rather than silently retrying it; a corrected
 document starts a new run.
 
-All of that is #366 for start/resume and #367 for status, list, history,
-cancellation, and deletion. Neither is built.
+Two of the three are here. `start` and `resume` are shipped (#366): an
+interrupted run stays resumable at the journal frontier, a failed or cancelled
+run is refused before anything is fetched, attached or appended, and a resume of
+a completed run replays it in full. Suspension is not: releasing the executor at
+a checkpoint, the ownership that decides who may continue a run, and `status`,
+`list`, `history`, `cancel`, and `delete` are #367 and unbuilt.
 
 ## Cleanup follows the invocation
 
@@ -126,8 +157,8 @@ An automated iteration stops on the first applicable signal:
 
 Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
 question during execution, and under `xmd run` the WebForm provider answers it
-in a browser. Under `xmd workflow` the same question becomes a durable
-suspension. Arbitration between signals is not implemented
+in a browser. Under `xmd workflow` the same question is to become a durable
+suspension, which waits on #367. Arbitration between signals is not implemented
 ([#300](https://github.com/taras/executable.md/issues/300)), and premature
 watcher semantics are deliberately excluded from it.
 
