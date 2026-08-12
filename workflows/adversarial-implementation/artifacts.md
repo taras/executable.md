@@ -8,7 +8,7 @@ record of a decision.
 
 The retained store exists. A workflow run owns one SQLite database that is the
 physical retention boundary for logically separate data
-([#291](https://github.com/taras/executable.md/issues/291), closed):
+([#291](https://github.com/taras/executable.md/issues/291), shipped):
 
 ```text
 WorkflowRun SQLite
@@ -21,7 +21,9 @@ WorkflowRun SQLite
 Alongside the journal the run retains its immutable identity — run ID, workflow
 definition, definition base, normalized props — one of six statuses, a nullable
 stop reason, replaceable retrieval metadata, and one document-execution record
-per start and per resume. A run is found by its public run ID alone: discovery
+per start and per resume. `xmd workflow start` and `xmd workflow resume` create
+and continue that record ([#366](https://github.com/taras/executable.md/issues/366),
+shipped). A run is found by its public run ID alone: discovery
 is arithmetic on that ID and no second registry can disagree with what is
 stored. Damaged or incompatible storage is described and left exactly as found;
 nothing migrates, truncates, or replaces it.
@@ -34,7 +36,7 @@ pushed to.
 ## One expansion, one effect, one transaction
 
 Every Workspace-local expansion publishes atomically
-([#365](https://github.com/taras/executable.md/issues/365), closed):
+([#365](https://github.com/taras/executable.md/issues/365), shipped):
 
 ```text
 BEGIN
@@ -85,6 +87,20 @@ a look-alike is refused before any mutation or publication.
 For this workflow that is the difference between "the history says the pull
 request was created" and "this history is the one this run wrote."
 
+The same principle decides where a run's own preparation comes from. A trusted
+host installs it at the host boundary — an admission canonical core applies
+inside its own journal read, and a durable preparation it runs inside the durable
+root, ahead of every public document policy, the root import, and every authored
+effect. Public middleware composed around the execution or the document expansion
+may inspect what it is handed, narrow it, install contextual behavior, refuse, and
+delegate, and nothing it returns is read: it cannot bring an execution or an
+expansion into being, substitute one, or publish an outcome
+([#432](https://github.com/taras/executable.md/issues/432),
+[#433](https://github.com/taras/executable.md/issues/433)). Security authority,
+retained identity, and outcome reconciliation never read replaceable contextual
+state, which is why a run's history is evidence rather than an account anything
+composed alongside it could have written.
+
 Every committed journal event also references the logical Workspace root current
 when it was written. Only committed event boundaries are checkpoints, which is
 what makes an event selectable for a history fork later (#368).
@@ -118,6 +134,19 @@ status, text, and structured failure. `<Elicit>` journals its validated answer
 keyed by a fingerprint of the compiled schema and the rendered message, so a
 resumed execution restores the answer instead of asking twice and refuses one
 recorded against a different question.
+
+A command's result is retained on the same terms, and retention is the host
+path's decision rather than the document's. `start` and `resume` keep the exit
+status and both channels the run received at its per-exec boundary, whatever the
+document's display policy showed a reader, because a resumed procedure reads a
+command's output back instead of running it again; `xmd run` keeps them only for
+a diagnostic journal it was asked for. Retained text crosses the pre-persistence
+secret gate like any other journaled field, and what it says is what reached the
+boundary after the host's own stdio middleware — a host may redact a credential
+upstream, and one that introduces credential-shaped text upstream is refused like
+any other run that would persist one. `Process.join()` may settle before the
+output pumps finish, so a tail written as they settle may never reach that
+boundary; effectionx #244 owns the stronger guarantee and none is claimed here.
 
 **Still missing: who answered.** The journal records the validated decision, the
 question fingerprint, and the document execution it belongs to. It does not
@@ -193,6 +222,14 @@ failing `<Output>` region keeps only the text it had already rendered, and that
 text reaches the output stream; nothing after the failure does. A failed document
 execution is still a complete record — replay restores its output and its failure
 without re-executing anything.
+
+None of that changes when a stage is reached through an invocation. Content a
+caller projects keeps the error mode of the region it is written in, so a
+component's own `printErrors(fn)` declaration governs the component's work and
+never the caller's text: an unrecovered projected failure passes outward wherever
+the caller's region does not print, and the partial text the projection rendered
+belongs to that caller's region and reaches its output, exactly once
+([#446](https://github.com/taras/executable.md/issues/446)).
 
 ### Logical result contracts
 

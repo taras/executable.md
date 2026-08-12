@@ -13,7 +13,7 @@ props:
 # Adversarial Implementation Workflow
 
 - **Status:** Living end-goal target
-- **Command:** `xmd workflow start` (#366), unbuilt
+- **Command:** `xmd workflow start` (#366, shipped)
 
 This entry document is the complete workflow map. The linked files define the
 prompts, effects, and authority boundaries used by each stage. Its component
@@ -276,22 +276,27 @@ produced.
 ## Waiting for the user is a suspension, not a stop
 
 A checkpoint that reaches a person is a durable wait, and a durable wait is not
-a failure. Under `xmd workflow` the elicitation records its pending request and
-the Workspace frontier, releases the executor, and returns control with a run ID
-and a stop reason on standard error. The process, the Workspace attachment, and
-the Agent processes need not stay alive. `xmd workflow resume <run-id>`
-continues the same workflow run once the answer is available: completed durable
-effects restore from the journal, ephemeral attachments rebuild, and partial
-replay continues at the retained frontier.
+a failure. Under `xmd workflow` the elicitation is to record its pending request
+and the Workspace frontier, release the executor, and return control with a run
+ID and a stop reason on standard error, so that the process, the Workspace
+attachment, and the Agent processes need not stay alive.
+`xmd workflow resume <run-id>` already continues the same workflow run once the
+answer is available: completed durable effects restore from the journal,
+ephemeral attachments rebuild, and partial replay continues at the retained
+frontier.
 
 That is what the earlier drafts of this document were reaching for with a
 `<Stage>` boundary. The construct was rejected — the root document is the
 workflow — and the requirement it stood for now belongs to the retained
-lifecycle: durable suspension and foreground `start`/`resume` are #366, and
-status, history, cancellation, and deletion are #367. Neither is built. Until
-they are, gating is expressed by nesting, which prevents the remaining stages
-from running but does not stop the document execution: it still expands to
-`<Output>` and completes.
+lifecycle. Half of it is here: foreground `start` and `resume` are shipped
+(#366), and a resume restores completed durable effects from the journal,
+rebuilds ephemeral attachments, and continues the partial remainder at the
+retained frontier. The other half is not: releasing the executor at a
+checkpoint, and the ownership, status, history, cancellation, and deletion
+around it, are #367 and unbuilt, so a question asked today is answered inside
+the document execution that asked it. Gating is expressed by nesting, which
+prevents the remaining stages from running but does not stop the document
+execution: it still expands to `<Output>` and completes.
 
 ## How props are read
 
@@ -334,6 +339,16 @@ such split. Declaring `returns` means it renders nothing, so `<Output>` inside
 one is a structural error; its whole body runs fail-fast and a failure binds
 nothing at all. There is no partially validated return for a caller to gate on.
 
+Invoking a component never moves that line. Content this document projects into
+one keeps the mode of the region it is written in here: a component's own
+`printErrors(fn)` declaration decides the component's work, not its caller's
+text, so a projected failure the component does not recover from passes outward
+wherever this site does not print, and whatever the projection rendered first
+reaches this document's output rather than the component's (#446). None of the
+stages above projects content — each takes its material as a declared prop — so
+the rule shows up here as an assurance rather than a mechanism: no stage
+invocation can turn a failure this document would fail on into one it prints.
+
 By one route or another a caller receives a complete result or nothing —
 never a half-record. The `throwOnError` on each `<Prompt>` is load-bearing for
 the same reason: a failed prompt without it records its failure and returns its
@@ -353,34 +368,50 @@ checkpoint in an `<Answers>` region instead of reaching a person.
 `Planning` each name `<Agent.AddDir>`, which does not exist, so their bodies run
 only once that registration is supplied or removed.
 
-**Not expressible.** Everything that composes the Workspace or performs a
-durable environmental effect:
+**Not expressible.** Every component that composes the Workspace or performs a
+durable environmental effect. These nine names resolve to nothing today:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `xmd workflow start` / `resume` | #366 | unbuilt |
-| `<Repository>` / `<Worktree>` | #293 | unbuilt |
+| `<Repository>` | #293 | unbuilt |
+| `<Worktree>` | #293 | unbuilt |
 | `<Agent.AddDir>` and the read-only Agent ceiling | #302 | unbuilt |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
-| `<Git.Add>` / `<Git.Commit>` | #294 | unbuilt |
+| `<Git.Add>` | #294 | unbuilt |
+| `<Git.Commit>` | #294 | unbuilt |
 | `<Git.Push>` | #370 | unbuilt |
 | `<PullRequest>` | #295 | unbuilt |
 | `<Issue>` | #296 | unbuilt |
 
-So the complete flow is non-executable at two levels: the workflow spine that
-selects the retained environment and composes named checkouts, and the
-implementation stage's durable Git and forge effects. What can be exercised
-today is discovery through plan convergence and the user gates around them,
-running in one document execution and one existing working directory, with
-commits, pushes, pull requests, and issues performed as explicit user-run steps
-between manual stages. Proving that shipped subset is #290.
+So the complete flow is non-executable at two levels: the named checkouts the
+Workspace is composed from, and the implementation stage's durable Git and forge
+effects. What can be exercised today is discovery through plan convergence and
+the user gates around them, running in one document execution and one existing
+working directory, with commits, pushes, pull requests, and issues performed as
+explicit user-run steps between manual stages. Proving that shipped subset is
+#290.
 
-The foundation underneath is built. Retained WorkflowRuns and filtered journals
-are stored and looked up by public run ID
-([#291](https://github.com/taras/executable.md/issues/291), closed), and one
+The command and the foundation underneath it are built.
+`xmd workflow start [--id] [--props-*] <definition>` and
+`xmd workflow resume <run-id>` create and continue a run on the Deno entrypoint
+and the compiled binary ([#366](https://github.com/taras/executable.md/issues/366),
+shipped): output streams in the foreground, run identity and status are reported
+on standard error, the run gets one implicit retained root Workspace, `<File>`
+effects are bound to its transaction, services are denied, and a resume replays
+completed work and continues the partial remainder. Beneath that, retained
+WorkflowRuns and filtered journals are stored and looked up by public run ID
+([#291](https://github.com/taras/executable.md/issues/291), shipped), and one
 Workspace mutation, its logical root, and its journal result publish in a single
-transaction ([#365](https://github.com/taras/executable.md/issues/365), closed).
-What is missing above them is public reachability, not durability.
+transaction ([#365](https://github.com/taras/executable.md/issues/365), shipped).
+
+Two things still keep *this* document from being started that way, and neither
+is durability. The run's Workspace holds no repository until `<Repository>` and
+`<Worktree>` exist (#293), so the `<Glob>` above would search an empty
+filesystem. And a run pins its definition to one committed Git object and
+installs no component search path, so the stages beside it — `InstructionFiles`,
+`Discovery`, `UserCheckpoint`, `Planning`, `Implementation` — resolve to nothing
+under `xmd workflow start`. Under `xmd run` they resolve as ordinary repository
+components on its search path, which is where the shipped subset is exercised.
 
 ## Rendered data flow
 
