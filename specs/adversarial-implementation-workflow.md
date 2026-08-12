@@ -138,14 +138,29 @@ What that root Workspace supplies today is the document's filesystem, and only
 that. A run's `<File>` and `<Glob>` operations resolve inside the run's own
 transactional filesystem, which starts empty: the repository, worktree, process,
 and Agent capabilities the stages use are the composition #293 and #302 still
-owe it. The definition is pinned to one committed Git object and a run installs
-no component search path, so a repository component beside the definition — every
-stage below — resolves to nothing under `xmd workflow start`. The stages that
-run today therefore run under `xmd run`, in one document execution and one
-existing working directory, with the user inspecting each result and starting the
-next stage. That manual boundary lets the exercise test the interview, handoff,
-plan, review, decision, and revision contracts while the retained environment
-around them is completed.
+owe it. The definition is pinned to one committed Git object and a run passes no
+repository component search path, so a repository component beside the
+definition — every stage below — resolves to nothing under `xmd workflow start`
+and `xmd workflow resume`.
+
+Making them reachable is #301's. It owns the boundary between a run's retained
+workflow-definition identity and the component code that definition invokes:
+`InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, and
+`Implementation` are to become reachable under `start` and `resume` from code the
+trusted host authorized, with that code accounted for by workflow-definition
+identity and retained-history admission, so a resume or a replay cannot
+substitute current checkout content for retained component code and neither a
+document, public middleware, nor a checkout beside the retained root can widen
+what may execute. Ordinary `xmd run` resolution is unchanged, and workflow
+execution gains no generic repository component search path. What is stated here
+is the required authority and identity outcome; the mechanism is #301's to
+design and is subject to architecture review there.
+
+The stages that run today therefore run under `xmd run`, in one document
+execution and one existing working directory, with the user inspecting each
+result and starting the next stage. That manual boundary lets the exercise test
+the interview, handoff, plan, review, decision, and revision contracts while the
+retained environment around them is completed.
 
 The automated form treats execution as a loop. An iteration stops on the first
 applicable signal in this priority order:
@@ -758,7 +773,8 @@ interview, plan convergence, the bounded repair turns, and the user gate — is
 executable on shipped syntax today. What a workflow run cannot yet give it is a
 checkout to work in and a way to reach these stages at all: the run's Workspace
 holds no repository until #293, and a pinned definition resolves no repository
-component beside it.
+component beside it until #301 supplies authorized component code the retained
+definition's identity and admission account for.
 
 The exercise succeeds when:
 
