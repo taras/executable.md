@@ -186,13 +186,14 @@ feedback, decisions, branches, and pull requests do not belong to whichever
 agent happened to create them. The document captures or resolves those assets
 deterministically and passes required content into agent prompts explicitly.
 
-`<File>` and `<Glob>` already perform such operations. The command supplies the
-rest: `xmd workflow start` creates a workflow run with one retained Workspace
-(#366), and named `<Repository>` and `<Worktree>` composition (#293),
-deterministic local Git effects (#294), explicit `<Git.Push>` (#370),
-`<PullRequest>` (#295), and `<Issue>` (#296) describe the effects inside it. None
-of them is built. Together they cover the work that should not depend on model
-judgment:
+`<File>` and `<Glob>` already perform such operations, and the command already
+supplies the run around them: `xmd workflow start` creates a workflow run with
+one retained Workspace and `xmd workflow resume` continues it from the retained
+journal (#366, shipped). What that run still lacks is the composition and the
+effects inside it — named `<Repository>` and `<Worktree>` (#293), deterministic
+local Git effects (#294), explicit `<Git.Push>` (#370), `<PullRequest>` (#295),
+and `<Issue>` (#296). None of those is built. Together they cover the work that
+should not depend on model judgment:
 
 - retain each handoff, plan, review, and decision as a filtered journal event
   bound to the Workspace root current when it was written;
@@ -276,6 +277,13 @@ The easy authoring experience builds on the foundation without exposing its
 mechanics in ordinary agent documents. New agent capabilities should compose
 through components and contextual APIs instead of adding unrelated special cases
 to the expansion engine.
+
+Composing with the foundation is not the same as deciding for it. Public
+middleware around an execution or a document expansion may inspect what it is
+given, narrow it, install contextual behavior, refuse, and delegate; canonical
+core alone brings that execution or expansion into being and publishes its
+outcome, so no composed layer can substitute a document, an output stream, a
+success, or a failure (#432, #433).
 
 ## Relationship to Agent Skills
 
