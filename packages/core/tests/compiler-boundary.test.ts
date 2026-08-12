@@ -12,13 +12,13 @@ import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
-import { execute } from "../src/execute.ts";
-import { collect } from "../src/collect.ts";
-import { asText } from "./helpers.ts";
+import { asText, completion } from "./helpers.ts";
 
+/** What the run said: its rendered text, or the failure it reported. */
 function* runDoc(source: string): Operation<string> {
   yield* useStubFs({ "doc.md": source });
-  return asText(yield* collect(yield* execute({ path: "doc.md", stream: new InMemoryStream() })));
+  const result = yield* completion({ path: "doc.md", stream: new InMemoryStream() });
+  return result.ok ? asText(result.value) : result.error.message;
 }
 
 describe("Tier CB — compiler boundary", () => {

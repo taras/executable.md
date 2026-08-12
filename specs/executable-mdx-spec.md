@@ -2912,6 +2912,16 @@ emission, and an empty selection emits nothing. A component invoked within the
 root expands recursively and its result is buffered into the surrounding
 output in both cases.
 
+**A root is fail-capable, and `<Output>` changes only selection.** A text root
+installs the `output` error mode for its whole body, so an undecided error no
+printing boundary handled ends the document execution and `execute()` completes
+`Err`. What the root rendered before the failure is still emitted, no later work
+begins, and the outcome is recorded so a replay reports the same failure without
+re-executing anything. Declaring `<Output>` selects which regions render and
+buffers the emission; it is not what makes a failure count, and a root that
+declares none settles a failure exactly the same way. Continuing past a failure
+is asked for explicitly, with `<PrintErrors>` (§6.8.1).
+
 #### Text roots and value roots
 
 A root has the same two return modes as any component (§6.10), with one
@@ -5122,14 +5132,17 @@ after a region still runs. The required sequencing:
 
 - Structural placement is validated before any body content executes; a
   structurally invalid component or root runs no eval, exec, `<Capture>`, or
-  nested components and produces only the printed error.
+  nested components. The aggregate is raised where every undecided error is
+  raised, so the region's own mode decides it: printed inside a printing
+  boundary, and the run's outcome at a root.
 - Documentation and output regions execute in document order.
 - The first error produced while executing documentation stops that body's
   execution immediately and propagates to the caller.
 - An error produced while rendering an output region fails the run. Nothing
   after it begins: not the rest of the region, not a later region, not the
-  documentation between them. A body that declares no `<Output>` is unaffected —
-  it runs under whatever mode encloses it, and at a root that is `print`.
+  documentation between them. A body that declares no `<Output>` runs under
+  whatever mode encloses it — and a root encloses its own body with `output`,
+  so a root without `<Output>` fails on the same terms (§5.4).
 - Content written in the region and projected through an element in it is part
   of the region, wherever the component projecting it puts the result. The first
   error in it stops the rest of that content, fails the run, and no sibling after
@@ -5145,11 +5158,17 @@ Each construct installs one mode for its own region, and the nearest one governs
 
 | Region | Mode |
 | --- | --- |
-| the root, and any body with no `<Output>` | inherited; `print` at a root |
+| a text root's whole body | `output` |
+| a component body with no `<Output>` | inherited |
 | an `<Output>` region | `output` |
 | documentation, and a value root | `throw` |
 | a `<PrintErrors>` region, or a `printErrors(fn)` invocation | `print`, except over `throw` |
 | content a caller projects into an invocation | the mode where the content is written |
+
+The first two rows are the same rule read twice: a mode is inherited from the
+enclosing structure, and what encloses a root's body is the root, which is
+fail-capable. `print` is what a printing boundary establishes; nothing
+establishes it by default.
 
 Because a mode is read from the enclosing structure, wrapping a printing
 boundary around a component whose own body declares `<Output>` changes nothing
@@ -5230,6 +5249,10 @@ Because selecting output requires the whole body, a root that declares
 `<Output>` is buffered — executed to completion, then emitted once — while a
 root without `<Output>` keeps per-segment streaming. Buffering defers only when
 output is emitted, not what executes, so replay is deterministic.
+
+The declaration decides that and nothing else. Both roots run under the same
+fail-capable mode, so the two differ in what a reader sees and when, never in
+what an uncaught failure means.
 
 #### Outcomes and the journal
 
@@ -5423,17 +5446,15 @@ may keep scoped resources without changing this component's contract.
 mode: what a failure inside one means is decided by the region the element is
 written in, exactly as if the same blocks had been written without it (§6.8.1).
 
-At a root with no `<Output>` the region prints, so an ordinary failure inside is
-a printed error and the document carries on — the shape §6.9's `print` mode
-describes, and the reason a `<TempDir>` around a step is not a change of
-contract.
+A root is fail-capable, so the first ordinary failure inside a `<TempDir>`
+written at a root fails the run, exactly as it does inside an `<Output>` region.
+What the content rendered before the failure is preserved, the rest of the
+content does not start, and no sibling after `</TempDir>` starts — so a failed
+preview cannot be followed by an elicitation or a publish.
 
-Inside an `<Output>` region the region fails closed, so the first ordinary
-failure inside a `<TempDir>` fails the run. What the content rendered before and
-including the failing command is preserved, the rest of the content does not
-start, and no sibling after `</TempDir>` starts — so a failed preview cannot be
-followed by an elicitation or a publish. Continuing is available where it always
-was: `<PrintErrors>` at the scope the author means.
+Inside a `<PrintErrors>` region the same failure is printed and the document
+carries on. That is the shape §6.9's `print` mode describes, and asking for it
+is what a `<TempDir>` around a step never does on the author's behalf.
 
 The directory is removed either way. Cleanup belongs to the invocation, not to
 the outcome, and it completes on success, on failure, and on cancellation.
@@ -6505,9 +6526,10 @@ and a document has no way to reach the value the host passed.
 
 A finding rejects that one append before the backend is invoked, and the failure
 reaches the durable effect that produced the event. What happens next is
-ordinary error handling: an effect inside the document prints the rejection
-where it stands and the run continues, while a rejection during the root import
-fails the run. Either way the offending event is absent, and a later close is a
+ordinary error handling: the region the effect was written in decides, so a
+`<PrintErrors>` region prints the rejection where it stands and the run
+continues, while an effect at a plain root, and a rejection during the root
+import, fail the run. Either way the offending event is absent, and a later close is a
 separate append that crosses the policy on its own — so a rejection never
 implies an empty journal. There is no allowlist, sanitization, repair, or
 approval: a finding is a code or data-flow defect to fix.
@@ -7168,9 +7190,14 @@ which performs no document effects, and routes the channels accordingly:
 - every failure — structural, schema, value, body, or after `<Return>` — writes
   its printed error to stderr, exits non-zero, and writes nothing to stdout.
 
-Text roots are unchanged: rendered Markdown goes to stdout and `--verbose` adds
-printed errors on stderr. `xmd test` reports on stdout in both modes; the JSON
-result contract belongs to `xmd run`.
+A text root writes its rendered Markdown to stdout, and `--verbose` adds the
+journal's printed errors on stderr. An uncaught failure ends it the same way a
+value root's does: what the document rendered first still reaches stdout, the
+failure's diagnostic is written to stderr once, and `xmd run` exits 1. A
+document that means to print a failure and carry on says so with
+`<PrintErrors>`, and then exits 0 with the diagnostic in its rendered output.
+`xmd test` reports on stdout in both modes; the JSON result contract belongs to
+`xmd run`.
 
 ### 9.7 Execution flows
 
@@ -7872,10 +7899,10 @@ visible warning blocks, gather into a separate error report).
 | TD9 | Bare form renders its path | `<TempDir />` renders the canonical path and nothing else |
 | TD10 | Captured form | `<TempDir as>` renders nothing at the site and the directory is still live for a later sibling |
 | TD11 | Retention ends | A captured directory is gone once the execution that owned it finishes |
-| TD12 | Prop validation | An undeclared prop is rejected by ordinary validation |
-| TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err` under a printing error mode, and the block after `</TempDir>` never runs |
-| TD14 | Ordinary failures at a printing root | A failing block inside a `<TempDir>` still renders a printed error and the following sibling still runs |
-| TD17 | Ordinary failures inside `<Output>` | The run fails, the failing command's own output is preserved, and neither the rest of the content nor the sibling after `</TempDir>` starts — with the directory still removed |
+| TD12 | Prop validation | An undeclared prop is rejected by ordinary validation, and the refusal is the run's outcome |
+| TD13 | Partial replay ends the execution | An effect recorded under an earlier directory raises `StaleInputError`, the execution completes `Err`, and the block after `</TempDir>` never runs |
+| TD14 | A checked command failure | A nonzero command inside a `<TempDir>` fails the run: `<TempDir>` prints its own failures, which never excuses a checked one, and neither the block after it nor the sibling after `</TempDir>` starts |
+| TD17 | Ordinary failures at a plain root | The run fails, the prose the content rendered first is preserved, and neither the rest of the content nor the sibling after `</TempDir>` starts — with the directory still removed |
 | TD17b | The same region under `<PrintErrors>` | The author's explicit boundary continues instead: the error is rendered, both probes run, and the directory is still removed |
 | TD15 | Cancelled acquisition | Cancelling while the directory is live, and before the acquiring task runs, both leave nothing behind |
 | TD16 | Replayed component import | A nested component's journaled import is the other effect a `<TempDir>` can consume; it fails the execution the same way |
@@ -8051,10 +8078,22 @@ platform's.
 | OM11a–OM11e | Private buffers | A `<Capture as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |
 | OM12a–OM12j | A malformed record | Seven corrupted fields are each refused, the refusal names the situation, a pre-contract journal is named as such, and an intact record replays |
 | OM13a–OM13e | What crosses the journal | Absent fields stay absent, a `"undefined"` cause is a cause, and a replay reconstructs an `Error` or an `AggregateError` from the recorded fields |
-| OM14–OM16 | Transitivity | `<PrintErrors>`, `<File>`, and a printing component that does not recover each stop a callee's own region; each still prints what is raised under its own mode |
+| OM14–OM16 | Transitivity | `<PrintErrors>`, `<File>`, and a printing component that does not recover each stop a callee's own region; the failure that left it reaches the root, and OM15c shows it printed where the caller's region prints |
 | OM17 | Chunks, not the close value | A streamed prefix arrives before the failing region's output, and both reach the stream |
 | OM18–OM19 | A printed error is data | A child's printed error does not fail a parent's documentation; an uncaptured failure in the same position still propagates |
 | OM20 | A bound command in the region | Its nonzero status is data and the region continues; the same command unbound stops the run and the block after it never starts |
+| OM21–OM22 | Caller content at a plain root | `<File>` refuses the write and reports its own failure, which is the one decision a write's author owns; a relaying component passes the content failure outward, where it ends the run and is observed once |
+
+### Tier RF — Root failure settlement
+
+| # | Test | Verify |
+|---|------|--------|
+| RF1 | An uncaught eval failure, no `<Output>` | The run fails, the prefix it streamed is preserved, the prose and the block after it never start, and the diagnostic is observed once |
+| RF2 | The same region inside `<PrintErrors>` | Printed once, the run completes, and the prose and block after it do run |
+| RF3 | A successful root with no `<Output>` | The complete ordinary body is emitted, segment by segment |
+| RF4 | A bound nonzero status, then a classifier | The status is data the document renders; the classifier that throws after it fails the root, and the next block never starts |
+| RF5 | `printErrors(fn)` | A component's own failure is still printed and the root continues |
+| RF6 | Replay | The determined failure and partial output replay from the record, with nothing appended and no command run again |
 
 ### Tier IM — Expansion metadata
 

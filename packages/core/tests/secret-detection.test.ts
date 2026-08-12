@@ -226,20 +226,21 @@ function persistedText(backend: InMemoryStream): string {
 }
 
 /**
- * Whether a run reports a rejected append it survived.
+ * Whether a run reports a rejected append.
  *
- * Rejecting one event of a run that continues is not a failed run: the effect
- * that produced the event fails, and the document prints that failure where the
- * effect stood. Asserting the printed rejection — rather than only that the
- * canary is missing — is what distinguishes "the gate refused it" from "the
- * block never ran".
+ * Rejecting one event is an ordinary failure of the effect that produced it,
+ * and where that failure is reported is the region's decision: printed inside a
+ * printing region, and the run's own outcome at a plain root. Asserting the
+ * reported rejection — rather than only that the canary is missing — is what
+ * distinguishes "the gate refused it" from "the block never ran".
  */
-function rejectedInPlace(result: Result<Json>): boolean {
-  return (
-    result.ok &&
-    typeof result.value === "string" &&
-    result.value.includes("secret detection rejected content before it was persisted")
-  );
+function reportsRejection(result: Result<Json>): boolean {
+  const said = result.ok
+    ? typeof result.value === "string"
+      ? result.value
+      : ""
+    : result.error.message;
+  return said.includes("secret detection rejected content before it was persisted");
 }
 
 /** A scanner that clears everything, for tests about wrapping rather than detection. */
@@ -447,7 +448,7 @@ describe("default-on secret detection", () => {
         props: { secretDetection: false },
       });
 
-      expect(rejectedInPlace(result)).toBe(true);
+      expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
 
@@ -457,7 +458,7 @@ describe("default-on secret detection", () => {
 
       const result = yield* yield* execute({ ...inlineSource(FRONTMATTER), stream: backend });
 
-      expect(rejectedInPlace(result)).toBe(true);
+      expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
 
@@ -480,7 +481,7 @@ describe("default-on secret detection", () => {
 
       // The document ran — the component executed before the exec block — and
       // still could not change which stream durableRun already held.
-      expect(rejectedInPlace(result)).toBe(true);
+      expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
 
@@ -579,7 +580,7 @@ describe("default-on secret detection", () => {
       // The counterfeit took effect — the read it governs failed — and the
       // journal was untouched by it, because the gate never asks.
       expect(read).toBe("CounterfeitSecretPolicyError");
-      expect(rejectedInPlace(result)).toBe(true);
+      expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
   });
@@ -637,7 +638,7 @@ describe("default-on secret detection", () => {
 
       expect(injections).toBeGreaterThan(0);
       // The gate reads the retained text, not the command's, so it catches it.
-      expect(rejectedInPlace(result)).toBe(true);
+      expect(reportsRejection(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
   });

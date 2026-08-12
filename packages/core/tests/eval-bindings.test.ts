@@ -11,7 +11,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { asText } from "./helpers.ts";
+import { asText, completion, failureMessage } from "./helpers.ts";
 
 describe("Tier T5 — Binding environment", () => {
   beforeAll(() => useTempFileCompiler());
@@ -82,43 +82,32 @@ describe("Tier T5 — Binding environment", () => {
     expect(output).toBe("");
   });
 
-  // T41: Block referencing undeclared binding not in env — error
-  it("T41: undeclared reference → error in output", function* () {
+  // T41: Block referencing undeclared binding not in env — nothing recovers it,
+  // so the run's outcome is that failure.
+  it("T41: undeclared reference → the run fails", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "test.md": "```js eval\nconst y = undeclaredVar + 1;\n```\n",
     });
     yield* useEchoExec();
 
-    const output = asText(
-      yield* collect(
-        yield* execute({
-          path: "test.md",
-          stream,
-        }),
-      ),
-    );
+    const result = yield* completion({ path: "test.md", stream });
 
-    expect(output).toContain("ERROR");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).toContain("undeclaredVar");
   });
 
   // T42: Syntax error in block — parse-time error before execution
-  it("T42: syntax error → error in output", function* () {
+  it("T42: syntax error → the run fails", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "test.md": "```js eval\nconst x = ;\n```\n",
     });
     yield* useEchoExec();
 
-    const output = asText(
-      yield* collect(
-        yield* execute({
-          path: "test.md",
-          stream,
-        }),
-      ),
-    );
+    const result = yield* completion({ path: "test.md", stream });
 
-    expect(output).toContain("ERROR");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).not.toBe("");
   });
 });

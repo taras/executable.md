@@ -116,6 +116,21 @@ function run(dir: string, componentDirs: string[] = [dir]): Operation<Json> {
   });
 }
 
+/**
+ * What one run said: its rendered text, or the failure it reported. An
+ * uncaught diagnostic is the run's own outcome, and these cases are about what
+ * the diagnostic names either way.
+ */
+function reportOf(body: () => Operation<Json>): Operation<string> {
+  return (function* () {
+    try {
+      return String(yield* body());
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  })();
+}
+
 describe("Tier CR — registration is validated where it is installed", () => {
   it("CR1: a structural name cannot be registered", function* () {
     const error = yield* thrown(() =>
@@ -458,8 +473,8 @@ describe("Tier CR — what a document gets", () => {
       ["---", "props:", "  type: object", "  properties: 7", "---", "", "unbroken"].join("\n"),
     );
 
-    const output = String(yield* run(dir));
-    expect(output).toContain("ERROR");
+    const output = yield* reportOf(() => run(dir));
+    expect(output).toContain("properties");
     // Neither the broken component's body nor core's component ran.
     expect(output).not.toContain("unbroken");
     expect(output).not.toContain("VISIBLE");
@@ -470,7 +485,7 @@ describe("Tier CR — what a document gets", () => {
     yield* writeTextFile(join(dir, "doc.md"), "<Content />\n");
     yield* writeTextFile(join(dir, "Content.md"), "SHOULD NOT RENDER\n");
 
-    const output = String(yield* run(dir));
+    const output = yield* reportOf(() => run(dir));
     expect(output).not.toContain("SHOULD NOT RENDER");
     expect(output).toContain("reserved");
   });
@@ -676,8 +691,8 @@ describe("Tier CR — selection is journaled", () => {
 
     // Resume with nothing registered: the recorded origin names an
     // implementation this run does not have.
-    const resumed = String(
-      yield* scoped(function* () {
+    const resumed = yield* reportOf(() =>
+      scoped(function* () {
         return yield* collect(
           yield* execute({
             path: join(dir, "doc.md"),
@@ -711,7 +726,8 @@ describe("Tier CR — selection is journaled", () => {
         return "RENDERED-BY-B";
       },
     };
-    const resumed = String(yield* runRegistered(dir, yield* partial(stream), [other]));
+    const truncated = yield* partial(stream);
+    const resumed = yield* reportOf(() => runRegistered(dir, truncated, [other]));
 
     // The printed error names both the recorded origin and the one found instead…
     expect(resumed).toContain("host-a");

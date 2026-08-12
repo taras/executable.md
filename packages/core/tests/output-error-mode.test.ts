@@ -12,14 +12,14 @@
  * either way.
  */
 
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, scoped } from "effection";
+import { createContext, ensure, Ok, scoped } from "effection";
 import type { Operation } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { Stdio } from "@effectionx/process";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { API, useHostFiles } from "@executablemd/runtime";
+import { API, fileWriteSuccess, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { forEach } from "@effectionx/stream-helpers";
 import { createApi } from "@effectionx/context-api";
@@ -32,7 +32,8 @@ import { registerComponents } from "../src/components/registration.ts";
 import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import type { FunctionComponentDefinition, Json, Segment } from "../src/types.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import type { ErrorSegment, FunctionComponentDefinition, Json, Segment } from "../src/types.ts";
 
 interface Run {
   /** Chunks in the order consumers received them. */
@@ -134,6 +135,29 @@ function runRegistered(
   });
 }
 
+/**
+ * The same run, with every raised segment recorded.
+ *
+ * `Component.raise` is the observation chain: a segment passes through it once,
+ * where it is created. Installed outside `execute()`, which installs its own
+ * providers at `min`, so this observes and delegates rather than deciding.
+ */
+function runObserving(
+  files: Record<string, string>,
+  stream = new InMemoryStream(),
+): Operation<Run & { raised: ErrorSegment[] }> {
+  return scoped(function* () {
+    const raised: ErrorSegment[] = [];
+    yield* Component.around({
+      *raise([segment], next) {
+        raised.push(segment);
+        return yield* next(segment);
+      },
+    });
+    return { ...(yield* run(files, stream)), raised };
+  });
+}
+
 /** Every error an aggregate carries, at any depth, plus the aggregate itself. */
 function aggregateMembers(error: unknown): unknown[] {
   const found: unknown[] = [];
@@ -226,7 +250,15 @@ const CONTAINMENT_DOC = [
  */
 function* expandingBody(): Operation<Json> {
   const outcome = yield* tryContent();
-  return outcome.text;
+  // A test reports the failure it kept, so the outcome is visible without
+  // leaving the invocation. The real package classifies and formats it; the
+  // message alone is enough to tell "contained and reported" from "lost".
+  if (outcome.failure === undefined) {
+    return outcome.text;
+  }
+  const message =
+    outcome.failure instanceof Error ? outcome.failure.message : String(outcome.failure);
+  return `${outcome.text}\n${message}\n`;
 }
 
 /**
@@ -911,10 +943,9 @@ describe("Tier OM — the failed document is a determined outcome", () => {
         throw thrown;
       },
     };
-    const result = yield* runRegistered(
-      { "doc.md": "<Output>\n\n<Failing />\n\n</Output>" },
-      { Failing: failing },
-    );
+    // A plain root, because settlement is the root's and not a region's: the
+    // failure a run reports is the object the component threw either way.
+    const result = yield* runRegistered({ "doc.md": "<Failing />" }, { Failing: failing });
 
     expect(result.ok).toBe(false);
     // The object itself, not a description of it. Identity is the whole claim:
@@ -967,20 +998,12 @@ describe("Tier OM — the failed document is a determined outcome", () => {
   });
 
   it("OM7: replays the same partial output and failure, running nothing again", function* () {
+    // A plain root: the outcome a run determined is the outcome it replays,
+    // whether or not the document selected what renders.
     const files = {
-      "doc.md": [
-        "<Output>",
-        "",
-        "```bash exec",
-        "echo BEFORE",
-        "```",
-        "",
-        "```bash exec",
-        "FAIL",
-        "```",
-        "",
-        "</Output>",
-      ].join("\n"),
+      "doc.md": ["```bash exec", "echo BEFORE", "```", "", "```bash exec", "FAIL", "```"].join(
+        "\n",
+      ),
     };
     const stream = new InMemoryStream();
 
@@ -1450,18 +1473,19 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     });
 
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
-    // `<File>` prints the failure that left the region and writes nothing. The
-    // command exited nonzero, so the run fails and the text after it never
-    // renders: a printing boundary reports a failure, it does not excuse a
-    // checked one (#441).
+    // `<File>` writes nothing and does not print the failure of the content its
+    // caller wrote: a component's own declaration decides what the component
+    // reports, and the region the element is written in — the root, which
+    // settles — decides this (§6.8.1). So the run fails carrying the region's
+    // own diagnostic, and the text after it never renders.
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("<!-- ERROR");
+    expect(String((result.error as Error).message)).toContain("Command failed");
     expect(result.output).not.toContain("MARKER");
   });
 
   // The same failure through a printing component that does not recover from a
-  // content failure of its own: the region's failure is what gets printed.
-  it("OM15b: prints the region's own failure at a printing component that does not recover", function* () {
+  // content failure of its own.
+  it("OM15b: passes the region's own failure past a printing component that does not recover", function* () {
     const result = yield* runRegistered(
       {
         "components/Stage.md": STAGE,
@@ -1471,11 +1495,28 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     );
 
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
-    // The printing component reports the failure that left the region, and the
-    // checked command failure inside it still ends the run (#441).
+    // The component's declaration does not re-declare the region it was invoked
+    // in, so the failure that left the callee's region reaches the root and
+    // ends the run (#441, §6.8.1).
     expect(result.ok).toBe(false);
-    expect(result.output).toContain("<!-- ERROR");
+    expect(String((result.error as Error).message)).toContain("Command failed");
     expect(result.output).not.toContain("MARKER");
+  });
+
+  // The same two boundaries where the region the elements are written in does
+  // print: there the failure is reported as a printed error rather than
+  // settling, and the callee's own region is still not resumed.
+  it("OM15c: prints the region's failure where the caller's region prints", function* () {
+    const result = yield* runRegistered(
+      {
+        "components/Stage.md": STAGE,
+        "doc.md": "<PrintErrors>\n<Relaying>\n<Stage />\n</Relaying>\n</PrintErrors>",
+      },
+      { Relaying: RELAYING },
+    );
+
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+    expect(result.output).toContain("<!-- ERROR");
   });
 
   it("OM16: still prints what is raised under its own error mode", function* () {
@@ -1606,5 +1647,213 @@ describe("Tier OM — a printed error crosses an invocation as data", () => {
 
     expect(unbound.ok).toBe(false);
     expect(commands(unbound.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+});
+
+/**
+ * Caller content is governed by the region the element is written in (§6.8.1),
+ * and at a plain root that region settles. So an ordinary failure of projected
+ * content leaves the printing component, ends the run, and the component's own
+ * work — the write, the relayed text — does not happen.
+ */
+describe("Tier OM — caller content at a plain root leaves the printing component", () => {
+  /** The paths a write was asked for, with the host provider never reached. */
+  function runRecordingWrites(
+    files: Record<string, string>,
+  ): Operation<Run & { writes: string[] }> {
+    return scoped(function* () {
+      const writes: string[] = [];
+      yield* API.Files.around({
+        // deno-lint-ignore require-yield
+        *writeTextFile([input]) {
+          writes.push(input.path);
+          return Ok(fileWriteSuccess("host-committed"));
+        },
+      });
+      return { ...(yield* run(files)), writes };
+    });
+  }
+
+  /**
+   * `<File>` is the one printing component that recovers deliberately: a write
+   * has nowhere to show a printed error, so it catches the content failure and
+   * reports a failure of its own instead (§6.13). That own failure is what its
+   * `printErrors(fn)` declaration prints, which is a decision about the write
+   * and not about the region — so the write is refused, the reader is told, and
+   * the root is not settled by somebody else's recovery.
+   */
+  it("OM21: an ordinary failure in <File>'s children writes nothing and is reported once", function* () {
+    const result = yield* runRecordingWrites({
+      "doc.md": '<File path="out.txt">\n<NoSuchComponent />\n</File>\n\nMARKER',
+    });
+
+    expect(result.writes).toEqual([]);
+    expect(result.output).toContain('did not write "out.txt"');
+    expect(result.output).toContain("NoSuchComponent");
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("MARKER");
+  });
+
+  it("OM22: the same failure through a relaying component is observed once", function* () {
+    const result = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Relaying",
+          origin: "output-error-mode.test",
+          props: RELAYING.props,
+          fn: RELAYING.fn,
+        },
+      ]);
+      return yield* runObserving({
+        "doc.md": "<Relaying>\n<NoSuchComponent />\n</Relaying>\n\nMARKER",
+      });
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).not.toContain("MARKER");
+    // Reported where it was created, and nowhere else: the component relayed
+    // the failure rather than deciding it a second time.
+    expect(
+      result.raised.filter((segment) => segment.message.includes("NoSuchComponent")),
+    ).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier RF — root failure settlement (spec §5.4, §6.9).
+ *
+ * A text root settles every uncaught, undecided failure as a failed
+ * `DocumentExecution`, whether or not it declares `<Output>`. `<Output>` selects
+ * which regions render; it was never what made a failure count.
+ */
+describe("Tier RF — root failure settlement", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const THROWING_STAGE = [
+    "PREFIX-PROSE",
+    "",
+    "```js eval",
+    'throw new Error("stage classifier failed");',
+    "```",
+    "",
+    "LATER-PROSE",
+    "",
+    "```bash exec",
+    "echo LATER",
+    "```",
+  ].join("\n");
+
+  it("RF1: an uncaught eval failure ends a root with no <Output>", function* () {
+    const result = yield* runObserving({ "doc.md": THROWING_STAGE });
+
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("stage classifier failed");
+    // What the root streamed before the failure is what it rendered.
+    expect(result.output).toContain("PREFIX-PROSE");
+    expect(result.output).not.toContain("LATER-PROSE");
+    // Neither the prose after it nor the block after that began.
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+    expect(
+      result.raised.filter((segment) => segment.message.includes("stage classifier failed")),
+    ).toHaveLength(1);
+  });
+
+  it("RF2: the same region inside <PrintErrors> prints once and continues", function* () {
+    const result = yield* runObserving({
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        "PREFIX-PROSE",
+        "",
+        "```js eval",
+        'throw new Error("stage classifier failed");',
+        "```",
+        "",
+        "</PrintErrors>",
+        "",
+        "LATER-PROSE",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("PREFIX-PROSE");
+    expect(result.output).toContain("stage classifier failed");
+    expect(result.output).toContain("LATER-PROSE");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
+    expect(
+      result.raised.filter((segment) => segment.message.includes("stage classifier failed")),
+    ).toHaveLength(1);
+  });
+
+  it("RF3: a successful root with no <Output> still streams its complete body", function* () {
+    const result = yield* run({
+      "doc.md": ["FIRST-PROSE", "", "```bash exec", "echo BETWEEN", "```", "", "LAST-PROSE"].join(
+        "\n",
+      ),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("FIRST-PROSE");
+    expect(result.output).toContain("LAST-PROSE");
+    // Per-segment emission, not one buffered write at the end.
+    expect(result.chunks.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("RF4: a bound nonzero status continues; a classifier that throws after it does not", function* () {
+    const result = yield* run({
+      "doc.md": [
+        '```bash exec as="probe"',
+        "FAIL",
+        "```",
+        "",
+        "seen={probe.exitCode}",
+        "",
+        "```js eval",
+        'if (probe.exitCode !== 0) { throw new Error("classifier rejected the probe"); }',
+        "```",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    // The status was data the document read and rendered, so the run reached
+    // the classifier at all.
+    expect(result.output).toContain("seen=1");
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("classifier rejected the probe");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
+  it("RF5: printErrors(fn) still prints its own failure and the root continues", function* () {
+    const result = yield* runRegistered(
+      { "doc.md": "<Printing />\n\nMARKER\n" },
+      { Printing: PRINTING },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("printed thing");
+    expect(result.output).toContain("MARKER");
+  });
+
+  it("RF6: the failed outcome replays from the record, running nothing again", function* () {
+    const stream = new InMemoryStream();
+
+    const first = yield* run({ "doc.md": THROWING_STAGE }, stream);
+    const eventsAfterFirst = stream.snapshot().length;
+    const second = yield* run({ "doc.md": THROWING_STAGE }, stream);
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(false);
+    expect(second.output).toBe(first.output);
+    expect(String(second.error)).toContain(String(first.error));
+    // Nothing appended and no command started: the record answered for the run.
+    expect(stream.snapshot()).toHaveLength(eventsAfterFirst);
+    expect(commands(stream.snapshot()).some((name) => name.includes("LATER"))).toBe(false);
   });
 });

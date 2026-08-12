@@ -113,6 +113,43 @@ Useful flags:
 - `--verbose`, `-V` - print durable journal entries to stderr while running.
 - `--component-dir` - add component search directories. Defaults to `components` and `.`.
 
+## When a document fails
+
+A failure nothing handles ends the run. What the document rendered before it
+stays on stdout, the diagnostic goes to stderr, nothing after the failure
+starts, and `xmd run` exits 1:
+
+````md
+Checking the build.
+
+```sh exec
+./scripts/build.sh
+```
+
+Publishing.
+````
+
+If the build command exits nonzero, `Publishing.` never renders.
+
+Printing a failure and carrying on is something a document asks for, with
+`<PrintErrors>`:
+
+````md
+<PrintErrors>
+
+```sh exec
+./scripts/optional-check.sh
+```
+
+</PrintErrors>
+
+Publishing.
+````
+
+`<Output>` is a separate question. It chooses which regions of a document
+render, and a document that declares none simply renders all of them — it
+decides nothing about failure either way.
+
 ## Run a workflow
 
 `xmd run` executes against the directory you are in and promises nothing

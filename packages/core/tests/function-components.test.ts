@@ -85,6 +85,22 @@ function runObserved(dir: string): Operation<ObservedRun> {
   });
 }
 
+/**
+ * What one run of the fixture said: its rendered text, or the diagnostic it
+ * reported. A refusal nothing recovers is the run's own outcome.
+ */
+function said(dir: string, stream: InMemoryStream = new InMemoryStream()): Operation<string> {
+  return scoped(function* () {
+    const execution = yield* execute({
+      path: path.join(dir, "doc.md"),
+      stream,
+      componentDirs: [path.join(dir, "components"), dir],
+    });
+    const result = yield* execution;
+    return result.ok ? String(result.value) : result.error.message;
+  });
+}
+
 describe("Tier FC — Function components", () => {
   it("FC1: basic function component returns string", function* () {
     const tmpDir = makeTempDir();
@@ -97,14 +113,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Hello />",
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("Hello from TypeScript!");
     } finally {
       cleanup(tmpDir);
@@ -126,13 +135,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Bad />",
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("async");
     } finally {
       cleanup(tmpDir);
@@ -153,13 +156,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Bad />",
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("reserved");
     } finally {
       cleanup(tmpDir);
@@ -182,13 +179,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": '<Legacy name="world" />',
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("name");
       expect(output).not.toContain("name=world");
     } finally {
@@ -210,13 +201,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": '<Modern name="world" />',
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("name=world");
     } finally {
       cleanup(tmpDir);
@@ -241,14 +226,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": '<Greet name="world" />',
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("Hello, world!");
     } finally {
       cleanup(tmpDir);
@@ -280,13 +258,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Defaults nested={{}} />",
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("default->changed");
     } finally {
       cleanup(tmpDir);
@@ -307,14 +279,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": ["<Wrapper>", "child content here", "</Wrapper>"].join("\n"),
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("BEFORE");
       expect(output).toContain("child content here");
       expect(output).toContain("AFTER");
@@ -355,14 +320,7 @@ describe("Tier FC — Function components", () => {
           "HEADING",
         ].join("\n"),
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("HEAD[HEADING]");
       expect(output).toContain("child content here");
       expect(output).not.toContain("ERROR");
@@ -391,14 +349,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Dual />",
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("FROM-MARKDOWN");
       expect(output).not.toContain("FROM-TYPESCRIPT");
     } finally {
@@ -456,13 +407,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Broken />\n\nAFTER\n",
       });
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream: new InMemoryStream(),
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(String(output)).toContain("component error");
       expect(String(output)).toContain("AFTER");
     } finally {
@@ -488,14 +433,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Typed count={42} />",
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("count=42");
     } finally {
       cleanup(tmpDir);
@@ -520,14 +458,7 @@ describe("Tier FC — Function components", () => {
         ].join("\n"),
         "doc.md": "<Req />",
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("must have required property");
     } finally {
       cleanup(tmpDir);
@@ -552,14 +483,7 @@ describe("Tier FC — Function components", () => {
         ),
         "doc.md": ["<MdComp />", "", "<TsComp />"].join("\n"),
       });
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const output = yield* said(tmpDir);
       expect(output).toContain("FROM-MD");
       expect(output).toContain("FROM-TS");
     } finally {
@@ -754,6 +678,11 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
   }
 
   function invocation(...children: string[]): string {
+    return invocationIn((body) => body, ...children);
+  }
+
+  /** The same document with the invocation inside a region of the caller's choosing. */
+  function invocationIn(region: (body: string) => string, ...children: string[]): string {
     return [
       "```js eval",
       "const responseSchema = {",
@@ -762,9 +691,9 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
       "};",
       "```",
       "",
-      '<Analyze schema={responseSchema} as="result">',
-      ...children,
-      "</Analyze>",
+      region(
+        ['<Analyze schema={responseSchema} as="result">', ...children, "</Analyze>"].join("\n"),
+      ),
       "",
       "```js eval",
       // `typeof` on a name the invocation never bound is safe; reading it
@@ -819,7 +748,15 @@ describe("Tier FC-WF — props, returns, and as around content()", () => {
     try {
       writeFiles(tmpDir, {
         "components/Analyze.ts": analyze(tmpDir),
-        "doc.md": invocation("PARTIAL-BEFORE", "<Missing />", "PARTIAL-AFTER"),
+        // Written in a region that prints, because what this reads is what
+        // survives the failure: the binding left unmade, and the sibling below
+        // it still running.
+        "doc.md": invocationIn(
+          (body) => `<PrintErrors>\n\n${body}\n\n</PrintErrors>`,
+          "PARTIAL-BEFORE",
+          "<Missing />",
+          "PARTIAL-AFTER",
+        ),
       });
 
       const run = yield* runObserved(tmpDir);
@@ -940,6 +877,11 @@ describe("Tier RT — Retained resources under durability", () => {
     });
   }
 
+  /** The same run, reporting what it said rather than unwrapping it. */
+  function reportOf(dir: string, stream: InMemoryStream): Operation<string> {
+    return said(dir, stream);
+  }
+
   // RT15: retention is a property of component execution, so it composes with
   // durability the way an ordinary resource does (O22). The import and the
   // durable effect replay; the retained resource is re-established on each
@@ -1020,7 +962,7 @@ describe("Tier RT — Retained resources under durability", () => {
         ].join("\n"),
       });
 
-      const output = yield* runDocument(tmpDir, new InMemoryStream());
+      const output = yield* reportOf(tmpDir, new InMemoryStream());
 
       expect(output).toContain("cannot retain a resource at the invocation site");
       expect(output).not.toContain("nope");

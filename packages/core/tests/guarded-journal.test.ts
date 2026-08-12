@@ -39,6 +39,15 @@ echo second
 \`\`\`
 `;
 
+/**
+ * The same document in a region that prints.
+ *
+ * A rejected append is an ordinary failure where it happens, so reading what
+ * the run journaled *after* one needs the document to carry on — which an
+ * authored `<PrintErrors>` region asks for, and nothing else does.
+ */
+const RECOVERING = `<PrintErrors>\n\n${DOCUMENT}\n</PrintErrors>\n`;
+
 /** A short, readable identity for an event in a timeline assertion. */
 function label(event: DurableEvent): string {
   if (event.type === "yield") {
@@ -168,7 +177,7 @@ describe("a guarded journal", () => {
     const commands: string[] = [];
     const backend = new InMemoryStream();
 
-    yield* useStubFs({ "README.md": DOCUMENT });
+    yield* useStubFs({ "README.md": RECOVERING });
     yield* useRecordingExec(commands);
 
     const stream = guardDurableStream(backend, rejecting(gated, isFirstExec));
@@ -223,7 +232,7 @@ describe("a guarded journal", () => {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     const journalPath = path.join(dir, "journal.jsonl");
 
-    yield* useStubFs({ "README.md": DOCUMENT });
+    yield* useStubFs({ "README.md": RECOVERING });
     yield* useRecordingExec([]);
 
     const backend = fileStream(journalPath);
@@ -248,7 +257,7 @@ describe("a guarded journal", () => {
     const baseUrl = yield* until(server.start());
     yield* ensure(() => until(server.stop()));
 
-    yield* useStubFs({ "README.md": DOCUMENT });
+    yield* useStubFs({ "README.md": RECOVERING });
     yield* useRecordingExec([]);
 
     const backend = yield* useHttpDurableStream({

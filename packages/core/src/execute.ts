@@ -89,10 +89,11 @@ import {
   documentationError,
   documentationFailure,
   durabilityFailure,
+  ErrorMode,
   filesFatalFailure,
   useSegmentCauses,
 } from "./errors.ts";
-import { Component, importComponent } from "./component-api.ts";
+import { Component, importComponent, raise } from "./component-api.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
@@ -1551,16 +1552,25 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
 
   const scopedExpansion: Operation<DocumentResult> = scoped(function* () {
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
+    // A text root is fail-capable. An undecided error no boundary handled is
+    // the run's own outcome, and `<Output>` decides which regions render rather
+    // than whether a failure counts. Installed before the structural preflight
+    // and before either body branch, so a buffered root, a streaming root and
+    // an invalid root all settle the same way. A value root keeps the `throw`
+    // decision `runValueRoot` installs for itself.
+    if (root.returns === undefined) {
+      yield* ErrorMode.set("output");
+    }
     // Structural preflight (spec §6.9, §6.10): a structurally invalid root
-    // executes no body side effects. A text root renders the aggregate
-    // printed error as a comment (root error mode is "print"); a value root has no
-    // rendered result to fall back on, so the printed error fails the execution.
+    // executes no body side effects. The aggregate is raised like any other
+    // undecided error, so it is observed once and the root's own mode decides
+    // it; a value root has no rendered result to fall back on at all.
     const structureError = validateBodyStructure(root.bodySegments, root.returns);
     if (structureError) {
       if (root.returns !== undefined) {
         throw new Error(structureError.message);
       }
-      const text = renderSegment(structureError);
+      const text = renderSegment(yield* raise(structureError));
       yield* ephemeral(DocumentOutput.operations.output(text));
       streamed.push(text);
       return { status: "ok", output: text, value: text };
@@ -1583,10 +1593,12 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
       );
     }
 
-    // A root declaring top-level <Output> buffers completely (spec §5.4):
-    // execute the whole body, then emit the selected regions once. The owner is
-    // allocated outside this expansion so that a failure partway still leaves
-    // this frame holding what the regions rendered before it.
+    // A root declaring top-level <Output> selects what renders, and selecting
+    // needs the whole body (spec §5.4): execute it, then emit the selected
+    // regions once. The owner is allocated outside this expansion so that a
+    // failure partway still leaves this frame holding what the regions rendered
+    // before it. Which regions render is the only thing the declaration
+    // decides; the root already fails on an undecided error without it.
     if (bodyHasOutput(root.bodySegments)) {
       yield* expandBody(
         root.bodySegments,

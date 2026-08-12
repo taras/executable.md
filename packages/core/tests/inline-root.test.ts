@@ -34,7 +34,7 @@ import { collect } from "../src/collect.ts";
 import { inspectDocument } from "../src/inspect.ts";
 import { INLINE_SOURCE_PATH, inlineSource } from "../src/root-source.ts";
 import type { InlineRootDocument, RootDocumentSource } from "../src/root-source.ts";
-import { asText } from "./helpers.ts";
+import { asText, completion, failureMessage } from "./helpers.ts";
 
 /**
  * A terminal filesystem that answers nothing. Installed where a run must reach
@@ -262,16 +262,15 @@ describe("Tier IR — inline root documents", () => {
     yield* useNoFs();
     const stream = new InMemoryStream();
 
-    const output = asText(
-      yield* collect(
-        yield* execute({
-          ...inlineSource(["---", "title: demo", "---", "", "<Else>orphan</Else>"].join("\n")),
-          stream,
-        }),
-      ),
-    );
+    // Nothing recovers the stray element, so the positioned diagnostic is the
+    // run's own outcome.
+    const result = yield* completion({
+      ...inlineSource(["---", "title: demo", "---", "", "<Else>orphan</Else>"].join("\n")),
+      stream,
+    });
 
-    expect(output).toContain("(<eval>:5:1)");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).toContain("(<eval>:5:1)");
   });
 
   it("IR8: an inline value root returns its declared value", function* () {

@@ -405,7 +405,14 @@ describe("Tier TD — TempDir", () => {
     const dir = yield* useFixture();
     yield* writeDocument(dir, '<TempDir keep="yes">inside</TempDir>');
 
-    expect(String(yield* run(dir))).toContain("additional properties");
+    // Ordinary validation, and nothing recovers it, so the run reports it.
+    let reported = "";
+    try {
+      yield* run(dir);
+    } catch (error) {
+      reported = error instanceof Error ? error.message : String(error);
+    }
+    expect(reported).toContain("additional properties");
   });
 
   // TD13: resuming from a partial journal would otherwise replay an effect
@@ -624,11 +631,16 @@ describe("Tier TD — TempDir", () => {
   /**
    * TD17/TD17b: `<TempDir>` gives its content a working directory; it does not
    * give it an error mode. What a failure inside one means is decided by the
-   * region the element is written in — `<Output>` closes, `<PrintErrors>`
-   * continues — and the same document under the two wrappers is the whole
-   * evidence. Written as a document a stage would really have: a preview that
-   * fails, work after it inside the directory, and a sibling standing in for
-   * the publish step that must not follow a failed preview.
+   * region the element is written in, and the same document under the two
+   * regions is the whole evidence: a plain root settles the failure,
+   * `<PrintErrors>` prints it and continues. Written as a document a stage
+   * would really have — a preview that renders and records where it ran, an
+   * ordinary failure after it, work that must not follow inside the directory,
+   * and a sibling standing in for the publish step.
+   *
+   * The failure is an unresolvable component rather than a nonzero command:
+   * a checked command failure is a disposition of its own (TD14), and what
+   * these two pin is the ordinary one.
    */
   function stage(dir: string, region: (body: string) => string): string {
     return region(
@@ -638,8 +650,10 @@ describe("Tier TD — TempDir", () => {
         "PREVIEW-HEADING",
         "",
         "```sh exec",
-        `pwd > ${join(dir, "inside.txt")}; echo VISIBLE-BEFORE-FAILURE; exit 7`,
+        `pwd > ${join(dir, "inside.txt")}`,
         "```",
+        "",
+        "<NoSuchComponent />",
         "",
         "```sh exec",
         `touch ${join(dir, "later-inside.txt")}`,
@@ -650,30 +664,25 @@ describe("Tier TD — TempDir", () => {
     );
   }
 
-  it("TD17: an ordinary failure inside <Output> fails the run and stops what follows", function* () {
+  it("TD17: an ordinary failure at a plain root fails the run and stops what follows", function* () {
     const dir = yield* useFixture();
     yield* writeDocument(
       dir,
-      stage(
-        dir,
-        (body) =>
-          `<Output>\n\n${body}\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n\n</Output>`,
-      ),
+      stage(dir, (body) => `${body}\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`),
     );
 
     const outcome = yield* runOutcome(dir);
 
-    // The document fails, and the prose the region rendered before the failure
-    // is still emitted. What the command printed reached the reader as it ran
-    // and is rendered nowhere, so it is not part of the document (#441).
+    // No `<Output>` anywhere: the root settles the failure by itself, and the
+    // prose the content rendered before it is still emitted.
     expect(outcome.ok).toBe(false);
     expect(outcome.output).toContain("PREVIEW-HEADING");
-    expect(outcome.output).not.toContain("VISIBLE-BEFORE-FAILURE");
     // Nothing later inside the directory started, and neither did the sibling
     // after it: the two probes a printed error would have let through.
     expect(yield* exists(join(dir, "later-inside.txt"))).toBe(false);
     expect(yield* exists(join(dir, "after.txt"))).toBe(false);
-    // The failing command did run, in the temporary directory, which is gone.
+    // The command before the failure did run, in the temporary directory,
+    // which is gone.
     const [created] = yield* recorded(dir, "inside.txt");
     expect(created).toContain("xmd-tempdir-");
     expect(yield* exists(created)).toBe(false);
@@ -686,7 +695,7 @@ describe("Tier TD — TempDir", () => {
       stage(
         dir,
         (body) =>
-          `<Output>\n\n<PrintErrors>\n\n${body}\n\n</PrintErrors>\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n\n</Output>`,
+          `<PrintErrors>\n\n${body}\n\n</PrintErrors>\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n`,
       ),
     );
 

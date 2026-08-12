@@ -266,10 +266,14 @@ describe("Tier SO — two executions of a registered component", () => {
     // The host tightens the contract between runs, on the object it registered.
     schema["required"] = ["a", "b"];
 
-    const second = String(yield* run({ "doc.md": '<Widget a="two" />' }, schema));
-    // The invocation no longer satisfies the schema, so it is a printed error
-    // rather than a rendered widget.
-    expect(second).toContain("<!-- ERROR");
+    // The invocation no longer satisfies the schema, and nothing recovers the
+    // refusal, so the second run reports it instead of rendering a widget.
+    let second = "";
+    try {
+      second = String(yield* run({ "doc.md": '<Widget a="two" />' }, schema));
+    } catch (error) {
+      second = error instanceof Error ? error.message : String(error);
+    }
     expect(second).toContain("required property");
     expect(second).not.toContain("widget:two");
   });

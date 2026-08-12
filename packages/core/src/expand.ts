@@ -2851,20 +2851,25 @@ function* expandFunctionComponent(
   // for the component's own work and not for the content a caller projected
   // through it — which keeps the mode of the region it is written in and
   // reports a failure past this boundary.
-  // What this invocation returns is accepted only if the frame it ran in did
-  // not suffer a checked command failure. A component may catch the
-  // `ContentError` its projected content raised and return replacement text;
-  // that decides what the component reports, not whether a command that exited
-  // nonzero left the run — or the test — intact (#441).
+  // What this invocation returns is accepted only if the run's own record came
+  // through it clear. A component may catch the `ContentError` its projected
+  // content raised and return replacement text; that decides what the component
+  // reports, not whether a command that exited nonzero left the run intact
+  // (#441).
+  //
+  // The run's record, not this frame's: a contained invocation keeps its checked
+  // failures, which is what makes them that test's failed result rather than the
+  // region's. Re-raising one here would hand the enclosing region a failure the
+  // containment exists to keep from it (§3.6).
   function* accepted(): Operation<Segment[]> {
-    const before = checkedFailures?.failure;
+    const before = inherited?.failure;
     const produced = yield* printsErrors(definition.fn)
       ? scoped(function* () {
           yield* usePrintErrors("component");
           return yield* invoke();
         })
       : invoke();
-    const suffered = checkedFailures?.failure;
+    const suffered = inherited?.failure;
     if (suffered !== undefined && suffered !== before) {
       return [yield* raise(suffered)];
     }

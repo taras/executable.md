@@ -38,12 +38,15 @@ export const ErrorMode: Context<ErrorMode> = createContext<ErrorMode>(
  *
  * The three modes differ over an error no middleware converted:
  *
- * - `print` prints it into the document and the run continues. This is the
- *   root's mode, and what a printing boundary installs for its region.
- * - `output` fails the run. Every `<Output>` region installs it: a region that
- *   shows an operator what a stage produced must not also let a failed stage
- *   reach the step after it. The failure that leaves the region propagates like
- *   any other, so the nearest printing boundary may print it instead.
+ * - `print` prints it into the document and the run continues. A printing
+ *   boundary installs it for its region, and it is the context's default
+ *   outside a document execution, where direct expansion and component-level
+ *   harnesses read it.
+ * - `output` fails the run. Every text root installs it for its body, and so
+ *   does every `<Output>` region: a run that shows an operator what a stage
+ *   produced must not also let a failed stage reach the step after it. The
+ *   failure that leaves the region propagates like any other, so the nearest
+ *   printing boundary may print it instead.
  * - `throw` fails the run whatever a printing boundary says. Documentation and
  *   value roots are hidden, so a printed error there gives an author nothing to
  *   read.

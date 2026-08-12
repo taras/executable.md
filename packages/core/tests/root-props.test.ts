@@ -272,11 +272,13 @@ describe("Tier RS — concise props declarations", () => {
     expect(supplied.result.ok).toBe(true);
     expect(supplied.output).toContain("Hello, Ada!");
 
-    // A component's prop failure is printed into the output rather than
-    // aborting the run, so the printed error is the observable, not the status.
+    // Nothing recovers the component's prop failure, so it is the run's own
+    // outcome and the component renders nothing.
     const omitted = yield* runPath("omitted.md");
-    expect(omitted.output).toContain("Prop validation failed for <Greeting />");
-    expect(omitted.output).toContain("must have required property 'name'");
+    expect(omitted.result.ok).toBe(false);
+    const reported = omitted.result.ok ? "" : omitted.result.error.message;
+    expect(reported).toContain("Prop validation failed for <Greeting />");
+    expect(reported).toContain("must have required property 'name'");
     expect(omitted.output).not.toContain("Hello, ");
   });
 

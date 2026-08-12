@@ -973,7 +973,11 @@ describe("Tier LOOP — execution records", () => {
   });
 
   it("LOOP45: a printing error mode is not a loop failure", function* () {
-    const run = yield* runDoc(["<Loop max={3}>", "<Missing />", "</Loop>"].join("\n"));
+    // The mode has to be asked for: a region that prints is what keeps the
+    // iterations going after the first failure.
+    const run = yield* runDoc(
+      ["<PrintErrors>", "<Loop max={3}>", "<Missing />", "</Loop>", "</PrintErrors>"].join("\n"),
+    );
 
     expect(iterationRecords(run.events)).toHaveLength(3);
     expect(outcomeRecords(run.events)[0]?.outcome).toBe("exhausted");
@@ -1569,9 +1573,12 @@ describe("Tier BREAK — the projection boundary", () => {
   });
 
   it("BREAK21: a <Break> a component writes in its own body is stray", function* () {
-    const output = yield* runDoc("<Loop max={2}>HEAD<Owner />TAIL</Loop>", {
-      "components/Owner.md": "<em><Break /></em>\n",
-    });
+    // Printing, because what this reads is what survives the stray element:
+    // both iterations running, and each keeping its trailing content.
+    const output = yield* runDoc(
+      "<PrintErrors>\n<Loop max={2}>HEAD<Owner />TAIL</Loop>\n</PrintErrors>",
+      { "components/Owner.md": "<em><Break /></em>\n" },
+    );
 
     expect(output).toContain("must be written inside a <Loop>");
     // Both iterations ran and both kept their trailing content.

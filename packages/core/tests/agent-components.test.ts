@@ -201,11 +201,12 @@ describe("Tier AC — agent components", () => {
   it("AC19: the removed prompt prop is rejected as an unknown prop", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);
-    const { output, result } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
-    expect(result.ok).toBe(true);
+    const { result } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
+    expect(result.ok).toBe(false);
     expect(stub.promptCalls.length).toBe(0);
-    expect(output).toContain("Prop validation failed for <Prompt />");
-    expect(output).toContain("prompt");
+    const reported = result.ok ? "" : result.error.message;
+    expect(reported).toContain("Prop validation failed for <Prompt />");
+    expect(reported).toContain("prompt");
   });
 
   it("AC20: a component's own validation printed error is observed once", function* () {
@@ -218,7 +219,12 @@ describe("Tier AC — agent components", () => {
         return yield* next(error);
       },
     });
-    const { output } = yield* runDoc('<Prompt prompt="hello" />\n', new InMemoryStream());
+    // Written in a region that prints, because what this pins is that the
+    // diagnostic is observed once and rendered once — which needs it rendered.
+    const { output } = yield* runDoc(
+      '<PrintErrors>\n<Prompt prompt="hello" />\n</PrintErrors>\n',
+      new InMemoryStream(),
+    );
     expect(observed).toHaveLength(1);
     expect(observed[0]).toContain("Prop validation failed for <Prompt />");
     expect(output.match(/<Prompt \/>/g)).toHaveLength(1);

@@ -244,6 +244,17 @@ function text(output: Json): string {
   return String(output);
 }
 
+/** What one run said: its rendered text, or the diagnostic it reported. */
+function reportOf(body: () => Operation<Json>): Operation<string> {
+  return (function* () {
+    try {
+      return String(yield* body());
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  })();
+}
+
 function read(fixture: Fixture, relative: string): Operation<string> {
   return readTextFile(join(fixture.workspace, relative));
 }
@@ -803,10 +814,11 @@ describe("Tier FL — File", () => {
   it("FL16: a missing path and an undeclared prop are both rejected", function* () {
     const fixture = yield* useFixture();
 
-    const missing = text(yield* run(fixture, "<File />"));
+    // Ordinary prop validation, uncaught, so each one is the run's outcome.
+    const missing = yield* reportOf(() => run(fixture, "<File />"));
     expect(missing).toContain("path");
 
-    const extra = text(yield* run(fixture, '<File path="a.md" encoding="utf16" />'));
+    const extra = yield* reportOf(() => run(fixture, '<File path="a.md" encoding="utf16" />'));
     expect(extra).toContain("additional properties");
   });
 

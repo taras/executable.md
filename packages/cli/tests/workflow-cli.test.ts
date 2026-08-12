@@ -49,26 +49,16 @@ const RELEASE = [
 ].join("\n");
 
 /**
- * A document that fails rather than printing.
+ * A document that fails.
  *
  * A `<File>` refusal is a *printed* error — data, and the run still completes —
- * so a failed run needs both an error nothing prints and a region that decides
- * one. `<Output>` is that region: it makes an undecided error the document
- * execution's own outcome. The unresolvable component doubles as the evidence for the other claim this
- * fixture carries: a workflow definition is one immutable object, so the
- * component search path is empty and a repository component fails to resolve
- * rather than resolving to content beside the definition in a mutable checkout.
+ * so a failed run needs an error nothing recovers. The unresolvable component
+ * is one, and it doubles as the evidence for the other claim this fixture
+ * carries: a workflow definition is one immutable object, so the component
+ * search path is empty and a repository component fails to resolve rather than
+ * resolving to content beside the definition in a mutable checkout.
  */
-const REFUSING = [
-  "# Refusing",
-  "",
-  "<ComponentBesideTheDefinition />",
-  "",
-  "<Output>",
-  "the run's result",
-  "</Output>",
-  "",
-].join("\n");
+const REFUSING = ["# Refusing", "", "<ComponentBesideTheDefinition />", ""].join("\n");
 
 function* git(repository: string, args: string[]): Operation<void> {
   const result = yield* exec("git", { arguments: args, cwd: repository }).expect();

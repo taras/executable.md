@@ -321,15 +321,15 @@ describe("Tier Q — Daemon integration", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-        }),
-      );
+      const execution = yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+      });
+      const result = yield* execution;
 
-      // The eval block error should appear in output
-      expect(output).toContain("intentional error");
+      // Nothing recovers the eval block's failure, so it is the run's outcome.
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error.message).toContain("intentional error");
 
       // execute completed without hanging — daemon was cleaned up
       // by structured concurrency when the scope closed.

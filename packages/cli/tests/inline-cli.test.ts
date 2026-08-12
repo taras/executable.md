@@ -192,11 +192,15 @@ describe(
       const stray = "<Else>orphan</Else>\n";
       const root = yield* useWorkspace({ "Doc.md": stray });
 
-      const file = yield* runCli(["run", "Doc.md", "--raw"], { cwd: root }).expect();
-      expect(file.stdout).toContain("(Doc.md:1:1)");
+      // Nothing recovers the stray element, so each run reports its diagnostic
+      // and exits 1. What is being checked is the identity in it.
+      const file = yield* runCli(["run", "Doc.md", "--raw"], { cwd: root }).join();
+      expect(file.code).toBe(1);
+      expect(file.stderr).toContain("(Doc.md:1:1)");
 
-      const inline = yield* runCli(["-e", stray, "--raw"], { cwd: root }).expect();
-      expect(inline.stdout).toContain("(<eval>:1:1)");
+      const inline = yield* runCli(["-e", stray, "--raw"], { cwd: root }).join();
+      expect(inline.code).toBe(1);
+      expect(inline.stderr).toContain("(<eval>:1:1)");
     });
 
     it("IE16: a relative path resolves against the invocation directory", function* () {
@@ -273,6 +277,32 @@ describe(
       const { code, stderr } = yield* runCli(["targets", "-e", "# Hello"]).join();
       expect(code).toBe(1);
       expect(stderr).toContain("exclusive to xmd run");
+    });
+
+    /**
+     * The root's settlement, observed where a caller observes it. An uncaught
+     * failure in a document that selects no output ends the run: what it
+     * printed first is on stdout, the diagnostic is on stderr once, the work
+     * after it never began, and the status says so.
+     */
+    it("IE24: an uncaught failure exits 1 with the prefix kept and one diagnostic", function* () {
+      const document = [
+        "PREFIX-PROSE",
+        "",
+        "```js eval",
+        'throw new Error("stage classifier failed");',
+        "```",
+        "",
+        "LATER-PROSE",
+      ].join("\n");
+
+      const { code, stdout, stderr } = yield* runCli(["-e", document, "--raw"]).join();
+
+      expect(code).toBe(1);
+      expect(stdout).toContain("PREFIX-PROSE");
+      expect(stdout).not.toContain("LATER-PROSE");
+      expect(stderr).toContain("stage classifier failed");
+      expect(stderr.split("stage classifier failed")).toHaveLength(2);
     });
 
     it("IE23: an inline document addresses no target, so a `#` in it is text", function* () {

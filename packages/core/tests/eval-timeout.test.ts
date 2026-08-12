@@ -15,6 +15,7 @@ import { Config } from "@executablemd/runtime";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { completion, failureMessage } from "./helpers.ts";
 
 describe("Tier T7 — timeout modifier", () => {
   beforeAll(() => useTempFileCompiler());
@@ -56,9 +57,10 @@ describe("Tier T7 — timeout modifier", () => {
       "test.md": "```js timeout eval\nconst x = 1;\n```\n",
     });
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const result = yield* completion({ path: "test.md", stream });
 
-    expect(output).toContain("names no duration");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).toContain("names no duration");
   });
 
   /**
@@ -72,10 +74,11 @@ describe("Tier T7 — timeout modifier", () => {
       "test.md": '```ts timeout eval\nyield* sleep(300);\noutput("SLEPT");\n```\n',
     });
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const result = yield* completion({ path: "test.md", stream });
 
-    expect(output).toContain("eval block timed out after 25ms");
-    expect(output).not.toContain("SLEPT");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).toContain("eval block timed out after 25ms");
+    expect(failureMessage(result)).not.toContain("SLEPT");
   });
 
   it("T58: a declared duration boxes the block at what it declared", function* () {
@@ -85,9 +88,10 @@ describe("Tier T7 — timeout modifier", () => {
       "test.md": '```ts timeout=25ms eval\nyield* sleep(300);\noutput("SLEPT");\n```\n',
     });
 
-    const output = yield* collect(yield* execute({ path: "test.md", stream }));
+    const result = yield* completion({ path: "test.md", stream });
 
-    expect(output).toContain("eval block timed out after 25ms");
-    expect(output).not.toContain("SLEPT");
+    expect(result.ok).toBe(false);
+    expect(failureMessage(result)).toContain("eval block timed out after 25ms");
+    expect(failureMessage(result)).not.toContain("SLEPT");
   });
 });

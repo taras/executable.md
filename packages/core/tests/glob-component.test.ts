@@ -71,6 +71,20 @@ function run(fixture: Fixture, source: string): Operation<Json> {
 }
 
 /**
+ * What one run said: its rendered text, or the diagnostic it reported. A
+ * refusal nothing recovers is the run's own outcome.
+ */
+function said(fixture: Fixture, source: string): Operation<string> {
+  return (function* () {
+    try {
+      return String(yield* run(fixture, source));
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  })();
+}
+
+/**
  * Run `source` as a document whose contextual working directory is the
  * workspace, against a caller-supplied journal.
  *
@@ -193,10 +207,10 @@ describe("Tier GB — Glob component", () => {
   it("GB1: include is required and undeclared props are rejected", function* () {
     const fixture = yield* useFixture();
 
-    const missing = text(yield* run(fixture, '<Glob as="found" />'));
+    const missing = yield* said(fixture, '<Glob as="found" />');
     expect(missing).toContain("must have required property 'include'");
 
-    const extra = text(yield* run(fixture, '<Glob include={["*.md"]} hidden={true} as="found" />'));
+    const extra = yield* said(fixture, '<Glob include={["*.md"]} hidden={true} as="found" />');
     expect(extra).toContain("additional properties");
   });
 
@@ -205,7 +219,7 @@ describe("Tier GB — Glob component", () => {
   it("GB2: an empty include list is rejected", function* () {
     const fixture = yield* useFixture();
 
-    const output = text(yield* run(fixture, '<Glob include={[]} as="found" />'));
+    const output = yield* said(fixture, '<Glob include={[]} as="found" />');
 
     expect(output).toContain('"/include" must NOT have fewer than 1 items');
   });
@@ -215,15 +229,13 @@ describe("Tier GB — Glob component", () => {
   it("GB3: include and exclude must be lists of strings", function* () {
     const fixture = yield* useFixture();
 
-    const bare = text(yield* run(fixture, '<Glob include={"*.md"} as="found" />'));
+    const bare = yield* said(fixture, '<Glob include={"*.md"} as="found" />');
     expect(bare).toContain('"/include" must be array');
 
-    const numbers = text(yield* run(fixture, '<Glob include={[1, 2]} as="found" />'));
+    const numbers = yield* said(fixture, '<Glob include={[1, 2]} as="found" />');
     expect(numbers).toContain('"/include/0" must be string');
 
-    const badExclude = text(
-      yield* run(fixture, '<Glob include={["*.md"]} exclude={"x"} as="found" />'),
-    );
+    const badExclude = yield* said(fixture, '<Glob include={["*.md"]} exclude={"x"} as="found" />');
     expect(badExclude).toContain('"/exclude" must be array');
   });
 
@@ -233,7 +245,7 @@ describe("Tier GB — Glob component", () => {
   it("GB4: invoking without as fails", function* () {
     const fixture = yield* useFixture();
 
-    const output = text(yield* run(fixture, '<Glob include={["*.md"]} />'));
+    const output = yield* said(fixture, '<Glob include={["*.md"]} />');
 
     expect(output).toContain("must be invoked with `as`");
   });

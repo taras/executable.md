@@ -9,9 +9,10 @@
  *
  * Two failure shapes appear here and they are not interchangeable. A
  * configuration mistake is a raised `ErrorSegment`, settled under the ambient
- * error mode — at a document root that means it lands in the rendered output. An
- * unmatched elicitation is a thrown provider failure, which fails the run. The
- * helpers below keep both observable.
+ * error mode — printed where the region prints, and the run's own outcome where
+ * it does not. An unmatched elicitation is a thrown provider failure, which
+ * fails the run wherever it is written. The helpers below keep both
+ * observable.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -154,9 +155,13 @@ function elicits(as: string, message: string): string {
   return `<Elicit schema={s} as="${as}">${message}</Elicit>`;
 }
 
-/** The document's own printed errors, as the ambient error mode rendered them. */
-function printedErrors(result: Run): string {
-  return result.output;
+/**
+ * The diagnostic the document reported, wherever its region put it: rendered
+ * into the output where the region prints, and the run's own failure where it
+ * does not.
+ */
+function reported(result: Run): string {
+  return result.failure ?? result.output;
 }
 
 describe("Answers: choosing by template", () => {
@@ -675,8 +680,8 @@ describe("Answers: configuration printed errors", () => {
       '<Answer template="Approve?" value={{ decision: "a" }} />\n',
     );
 
-    expect(printedErrors(result)).toContain("<Answer> must be a direct child of <Answers>");
-    expect(printedErrors(result)).toContain("doc.md:1:1");
+    expect(reported(result)).toContain("<Answer> must be a direct child of <Answers>");
+    expect(reported(result)).toContain("doc.md:1:1");
   });
 
   it("refuses an <Answers> with nothing to answer for", function* () {
@@ -691,10 +696,10 @@ describe("Answers: configuration printed errors", () => {
         "",
       ].join("\n"),
     );
-    expect(printedErrors(bodyless)).toContain("has no body to answer for");
+    expect(reported(bodyless)).toContain("has no body to answer for");
 
     const selfClosing = yield* run(workspace, "<Answers />\n");
-    expect(printedErrors(selfClosing)).toContain("has no body to answer for");
+    expect(reported(selfClosing)).toContain("has no body to answer for");
   });
 
   it("refuses both template forms at once", function* () {
@@ -712,7 +717,7 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain(
+    expect(reported(result)).toContain(
       "accepts either a template prop or template children, not both",
     );
   });
@@ -732,7 +737,7 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain("adjacent capture holes");
+    expect(reported(result)).toContain("adjacent capture holes");
   });
 
   it("refuses a matcher with no value", function* () {
@@ -743,7 +748,7 @@ describe("Answers: configuration printed errors", () => {
       ["<Answers>", '<Answer template="Approve?" />', "", "body", "</Answers>", ""].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain('requires a "value" prop');
+    expect(reported(result)).toContain('requires a "value" prop');
   });
 
   /**
@@ -770,8 +775,8 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain("template must be a literal string prop");
-    expect(printedErrors(result)).toContain("{binding} holes");
+    expect(reported(result)).toContain("template must be a literal string prop");
+    expect(reported(result)).toContain("{binding} holes");
   });
 
   it("refuses a value that is not JSON", function* () {
@@ -789,7 +794,7 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain("value text is not JSON");
+    expect(reported(result)).toContain("value text is not JSON");
   });
 
   /**
@@ -812,8 +817,8 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).toContain("captured JSON text");
-    expect(printedErrors(result)).toContain(`value='\"approve\"'`);
+    expect(reported(result)).toContain("captured JSON text");
+    expect(reported(result)).toContain(`value='\"approve\"'`);
   });
 
   /**
@@ -835,7 +840,7 @@ describe("Answers: configuration printed errors", () => {
       ].join("\n"),
     );
 
-    expect(printedErrors(result)).not.toContain("a body nobody should see");
+    expect(reported(result)).not.toContain("a body nobody should see");
   });
 });
 
@@ -924,7 +929,7 @@ describe("Answers: reservation", () => {
 
     // A reserved name resolves to nothing else wherever it is written, so the
     // misplacement is still a printed error rather than a component that renders.
-    expect(printedErrors(result)).toContain("<Answer> must be a direct child of <Answers>");
+    expect(reported(result)).toContain("<Answer> must be a direct child of <Answers>");
     expect(result.output).not.toContain("REPOSITORY_ANSWER");
   });
 });

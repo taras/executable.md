@@ -24,7 +24,11 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { ModifierFactory } from "../src/modifiers.ts";
 
 interface Run {
-  /** The rendered document. A text root renders text, so this is its Markdown. */
+  /**
+   * What the run said: its rendered Markdown, or the diagnostic it reported.
+   * A refusal nothing recovers is the run's own outcome rather than a comment
+   * in the body, and these cases are about what the refusal says.
+   */
   output: string;
   /** The timeout every exec call was given, in call order. */
   timeouts: (number | undefined)[];
@@ -55,14 +59,13 @@ function* run(
         return { exitCode: 0, stdout: "RAN\n", stderr: "" };
       },
     });
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream: new InMemoryStream(),
-        ...(options.modifiers ? { modifiers: options.modifiers } : {}),
-      }),
-    );
-    return { output: String(output), timeouts };
+    const execution = yield* execute({
+      path: "test.md",
+      stream: new InMemoryStream(),
+      ...(options.modifiers ? { modifiers: options.modifiers } : {}),
+    });
+    const result = yield* execution;
+    return { output: result.ok ? String(result.value) : result.error.message, timeouts };
   });
 }
 
