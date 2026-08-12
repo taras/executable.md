@@ -336,3 +336,57 @@ describe("parseInfoString", () => {
     });
   });
 });
+
+describe("parseInfoString — the binding annotation", () => {
+  /** What a refused annotation said, or "" where one bound a name. */
+  function refusal(infoString: string): string {
+    const binding = parseInfoString(infoString).binding;
+    if (binding === undefined || binding.ok) {
+      return "";
+    }
+    return binding.error.message;
+  }
+
+  it("binds a trailing quoted name and removes it from the chain", function* () {
+    const result = parseInfoString('bash exec as="versions"');
+    expect(result).toMatchObject({
+      language: "bash",
+      modifiers: [{ name: "exec" }],
+      executable: true,
+      binding: { ok: true, value: "versions" },
+    });
+  });
+
+  it("composes with the timeout modifier", function* () {
+    const result = parseInfoString('bash timeout=30s exec as="versions"');
+    expect(result).toMatchObject({
+      modifiers: [{ name: "timeout", params: "30s" }, { name: "exec" }],
+      binding: { ok: true, value: "versions" },
+    });
+  });
+
+  it("leaves a block with no annotation alone", function* () {
+    expect(parseInfoString("bash exec").binding).toBe(undefined);
+  });
+
+  it("refuses a second annotation", function* () {
+    const result = parseInfoString('bash exec as="one" as="two"');
+    expect(refusal('bash exec as="one" as="two"')).toContain("not several");
+    // Neither becomes middleware: a refused annotation runs no chain.
+    expect(result.modifiers).toEqual([{ name: "exec" }]);
+  });
+
+  it("refuses an annotation that is not the last word", function* () {
+    expect(refusal('bash exec as="one" silent')).toContain("must be the last word");
+  });
+
+  it("refuses an unquoted name", function* () {
+    expect(refusal("bash exec as=versions")).toContain("double quotes");
+  });
+
+  it("refuses a name that is not a binding name", function* () {
+    expect(refusal('bash exec as="not-valid"')).toContain("valid JavaScript identifier");
+    expect(refusal('bash exec as="const"')).toContain("valid JavaScript binding name");
+    expect(refusal('bash exec as=""')).toContain("non-empty");
+  });
+});

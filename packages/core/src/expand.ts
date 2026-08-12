@@ -23,6 +23,7 @@ import type {
   ComponentDefinition,
   ComponentFailure,
   EvalEnv,
+  ExecutableCodeBlock,
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
@@ -873,6 +874,15 @@ export function* expandSegments(
       }
 
       case "codeBlock": {
+        // Everything a binding annotation can be wrong about is decided here,
+        // before the chain is composed and therefore before a process starts.
+        const refusal = bindingRefusal(segment);
+        if (refusal !== undefined) {
+          result.push(yield* raise({ type: "error", message: refusal, source: segment.content }));
+          break;
+        }
+        const bindingName = segment.binding?.ok === true ? segment.binding.value : undefined;
+
         // Interpolate eval bindings into content before the modifier chain.
         // A binding environment may not be in scope (e.g., blocks outside
         // component expansion) — fall back to the original content.
@@ -897,10 +907,46 @@ export function* expandSegments(
           blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
           componentName: parentMeta["componentName"] as string | undefined,
           routing: yield* declaredRouting(),
+          ...(bindingName === undefined ? {} : { bound: true }),
         };
+
+        if (bindingName !== undefined && !evalEnv) {
+          result.push(
+            yield* raise({
+              type: "error",
+              message: '`as="name"` requires an evaluation environment.',
+              source: segment.content,
+            }),
+          );
+          break;
+        }
 
         try {
           const codeResult = yield* applyModifiers(segment.modifiers, context);
+
+          // A bound command's outcome is data the document decides on: the
+          // block renders nothing, displays neither channel, and a nonzero
+          // status is a field rather than a failure — including inside
+          // `<Output>`, where an ordinary command's would end the run (§3.6).
+          if (bindingName !== undefined && evalEnv) {
+            const outcome = codeResult.bound;
+            if (outcome === undefined) {
+              result.push(
+                yield* raise({
+                  type: "error",
+                  message: `\`as="${bindingName}"\` bound nothing: the chain produced no process outcome.`,
+                  source: segment.content,
+                }),
+              );
+              break;
+            }
+            evalEnv.values[bindingName] = {
+              exitCode: outcome.exitCode,
+              stdout: outcome.stdout,
+              stderr: outcome.stderr,
+            };
+            break;
+          }
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
@@ -1014,6 +1060,37 @@ function* checkedCommandFailure(
     yield* ErrorMode.set("output");
     return yield* raise(segment);
   });
+}
+
+/**
+ * Why this block's `as="name"` annotation binds nothing, if it binds nothing.
+ *
+ * A binding turns a command's status into data, so what may stand between the
+ * annotation and the process is exactly what cannot change that outcome: the
+ * built-in `timeout`, which bounds the command and stays a failure when it
+ * wins. Every other modifier — a second terminal, a display policy, anything a
+ * caller registered — is refused here, where no process has started yet.
+ */
+function bindingRefusal(segment: ExecutableCodeBlock): string | undefined {
+  const binding = segment.binding;
+  if (binding === undefined) {
+    return undefined;
+  }
+  if (!binding.ok) {
+    return binding.error.message;
+  }
+  const terminal = segment.modifiers.at(-1);
+  if (terminal?.name !== "exec") {
+    return '`as="name"` is supported only with the `exec` terminal.';
+  }
+  const wrapping = segment.modifiers.slice(0, -1).find((modifier) => modifier.name !== "timeout");
+  if (wrapping !== undefined) {
+    return (
+      `only the built-in \`timeout\` modifier may wrap a bound \`exec\`. ` +
+      `Got: "${wrapping.name}".`
+    );
+  }
+  return undefined;
 }
 
 function captureError(message: string): ErrorSegment {

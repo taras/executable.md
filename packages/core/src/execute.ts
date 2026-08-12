@@ -118,6 +118,7 @@ import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
+import type { ForegroundRouting } from "./foreground.ts";
 import { checkedFailureLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
@@ -1088,11 +1089,18 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
       // and the Process Api itself defaults to nothing (spec §Config).
       const timeout = yield* ephemeral(timeoutExec);
       // Where this block's output goes: a `<Capture as>` region decided that
-      // lexically, and a modifier inside the chain may have narrowed it.
-      const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
+      // lexically, and a modifier inside the chain may have narrowed it. A bound
+      // block is not a display at all — its outcome is data the document reads —
+      // so it shows neither channel and takes its region's routing from nothing.
+      const bound = context.bound === true;
+      const selected = bound
+        ? BINDING_ROUTING
+        : ((yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND);
 
       const captured = selected.stdout === "capture";
       let live = "";
+      let liveStdout = "";
+      let liveStderr = "";
       const result = (yield createDurableOperation<Json>(
         {
           type: "exec",
@@ -1102,7 +1110,7 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
         function* (): Operation<Json> {
           // Routing and retention are established before the child exists, so
           // startup chunks are treated like every other byte.
-          const finished = yield* route(selected, retainProcessOutput);
+          const finished = yield* route(selected, retainProcessOutput, bound);
           // `retain: false`: this execution keeps what it decided to keep, on
           // the chain above, where silencing cannot hide it from a record.
           const execResult = yield* API.Process.operations.exec({
@@ -1113,6 +1121,8 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
           });
           const kept = finished();
           live = kept.captured;
+          liveStdout = kept.boundStdout ?? "";
+          liveStderr = kept.boundStderr ?? "";
           return {
             exitCode: execResult.exitCode,
             ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
@@ -1130,9 +1140,26 @@ function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
         output: captured ? (result.stdout ?? live) : "",
         exitCode: result.exitCode,
         stderr: result.stderr ?? "",
+        // The binding comes from the record when there is one and from this
+        // block's own buffers when there is not, on the same terms a capture's
+        // does — which is what lets a resumed run rebuild the outcome without
+        // starting the command again. It is a fresh object every time: what
+        // replay preserves is the field values.
+        ...(bound
+          ? {
+              bound: {
+                exitCode: result.exitCode,
+                stdout: result.stdout ?? liveStdout,
+                stderr: result.stderr ?? liveStderr,
+              },
+            }
+          : {}),
       };
     })();
 }
+
+/** A bound block displays neither channel: its outcome is read, not shown. */
+const BINDING_ROUTING: ForegroundRouting = { stdout: "hidden", stderr: "hidden" };
 
 // `silent` suppresses output; it does not convert failure into success (#307).
 // The outcome it hands back is the inner chain's, so a silenced command that

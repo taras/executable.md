@@ -9,6 +9,9 @@
  * Everything else is passive text.
  */
 
+import { Err, Ok } from "effection";
+import type { Result } from "effection";
+import { validateBindingName } from "./live-env.ts";
 import type {
   Segment,
   TextSegment,
@@ -19,6 +22,62 @@ import type {
   Json,
   SourcePosition,
 } from "./types.ts";
+
+/**
+ * The one spelling a binding annotation has: trailing, and quoted.
+ *
+ * Everything else a word beginning `as` can be is a malformed annotation
+ * rather than a modifier, because `as` is the vocabulary every other binding
+ * construct uses and reading it as middleware would run the command instead of
+ * refusing it.
+ */
+const BINDING_ANNOTATION = /^as="([^"]*)"$/;
+
+/**
+ * Read the `as="name"` annotation out of the words after the language.
+ *
+ * The annotation is removed from the chain — it is not middleware — and what
+ * comes back is the name it binds, or the refusal that names why it does not
+ * bind anything.
+ */
+function takeBindingAnnotation(
+  tokens: string[],
+  modifiers: Modifier[],
+): Result<string> | undefined {
+  const found: number[] = [];
+  for (const [index, modifier] of modifiers.entries()) {
+    if (modifier.name === "as") {
+      found.push(index);
+    }
+  }
+  if (found.length === 0) {
+    return undefined;
+  }
+  for (let i = found.length - 1; i >= 0; i--) {
+    modifiers.splice(found[i]!, 1);
+  }
+  if (found.length > 1) {
+    return Err(new Error('an executable block takes one `as="name"` annotation, not several.'));
+  }
+  const at = found[0]!;
+  if (at !== tokens.length - 2) {
+    return Err(
+      new Error('`as="name"` must be the last word in the info string: `bash exec as="name"`.'),
+    );
+  }
+  const matched = BINDING_ANNOTATION.exec(tokens[at + 1]!);
+  if (!matched) {
+    return Err(new Error('`as` must name a binding in double quotes: `exec as="name"`.'));
+  }
+  const name = validateBindingName(matched[1]!);
+  if (!name.ok) {
+    return Err(new Error(`\`as\` ${name.error.message}`));
+  }
+  if (name.value === undefined) {
+    return Err(new Error("`as` must be non-empty."));
+  }
+  return Ok(name.value);
+}
 
 export function parseInfoString(infoString: string): ParsedInfoString {
   const tokens = infoString.trim().split(/\s+/);
@@ -53,10 +112,13 @@ export function parseInfoString(infoString: string): ParsedInfoString {
     }
   }
 
+  const binding = takeBindingAnnotation(tokens, modifiers);
+
   return {
     language,
     modifiers,
     executable: modifiers.some((m) => m.name === "exec" || m.name === "eval"),
+    ...(binding === undefined ? {} : { binding }),
   };
 }
 
@@ -175,6 +237,7 @@ export function scanSegments(
           content,
           modifiers: parsed.modifiers,
           executable: true,
+          ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
         } satisfies ExecutableCodeBlock);
       } else {
         // Non-executable code block: preserve as text
@@ -756,6 +819,7 @@ function parseChildren(
           content,
           modifiers: parsed.modifiers,
           executable: true,
+          ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
         } satisfies ExecutableCodeBlock);
       } else {
         pushText(children, fullFence);

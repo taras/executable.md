@@ -27,6 +27,11 @@
  * - **Rendering** is what the document says. Forwarded bytes were already
  *   displayed, so nothing renders them a second time; captured bytes are the
  *   binding's text.
+ * - **Binding** is what the document reads. An `exec as="name"` block takes
+ *   both received channels and the exit status into an ordinary binding value,
+ *   displays neither channel and renders nothing. Its buffers belong to the
+ *   expansion that asked for them: a document reading a command's outcome does
+ *   not thereby make the run keep one.
  *
  * Retention defaults to keeping output, so a programmatic caller that hands
  * `execute()` a durable stream keeps the record it has always had. The CLI
@@ -99,6 +104,10 @@ export interface ForegroundOutput {
   retainedStdout: string | undefined;
   /** stderr the host asked to retain; undefined when it asked for none. */
   retainedStderr: string | undefined;
+  /** stdout a bound block's binding asked for; undefined when none did. */
+  boundStdout: string | undefined;
+  /** stderr a bound block's binding asked for; undefined when none did. */
+  boundStderr: string | undefined;
 }
 
 /**
@@ -113,7 +122,10 @@ export interface ForegroundOutput {
  * - captured stdout goes to the region's own buffer and no further, which is
  *   what stops it being displayed as well as captured; and
  * - a run that keeps no record accumulates nothing, so a capture's stderr —
- *   diagnostic, and possibly enormous — is forwarded and forgotten.
+ *   diagnostic, and possibly enormous — is forwarded and forgotten; and
+ * - `bind` is the one thing a document can ask for on its own account: both
+ *   channels are buffered for the current binding whatever the host retains,
+ *   and neither buffer reaches the record.
  *
  * A channel is the operation this boundary receives bytes on. Enclosing
  * middleware that forwards a command's stdout on stderr has reclassified it,
@@ -134,21 +146,28 @@ export interface ForegroundOutput {
 export function* route(
   selected: ForegroundRouting,
   retain: boolean,
+  bind = false,
 ): Operation<() => ForegroundOutput> {
   let captured = "";
   let retainedStdout = "";
   let retainedStderr = "";
+  let boundStdout = "";
+  let boundStderr = "";
   const fromStdout = new TextDecoder();
   const fromStderr = new TextDecoder();
-  const wanted = retain || selected.stdout === "capture";
+  const wantsStdout = retain || bind || selected.stdout === "capture";
+  const wantsStderr = retain || bind;
 
   yield* Stdio.around({
     *stdout([bytes], next) {
       // Decoded once, for whoever wants it: feeding the same bytes through a
       // stateful decoder twice would corrupt a split code point.
-      const text = wanted ? fromStdout.decode(bytes, { stream: true }) : "";
+      const text = wantsStdout ? fromStdout.decode(bytes, { stream: true }) : "";
       if (retain) {
         retainedStdout += text;
+      }
+      if (bind) {
+        boundStdout += text;
       }
       if (selected.stdout === "capture") {
         captured += text;
@@ -160,8 +179,12 @@ export function* route(
       return yield* next(bytes);
     },
     *stderr([bytes], next) {
+      const text = wantsStderr ? fromStderr.decode(bytes, { stream: true }) : "";
       if (retain) {
-        retainedStderr += fromStderr.decode(bytes, { stream: true });
+        retainedStderr += text;
+      }
+      if (bind) {
+        boundStderr += text;
       }
       if (selected.stderr === "hidden") {
         return;
@@ -173,22 +196,33 @@ export function* route(
   return () => {
     // Flushed once the child is done, so a truncated final sequence is
     // reported rather than held.
-    if (wanted) {
+    if (wantsStdout) {
       const tail = fromStdout.decode();
       if (retain) {
         retainedStdout += tail;
+      }
+      if (bind) {
+        boundStdout += tail;
       }
       if (selected.stdout === "capture") {
         captured += tail;
       }
     }
-    if (retain) {
-      retainedStderr += fromStderr.decode();
+    if (wantsStderr) {
+      const tail = fromStderr.decode();
+      if (retain) {
+        retainedStderr += tail;
+      }
+      if (bind) {
+        boundStderr += tail;
+      }
     }
     return {
       captured,
       retainedStdout: retain ? retainedStdout : undefined,
       retainedStderr: retain ? retainedStderr : undefined,
+      boundStdout: bind ? boundStdout : undefined,
+      boundStderr: bind ? boundStderr : undefined,
     };
   };
 }

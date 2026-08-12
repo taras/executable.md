@@ -402,6 +402,11 @@ This is middleware composition, not a bag of flags. Order matters:
 `silent exec` means "execute, then suppress the output."
 `exec` alone means "execute, show the output."
 
+One word after the language is not middleware. A trailing `as="name"` is a
+**binding annotation**: it names where the block's result is bound, exactly as
+`as` does on a component invocation and on `<Capture>`. It is removed before the
+chain is composed, so it wraps nothing and nothing wraps it (§3.6).
+
 ### 3.2 Detection rule
 
 A fenced code block is executable when the info string contains `exec`
@@ -876,13 +881,15 @@ scope.around(Sample, {
 ### 3.5 Modifier parsing
 
 The info string is split on whitespace. The first token is the
-language. The remaining tokens are the modifier chain:
+language. The remaining tokens are the modifier chain, minus the binding
+annotation, which is taken out of the chain before anything composes it:
 
 ```typescript
 interface ParsedInfoString {
   language: string;
   modifiers: Modifier[];
   executable: boolean;       // true if 'exec' or 'eval' is in the chain
+  binding?: Result<string>;  // the `as="name"` annotation, if there was one
 }
 
 interface Modifier {
@@ -914,6 +921,14 @@ function parseInfoString(infoString: string): ParsedInfoString {
   };
 }
 ```
+
+A word whose name is `as` is read as a binding annotation and never as a
+modifier. Exactly one is accepted, it is the last word in the info string, and
+its name is double-quoted and is a binding name on the same terms as component
+invocation `as`, `<Capture as>` and `<Each as>` (§4.3). A missing, duplicated,
+unquoted, malformed, or non-trailing annotation is the refusal it describes,
+and every one of them is decided before the chain is composed — so a refused
+block starts no process.
 
 ### 3.6 Foreground execution, capture, and retention
 
@@ -953,6 +968,7 @@ the document at completion.
 | ordinary `exec` | forwarded live | forwarded live |
 | inside `<Capture as>` | collected into the captured value | forwarded live |
 | `silent exec` | neither | neither |
+| `exec as="name"` | collected into the binding | collected into the binding |
 
 Routing decides whether a channel reaches the terminal, not which of the host's
 streams it lands on. That second question is the host's, and is answered
@@ -991,9 +1007,10 @@ retained history: a resumed procedure reads back
 what a command printed rather than running it again to find out.
 
 Where nothing is retained the run never builds the complete strings: the Process
-operation accumulates only when the caller asked it to. The one exception is a
-structural capture, whose buffer has the capture's scope and holds received
-stdout alone. Where output is retained it is kept in addition to the routing the
+operation accumulates only when the caller asked it to. The exceptions are the
+two buffers a document asks for on its own account — a structural capture's,
+which has the capture's scope and holds received stdout alone, and a bound
+block's, which has the expansion's and holds both received channels. Where output is retained it is kept in addition to the routing the
 document chose — including for `silent` and captured blocks, because a display
 policy does not weaken an audit record. Silencing output for the host's terminal
 likewise leaves the record intact: not showing something and not knowing it are
@@ -1005,6 +1022,54 @@ redact a credential upstream so that it never reaches the gate, and a host that
 introduces credential-shaped text upstream is refused like any other run that
 would persist one. Output that is not retained is never accumulated for a
 scanner to inspect.
+
+**Binding.** An ordinary `exec` block forwards both channels and raises on a
+nonzero exit. That is right for a command whose failure is a failure, and wrong
+for one whose failure is an answer — asking a registry about a package that does
+not exist yet, for instance. `exec as="name"` binds what the process settled to,
+so the document decides what the status means:
+
+````md
+```bash exec as="versions"
+npm view @executablemd/workflow versions --json
+```
+````
+
+The binding is an ordinary eval binding (§4.3) holding a fresh, mutable object:
+
+```ts
+{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+```
+
+`stdout` and `stderr` are exactly what the two channels received at the per-exec
+boundary, kept apart. A bound block displays neither channel and renders
+nothing, so a later block, text interpolation or eval reads the outcome and
+nothing else in the document shows it.
+
+Only the built-in `timeout` may wrap a bound `exec`, and `as` is supported with
+no other terminal. Every other modifier — `silent`, `eval`, `daemon`,
+`service`, a registered one — is refused before a process starts, because a
+binding turns a status into data and what stands between the annotation and the
+process must not be able to change that outcome.
+
+A binding is not a retention decision. Both channels are buffered for the
+current binding whether or not the host asked for a record, and that buffer adds
+nothing to the durable exec result: a transient run still retains the exit
+status alone. Where the host did select retention the existing exec event holds
+both channels exactly once, and a resumed run rebuilds the same binding fields
+from that event without starting the command again. Replay preserves the field
+values, not the object.
+
+A process that starts and reaches an exit status binds its outcome. A nonzero
+status is data: it does not raise, and the run continues inside `<Output>`,
+where an ordinary command's would end it. Everything that never reaches a
+settled status — a process that cannot start, a timeout, cancellation, a
+durability failure, a Files infrastructure failure — is the failure it has
+always been, and binds nothing.
 
 **Channels.** A channel is the stdio operation on which the boundary receives
 bytes. Enclosing middleware that forwards a command's stdout on stderr has
@@ -1021,10 +1086,10 @@ received at all and may therefore be missing from what is retained or captured.
 effectionx #244 owns that limitation, and nothing here claims pump-complete tail
 delivery or retention until it is integrated.
 
-**Failure.** A nonzero exit is a checked failure. The ambient printing mode may
-decide how it is reported, never that the run succeeded: later executable
-blocks do not run and the execution fails, with no `<Output>` declaration
-required. `<Output>` selects rendered document content and nothing else.
+**Failure.** A nonzero exit is a checked failure, unless the block bound it.
+The ambient printing mode may decide how it is reported, never that the run
+succeeded: later executable blocks do not run and the execution fails, with no
+`<Output>` declaration required. `<Output>` selects rendered document content and nothing else.
 `silent` hides output; it does not convert a failure into success.
 
 Exactly one thing recovers a checked failure: an explicit error-handling
@@ -1087,6 +1152,18 @@ continues, which is what makes printing an explicit act rather than the default
 a root falls into. That recovery is authorized by the element itself and reaches
 its body as an argument, never as ambient state something outside the document
 could set (§3.6).
+
+**`exec as="name"`** — `exec` runs the command and journals the result as usual.
+The annotation is not part of the chain: it names where the settled outcome —
+exit status and both received channels — is bound. Neither channel is displayed
+and the block renders nothing, so what the command produced is read rather than
+shown. A nonzero status is a field of the binding rather than a checked failure
+(§3.6).
+
+**`bash timeout=30s exec as="name"`** — `timeout` still bounds the command, and
+still wins as a failure when it does: a command the timeout cancelled reached no
+exit status, so it binds nothing. `timeout` is the only modifier a bound `exec`
+accepts.
 
 **`silent exec`** — `exec` runs the command and journals the result as usual.
 `silent` displays neither channel. A non-zero exit is still a failure: `silent`
@@ -7420,6 +7497,7 @@ visible warning blocks, gather into a separate error report).
 | D18 | Modifier override in child scope | Parent registers `sample`, child overrides with different handler |
 | D19 | Modifier parsing: `timeout=30s` | Modifier has name "timeout", params "30s" |
 | D20 | Info string with language only | Not executable, treated as passive text |
+| D21 | `as="name"` parsing | Bound out of the chain rather than into it; a duplicated, non-trailing, unquoted or non-binding name is refused |
 
 ### Tier FG — Foreground execution, capture, and retention (§3.6)
 
@@ -7451,6 +7529,11 @@ visible warning blocks, gather into a separate error report).
 | FG24 | An upstream redaction | Captured, journaled and replayed as the safe text; the original is nowhere, and replay starts no child |
 | FG25 | Upstream consumption | Displayed and retained nowhere; exit status and the other channel are unaffected |
 | FG26 | An upstream redirect | Reclassifies the channel the run records; retained stdout is empty |
+| FG27 | A nonzero `exec as="name"` | Binds status and both channels, displays and renders neither, the run goes on, and the record still keeps the status alone |
+| FG28 | A resumed retained bound block | Rebuilds the same binding fields from the record without starting the command again |
+| FG29 | A command that cannot start | Fails as any block does and binds nothing |
+| FG30 | A bound block that times out | The timeout still wins as a failure; nothing is bound |
+| FG31 | A refused annotation or modifier | `silent`, a non-`exec` terminal, an unquoted, duplicated, non-trailing or invalid name — refused, and no process starts |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |
@@ -7911,6 +7994,7 @@ platform's.
 | OM14–OM16 | Transitivity | `<PrintErrors>`, `<File>`, and a printing component that does not recover each stop a callee's own region; each still prints what is raised under its own mode |
 | OM17 | Chunks, not the close value | A streamed prefix arrives before the failing region's output, and both reach the stream |
 | OM18–OM19 | A printed error is data | A child's printed error does not fail a parent's documentation; an uncaptured failure in the same position still propagates |
+| OM20 | A bound command in the region | Its nonzero status is data and the region continues; the same command unbound stops the run and the block after it never starts |
 
 ### Tier IM — Expansion metadata
 

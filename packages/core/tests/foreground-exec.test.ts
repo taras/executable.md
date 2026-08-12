@@ -15,7 +15,7 @@
  * handler, what the boundary receives is what the command emitted, and that is
  * all such a case asserts.
  */
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, ensure, scoped, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
@@ -28,6 +28,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { useStubFs } from "@executablemd/runtime/test";
 import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
@@ -812,5 +813,179 @@ describe("Tier FG — foreground execution", () => {
     expect(kept?.retainedStderr?.length).toBe("outerr".length);
     expect(seen.stderr).toContain("out");
     expect(seen.stderr).toContain("err");
+  });
+});
+
+/**
+ * Tier FG — a command whose failure is an answer (spec §3.6, #447).
+ *
+ * `exec as="name"` binds what the process settled to, so these cases ask the
+ * three questions that separates a binding from every other use of the same
+ * bytes: what the document reads, what a reader is shown, and what the run
+ * keeps. A binding is none of the other two — it never displays a channel and
+ * never adds one to a record the host did not ask for.
+ */
+describe("Tier FG — bound command results", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** How many children a run started, whatever else the case installs. */
+  function* counting(starts: { count: number }): Operation<void> {
+    yield* API.Process.around({
+      *exec([options], next) {
+        starts.count += 1;
+        return yield* next(options);
+      },
+    });
+  }
+
+  it("FG27: a nonzero command binds its outcome, shows nothing, and the run goes on", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "printf out; printf err >&2; exit 7",
+      "```",
+      "",
+      "```js eval",
+      "output(`code=${probe.exitCode} out=${probe.stdout} err=${probe.stderr}`);",
+      "```",
+      "",
+      "```bash exec",
+      "echo after",
+      "```",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(function* (seen) {
+      const { output, stream } = yield* runDocument(source, { retainProcessOutput: false });
+      return { seen, output, stream };
+    });
+
+    // The document decided what the nonzero status meant, and kept going.
+    expect(run.output).toContain("code=7 out=out err=err");
+    // Neither channel was displayed, and the block rendered nothing itself.
+    expect(run.seen.stdout).not.toContain("out");
+    expect(run.seen.stderr).not.toContain("err");
+    expect(run.output).not.toContain("Command failed");
+    // The block after it is an ordinary foreground block again.
+    expect(run.seen.stdout).toContain("after");
+    // And a binding is not a retention decision: this run keeps the status
+    // alone, exactly as it would have without one.
+    const outcome = execOutcome(run.stream);
+    expect(outcome?.exitCode).toBe(7);
+    expect(outcome?.stdout).toBe(undefined);
+    expect(outcome?.stderr).toBe(undefined);
+  });
+
+  it("FG28: a resumed retained run rebuilds the same binding without running again", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "printf recorded-out; printf recorded-err >&2; exit 3",
+      "```",
+      "",
+      "[{probe.exitCode}|{probe.stdout}|{probe.stderr}]",
+      "",
+    ].join("\n");
+
+    const starts = { count: 0 };
+    const first = new InMemoryStream();
+    const live = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(source, { retainProcessOutput: true, stream: first });
+      });
+    });
+
+    expect(starts.count).toBe(1);
+    expect(live.output).toContain("[3|recorded-out|recorded-err]");
+    // The record holds both channels, because this host asked for a record.
+    const kept = execOutcome(first);
+    expect(kept?.stdout).toBe("recorded-out");
+    expect(kept?.stderr).toBe("recorded-err");
+
+    const events = first.snapshot();
+    expect(events.at(-1)?.type).toBe("close");
+    const partial = new InMemoryStream(events.slice(0, -1));
+
+    const resumed = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(source, { retainProcessOutput: true, stream: partial });
+      });
+      return { output: run.output, seen };
+    });
+
+    // Same fields, from the record; no second child, and nothing displayed.
+    expect(starts.count).toBe(1);
+    expect(resumed.output).toContain("[3|recorded-out|recorded-err]");
+    expect(resumed.seen.stdout).toBe("");
+    expect(resumed.seen.stderr).toBe("");
+  });
+
+  it("FG29: a command that cannot start fails and binds nothing", function* () {
+    const source = ['```bash exec as="probe"', "true", "```", "", "[{probe.exitCode}]", ""].join(
+      "\n",
+    );
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* API.Process.around({
+          // deno-lint-ignore require-yield
+          *exec() {
+            throw new Error("no such executable");
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    // The failure is the block's, decided by the region's error mode as any
+    // other is — and the reference below it never resolved, because nothing
+    // was bound.
+    expect(run.output).toContain("no such executable");
+    expect(run.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG30: a timeout stays a failure and binds nothing", function* () {
+    const dir = yield* useDirectory();
+    const source = [
+      '```bash timeout=25ms exec as="probe"',
+      `sleep 5; touch ${path.join(dir, "finished")}`,
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+
+    const run = yield* watching(() => runDocument(source, { retainProcessOutput: false }));
+
+    // A timeout wins as a failure, so the command has no settled status to
+    // bind: the reference below it stands unresolved.
+    expect(run.output).toContain("timed out after 25ms");
+    expect(run.output).toContain("{probe.exitCode}");
+    expect(yield* exists(path.join(dir, "finished"))).toBe(false);
+  });
+
+  it("FG31: a refused annotation or modifier starts no process", function* () {
+    const refused = [
+      ['```bash silent exec as="probe"', "only the built-in `timeout` modifier"],
+      ['```js eval as="probe"', "supported only with the `exec` terminal"],
+      ["```bash exec as=probe", "double quotes"],
+      ['```bash exec as="probe" as="other"', "not several"],
+      ['```bash exec as="probe" silent', "must be the last word"],
+      ['```bash exec as="1nope"', "valid JavaScript identifier"],
+    ];
+
+    for (const [fence, expected] of refused) {
+      const starts = { count: 0 };
+      const source = [fence!, "echo ran", "```", ""].join("\n");
+      const run = yield* watching(function* () {
+        return yield* scoped(function* () {
+          yield* counting(starts);
+          return yield* runDocument(source, { retainProcessOutput: false });
+        });
+      });
+
+      expect(run.output).toContain(expected!);
+      expect(starts.count).toBe(0);
+    }
   });
 });

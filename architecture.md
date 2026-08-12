@@ -935,6 +935,16 @@ a printed error. Holding a failure as data is asked for explicitly:
 the value by reference, or `{ok: false, error}` — converting the failure
 before any raise. Private buffers never merge into document output.
 
+A command's exit status is not an error until something decides it is one.
+`exec as=` binds the settled process outcome — the status and both channels the
+per-exec boundary received — so a nonzero status is ordinary data and there is
+no error to raise, in any error mode. What never reaches a settled status is
+unaffected: a process that could not start, a timeout, cancellation, a
+durability failure and a Files infrastructure failure are each the failure they
+already were, and bind nothing. Buffering both channels for that binding is a
+document-owned buffer and not a retention decision; what a run keeps durably
+stays the trusted host's.
+
 ### 7. A blocker is not a failure
 
 A workflow run waiting for input — auth, a human answer, days if needed — has
@@ -1654,6 +1664,7 @@ Status is measured against main.
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
+| `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing | built on the #447 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
