@@ -83,8 +83,9 @@ export function* useStubFs(files: Record<string, string>): Operation<void> {
  * Recognizes `bash -c "echo ..."` and returns the echo'd text as stdout.
  * All other commands return the script text as stdout with exit code 0.
  *
- * It answers like a real child: the text is written to the display channel as
- * it "arrives", and it is retained in the outcome only when the caller asked
+ * It answers like a real child: the text is written to the stdio chain as it
+ * "arrives", so whatever encloses the call sees it the way it would see a
+ * child's, and it is retained in the outcome only when the caller asked
  * for retention. A stub that always returned strings would let a document
  * render output the contract says was already displayed.
  */
@@ -115,7 +116,7 @@ export function* useFailingExec(exitCode: number, stderr = "command failed"): Op
 
 const encoder = new TextEncoder();
 
-/** What the caller asked to keep, so a stub cannot retain more than a child would. */
+/** What the caller asked to keep, so a stub cannot retain more than a call would. */
 function retained(
   options: { retain?: boolean },
   outcome: { exitCode: number; stdout: string; stderr: string },

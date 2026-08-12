@@ -862,8 +862,9 @@ export function* expandSegments(
             result.push(
               yield* checkedCommandFailure({
                 type: "error",
-                // stderr reached the reader as the command wrote it, so the
-                // diagnostic quotes it only when this run retained it (#441).
+                // stderr was already displayed on its way past, so the
+                // diagnostic quotes it only when this run retained it — and
+                // what it quotes is what reached this run's boundary (#441).
                 message: codeResult.stderr
                   ? `Command failed (exit ${codeResult.exitCode}): ${codeResult.stderr}`
                   : `Command failed (exit ${codeResult.exitCode})`,

@@ -207,8 +207,9 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
   /**
    * A value root's stdout is the result's, so this process shows a command's
    * stdout on the stream the result leaves free. Which stream that is belongs
-   * to this process — the document forwards each channel as the child wrote it,
-   * and the record says which channel each byte came from however it is shown.
+   * to this process, and choosing it is display policy: it runs downstream of
+   * the per-exec boundary, so the channel recorded when the bytes were received
+   * there is the channel the record still names.
    */
   it("VR10: a command's stdout is shown beside the result, and recorded as stdout", function* () {
     const result = yield* useFixture({ "doc.md": PRINTING_ROOT }, function* (dir) {
@@ -228,7 +229,7 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     expect(result.run.stderr).toContain("to-err");
     expect(result.run.stderr.match(/to-out/g) ?? []).toHaveLength(1);
     expect(result.run.stderr.match(/to-err/g) ?? []).toHaveLength(1);
-    // And the record still holds each channel as the child wrote it.
+    // And the record still names the channel each was received on.
     const exec = result.record
       .split("\n")
       .filter((line) => line !== "")

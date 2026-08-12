@@ -10,8 +10,10 @@
  * "Exactly" always means exactly what reached the per-exec boundary. Middleware
  * enclosing an execution is trusted preprocessing and may transform, redact,
  * redirect or consume a channel first; what a run captures, journals and
- * reports is what that leaves. What the child wrote to its pipe is not observed
- * by anything here, and no case claims it.
+ * reports is what that leaves. What a child wrote to its pipe is not observed
+ * by anything here, and no case claims it: where a case installs no enclosing
+ * handler, what the boundary receives is what the command emitted, and that is
+ * all such a case asserts.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -404,7 +406,7 @@ describe("Tier FG — foreground execution", () => {
     // Displayed on its own channel; which stream that is belongs to the host.
     expect(seen.stdout).toBe("from-stdout\n");
     expect(seen.stderr).toBe("from-stderr\n");
-    // And recorded as what the child actually wrote.
+    // And recorded on the operation each was received on.
     expect(kept?.retainedStdout).toBe("from-stdout\n");
     expect(kept?.retainedStderr).toBe("from-stderr\n");
   });
@@ -554,7 +556,7 @@ describe("Tier FG — foreground execution", () => {
     // Each reached the reader once, on its own channel.
     expect(seen.stdout).toBe("out");
     expect(seen.stderr).toBe("err");
-    // And the record says which channel each came from.
+    // And the record names the channel each was received on.
     expect(kept?.retainedStdout).toBe("out");
     expect(kept?.retainedStderr).toBe("err");
   });
@@ -707,7 +709,8 @@ describe("Tier FG — foreground execution", () => {
     });
 
     expect(starts).toBe(1);
-    // Bound and displayed as the redaction, never as what the child printed.
+    // Bound and displayed as the redaction, which is what the boundary
+    // received — never as what the command emitted behind it.
     expect(live.output).toContain("account-REDACTED");
     expect(live.output).not.toContain("1234-5678");
     expect(live.seen.stdout).not.toContain("1234-5678");
@@ -740,8 +743,8 @@ describe("Tier FG — foreground execution", () => {
   /**
    * Consumption is the strongest form of the same authority: an enclosing
    * handler that forwards nothing has decided the run saw nothing. The exit
-   * status is the child's own and is unaffected, and the other channel is
-   * untouched.
+   * status does not travel through the stdio chain and is unaffected, and the
+   * channel the handler left alone arrives as the command emitted it.
    */
   it("FG25: stdout consumed upstream of the boundary is displayed and retained nowhere", function* () {
     const source = ["```bash exec", "echo swallowed; echo kept >&2", "```", ""].join("\n");
@@ -765,7 +768,8 @@ describe("Tier FG — foreground execution", () => {
     expect(run.seen.stdout).toBe("");
     expect(kept?.stdout).toBe("");
     expect(JSON.stringify(kept)).not.toContain("swallowed");
-    // The status and the channel it did forward are the child's own.
+    // The status never passes through the chain, and the untouched channel
+    // reaches the boundary as the command emitted it.
     expect(kept?.exitCode).toBe(0);
     expect(kept?.stderr).toBe("kept\n");
   });

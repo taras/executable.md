@@ -646,9 +646,9 @@ function* runDocument(
     // This run's stdout carries the JSON result and nothing else, so a
     // command's stdout is shown on the stream that is free. Which of this
     // process's streams a channel lands on is this process's own business, and
-    // it is settled here, at the boundary that owns them: the document forwards
-    // a command's channels as the child wrote them, and the record says which
-    // channel each byte came from however they are displayed.
+    // it is settled here, at the boundary that owns them. This is display
+    // policy, downstream of the per-exec boundary: the channel was recorded
+    // when it was received there, and showing it elsewhere leaves that alone.
     yield* Stdio.around(
       {
         *stdout([bytes]) {

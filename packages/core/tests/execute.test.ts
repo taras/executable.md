@@ -755,7 +755,7 @@ describe("execute", () => {
     // Check output contains expected content
     expect(result).toContain("# My Project");
     expect(result).toContain("hi Hello, world!");
-    // The listing was displayed as the command produced it, not rendered.
+    // The listing was displayed as it arrived, not rendered into the document.
     expect(run.stdout).toContain("main.ts");
     expect(run.stdout).toContain("utils.ts");
 

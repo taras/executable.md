@@ -1,10 +1,13 @@
 /**
  * The process adapter's retention, tested where it lives.
  *
- * Retention is the adapter's own business: it reads what a child writes on the
- * way past, and a caller only ever sees the result. These cases drive real
- * children through the public operation rather than reaching for the helper
- * behind it, so what is asserted is the contract `exec` states.
+ * Retention is the adapter's own business: it reads what reaches its per-exec
+ * boundary on the way past, and a caller only ever sees the result. Middleware
+ * enclosing a call is trusted preprocessing and may transform, consume, redact,
+ * or redirect before that — nothing here installs any, so what these cases
+ * receive is what the commands emit. They drive real children through the
+ * public operation rather than reaching for the helper behind it, so what is
+ * asserted is the contract `exec` states.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

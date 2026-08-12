@@ -1485,10 +1485,11 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     if (root.returns !== undefined) {
-      // A command's channels are forwarded as the child wrote them. stdout
+      // Each channel is forwarded on the operation it was received on. stdout
       // belongs to the result here, so a host that prints the result on its own
       // stdout shows a command's stdout on the stream it leaves free — that is
-      // a decision about the host's streams, and it is taken there.
+      // a decision about the host's streams, taken downstream of the per-exec
+      // boundary, and it does not change the channel already retained.
       return yield* runValueRoot(
         root,
         root.returns as ReturnsSchema,
