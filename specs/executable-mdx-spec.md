@@ -1021,10 +1021,13 @@ required. `<Output>` selects rendered document content and nothing else.
 Exactly one thing recovers a checked failure: an explicit error-handling
 construct written in the document, which is `<PrintErrors>`. Its authority is
 carried by execution-owned structure — the element hands it to the expansion of
-its own body, which carries it through that document frame and across the
-invocations the region's own text makes. Ambient replaceable state never
-determines it: contexts resolve by name, so a same-name binding created outside
-the document must not be able to turn a failed run into a successful one.
+its own body, which carries it to everything the region causes: the branches,
+iterations, captures and answers written inside it, the bodies of components its
+elements invoke, and the content those invocations project back. It reaches
+nothing else; a sibling after the region, a later invocation, and a root all
+start outside it. Ambient replaceable state never determines it: contexts
+resolve by name, so a same-name binding created outside the document must not be
+able to turn a failed run into a successful one.
 
 ### 3.7 What is the command?
 
@@ -7866,6 +7869,9 @@ platform's.
 | OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a checked command failure fails a root without `<Output>` |
 | OM5g | A counterfeit `printsCheckedFailures` context | Cannot keep a run a document never authorized: the run fails, the marker is absent, and the later block never starts |
 | OM5h | A real `<PrintErrors>` region | Prints the same checked failure and the document continues |
+| OM5i | A checked failure inside an `<Each>` in the region | Covered: printed, and the marker and later work are reached |
+| OM5j | Caller content projected through a component in the region | Covered the same way |
+| OM5k | A checked failure after the region closes | Not covered: the run fails and no later work starts |
 | OM6–OM6c | The live failure | The original object, a settled printed error's `DocumentationError` with its mode, and a body-plus-teardown aggregate each reach the completion intact |
 | OM7 | Replay | The same partial output and failure, with no command run again |
 | OM7b | Replay of a recovered outcome | An explicitly recovered run replays as recovered, with no command run again |

@@ -474,6 +474,110 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
   });
 
+  /**
+   * The region's authority follows the work the region causes, not the
+   * segments literally between its tags. An iteration is that work: the
+   * document wrote the block inside the region, and `<Each>` is how the region
+   * runs it.
+   */
+  it("OM5i: covers a checked failure inside an <Each> in the region", function* () {
+    const result = yield* run({
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        '<Each in={[1]} let="n">',
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</Each>",
+        "",
+        "</PrintErrors>",
+        "",
+        "MARKER",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Command failed");
+    expect(result.output).toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
+  });
+
+  /**
+   * Content the caller wrote inside the region and projected through a
+   * component is the region's own text: it was written there, and the
+   * invocation is only how it is placed.
+   */
+  it("OM5j: covers caller content projected through a component in the region", function* () {
+    const result = yield* run({
+      "components/Frame.md": "<Content />\n",
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        "<Frame>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</Frame>",
+        "",
+        "</PrintErrors>",
+        "",
+        "MARKER",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Command failed");
+    expect(result.output).toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
+  });
+
+  /**
+   * The other edge of the same boundary: authority ends with the region. A
+   * failing command written after `</PrintErrors>` is an ordinary checked
+   * failure, and the region before it changes nothing about that.
+   */
+  it("OM5k: does not cover a checked failure after the region closes", function* () {
+    const result = yield* run({
+      "doc.md": [
+        "<PrintErrors>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "</PrintErrors>",
+        "",
+        "```bash exec",
+        "FAIL",
+        "```",
+        "",
+        "MARKER",
+        "",
+        "```bash exec",
+        "echo LATER",
+        "```",
+      ].join("\n"),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.output).not.toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
   it("OM5f: a checked command failure fails a root without <Output>", function* () {
     const result = yield* run({
       "doc.md": ["```bash exec", "FAIL", "```", "", "```bash exec", "echo LATER", "```"].join("\n"),

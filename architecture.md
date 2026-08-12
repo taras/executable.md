@@ -1186,9 +1186,12 @@ document continues. A root that prints errors by default has not asked for
 anything, and does not get to call a failed run a success.
 
 That authority travels by execution-owned structure: the element hands it to the
-expansion of its own body as an argument, and expansion carries it through that
-document frame and across the invocations the region's own text makes. Ambient
-replaceable state never decides it. Contexts resolve by name, so a separately
+expansion of its own body as an argument, and expansion carries it to everything
+the region causes — the branches, iterations, captures and answers written
+inside it, the bodies of the components its elements invoke, and the content
+those invocations project back, which the document wrote inside the region. It
+reaches nothing else: a sibling after the region closes, a later invocation, or
+a root all start outside it. Ambient replaceable state never decides it. Contexts resolve by name, so a separately
 created context with the same name is the same binding, and anything able to
 name one could otherwise turn a failed run into a successful one from outside
 the document — which is precisely the authority a document's own text is
