@@ -14,6 +14,12 @@
  * rather than a printed error: there is no directory to run inside, so the
  * content must not run and the siblings after it must not proceed as though it
  * had.
+ *
+ * What a failure *inside* the directory means is not this component's to say.
+ * The `printErrors` declaration below covers acquisition — the one thing this
+ * component does on its own — while the content belongs to the region it is
+ * written in: printed at a root, fail-closed inside an `<Output>` region, and
+ * continued only where an author asked for that with `<PrintErrors>` (§6.11).
  */
 
 import type { Operation } from "effection";

@@ -11,6 +11,12 @@
  * A boundary sets `print` for its region and turns a propagating failure into
  * one printed error. Both halves are the same decision: the region prints, and
  * a failure that reaches the boundary is what gets printed.
+ *
+ * The two differ over one thing, and it is who is speaking. `<PrintErrors>` is
+ * written by the author of the region it encloses, so it decides everything
+ * inside it. `printErrors(fn)` is written by the author of one component, who
+ * owns what that component does and not what a caller wrote inside it — so a
+ * failure of the projected content is passed outward instead (§6.8.1).
  */
 
 import { Component, raise } from "./component-api.ts";
@@ -49,8 +55,9 @@ const PRINTS_ERRORS = "executablemd.core.printsErrors";
  * ```
  *
  * The boundary is outside the whole invocation, so a failure while the
- * invocation is being dismantled is printed too, and content the component
- * projects is inside it.
+ * invocation is being dismantled is printed too. What it does not cover is the
+ * content a caller projected: that text is the caller's, and the region it is
+ * written in decides what a failure of it means (§6.8.1).
  */
 export function printErrors<T extends FunctionComponent>(component: T): T {
   Object.defineProperty(component, PRINTS_ERRORS, { value: true, enumerable: false });
@@ -78,13 +85,25 @@ export function printsErrors(component: FunctionComponent): boolean {
  * boundary is the one that handles a failure and an enclosing one never sees it
  * again. The original failure is attributed as the printed error's cause, so
  * what the component actually did remains reachable from the outside.
+ *
+ * A boundary a component declared about itself has one thing it does not
+ * decide: a failure of the content its caller wrote, arriving where that
+ * caller's region does not print. `<PrintErrors>` re-declares the region it
+ * encloses, so printing there resumes only what its own author gated; a
+ * component declaration cannot re-declare the region it is invoked in, and
+ * printing a failure into an `<Output>` region would resume exactly what that
+ * region's author gated behind it. It is delegated outward instead.
  */
-export function* usePrintErrors(): Operation<void> {
-  if ((yield* ErrorMode.get()) !== "throw") {
+export function* usePrintErrors(declaredBy: "region" | "component" = "region"): Operation<void> {
+  const site = (yield* ErrorMode.get()) ?? "print";
+  if (site !== "throw") {
     yield* ErrorMode.set("print");
   }
   yield* Component.around({
-    *handleFailure([failure], _next): Operation<ErrorSegment> {
+    *handleFailure([failure], next): Operation<ErrorSegment> {
+      if (declaredBy === "component" && failure.origin === "content" && site !== "print") {
+        return yield* next(failure);
+      }
       const segment: ErrorSegment = {
         type: "error",
         message: `Function component ${failure.name} error: ${failure.error.message}`,

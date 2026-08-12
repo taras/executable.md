@@ -31,9 +31,12 @@ import type { ComponentElement, Segment } from "./types.ts";
 /**
  * What to project.
  *
- * `mode` is set only by a persistent evaluation's binding snapshot, which knows the
- * error mode of the block that started it; every other caller leaves it unset and
- * the projection site's ambient error mode applies.
+ * `mode` names the error mode the projected content is governed by, for the two
+ * callers that know it better than the projection site does: a persistent
+ * evaluation's binding snapshot, which knows the error mode of the block that
+ * started it, and a function component's `content()`, whose content was written
+ * at the invocation's element rather than inside it (§6.8.1). Every other
+ * caller leaves it unset and the projection site's ambient error mode applies.
  */
 export type ProjectionRequest = { mode?: ErrorMode } & (
   | { kind: "slot"; name?: string }

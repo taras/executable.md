@@ -847,6 +847,14 @@ exact function object — nothing is shared by name. Inside documentation a
 failure still ends the document execution — a hidden region gives the author
 nothing to read.
 
+A component's declaration speaks for the component. `<PrintErrors>` is written
+by the author of the region it encloses and decides everything written there;
+`printErrors(fn)` is written by the author of one component and decides what
+that component does, never what a caller wrote inside it. Content a caller
+projects keeps the mode of the region it is written in (rule 3), and a failure
+of it the component does not recover from passes outward wherever that region
+does not print.
+
 ### 5. Raise decides by value
 
 An error that emerges from the middleware is raised where it stands. Raise

@@ -1826,6 +1826,7 @@ function* expandComponent(
       position,
       callerMeta,
       callerProps,
+      owner,
       path,
     );
   }
@@ -2142,11 +2143,24 @@ function asText(output: Json): string {
  * Under a throwing error mode the original `DocumentationError` travels as the
  * cause, which is how the boundary restores it by identity when the component
  * does not recover.
+ *
+ * `rendered` is what the projection produced before it stopped. It travels with
+ * the failure because a component that does not recover contributes nothing of
+ * its own: the text is the caller's, it was going to render where the element
+ * is written, and the invocation boundary is the last place that can hand it
+ * over (§6.9 Partial output).
  */
 class ContentExpansionFailure extends ContentError {
-  constructor(errors: readonly ErrorSegment[], cause?: DocumentationError) {
+  readonly rendered: readonly Segment[];
+
+  constructor(
+    errors: readonly ErrorSegment[],
+    cause?: DocumentationError,
+    rendered: readonly Segment[] = [],
+  ) {
     super(errors);
     this.cause = cause;
+    this.rendered = rendered;
   }
 }
 
@@ -2209,6 +2223,13 @@ function* expandFunctionComponent(
   /** The invoking frame's meta and props, for content this component projects. */
   callerMeta: Record<string, unknown> = {},
   callerProps: Record<string, Json> = {},
+  /**
+   * The caller's output owner, when this invocation renders into it. What the
+   * projected content rendered before a failure the component did not recover
+   * from goes here, and nowhere else: an invocation captured with `as` produces
+   * a binding rather than output and passes none (§6.9).
+   */
+  callerOwner?: Segment[],
   path: string = "",
 ): Operation<Segment[]> {
   if ("as" in expressions) {
@@ -2270,6 +2291,7 @@ function* expandFunctionComponent(
     ];
   }
   const asBinding = asBindingResult.value;
+  const owner = asBinding === undefined ? callerOwner : undefined;
   const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
 
   // Validate props
@@ -2303,6 +2325,13 @@ function* expandFunctionComponent(
   // component's own body later did to the environment.
   const siteEnv = yield* env;
   const captureEnv = layerEnvironments(projectedEnv, siteEnv)?.values ?? {};
+
+  // The error mode of the region this element is written in, read before the
+  // invocation can install one of its own. Content the caller wrote belongs to
+  // that region, so a `printErrors(fn)` declaration — the one thing that makes
+  // the mode inside an invocation differ from the mode at its site — governs
+  // the component and not the text somebody else put inside it (§6.9).
+  const siteErrorMode = (yield* ErrorMode.get()) ?? "print";
 
   const expansion = snapshot(path, name, position);
 
@@ -2342,23 +2371,33 @@ function* expandFunctionComponent(
         yield* Component.around(
           {
             *content([slotName], _next) {
-              let segments: Segment[];
-              try {
-                segments = yield* handle.project({ kind: "slot", name: slotName });
-              } catch (error) {
+              // Asked for as an outcome, so a failure arrives with what the
+              // projection rendered before it. `content()` still presents the
+              // failure at the author's call — the difference is that the text
+              // is no longer lost when the component does not recover.
+              const outcome = yield* handle.tryProject({
+                kind: "slot",
+                name: slotName,
+                mode: siteErrorMode,
+              });
+              if (outcome.failure !== undefined) {
                 // A throwing error mode already decided this execution fails; the call
                 // site still sees the public shape, and the original failure
                 // travels as the cause so the boundary can restore it.
-                if (error instanceof DocumentationError) {
-                  throw new ContentExpansionFailure([error.segment], error);
+                if (outcome.failure instanceof DocumentationError) {
+                  throw new ContentExpansionFailure(
+                    [outcome.failure.segment],
+                    outcome.failure,
+                    outcome.segments,
+                  );
                 }
-                throw error;
+                throw outcome.failure;
               }
-              const errors = errorSegments(segments);
+              const errors = errorSegments(outcome.segments);
               if (errors.length > 0) {
-                throw new ContentExpansionFailure(errors);
+                throw new ContentExpansionFailure(errors, undefined, outcome.segments);
               }
-              return renderSegments(segments);
+              return renderSegments(outcome.segments);
             },
             // The element's shape, not its rendered result: content that renders
             // an empty string is still content.
@@ -2386,7 +2425,11 @@ function* expandFunctionComponent(
               });
             },
             *tryContent([slotName], _next) {
-              const outcome = yield* handle.tryProject({ kind: "slot", name: slotName });
+              const outcome = yield* handle.tryProject({
+                kind: "slot",
+                name: slotName,
+                mode: siteErrorMode,
+              });
               // A documentation failure is presented in the public shape, as
               // `content()` does, so a component recovering from one sees the
               // same thing either way.
@@ -2462,6 +2505,11 @@ function* expandFunctionComponent(
       // reporting it again here would double-observe it.
       if (error instanceof ContentExpansionFailure) {
         if (error.cause instanceof DocumentationError) {
+          // The component contributed nothing, so what its content rendered
+          // before stopping is the caller's own text and belongs where the
+          // element is written. A call site that produces a binding rather than
+          // document text owns no region and receives none of it (§6.9).
+          owner?.push(...error.rendered);
           // A `throw` decision is final: the region is hidden, so no printing
           // boundary may undo it. An `output` decision leaves an ordinary
           // propagating failure — the region already stopped, and printing what
@@ -2476,6 +2524,10 @@ function* expandFunctionComponent(
               name,
               ...(expansion.position === undefined ? {} : { position: expansion.position }),
               error: error.cause,
+              // The caller's content failed, not this component. A boundary the
+              // component declared about itself passes this outward; the
+              // region's own boundary, if it has one, decides it (§6.8.1).
+              origin: "content",
             }),
           ];
         }
@@ -2501,13 +2553,16 @@ function* expandFunctionComponent(
 
   // The boundary sits outside the whole invocation, so it is still installed
   // while the invocation is being dismantled — middleware a component installs
-  // for itself is gone by then. Outside also puts nested components and
-  // projected content inside it, since their scopes descend from this one.
-  // Scoped, so a component that prints its own failures does not quietly
-  // decide the same for its siblings.
+  // for itself is gone by then. Outside also puts the nested components the
+  // component itself reaches inside it, since their scopes descend from this
+  // one. Scoped, so a component that prints its own failures does not quietly
+  // decide the same for its siblings. Declared by the component, so it speaks
+  // for the component's own work and not for the content a caller projected
+  // through it — which keeps the mode of the region it is written in and
+  // reports a failure past this boundary.
   if (printsErrors(definition.fn)) {
     return yield* scoped(function* () {
-      yield* usePrintErrors();
+      yield* usePrintErrors("component");
       return yield* invoke();
     });
   }

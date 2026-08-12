@@ -22,6 +22,7 @@ import {
 import type { Operation } from "effection";
 import { when } from "@effectionx/converge";
 import { cwd, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { forEach } from "@effectionx/stream-helpers";
 import { useHostFiles } from "@executablemd/runtime";
 import { InMemoryStream, StaleInputError } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -65,6 +66,28 @@ function run(dir: string): Operation<Json> {
         componentDirs: [dir],
       }),
     );
+  });
+}
+
+/**
+ * The same run, reporting the outcome and the rendered body instead of
+ * unwrapping it. A run that fails still emits what it rendered first, and both
+ * halves are what a document's author sees.
+ */
+function runOutcome(dir: string): Operation<{ ok: boolean; output: string }> {
+  return scoped(function* () {
+    yield* useHostFiles();
+    const execution = yield* execute({
+      path: join(dir, "doc.md"),
+      stream: new InMemoryStream(),
+      componentDirs: [dir],
+    });
+    const chunks: string[] = [];
+    yield* forEach(function* (chunk: string) {
+      chunks.push(chunk);
+    }, execution.output);
+    const result = yield* execution;
+    return { ok: result.ok, output: chunks.join("") };
   });
 }
 
@@ -541,5 +564,87 @@ describe("Tier TD — TempDir", () => {
     expect(outcome.ok).toBe(true);
     // The sibling after the component still ran.
     expect(yield* exists(after)).toBe(true);
+  });
+
+  /**
+   * TD17/TD17b: `<TempDir>` gives its content a working directory; it does not
+   * give it an error mode. What a failure inside one means is decided by the
+   * region the element is written in — `<Output>` closes, `<PrintErrors>`
+   * continues — and the same document under the two wrappers is the whole
+   * evidence. Written as a document a stage would really have: a preview that
+   * fails, work after it inside the directory, and a sibling standing in for
+   * the publish step that must not follow a failed preview.
+   */
+  function stage(dir: string, region: (body: string) => string): string {
+    return region(
+      [
+        "<TempDir>",
+        "",
+        "PREVIEW-HEADING",
+        "",
+        "```sh exec",
+        `pwd > ${join(dir, "inside.txt")}; echo VISIBLE-BEFORE-FAILURE; exit 7`,
+        "```",
+        "",
+        "```sh exec",
+        `touch ${join(dir, "later-inside.txt")}`,
+        "```",
+        "",
+        "</TempDir>",
+      ].join("\n"),
+    );
+  }
+
+  it("TD17: an ordinary failure inside <Output> fails the run and stops what follows", function* () {
+    const dir = yield* useFixture();
+    yield* writeDocument(
+      dir,
+      stage(
+        dir,
+        (body) =>
+          `<Output>\n\n${body}\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n\n</Output>`,
+      ),
+    );
+
+    const outcome = yield* runOutcome(dir);
+
+    // The document fails, and what the region rendered before the failure —
+    // the text ahead of it and the failing command's own output — is still
+    // emitted.
+    expect(outcome.ok).toBe(false);
+    expect(outcome.output).toContain("PREVIEW-HEADING");
+    expect(outcome.output).toContain("VISIBLE-BEFORE-FAILURE");
+    // Nothing later inside the directory started, and neither did the sibling
+    // after it: the two probes a printed error would have let through.
+    expect(yield* exists(join(dir, "later-inside.txt"))).toBe(false);
+    expect(yield* exists(join(dir, "after.txt"))).toBe(false);
+    // The failing command did run, in the temporary directory, which is gone.
+    const [created] = yield* recorded(dir, "inside.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
+  });
+
+  it("TD17b: <PrintErrors> around the same region continues, and cleans up", function* () {
+    const dir = yield* useFixture();
+    yield* writeDocument(
+      dir,
+      stage(
+        dir,
+        (body) =>
+          `<Output>\n\n<PrintErrors>\n\n${body}\n\n</PrintErrors>\n\n\`\`\`sh exec\ntouch ${join(dir, "after.txt")}\n\`\`\`\n\n</Output>`,
+      ),
+    );
+
+    const outcome = yield* runOutcome(dir);
+
+    // Continuation is available, and asking for it is what an author writes.
+    expect(outcome.ok).toBe(true);
+    expect(outcome.output).toContain("<!-- ERROR");
+    expect(yield* exists(join(dir, "later-inside.txt"))).toBe(true);
+    expect(yield* exists(join(dir, "after.txt"))).toBe(true);
+    // Recovery is not retention: the directory is still removed.
+    const [created] = yield* recorded(dir, "inside.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
   });
 });
