@@ -94,17 +94,19 @@ describe("Tier TF — run timeout options", () => {
     });
   });
 
-  it("TF6: --timeout-exec bounds the block, and the run itself completes", function* () {
+  it("TF6: --timeout-exec bounds the block, and the run deadline is not what fired", function* () {
     yield* useDocument(blocked("bash exec", "NEVER"), function* (dir) {
       const { code, stdout, stderr } = yield* runCli(
         ["run", "doc.md", "--timeout-exec", "500ms", "--raw"],
         { cwd: dir },
       ).join();
-      // The block was cut off; the run reported it and finished normally.
-      expect(code).toBe(0);
-      expect(stdout).toContain("timed out after 500ms");
-      expect(stdout).not.toContain("NEVER");
+      // The block was cut off, and nothing recovers that, so the run reports it
+      // and ends. Which option fired is the claim: the exec default, at the
+      // block, rather than the run deadline around the whole invocation.
+      expect(code).toBe(1);
+      expect(stderr).toContain("timed out after 500ms");
       expect(stderr).not.toContain("exceeded its --timeout");
+      expect(stdout).not.toContain("NEVER");
     });
   });
 
@@ -133,13 +135,15 @@ describe("Tier TF — run timeout options", () => {
       "",
     ].join("\n");
     yield* useDocument(document, function* (dir) {
-      const { code, stdout } = yield* runCli(
+      const { code, stdout, stderr } = yield* runCli(
         ["run", "doc.md", "--timeout-exec", "500ms", "--raw"],
         { cwd: dir },
       ).join();
-      expect(code).toBe(0);
+      // The declared block outlived the default and finished; the undeclared
+      // one did not, and ends the run where it stands.
+      expect(code).toBe(1);
       expect(stdout).toContain("DECLARED_FINISHED");
-      expect(stdout).toContain("timed out after 500ms");
+      expect(stderr).toContain("timed out after 500ms");
       expect(stdout).not.toContain("NEVER");
     });
   });
@@ -158,8 +162,11 @@ describe("Tier TF — run timeout options", () => {
 
   it("TF10: a bare timeout with no --timeout-exec refuses", function* () {
     yield* useDocument(["```bash timeout exec", "echo RAN", "```", ""].join("\n"), function* (dir) {
-      const { stdout } = yield* runCli(["run", "doc.md", "--raw"], { cwd: dir }).join();
-      expect(stdout).toContain("names no duration");
+      const { code, stdout, stderr } = yield* runCli(["run", "doc.md", "--raw"], {
+        cwd: dir,
+      }).join();
+      expect(code).toBe(1);
+      expect(stderr).toContain("names no duration");
       expect(stdout).not.toContain("RAN");
     });
   });
