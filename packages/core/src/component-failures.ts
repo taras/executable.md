@@ -69,10 +69,11 @@ export interface CheckedFailures {
    * Component functions whose invocation contains a checked failure rather than
    * letting it end the run, by exact identity.
    *
-   * Frozen out of this execution's installations before any of them ran, and
-   * carried here rather than looked up, so what may contain a failure is fixed
-   * before a document exists and cannot be added to by anything the document
-   * reaches.
+   * Named through the capability canonical execution hands each installation
+   * while the installations run, then frozen — so what may contain a failure is
+   * fixed before the execution request exists, before any public handler can
+   * inspect or replace the options, and beyond the reach of anything a document
+   * or a middleware package holds.
    */
   readonly contains: readonly FunctionComponent[];
 }

@@ -1140,13 +1140,17 @@ receives it, and a host that does so is exercising its own authority over its
 own child processes. What it forwards is what exists as far as the document is
 concerned.
 
-*Known gap.* That authority is currently conferred by enclosing an execution,
-not by being a host. A component installs stdio middleware the same way a host
-does, so a component's middleware can today rewrite what a run retains — which
-means document-selected code can change durable history and remove material
-before the pre-persistence secret gate. Host authority is not yet represented
-explicitly at the runtime boundary, and this section describes what the
-implementation does rather than what it should guarantee.
+What a run retains is therefore what its **configured execution environment**
+forwarded. `xmd run --journal` is diagnostic persistence: it records what that
+environment forwarded, not what a child wrote to its pipe, which nothing here
+observes and nothing here claims. A workflow's process results are durable
+within the environment the workflow authorized. Middleware enclosing an
+execution — the host's own, and anything the host composed into it — may
+preprocess that output before either sees it.
+
+*Current limitation.* Output a child writes as the pump settles may not be
+retained; effectionx #244 owns that, and until its solution is integrated this
+boundary does not claim pump-complete tail retention.
 So transformed text is what a run captures and journals, consumed output is
 absent from both, and output an enclosing handler forwards on the other channel
 is recorded as that other channel.
@@ -1201,15 +1205,19 @@ the run succeed, and no later work in any frame begins. `<File>` and `<TempDir>`
 are covered by that rule like any other printing boundary: their own cleanup and
 their own report still happen, and neither writes, replaces, or continues.
 
-One construct contains a checked failure rather than recovering it. An
+`<PrintErrors>` *recovers*: it prints the failure and its region continues. One
+other construct *contains* one instead, which is a different thing. An
 invocation of the `<Test>` a testing session built keeps its checked failures to
 itself: the failure becomes that test's failed result, the run's own record
 stays clear, the tests after it still run, and the session's completion policy
-is what fails the run. Containment is granted by function identity, not by name
-— the session hands the exact object it built back to the host that starts the
-execution, on the host's own options, so a repository component called `Test`
-is a different function and receives nothing, and no document, component, or
-middleware is offered a way to nominate one. `<PrintErrors>` is
+is what fails the run. Containment is granted by function identity, not by name.
+Canonical execution hands each installation a capability while the installations
+run — before the request exists and before any public `Execution` handler can
+inspect or replace the options — and the host names the exact object the testing
+session built. Nothing in the options says which components are contained, so a
+handler that replaces them, or mutates an object it invented, nominates nothing;
+a repository component called `Test` is a different function and receives
+nothing. `<PrintErrors>` is
 that construct — a region that says the failures inside it are printed and the
 document continues. A root that prints errors by default has not asked for
 anything, and does not get to call a failed run a success.

@@ -45,5 +45,9 @@
  */
 
 export { executeInstalled } from "./src/execute.ts";
-export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
+export type {
+  ExecutionCapability,
+  ExecutionInstallation,
+  JournalAdmission,
+} from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";

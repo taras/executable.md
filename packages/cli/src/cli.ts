@@ -691,9 +691,17 @@ function* runDocument(
       // Whatever the host path decided. A run that keeps nothing forwards its
       // commands' output to the reader and accumulates none of it.
       retainProcessOutput,
-      containCheckedFailures: [testComponent],
     },
-    mode.installations ?? [],
+    [
+      ...(mode.installations ?? []),
+      // Attached by this command, not by the document: a checked command
+      // failure inside a test is that test's outcome (#441).
+      {
+        *install(capability) {
+          capability.containCheckedFailures(testComponent);
+        },
+      },
+    ],
   );
 
   // Consume the output stream with forEach.

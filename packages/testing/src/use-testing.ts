@@ -27,8 +27,9 @@ export interface Testing {
   /** Immutable snapshot of completed tests, in discovery order. */
   readonly results: Operation<readonly TestResult[]>;
   /**
-   * The `<Test>` this session built, for the host to hand back on its own
-   * options so a checked command failure is contained in the test that ran it.
+   * The `<Test>` this session built, for the host to name through its execution
+   * installation so a checked command failure is contained in the test that ran
+   * it.
    */
   readonly test: FunctionComponent;
 }

@@ -926,9 +926,10 @@ child → enclosing host stdio middleware → the per-exec boundary → this
 document's display policy → terminal
 ```
 
-Middleware installed around an execution is trusted preprocessing: the process
-stdio chain is a documented extension point, and a host may consume, transform,
-redact, or redirect a channel before the run receives it. One wrapper per `exec`
+Middleware installed around an execution is preprocessing by the run's
+configured execution environment: the process stdio chain is a documented
+extension point, and what is installed there may consume, transform, redact, or
+redirect a channel before the run receives it. One wrapper per `exec`
 is installed before the child is acquired and stays until it completes and both
 decoders flush. Everywhere below, **exact output means exactly what reaches the
 per-exec boundary** — never a claim about what the child wrote to its pipe,
@@ -978,12 +979,13 @@ no shared runner infers it from whether a journal pathname was named.
 | Invocation | Live routing | Retained result |
 | --- | --- | --- |
 | `xmd run`, `xmd test` | as the table above | exit status only |
-| `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr |
+| `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr — diagnostic persistence of what the configured execution environment forwarded |
 | `xmd workflow start`, `xmd workflow resume` | unchanged | exit status, stdout, and stderr |
 | programmatic `execute()` | unchanged | exit status, stdout, and stderr |
 
-A workflow names no journal — it owns one — and retains, because its process
-results are part of the run's retained history: a resumed procedure reads back
+A workflow names no journal — it owns one — and retains durably within the
+environment it authorized, because its process results are part of the run's
+retained history: a resumed procedure reads back
 what a command printed rather than running it again to find out.
 
 Where nothing is retained the run never builds the complete strings: the Process
@@ -1011,6 +1013,9 @@ byte payload, from contextual state, or from state held for the run. A
 downstream policy showing one channel on another of the host's streams changes
 nothing about the result. Each received channel decodes independently, so a
 character split across two chunks survives interleaving with the other channel.
+Output a child writes as the pump settles may not be received at all; effectionx
+#244 owns that limitation, and nothing here claims pump-complete tail
+retention until it is integrated.
 
 **Failure.** A nonzero exit is a checked failure. The ambient printing mode may
 decide how it is reported, never that the run succeeded: later executable
@@ -1026,8 +1031,8 @@ content raised all decide how their own failure is reported and none of them
 recovers a checked command failure: the run fails, nothing is written or
 replaced, required cleanup still runs, and no later executable work begins.
 
-A checked failure inside an invocation of the official `<Test>` is *contained*
-rather than recovered: it becomes that test's failed result, the run's record
+`<PrintErrors>` recovers. A checked failure inside an invocation of the official
+`<Test>` is *contained* instead, which is a different outcome: it becomes that test's failed result, the run's record
 stays clear, and later tests run — see `specs/testing-spec.md`. Its authority is
 carried by execution-owned structure — the element hands it to the expansion of
 its own body, which carries it to everything the region causes: the branches,

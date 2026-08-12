@@ -11,7 +11,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
 import type { TestHandlers } from "../src/handlers.ts";
@@ -74,11 +74,20 @@ export function* runDoc(
       test = yield* installTestingComponents({ verbose: options.verbose });
     }
 
-    const execution = yield* execute({
-      path: options.path ?? "README.md",
-      stream: options.stream ?? new InMemoryStream(),
-      containCheckedFailures: [test],
-    });
+    const execution = yield* executeInstalled(
+      {
+        path: options.path ?? "README.md",
+        stream: options.stream ?? new InMemoryStream(),
+      },
+      // The host attaches it; the capability exists only while this runs.
+      [
+        {
+          *install(capability) {
+            capability.containCheckedFailures(test);
+          },
+        },
+      ],
+    );
 
     const chunks: string[] = [];
     const output = yield* forEach(function* (chunk: string) {

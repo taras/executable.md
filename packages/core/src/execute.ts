@@ -152,22 +152,6 @@ export interface ExecuteSettings {
    * alone and never accumulates the bytes on their way to the reader (#441).
    */
   retainProcessOutput?: boolean;
-  /**
-   * Component functions whose invocation contains a checked command failure
-   * rather than letting it end the run.
-   *
-   * Identities, not names: the exact function objects a first-party package
-   * built and handed to the host that starts the run. `<Test>` is the one that
-   * has this, because a failing test is the outcome of that test rather than of
-   * the run, and the testing session's own completion policy fails the run
-   * afterwards.
-   *
-   * It travels on the host's own options for the same reason `retainProcessOutput`
-   * does: the object belongs to whoever starts the execution, a document never
-   * holds it, and the collection is fixed before the root import. A repository
-   * component named `Test` is a different function object and receives nothing.
-   */
-  containCheckedFailures?: readonly FunctionComponent[];
 }
 
 /**
@@ -1701,6 +1685,8 @@ function* executeDocument(
   admissions: readonly JournalAdmission[] = [],
   completions: readonly CompletionFailure[] = [],
   preparations: readonly DurablePreparation[] = [],
+  /** Component identities whose invocation contains a checked failure. */
+  contains: readonly FunctionComponent[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -1709,7 +1695,6 @@ function* executeDocument(
     modifiers: customModifiers = {},
     secretDetection,
     retainProcessOutput = true,
-    containCheckedFailures = [],
   } = options;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
@@ -1813,7 +1798,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, containCheckedFailures),
+            documentWorkflow(claimed, contains),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -1955,6 +1940,28 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  * installation does afterwards — including anything it composes — can add to,
  * remove from or observe the collection that ends up authoritative.
  */
+/**
+ * What canonical execution hands an installation, and hands nobody else.
+ *
+ * A capability rather than a field: it closes over this invocation's private
+ * state, it is offered while the installations run — before the request exists
+ * and before any public `Execution` handler can inspect or replace the options —
+ * and it appears in no object a handler, a document, or a component can reach.
+ * A host attaches installations; middleware does not become one by wrapping the
+ * chain, and `withOptions()` cannot carry this.
+ */
+export interface ExecutionCapability {
+  /**
+   * Contain this component's checked command failures within its invocation.
+   *
+   * The exact function object. A checked failure inside an invocation of it
+   * becomes that invocation's failure rather than the run's, which is what lets
+   * a failing test be the outcome of the test while the tests after it still
+   * run. A repository component of the same name is a different object.
+   */
+  containCheckedFailures(fn: FunctionComponent): void;
+}
+
 export interface ExecutionInstallation {
   readonly admissions?: readonly JournalAdmission[];
   /**
@@ -1966,7 +1973,7 @@ export interface ExecutionInstallation {
    * the run before it exists.
    */
   readonly prepare?: DurablePreparation;
-  install?(): Operation<void>;
+  install?(capability: ExecutionCapability): Operation<void>;
 }
 
 /**
@@ -2240,11 +2247,22 @@ function* invoke(
     }),
   );
 
+  // Collected here and nowhere else: a closure this invocation owns, filled
+  // while the installations run and frozen before the request exists.
+  const contained: FunctionComponent[] = [];
+  const capability: ExecutionCapability = {
+    containCheckedFailures(fn: FunctionComponent): void {
+      contained.push(fn);
+    },
+  };
+
   for (const installation of installations) {
     if (installation.install) {
-      yield* installation.install();
+      yield* installation.install(capability);
     }
   }
+
+  const contains = Object.freeze([...contained]);
 
   const issued = issueExecution(options);
 
@@ -2270,7 +2288,13 @@ function* invoke(
   // Whatever a handler returns is not an execution, so it is not read.
   yield* invocationExecution.operations.execute(issued.request);
 
-  return yield* executeDocument(issued.settle(), admissions, issued.completions(), preparations);
+  return yield* executeDocument(
+    issued.settle(),
+    admissions,
+    issued.completions(),
+    preparations,
+    contains,
+  );
 }
 
 /**

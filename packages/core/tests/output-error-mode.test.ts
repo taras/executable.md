@@ -25,6 +25,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { execute } from "../src/execute.ts";
 import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
+import { Execution } from "../src/execute.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
@@ -655,6 +656,86 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     expect(String(result.error)).not.toContain("Command failed");
   });
 
+  /**
+   * Containment is a capability canonical execution hands an installation while
+   * the installations run — before a request exists. A public `Execution`
+   * handler holds the request and may replace its options; what it may not do
+   * is nominate a component, because nothing in the options says which ones are
+   * contained, and mutating an object it invented afterwards reaches nothing.
+   */
+  it("OM5n: counterfeit options cannot contain a component's checked failure", function* () {
+    const counterfeit: { containCheckedFailures: unknown[] } = { containCheckedFailures: [] };
+    let delegated = false;
+
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          // Replace the options with an object carrying the member, delegate,
+          // and then fill it in — both halves of the attempt.
+          const forged = { ...request.options, ...counterfeit };
+          delegated = true;
+          yield* next(request.withOptions(forged as typeof request.options));
+          counterfeit.containCheckedFailures.push(CATCHING.fn);
+        },
+      });
+      return yield* runRegistered(
+        {
+          "doc.md": [
+            "<Catching>",
+            "",
+            "```bash exec",
+            "FAIL",
+            "```",
+            "",
+            "</Catching>",
+            "",
+            "MARKER",
+          ].join("\n"),
+        },
+        { Catching: CATCHING },
+      );
+    });
+
+    expect(delegated).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.output).not.toContain("MARKER");
+  });
+
+  /**
+   * The disposition is not read off the error mode. Under `output` the region
+   * would ordinarily settle its own failure, and the component here returns
+   * replacement text for one it caught — neither makes the command's nonzero
+   * exit something the run survived.
+   */
+  it("OM5o: an output region whose component replaces the failure still fails", function* () {
+    const result = yield* runRegistered(
+      {
+        "doc.md": [
+          "<Output>",
+          "",
+          "<Catching>",
+          "",
+          "```bash exec",
+          "FAIL",
+          "```",
+          "",
+          "</Catching>",
+          "",
+          "MARKER",
+          "",
+          "</Output>",
+        ].join("\n"),
+      },
+      { Catching: CATCHING },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.output).not.toContain("RECOVERED");
+    expect(result.output).not.toContain("MARKER");
+  });
+
   it("OM5f: a checked command failure fails a root without <Output>", function* () {
     const result = yield* run({
       "doc.md": ["```bash exec", "FAIL", "```", "", "```bash exec", "echo LATER", "```"].join("\n"),
@@ -1218,10 +1299,13 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     });
 
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
-    // `<File>` prints the failure that left the region — it does not resume the
-    // region, and it never writes a file built from content that failed.
+    // `<File>` prints the failure that left the region and writes nothing. The
+    // command exited nonzero, so the run fails and the text after it never
+    // renders: a printing boundary reports a failure, it does not excuse a
+    // checked one (#441).
+    expect(result.ok).toBe(false);
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.output).toContain("MARKER");
+    expect(result.output).not.toContain("MARKER");
   });
 
   // The same failure through a printing component that does not recover from a
@@ -1236,9 +1320,11 @@ describe("Tier OM — a printing boundary does not resume a callee's own region"
     );
 
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
-    expect(result.ok).toBe(true);
+    // The printing component reports the failure that left the region, and the
+    // checked command failure inside it still ends the run (#441).
+    expect(result.ok).toBe(false);
     expect(result.output).toContain("<!-- ERROR");
-    expect(result.output).toContain("MARKER");
+    expect(result.output).not.toContain("MARKER");
   });
 
   it("OM16: still prints what is raised under its own error mode", function* () {

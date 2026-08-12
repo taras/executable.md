@@ -49,10 +49,11 @@ const TEST_TIMEOUT_MS = 20_000;
  * Install the testing components, and report the `<Test>` this session built.
  *
  * The identity is returned rather than published: a host that starts an
- * execution passes it back through its own options so a checked command failure
- * inside a test is that test's outcome. A caller that ignores it gets the
- * previous behaviour, and nothing a document reaches is offered the identity or
- * a way to nominate another (#441).
+ * execution names it through the capability canonical execution hands its
+ * installations, so a checked command failure inside a test is that test's
+ * outcome. A caller that ignores it gets the previous behaviour, and nothing a
+ * document or a middleware package reaches is offered the identity or a way to
+ * nominate another (#441).
  */
 export function* installTestingComponents(options?: {
   verbose?: boolean;

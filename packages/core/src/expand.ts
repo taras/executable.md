@@ -997,19 +997,21 @@ function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
 ): Operation<ErrorSegment> {
+  // Written down before it is raised or projected, and before the error mode is
+  // consulted at all: the mode decides how this is reported, never whether the
+  // run suffered it. An enclosing boundary may still catch what this becomes —
+  // a component's own failure, or the `ContentError` its projected content
+  // raised — and print or replace it. Those boundaries recover their own
+  // failures; a command that exited nonzero is remembered here either way, in
+  // the frame that owns it: a contained invocation's own, or the run's.
+  if (checkedFailures !== undefined && !checkedFailures.authorized) {
+    checkedFailures.failure ??= segment;
+  }
   const mode = (yield* ErrorMode.get()) ?? "print";
   // The region that asked to print failures gets to print this one; a root that
   // merely prints by default does not get to call the run a success.
   if (mode !== "print" || checkedFailures?.authorized) {
     return yield* raise(segment);
-  }
-  // Written down before it is raised, because raising it is not the end of it:
-  // an enclosing boundary may still catch what this becomes — a component's own
-  // failure, or the `ContentError` its projected content raised — and print it.
-  // Those boundaries recover their own failures; the run still suffered a
-  // command that exited nonzero, and this is where it is remembered.
-  if (checkedFailures !== undefined) {
-    checkedFailures.failure ??= segment;
   }
   return yield* scoped(function* () {
     yield* ErrorMode.set("output");
@@ -2726,13 +2728,26 @@ function* expandFunctionComponent(
   // for the component's own work and not for the content a caller projected
   // through it — which keeps the mode of the region it is written in and
   // reports a failure past this boundary.
-  if (printsErrors(definition.fn)) {
-    return yield* scoped(function* () {
-      yield* usePrintErrors("component");
-      return yield* invoke();
-    });
+  // What this invocation returns is accepted only if the frame it ran in did
+  // not suffer a checked command failure. A component may catch the
+  // `ContentError` its projected content raised and return replacement text;
+  // that decides what the component reports, not whether a command that exited
+  // nonzero left the run — or the test — intact (#441).
+  function* accepted(): Operation<Segment[]> {
+    const before = checkedFailures?.failure;
+    const produced = yield* printsErrors(definition.fn)
+      ? scoped(function* () {
+          yield* usePrintErrors("component");
+          return yield* invoke();
+        })
+      : invoke();
+    const suffered = checkedFailures?.failure;
+    if (suffered !== undefined && suffered !== before) {
+      return [yield* raise(suffered)];
+    }
+    return produced;
   }
-  return yield* invoke();
+  return yield* accepted();
 }
 
 /**
