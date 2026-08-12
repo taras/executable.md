@@ -65,30 +65,19 @@ export interface CheckedFailures {
   readonly authorized: boolean;
   /** The first unauthorized checked failure this run suffered, once it has. */
   failure?: ErrorSegment;
-  /**
-   * Component functions whose invocation contains a checked failure rather than
-   * letting it end the run, by exact identity.
-   *
-   * Named through the capability canonical execution hands each installation
-   * while the installations run, then frozen — so what may contain a failure is
-   * fixed before the execution request exists, before any public handler can
-   * inspect or replace the options, and beyond the reach of anything a document
-   * or a middleware package holds.
-   */
-  readonly contains: readonly FunctionComponent[];
 }
 
 /** The ledger an execution starts with: no authority, nothing suffered yet. */
-export function checkedFailureLedger(contains: readonly FunctionComponent[] = []): CheckedFailures {
-  return { authorized: false, contains };
+export function checkedFailureLedger(): CheckedFailures {
+  return { authorized: false };
 }
 
 /**
  * The ledger for work a `<PrintErrors>` region causes: recovery is authorized,
  * so nothing it prints is a failure the run suffered.
  */
-export function recoveringLedger(inherited: CheckedFailures | undefined): CheckedFailures {
-  return { authorized: true, contains: inherited?.contains ?? [] };
+export function recoveringLedger(): CheckedFailures {
+  return { authorized: true };
 }
 
 /**
@@ -100,15 +89,7 @@ export function recoveringLedger(inherited: CheckedFailures | undefined): Checke
  * session's completion policy is what decides the run.
  */
 export function containedLedger(inherited: CheckedFailures | undefined): CheckedFailures {
-  return { authorized: inherited?.authorized ?? false, contains: inherited?.contains ?? [] };
-}
-
-/** Whether this invocation is one whose checked failures are contained. */
-export function containsCheckedFailures(
-  checkedFailures: CheckedFailures | undefined,
-  fn: FunctionComponent,
-): boolean {
-  return checkedFailures?.contains.includes(fn) ?? false;
+  return { authorized: inherited?.authorized ?? false };
 }
 
 /**

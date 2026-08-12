@@ -1453,14 +1453,11 @@ function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void
   }
 }
 
-function* documentWorkflow(
-  props: Record<string, Json>,
-  contains: readonly FunctionComponent[],
-): Workflow<DocumentResult> {
+function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
   // document, component, or printing boundary can clear it (#441).
-  const checkedFailures = checkedFailureLedger(contains);
+  const checkedFailures = checkedFailureLedger();
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
@@ -1685,8 +1682,6 @@ function* executeDocument(
   admissions: readonly JournalAdmission[] = [],
   completions: readonly CompletionFailure[] = [],
   preparations: readonly DurablePreparation[] = [],
-  /** Component identities whose invocation contains a checked failure. */
-  contains: readonly FunctionComponent[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -1798,7 +1793,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, contains),
+            documentWorkflow(claimed),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -1940,28 +1935,6 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  * installation does afterwards — including anything it composes — can add to,
  * remove from or observe the collection that ends up authoritative.
  */
-/**
- * What canonical execution hands an installation, and hands nobody else.
- *
- * A capability rather than a field: it closes over this invocation's private
- * state, it is offered while the installations run — before the request exists
- * and before any public `Execution` handler can inspect or replace the options —
- * and it appears in no object a handler, a document, or a component can reach.
- * A host attaches installations; middleware does not become one by wrapping the
- * chain, and `withOptions()` cannot carry this.
- */
-export interface ExecutionCapability {
-  /**
-   * Contain this component's checked command failures within its invocation.
-   *
-   * The exact function object. A checked failure inside an invocation of it
-   * becomes that invocation's failure rather than the run's, which is what lets
-   * a failing test be the outcome of the test while the tests after it still
-   * run. A repository component of the same name is a different object.
-   */
-  containCheckedFailures(fn: FunctionComponent): void;
-}
-
 export interface ExecutionInstallation {
   readonly admissions?: readonly JournalAdmission[];
   /**
@@ -1973,7 +1946,7 @@ export interface ExecutionInstallation {
    * the run before it exists.
    */
   readonly prepare?: DurablePreparation;
-  install?(capability: ExecutionCapability): Operation<void>;
+  install?(): Operation<void>;
 }
 
 /**
@@ -2247,22 +2220,11 @@ function* invoke(
     }),
   );
 
-  // Collected here and nowhere else: a closure this invocation owns, filled
-  // while the installations run and frozen before the request exists.
-  const contained: FunctionComponent[] = [];
-  const capability: ExecutionCapability = {
-    containCheckedFailures(fn: FunctionComponent): void {
-      contained.push(fn);
-    },
-  };
-
   for (const installation of installations) {
     if (installation.install) {
-      yield* installation.install(capability);
+      yield* installation.install();
     }
   }
-
-  const contains = Object.freeze([...contained]);
 
   const issued = issueExecution(options);
 
@@ -2288,13 +2250,7 @@ function* invoke(
   // Whatever a handler returns is not an execution, so it is not read.
   yield* invocationExecution.operations.execute(issued.request);
 
-  return yield* executeDocument(
-    issued.settle(),
-    admissions,
-    issued.completions(),
-    preparations,
-    contains,
-  );
+  return yield* executeDocument(issued.settle(), admissions, issued.completions(), preparations);
 }
 
 /**

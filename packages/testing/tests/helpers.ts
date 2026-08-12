@@ -11,13 +11,13 @@ import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { executeInstalled } from "@executablemd/core/host";
+import { execute } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
 import type { TestHandlers } from "../src/handlers.ts";
 import { Test } from "../src/test-api.ts";
 import type { BoundaryOutcome, TestResult } from "../src/test-api.ts";
-import type { FunctionComponent, Json } from "@executablemd/core";
+import type { Json } from "@executablemd/core";
 
 export interface DocRun {
   /** Chunks received while streaming. */
@@ -60,34 +60,23 @@ export function* runDoc(
       },
     });
 
-    // The identity this session built, handed back on the host's own options so
-    // a checked command failure inside a test is that test's outcome (#441).
-    let test: FunctionComponent;
     if (options.handlers) {
-      test = yield* installHandlers(options.handlers, { verbose: options.verbose });
+      yield* installHandlers(options.handlers, { verbose: options.verbose });
       if (options.testing) {
         yield* Test.around({ testing: () => true });
       }
     } else if (options.testing) {
-      test = (yield* useTesting({ verbose: options.verbose })).test;
+      yield* useTesting({ verbose: options.verbose });
     } else {
-      test = yield* installTestingComponents({ verbose: options.verbose });
+      yield* installTestingComponents({ verbose: options.verbose });
     }
 
-    const execution = yield* executeInstalled(
-      {
-        path: options.path ?? "README.md",
-        stream: options.stream ?? new InMemoryStream(),
-      },
-      // The host attaches it; the capability exists only while this runs.
-      [
-        {
-          *install(capability) {
-            capability.containCheckedFailures(test);
-          },
-        },
-      ],
-    );
+    // Plain `execute()`: containment is core's, so a host attaches nothing to
+    // get it (#441).
+    const execution = yield* execute({
+      path: options.path ?? "README.md",
+      stream: options.stream ?? new InMemoryStream(),
+    });
 
     const chunks: string[] = [];
     const output = yield* forEach(function* (chunk: string) {

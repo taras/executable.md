@@ -22,16 +22,17 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { forEach } from "@effectionx/stream-helpers";
-import { execute } from "../src/execute.ts";
+import { createApi } from "@effectionx/context-api";
+import { execute, executeInstalled } from "../src/execute.ts";
 import { expandSegments } from "../src/expand.ts";
-import { Component, content } from "../src/component-api.ts";
+import { Component, content, tryContent } from "../src/component-api.ts";
 import { Execution } from "../src/execute.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
-import type { FunctionComponentDefinition, Segment } from "../src/types.ts";
+import type { FunctionComponentDefinition, Json, Segment } from "../src/types.ts";
 
 interface Run {
   /** Chunks in the order consumers received them. */
@@ -189,6 +190,44 @@ const BROKEN: FunctionComponentDefinition = {
     throw new Error("broken thing");
   },
 };
+
+/**
+ * One failing command inside a `<Test>`, then work that only runs if the run
+ * survived it. Used by the containment pair OM5p/OM5q, which differ in nothing
+ * but how the behavior is reached.
+ */
+const CONTAINMENT_DOC = [
+  "<Test>",
+  "",
+  "```bash exec",
+  "FAIL",
+  "```",
+  "",
+  "</Test>",
+  "",
+  "MARKER",
+  "",
+  "```bash exec",
+  "echo LATER",
+  "```",
+].join("\n");
+
+/**
+ * What a test does, reduced to the part these assert: expand the content and
+ * keep a failure of it. The real testing package adds activation, the isolated
+ * bindings, the timeout, the classification and the record; none of that
+ * decides containment, which is why this much is enough to tell the two
+ * dispositions apart.
+ *
+ * Asking with `tryContent()` matters, and not because of the ledger: a body
+ * that lets its content's failure pass outward has handed it to the caller,
+ * which is the caller's to report (§6.8.1). Containment decides what a failure
+ * the invocation *keeps* means.
+ */
+function* expandingBody(): Operation<Json> {
+  const outcome = yield* tryContent();
+  return outcome.text;
+}
 
 /**
  * A printing component that asks for its content and does not recover from a
@@ -657,11 +696,11 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
   });
 
   /**
-   * Containment is a capability canonical execution hands an installation while
-   * the installations run — before a request exists. A public `Execution`
-   * handler holds the request and may replace its options; what it may not do
-   * is nominate a component, because nothing in the options says which ones are
-   * contained, and mutating an object it invented afterwards reaches nothing.
+   * Containment belongs to one construct canonical core owns, and nothing an
+   * execution is handed says which components are contained. A public
+   * `Execution` handler holds the request and may replace its options; the
+   * member it invents here is read by nobody, and filling it in after
+   * delegating reaches nothing either.
    */
   it("OM5n: counterfeit options cannot contain a component's checked failure", function* () {
     const counterfeit: { containCheckedFailures: unknown[] } = { containCheckedFailures: [] };
@@ -700,6 +739,118 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     expect(result.ok).toBe(false);
     expect(String((result.error as Error).message)).toContain("Command failed");
     expect(result.output).not.toContain("MARKER");
+  });
+
+  /**
+   * Core's `<Test>` is a **default**: a package that registers the name is
+   * selected ahead of it, which means the definition core would have expanded
+   * was not expanded at all. Same name, same origin string as the testing
+   * package, same body — and no containment, because containment follows the
+   * construct rather than what anything is called or who registered it.
+   *
+   * The positive control is OM5q: the identical body, reached as core's own
+   * `<Test>`, does contain.
+   */
+  it("OM5p: a registered Test of the same name and origin contains nothing", function* () {
+    const result = yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Test",
+          origin: "@executablemd/testing",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          fn: expandingBody,
+        },
+      ]);
+      return yield* run({ "doc.md": CONTAINMENT_DOC });
+    });
+
+    // The command's nonzero exit is the run's, so the document stops there.
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.output).not.toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
+  /**
+   * The composition the testing package uses, and the one a second loaded copy
+   * of core uses: an Api descriptor created here, sharing only the name, whose
+   * handler supplies what a test does. No function crosses in either direction
+   * — this hands core no identity and receives none — and the invocation that
+   * contains the failure is core's own `<Test>`.
+   */
+  it("OM5q: supplied behavior reaches core's Test, which contains the failure", function* () {
+    const Behavior = createApi<{ test(props: Record<string, Json>): Operation<Json> }>(
+      "TestBehavior",
+      {
+        // deno-lint-ignore require-yield
+        *test(): Operation<Json> {
+          throw new Error("unreachable: the handler below answers");
+        },
+      },
+    );
+
+    const result = yield* scoped(function* () {
+      yield* Behavior.around({
+        *test(_args) {
+          return yield* expandingBody();
+        },
+      });
+      return yield* run({ "doc.md": CONTAINMENT_DOC });
+    });
+
+    // Contained: the failure ended that invocation, the run's own record stayed
+    // clear, and the work after it ran.
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Command failed");
+    expect(result.output).toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(true);
+  });
+
+  /**
+   * The surface itself. An installation is the most trusted thing an execution
+   * has, and it is handed nothing: no capability, no request, no options. A
+   * public handler holds the request and finds no member on it, or on its
+   * options, that names a component.
+   */
+  it("OM5r: nothing an execution hands out can enrol a component", function* () {
+    let installArity = -1;
+    let named: string[] = [];
+
+    const stream = new InMemoryStream();
+    let output = "";
+
+    const result = yield* scoped(function* () {
+      yield* Execution.around({
+        *execute([request], next) {
+          named = [...Object.keys(request), ...Object.keys(request.options)].filter((key) =>
+            /contain/i.test(key),
+          );
+          yield* next(request);
+        },
+      });
+      yield* useStubFs({ "doc.md": CONTAINMENT_DOC });
+      yield* useStagedExec();
+      yield* useHostFiles();
+      const execution = yield* executeInstalled({ path: "doc.md", stream }, [
+        {
+          // deno-lint-ignore require-yield
+          *install(...args: unknown[]) {
+            installArity = args.length;
+          },
+        },
+      ]);
+      output = yield* forEach(function* (_chunk: string) {}, execution.output);
+      return yield* execution;
+    });
+
+    expect(installArity).toBe(0);
+    expect(named).toEqual([]);
+    // And with no testing package in reach, `<Test>` says so rather than
+    // rendering an empty string that would read as a document that passed.
+    expect(result.ok).toBe(false);
+    expect(String(result.ok ? "" : result.error)).toContain("requires a testing package");
+    expect(output).not.toContain("MARKER");
+    expect(commands(stream.snapshot()).some((name) => name.includes("FAIL"))).toBe(false);
   });
 
   /**

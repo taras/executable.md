@@ -1,7 +1,13 @@
 /**
- * `<Test>` as an ordinary function component (specs/testing-spec.md).
+ * What a `<Test>` invocation does (specs/testing-spec.md).
  *
- * A test is a component invocation, and the engine now owns that invocation:
+ * The construct itself is core's: core registers `<Test>`, and an invocation of
+ * that definition is the one whose checked command failures are contained. This
+ * module supplies the rest — activation, the isolated binding environment, the
+ * timeout, how a failure is classified, what is staged and how it is reported —
+ * through the `TestBehavior` operation core calls from inside the invocation.
+ *
+ * A test is a component invocation, and the engine owns that invocation:
  * its resources, its middleware and anything its body projects are dismantled
  * in that order before the next test starts. What the component keeps is the
  * part that is a test rather than a component — the isolated binding
@@ -28,18 +34,12 @@ import {
   raise,
   tryContent,
 } from "@executablemd/core";
-import type { SourcePosition, ErrorSegment, EvalEnv, Json, PropsSchema } from "@executablemd/core";
+import type { SourcePosition, ErrorSegment, EvalEnv, Json } from "@executablemd/core";
 import { AssertionError } from "./assert.ts";
 import { AssertionReport } from "./assertions.ts";
 import { persistTestResult } from "./journal.ts";
 import { inTest, record, Test, testing } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
-
-export const TEST_PROPS: PropsSchema = {
-  type: "object",
-  properties: { name: { type: "string" } },
-  additionalProperties: false,
-};
 
 /** An ErrorSegment raised anywhere inside a test body. */
 export class RaisedSegmentError extends Error {
@@ -236,9 +236,18 @@ export function failureReport(result: TestResult, options: { detail: boolean }):
   return `\n${lines.join("\n")}\n`;
 }
 
-/** Build the `<Test>` component for a given per-test timeout. */
-export function createTest(timeoutMs: number) {
-  return function* Test_(props: Record<string, Json>): Operation<Json> {
+/**
+ * What core's `<Test>` does, for a given per-test timeout.
+ *
+ * This is the behavior half of the construct: core decides which element is a
+ * test and what an invocation of one means for the run, and this decides what
+ * happens inside it. It runs inside that invocation — installed through
+ * `TestBehavior`, whose handlers are delegated in the caller's scope — so every
+ * install below lands in the test's own frame exactly as it would in a
+ * component body, and is removed with it.
+ */
+export function testBehavior(timeoutMs: number) {
+  return function* (props: Record<string, Json>): Operation<Json> {
     if (!(yield* testing)) {
       return "";
     }

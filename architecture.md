@@ -1205,22 +1205,36 @@ the run succeed, and no later work in any frame begins. `<File>` and `<TempDir>`
 are covered by that rule like any other printing boundary: their own cleanup and
 their own report still happen, and neither writes, replaces, or continues.
 
-`<PrintErrors>` *recovers*: it prints the failure and its region continues. One
-other construct *contains* one instead, which is a different thing. An
-invocation of the `<Test>` a testing session built keeps its checked failures to
-itself: the failure becomes that test's failed result, the run's own record
-stays clear, the tests after it still run, and the session's completion policy
-is what fails the run. Containment is granted by function identity, not by name.
-Canonical execution hands each installation a capability while the installations
-run — before the request exists and before any public `Execution` handler can
-inspect or replace the options — and the host names the exact object the testing
-session built. Nothing in the options says which components are contained, so a
-handler that replaces them, or mutates an object it invented, nominates nothing;
-a repository component called `Test` is a different function and receives
-nothing. `<PrintErrors>` is
-that construct — a region that says the failures inside it are printed and the
-document continues. A root that prints errors by default has not asked for
-anything, and does not get to call a failed run a success.
+`<PrintErrors>` *recovers*: a region that says the failures inside it are
+printed and the document continues. A root that prints errors by default has not
+asked for anything, and does not get to call a failed run a success.
+
+One other construct *contains* a failure instead, which is a different thing.
+An invocation of `<Test>` keeps its checked failures to itself: the failure
+becomes that test's failed result, the run's own record stays clear, the tests
+after it still run, and the testing completion policy is what fails the run.
+
+Canonical core owns that construct. `<Test>` is one of core's registered
+defaults, and containment is granted while core expands that definition and at
+no other time. Nothing nominates it: not a function another package supplies,
+not a component name or registration origin, not a context, marker or metadata,
+not the options or the request, not an installation. There is no public API that
+accepts a component and confers containment, so there is nothing for a handler
+to replace, counterfeit, or hand to itself.
+
+What core does not own is testing. Activation, isolated bindings, the timeout,
+how a failure is classified, what is recorded and how it is reported are
+`@executablemd/testing`'s, supplied through a contextual operation core calls
+from inside the invocation. That surface accepts no function, component name or
+container, and cannot make another component contain a failure: it says what a
+test does, while canonical core says which element is one. Its name is stable,
+so a testing package loaded beside a second copy of core reaches the copy
+expanding the document without either comparing the other's private function.
+
+Being a default is what makes the rule hold at the edges. A repository `Test`,
+or a package that registers the name, is selected ahead of core's — so core's
+definition was not expanded, and the definition that was receives the ordinary
+disposition, whatever it is called and whoever registered it.
 
 That authority travels by execution-owned structure: the element hands it to the
 expansion of its own body as an argument, and expansion carries it to everything

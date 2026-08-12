@@ -1,9 +1,14 @@
 /**
  * Component registration (specs/testing-spec.md).
  *
- * `<Testing>`, `<Test>`, the value assertions and `<AssertThrows>` are all
- * registered as ordinary non-reserved defaults, so a repository component of
- * any of those names replaces it.
+ * `<Testing>`, the value assertions and `<AssertThrows>` are registered as
+ * ordinary non-reserved defaults, so a repository component of any of those
+ * names replaces it.
+ *
+ * `<Test>` is not among them. That construct is core's, because core owns what
+ * an invocation of it means for the run — a checked command failure inside one
+ * is that test's outcome rather than the document's — and what this package
+ * installs is what a test *does* (#441).
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
  * boundaries affect the execution outcome even when root testing is inactive.
@@ -18,7 +23,7 @@
 
 import { Err } from "effection";
 import type { Operation } from "effection";
-import { Component, registerComponents, Execution } from "@executablemd/core";
+import { Component, registerComponents, Execution, TestBehavior } from "@executablemd/core";
 import type {
   ComponentFailure,
   ComponentRegistration,
@@ -33,32 +38,26 @@ import { Testing, TESTING_PROPS } from "./testing-component.ts";
 import {
   absorbTestFailure,
   RaisedSegmentError,
-  createTest,
   failureReport,
   flushStaged,
   formatLocation,
   Staging,
-  TEST_PROPS,
+  testBehavior,
 } from "./test-component.ts";
 import type { TestHandlers } from "./handlers.ts";
-import type { FunctionComponent } from "@executablemd/core";
 
 const TEST_TIMEOUT_MS = 20_000;
 
 /**
- * Install the testing components, and report the `<Test>` this session built.
+ * Install the testing components and supply what core's `<Test>` does.
  *
- * The identity is returned rather than published: a host that starts an
- * execution names it through the capability canonical execution hands its
- * installations, so a checked command failure inside a test is that test's
- * outcome. A caller that ignores it gets the previous behaviour, and nothing a
- * document or a middleware package reaches is offered the identity or a way to
- * nominate another (#441).
+ * `<Test>` itself is not registered here. The construct belongs to core, which
+ * is what makes a checked command failure inside a test that test's outcome
+ * rather than the run's; this session supplies its behavior and hands nobody an
+ * identity (#441).
  */
-export function* installTestingComponents(options?: {
-  verbose?: boolean;
-}): Operation<FunctionComponent> {
-  return yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
+export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
+  yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
 }
 
 /**
@@ -68,7 +67,7 @@ export function* installTestingComponents(options?: {
 export function* installHandlers(
   handlers: TestHandlers,
   options?: { verbose?: boolean },
-): Operation<FunctionComponent> {
+): Operation<void> {
   if (options?.verbose) {
     yield* Test.around({ verbose: () => true });
   }
@@ -101,22 +100,20 @@ export function* installHandlers(
       };
     },
   });
-  // Built once, so the identity registered below and the identity enrolled for
-  // containment are the same object. A repository `Test` is chosen ahead of
-  // this one and is a different function, which is exactly why containment is
-  // asked for by identity rather than by name.
-  const test = createTest(handlers.timeoutMs);
+  // What core's `<Test>` does. The operation names no component and carries no
+  // function outward: which element is a test stays core's decision, and a
+  // repository `Test` selected ahead of core's default never reaches this.
+  const behavior = testBehavior(handlers.timeoutMs);
+  yield* TestBehavior.around({
+    *test([props]) {
+      return yield* behavior(props);
+    },
+  });
 
   // Non-reserved defaults: a repository component of either name is chosen
   // ahead of these, as it would be ahead of any other package's.
   const registrations: ComponentRegistration[] = [
     { name: "Testing", origin: "@executablemd/testing", fn: Testing, props: TESTING_PROPS },
-    {
-      name: "Test",
-      origin: "@executablemd/testing",
-      fn: test,
-      props: TEST_PROPS,
-    },
     // The table stays data: it names the comparison and the props each kind
     // takes, and the registration is built from it rather than beside it.
     {
@@ -178,8 +175,6 @@ export function* installHandlers(
       yield* next(request);
     },
   });
-
-  return test;
 }
 
 /** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */

@@ -52,12 +52,9 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
-import {
-  containedLedger,
-  containsCheckedFailures,
-  recoveringLedger,
-} from "./component-failures.ts";
+import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
+import CoreTest from "./components/Test.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
@@ -1885,7 +1882,7 @@ function* expandPrintErrors(
       0,
       // The region grants authority for the work it causes, and a failure it
       // recovers is not one the run suffered.
-      recoveringLedger(checkedFailures),
+      recoveringLedger(),
     );
   });
 }
@@ -2391,14 +2388,17 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
 ): Operation<Segment[]> {
-  // An invocation of a contained identity keeps its checked failures to itself:
+  // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
   // outcome of the test, and the run's own record stays clear so the work after
-  // it still runs. Identity, not name — a repository component called `Test` is
-  // a different object and inherits the ordinary disposition (§3.6).
-  const checkedFailures = containsCheckedFailures(inherited, definition.fn)
-    ? containedLedger(inherited)
-    : inherited;
+  // it still runs (§3.6).
+  //
+  // The definition being expanded, compared with the one this copy of core
+  // registered — so containment is granted by canonical core to a construct
+  // canonical core owns. A repository `Test`, or a package that registers the
+  // name, is selected ahead of core's default: a different definition runs and
+  // inherits the ordinary disposition.
+  const checkedFailures = definition.fn === CoreTest ? containedLedger(inherited) : inherited;
   if ("as" in expressions) {
     return [
       yield* raise({

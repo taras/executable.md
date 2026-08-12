@@ -153,13 +153,22 @@ completion policy is what fails the overall run. A contained outcome is decided
 once — replay restores the failed result and the failing testing outcome from
 the journal without running the command again.
 
-Containment belongs to the `<Test>` a testing session built, by function
-identity. The session reports that exact object to the host that starts the
-execution, which hands it back on its own options; nothing a document reaches is
-offered the identity or a way to nominate another. A repository component named
-`Test` is chosen ahead of the package's, is a different function, and receives
-no containment: a checked failure inside it is the run's, exactly as it would be
-anywhere else the document did not authorize one.
+Containment belongs to the `<Test>` construct, and canonical core owns it.
+`<Test>` is one of core's registered defaults, and containment is granted while
+core expands that definition and at no other time. This package supplies what a
+test *does* — activation, isolated bindings, the timeout, classification,
+staging and recording, reporting, and the completion failure — through a
+contextual operation core calls from inside the invocation. That operation
+accepts no function, component name, marker or container, and cannot make any
+other component contain a failure.
+
+A repository component named `Test`, or another package that registers the name,
+is chosen ahead of core's default. Core's definition was therefore not expanded,
+and the one that was receives no containment: a checked failure inside it is the
+run's, exactly as it would be anywhere else the document did not authorize one.
+
+`useTesting()` with `execute()` needs nothing else. The host attaches no
+installation, names no component, and receives no identity.
 
 A test body behaves like any regular component body. Tests run sequentially in
 expansion order. Each test runs in a child Effection scope and an isolated

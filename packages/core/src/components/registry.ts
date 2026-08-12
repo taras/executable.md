@@ -22,6 +22,7 @@ import File, { props as fileProps } from "./File.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
+import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
 import type { FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
 
@@ -58,4 +59,5 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   core("Glob", Glob, parseJsonObject(globProps), parseJsonObject(globReturns)),
   core("Parse", Parse, parseJsonObject(parseProps), parseJsonObject(parseReturns)),
   core("SafeParse", SafeParse, parseJsonObject(safeParseProps), parseJsonObject(safeParseReturns)),
+  core("Test", Test, parseJsonObject(testProps)),
 ]);

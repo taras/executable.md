@@ -1031,9 +1031,17 @@ content raised all decide how their own failure is reported and none of them
 recovers a checked command failure: the run fails, nothing is written or
 replaced, required cleanup still runs, and no later executable work begins.
 
-`<PrintErrors>` recovers. A checked failure inside an invocation of the official
-`<Test>` is *contained* instead, which is a different outcome: it becomes that test's failed result, the run's record
-stays clear, and later tests run — see `specs/testing-spec.md`. Its authority is
+`<PrintErrors>` recovers. A checked failure inside an invocation of `<Test>` is
+*contained* instead, which is a different outcome: it becomes that test's failed
+result, the run's record stays clear, and later tests run. `<Test>` is one of
+core's registered defaults, and containment is granted while core expands that
+definition and at no other time — no name, origin, context, marker, option, or
+installation confers it, and a repository `Test` selected ahead of core's
+default receives none. What a test does is supplied by the testing package
+through a contextual operation that names no component; see
+`specs/testing-spec.md`.
+
+`<PrintErrors>`'s authority is
 carried by execution-owned structure — the element hands it to the expansion of
 its own body, which carries it to everything the region causes: the branches,
 iterations, captures and answers written inside it, the bodies of components its
