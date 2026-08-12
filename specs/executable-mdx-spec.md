@@ -929,11 +929,13 @@ document's display policy → terminal
 Middleware installed around an execution is preprocessing by the run's
 configured execution environment: the process stdio chain is a documented
 extension point, and what is installed there may consume, transform, redact, or
-redirect a channel before the run receives it. One wrapper per `exec`
-is installed before the child is acquired and stays until it completes and both
-decoders flush. Everywhere below, **exact output means exactly what reaches the
-per-exec boundary** — never a claim about what the child wrote to its pipe,
-which no execution observes. So text a host rewrote is what is captured and
+redirect a channel before the run receives it. One wrapper per `exec` is
+installed before the child is acquired, and the result is snapshotted when the
+`Process` operation settles — which, as **Channels** below records, may be
+before the pumps have finished. Everywhere below, **exact output means exactly
+what reaches the per-exec boundary** — never a claim about what the child wrote
+to its pipe, which no execution observes, and never a claim of pump-complete
+tail delivery. So text a host rewrote is what is captured and
 journaled, output it consumed is absent from both, and output it forwarded on
 the other channel is recorded as that other channel.
 
@@ -1013,9 +1015,11 @@ byte payload, from contextual state, or from state held for the run. A
 downstream policy showing one channel on another of the host's streams changes
 nothing about the result. Each received channel decodes independently, so a
 character split across two chunks survives interleaving with the other channel.
-Output a child writes as the pump settles may not be received at all; effectionx
-#244 owns that limitation, and nothing here claims pump-complete tail
-retention until it is integrated.
+`Process.join()` may settle before the stdout and stderr pumps and their stdio
+middleware finish, so output a child writes as the pumps settle may not be
+received at all and may therefore be missing from what is retained or captured.
+effectionx #244 owns that limitation, and nothing here claims pump-complete tail
+delivery or retention until it is integrated.
 
 **Failure.** A nonzero exit is a checked failure. The ambient printing mode may
 decide how it is reported, never that the run succeeded: later executable

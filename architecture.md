@@ -1148,19 +1148,26 @@ within the environment the workflow authorized. Middleware enclosing an
 execution — the host's own, and anything the host composed into it — may
 preprocess that output before either sees it.
 
-*Current limitation.* Output a child writes as the pump settles may not be
-retained; effectionx #244 owns that, and until its solution is integrated this
-boundary does not claim pump-complete tail retention.
+*Current limitation.* `Process.join()` may settle before the pumps and their
+`Stdio` middleware finish, so output a child writes as the pumps settle may
+never reach the boundary and may therefore be absent from what a run retains.
+effectionx #244 owns that, and until its solution is integrated nothing here
+claims pump-complete tail delivery or retention.
 So transformed text is what a run captures and journals, consumed output is
 absent from both, and output an enclosing handler forwards on the other channel
 is recorded as that other channel.
 
 **The per-exec boundary is where a run observes.** One wrapper is installed
-before `Process.exec` begins and stays alive until the child completes and both
-decoders have flushed, so nothing forwarded during acquisition or at the tail is
-missed. "Exactly what the command produced" means, throughout this repository,
-*exactly the bytes received here* — never a claim about what the child wrote to
-its pipe, which no execution observes.
+before `Process.exec` begins, so a chunk forwarded while the child is being
+started is received like any other rather than raced for. The snapshot is taken
+when the current `Process` operation settles, and that is as strong as the tail
+guarantee gets today: `Process.join()` may settle before the stdout and stderr
+pumps and their `Stdio` middleware have finished, so output written as the pumps
+settle may never reach this boundary. effectionx #244 owns the stronger
+guarantee. "Exactly what the command produced" means, throughout this
+repository, *exactly the bytes received here* — never a claim about what the
+child wrote to its pipe, which no execution observes, and never a claim of
+pump-complete tail delivery.
 
 **A run's own display policies are downstream and change nothing.** `silent`, a
 `<Capture as>` region's suppression of terminal stdout, quiet runtime output for

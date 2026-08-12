@@ -19,11 +19,22 @@ effect.
 </Testing>
 ```
 
-Installing the package registers `<Testing>` and `<Test>` as ordinary
-**non-reserved defaults** (executable-mdx-spec.md §5.3): a repository component
-of either name is chosen ahead of the registered one, exactly as it would be
-ahead of any other package's default, and then decides for itself what a testing
-boundary — or a test — means.
+Installing the package registers `<Testing>`, `<AssertThrows>` and the value
+assertions as ordinary **non-reserved defaults** (executable-mdx-spec.md §5.3):
+a repository component of any of those names is chosen ahead of the registered
+one, exactly as it would be ahead of any other package's default, and then
+decides for itself what a testing boundary means.
+
+`<Test>` is not among them. Canonical core registers and owns the default
+`<Test>` construct, because core owns what an invocation of one means for the
+run (see *Checked command failures inside a test* below). Installing this
+package supplies that construct's testing behavior — activation, isolated
+bindings and scope, the timeout, assertion and unexpected-failure
+classification, TestResult staging and recording, reporting, and the testing
+completion failure — through the `TestBehavior` operation core calls from
+inside the invocation. `<Test>` is still an ordinary non-reserved default, so a
+repository component of that name is chosen ahead of core's and decides for
+itself what a test means.
 
 A test result is journaled once the invocation that produced it has been
 dismantled, so a teardown failure is part of the outcome recorded for it. That
@@ -154,18 +165,18 @@ once — replay restores the failed result and the failing testing outcome from
 the journal without running the command again.
 
 Containment belongs to the `<Test>` construct, and canonical core owns it.
-`<Test>` is one of core's registered defaults, and containment is granted while
-core expands that definition and at no other time. This package supplies what a
-test *does* — activation, isolated bindings, the timeout, classification,
-staging and recording, reporting, and the completion failure — through a
-contextual operation core calls from inside the invocation. That operation
-accepts no function, component name, marker or container, and cannot make any
-other component contain a failure.
+Core registers `<Test>` as one of its own defaults, and grants containment only
+to that exact definition, only while it is expanding it. Nothing else confers
+it: not a name, an origin, a context, a marker, an option, the request, or an
+installation. `TestBehavior` supplies what a test *does* and decides nothing
+about which element is one — it accepts no function, component name, marker or
+container, and cannot make any other component contain a failure.
 
 A repository component named `Test`, or another package that registers the name,
-is chosen ahead of core's default. Core's definition was therefore not expanded,
-and the one that was receives no containment: a checked failure inside it is the
-run's, exactly as it would be anywhere else the document did not authorize one.
+still wins ordinary default resolution and is chosen ahead of core's. Core's
+definition was therefore not expanded, and the one that was receives no
+containment: a checked failure inside it is the run's, exactly as it would be
+anywhere else the document did not authorize one.
 
 `useTesting()` with `execute()` needs nothing else. The host attaches no
 installation, names no component, and receives no identity.

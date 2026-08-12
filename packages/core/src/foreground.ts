@@ -127,7 +127,9 @@ export interface ForegroundOutput {
  * Each channel decodes with its own streaming decoder, and each chunk is
  * decoded once and reused, so a code point split across chunks survives and one
  * channel can never disturb the other's partial character. Both decoders are
- * flushed once, when the process is done.
+ * flushed once, when the current `Process` operation settles — which is not the
+ * same as when the pumps are done: `Process.join()` may settle first, so output
+ * written as the pumps settle may never arrive here. effectionx #244 owns that.
  */
 export function* route(
   selected: ForegroundRouting,

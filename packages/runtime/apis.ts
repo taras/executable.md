@@ -150,6 +150,10 @@ function errorCode(error: unknown): string | undefined {
  * what enclosing middleware forwarded: a host that transforms, redacts,
  * redirects, or consumes output upstream of this call is trusted preprocessing,
  * and its result is what a caller is told the command produced.
+ *
+ * What this does not promise is the tail. The record is read when the `Process`
+ * operation settles, and that can happen before the pumps have finished, so
+ * this claims no pump-complete delivery (effectionx #244).
  */
 function* retaining(): Operation<{ stdout: () => string; stderr: () => string }> {
   let stdout = "";
@@ -169,7 +173,10 @@ function* retaining(): Operation<{ stdout: () => string; stderr: () => string }>
       return yield* next(bytes);
     },
   });
-  // Flushed once, when the process is done.
+  // Flushed once, when the caller reads — that is, when the `Process` operation
+  // settles. `Process.join()` may settle before the pumps and their middleware
+  // finish, so a tail written as they settle may never have reached the
+  // handlers above; effectionx #244 owns that.
   return {
     stdout: () => stdout + fromStdout.decode(),
     stderr: () => stderr + fromStderr.decode(),
