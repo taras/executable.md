@@ -17,6 +17,7 @@
 
 import type { Operation } from "effection";
 import { Execution } from "@executablemd/core";
+import type { FunctionComponent } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
 import type { TestResult } from "./test-api.ts";
 import { installTestingComponents } from "./components.ts";
@@ -25,6 +26,11 @@ import { flushStaged } from "./test-component.ts";
 export interface Testing {
   /** Immutable snapshot of completed tests, in discovery order. */
   readonly results: Operation<readonly TestResult[]>;
+  /**
+   * The `<Test>` this session built, for the host to hand back on its own
+   * options so a checked command failure is contained in the test that ran it.
+   */
+  readonly test: FunctionComponent;
 }
 
 export function* useTesting(options?: { verbose?: boolean }): Operation<Testing> {
@@ -35,7 +41,7 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
   }
   yield* Test.around({ sessionActive: () => true });
 
-  yield* installTestingComponents(options);
+  const test = yield* installTestingComponents(options);
 
   const collected: TestResult[] = [];
   yield* Test.around({
@@ -116,5 +122,6 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
         return Object.freeze([...collected]);
       },
     },
+    test,
   };
 }

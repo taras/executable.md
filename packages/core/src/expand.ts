@@ -52,6 +52,12 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
+import {
+  containedLedger,
+  containsCheckedFailures,
+  recoveringLedger,
+} from "./component-failures.ts";
+import type { CheckedFailures } from "./component-failures.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
@@ -173,7 +179,7 @@ function expandChildrenScoped(
   owner: Segment[],
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -194,7 +200,7 @@ function expandChildrenScoped(
       owner,
       path,
       0,
-      printsCheckedFailures,
+      checkedFailures,
     );
   });
 }
@@ -232,7 +238,7 @@ interface ProjectionState {
    * text, written where the invocation was written, so it is covered exactly as
    * the invocation is (§3.6).
    */
-  printsCheckedFailures: boolean;
+  checkedFailures: CheckedFailures | undefined;
 }
 
 interface ProjectionFrame {
@@ -361,7 +367,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             rendered,
             options.path,
             0,
-            state.printsCheckedFailures,
+            state.checkedFailures,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -455,7 +461,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             rendered,
             path,
             0,
-            state.printsCheckedFailures,
+            state.checkedFailures,
           );
           outcome.resolve({ segments: [...errors, ...rendered] });
         } catch (error) {
@@ -599,7 +605,7 @@ export function* expandSegments(
    * nothing else — a sibling after `</PrintErrors>`, a later invocation, or a
    * root, all of which start from the default here and are outside it.
    */
-  printsCheckedFailures: boolean = false,
+  checkedFailures?: CheckedFailures,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -617,7 +623,7 @@ export function* expandSegments(
         owner,
         path,
         indexBase,
-        printsCheckedFailures,
+        checkedFailures,
       );
     });
   }
@@ -628,6 +634,11 @@ export function* expandSegments(
   const loop = yield* ActiveLoop.get();
 
   for (const [index, segment] of segments.entries()) {
+    // A checked failure the document did not authorize ends the work: whatever
+    // enclosing boundary printed it, nothing after it in any frame begins.
+    if (checkedFailures?.failure !== undefined) {
+      break;
+    }
     switch (segment.type) {
       case "text": {
         // Heal incomplete markdown constructs at segment boundaries (spec §2.3)
@@ -707,7 +718,7 @@ export function* expandSegments(
               hideSet,
               counter,
               elementPath,
-              printsCheckedFailures,
+              checkedFailures,
             )),
           );
           break;
@@ -725,7 +736,7 @@ export function* expandSegments(
               counter,
               result,
               elementPath,
-              printsCheckedFailures,
+              checkedFailures,
             )),
           );
           break;
@@ -744,7 +755,7 @@ export function* expandSegments(
             counter,
             result,
             elementPath,
-            printsCheckedFailures,
+            checkedFailures,
           );
           break;
         }
@@ -769,7 +780,7 @@ export function* expandSegments(
             counter,
             result,
             elementPath,
-            printsCheckedFailures,
+            checkedFailures,
           );
           break;
         }
@@ -785,6 +796,7 @@ export function* expandSegments(
             counter,
             result,
             elementPath,
+            checkedFailures,
           );
           break;
         }
@@ -808,7 +820,7 @@ export function* expandSegments(
                   into,
                   frame === undefined ? elementPath : extendPath(elementPath, frame),
                   0,
-                  printsCheckedFailures,
+                  checkedFailures,
                 ),
               result,
             )),
@@ -852,7 +864,7 @@ export function* expandSegments(
           parentProps,
           result,
           elementPath,
-          printsCheckedFailures,
+          checkedFailures,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -923,7 +935,7 @@ export function* expandSegments(
                     : `Command failed (exit ${codeResult.exitCode})`,
                   source: segment.content,
                 },
-                printsCheckedFailures,
+                checkedFailures,
               ),
             );
           }
@@ -975,18 +987,29 @@ export function* expandSegments(
  * printing boundary may still be the thing that prints it, exactly as an
  * `<Output>` region's failure is printed today.
  *
- * `recovers` is the authority to keep the run, and it is an argument because it
+ * The ledger is the authority to keep the run, and it is an argument because it
  * has exactly one origin: a `<PrintErrors>` element the document was written
  * with, which hands it to the expansion of its own body and to nothing else.
  * Nothing ambient is consulted. A run's outcome may not be decided by state an
  * enclosing caller can install, and a name is all it takes to install one.
  */
-function* checkedCommandFailure(segment: ErrorSegment, recovers: boolean): Operation<ErrorSegment> {
+function* checkedCommandFailure(
+  segment: ErrorSegment,
+  checkedFailures: CheckedFailures | undefined,
+): Operation<ErrorSegment> {
   const mode = (yield* ErrorMode.get()) ?? "print";
   // The region that asked to print failures gets to print this one; a root that
   // merely prints by default does not get to call the run a success.
-  if (mode !== "print" || recovers) {
+  if (mode !== "print" || checkedFailures?.authorized) {
     return yield* raise(segment);
+  }
+  // Written down before it is raised, because raising it is not the end of it:
+  // an enclosing boundary may still catch what this becomes — a component's own
+  // failure, or the `ContentError` its projected content raised — and print it.
+  // Those boundaries recover their own failures; the run still suffered a
+  // command that exited nonzero, and this is where it is remembered.
+  if (checkedFailures !== undefined) {
+    checkedFailures.failure ??= segment;
   }
   return yield* scoped(function* () {
     yield* ErrorMode.set("output");
@@ -1019,7 +1042,7 @@ function* expandCapture(
   counter: BlockCounter,
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
     return [
@@ -1069,7 +1092,7 @@ function* expandCapture(
       undefined,
       path,
       0,
-      printsCheckedFailures,
+      checkedFailures,
     ),
   );
 
@@ -1135,7 +1158,7 @@ function* expandEach(
   owner: Segment[],
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1218,7 +1241,7 @@ function* expandEach(
       counter,
       out,
       extendPath(path, { f: "item", i: iteration }),
-      printsCheckedFailures,
+      checkedFailures,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1479,7 +1502,7 @@ function* expandIf(
   owner: Segment[],
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1552,7 +1575,7 @@ function* expandIf(
     owner,
     branchPath,
     0,
-    printsCheckedFailures,
+    checkedFailures,
   );
 }
 
@@ -1652,7 +1675,7 @@ function* expandLoop(
   owner: Segment[],
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -1709,7 +1732,7 @@ function* expandLoop(
           owner,
           extendPath(path, { f: "iter", i: iteration }),
           0,
-          printsCheckedFailures,
+          checkedFailures,
         );
         if (frame.broken) {
           break;
@@ -1831,6 +1854,8 @@ function* expandPrintErrors(
   /** The region this renders into: it writes there rather than returning. */
   owner: Segment[],
   path: string,
+  /** The ledger this region grants recovery on top of (§3.6). */
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -1856,7 +1881,9 @@ function* expandPrintErrors(
       owner,
       path,
       0,
-      true,
+      // The region grants authority for the work it causes, and a failure it
+      // recovers is not one the run suffered.
+      recoveringLedger(checkedFailures),
     );
   });
 }
@@ -1890,7 +1917,7 @@ function* expandComponent(
    * the region asked to print, and its body's commands are covered exactly as a
    * block written there would be.
    */
-  printsCheckedFailures: boolean = false,
+  checkedFailures?: CheckedFailures,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -1952,7 +1979,7 @@ function* expandComponent(
       callerProps,
       owner,
       path,
-      printsCheckedFailures,
+      checkedFailures,
     );
   }
 
@@ -2101,7 +2128,7 @@ function* expandComponent(
       callerLoop: siteLoop,
       ownPath: path,
       printedErrors: bodyContentErrors,
-      printsCheckedFailures,
+      checkedFailures,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -2170,7 +2197,7 @@ function* expandComponent(
           callerEvalEnv ?? undefined,
           claimProjection,
           path,
-          printsCheckedFailures,
+          checkedFailures,
         );
       });
     } catch (error) {
@@ -2213,7 +2240,7 @@ function* expandComponent(
       claimProjection,
       bodyOwner,
       path,
-      printsCheckedFailures,
+      checkedFailures,
     );
   });
 
@@ -2359,9 +2386,17 @@ function* expandFunctionComponent(
    */
   callerOwner?: Segment[],
   path: string = "",
-  /** Whether the invoking element sits inside a `<PrintErrors>` region. */
-  printsCheckedFailures: boolean = false,
+  /** This work's checked-failure ledger, inherited from the invoking element. */
+  inherited?: CheckedFailures,
 ): Operation<Segment[]> {
+  // An invocation of a contained identity keeps its checked failures to itself:
+  // they become that invocation's failure, which is how a failing test is the
+  // outcome of the test, and the run's own record stays clear so the work after
+  // it still runs. Identity, not name — a repository component called `Test` is
+  // a different object and inherits the ordinary disposition (§3.6).
+  const checkedFailures = containsCheckedFailures(inherited, definition.fn)
+    ? containedLedger(inherited)
+    : inherited;
   if ("as" in expressions) {
     return [
       yield* raise({
@@ -2491,7 +2526,7 @@ function* expandFunctionComponent(
           counter,
           callerLoop: siteLoop,
           ownPath: path,
-          printsCheckedFailures,
+          checkedFailures,
         });
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
@@ -3399,7 +3434,7 @@ export function* expandBody(
   owner?: Segment[],
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
-  printsCheckedFailures: boolean = false,
+  checkedFailures?: CheckedFailures,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -3412,7 +3447,7 @@ export function* expandBody(
       owner,
       path,
       0,
-      printsCheckedFailures,
+      checkedFailures,
     );
   }
 
@@ -3432,7 +3467,7 @@ export function* expandBody(
         output,
         chunkPath,
         0,
-        printsCheckedFailures,
+        checkedFailures,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -3446,7 +3481,7 @@ export function* expandBody(
           output,
           chunkPath,
           0,
-          printsCheckedFailures,
+          checkedFailures,
         );
       });
     } else {
@@ -3462,7 +3497,7 @@ export function* expandBody(
           undefined,
           chunkPath,
           chunkBase,
-          printsCheckedFailures,
+          checkedFailures,
         );
       });
     }
@@ -3488,7 +3523,7 @@ function runDocumentation(
   path: string,
   indexBase: number,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
-  printsCheckedFailures: boolean,
+  checkedFailures: CheckedFailures | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -3501,7 +3536,7 @@ function runDocumentation(
       undefined,
       path,
       indexBase,
-      printsCheckedFailures,
+      checkedFailures,
     );
   });
 }
@@ -3551,7 +3586,7 @@ function* expandValueBody(
   claim: ClaimFn = passthroughClaim,
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
-  printsCheckedFailures: boolean = false,
+  checkedFailures?: CheckedFailures,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -3572,7 +3607,7 @@ function* expandValueBody(
       counter,
       path,
       index,
-      printsCheckedFailures,
+      checkedFailures,
     );
   }
 

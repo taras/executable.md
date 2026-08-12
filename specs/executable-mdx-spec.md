@@ -1019,7 +1019,16 @@ required. `<Output>` selects rendered document content and nothing else.
 `silent` hides output; it does not convert a failure into success.
 
 Exactly one thing recovers a checked failure: an explicit error-handling
-construct written in the document, which is `<PrintErrors>`. Its authority is
+construct written in the document, which is `<PrintErrors>`. `printErrors(fn)`,
+built-in printing boundaries such as `<File>` and `<TempDir>`, component failure
+middleware, and a component that catches the `ContentError` its projected
+content raised all decide how their own failure is reported and none of them
+recovers a checked command failure: the run fails, nothing is written or
+replaced, required cleanup still runs, and no later executable work begins.
+
+A checked failure inside an invocation of the official `<Test>` is *contained*
+rather than recovered: it becomes that test's failed result, the run's record
+stays clear, and later tests run — see `specs/testing-spec.md`. Its authority is
 carried by execution-owned structure — the element hands it to the expansion of
 its own body, which carries it to everything the region causes: the branches,
 iterations, captures and answers written inside it, the bodies of components its
@@ -7872,6 +7881,8 @@ platform's.
 | OM5i | A checked failure inside an `<Each>` in the region | Covered: printed, and the marker and later work are reached |
 | OM5j | Caller content projected through a component in the region | Covered the same way |
 | OM5k | A checked failure after the region closes | Not covered: the run fails and no later work starts |
+| OM5l | A component catching `ContentError` around a checked failure | Its recovery return is not accepted: the run fails and no later work starts |
+| OM5m | The same component, an ordinary content failure | Unchanged: the caller's content failure is reported as the caller's |
 | OM6–OM6c | The live failure | The original object, a settled printed error's `DocumentationError` with its mode, and a body-plus-teardown aggregate each reach the completion intact |
 | OM7 | Replay | The same partial output and failure, with no command run again |
 | OM7b | Replay of a recovered outcome | An explicitly recovered run replays as recovered, with no command run again |

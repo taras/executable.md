@@ -68,7 +68,12 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { DocumentInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
+import type {
+  DocumentInfo,
+  FileRootDocument,
+  FunctionComponent,
+  RootDocumentSource,
+} from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
@@ -604,18 +609,23 @@ function* runDocument(
     yield* useTerminalOutput();
   }
 
+  // The `<Test>` this invocation's testing session built. Handed back on this
+  // command's own options below, so a checked command failure inside a test is
+  // that test's outcome rather than the run's (#441).
+  let testComponent: FunctionComponent;
+
   // Compose testing around the single core execution entrypoint: both
   // commands register the components (assertions work in regular documents,
   // explicit <Testing> boundaries affect the outcome), while `xmd test`
   // additionally activates root testing through a useTesting() session.
   if (mode.testing) {
-    yield* useTesting({ verbose });
+    testComponent = (yield* useTesting({ verbose })).test;
     // TestAgent installs before the agent components so its <Prompt>
     // interceptor runs first.
     yield* installTestAgentComponents();
     yield* installAgentComponents();
   } else {
-    yield* installTestingComponents({ verbose });
+    testComponent = yield* installTestingComponents({ verbose });
   }
 
   // `<WebForm>` for both commands. Registered rather than reserved, so a
@@ -681,6 +691,7 @@ function* runDocument(
       // Whatever the host path decided. A run that keeps nothing forwards its
       // commands' output to the reader and accumulates none of it.
       retainProcessOutput,
+      containCheckedFailures: [testComponent],
     },
     mode.installations ?? [],
   );

@@ -118,6 +118,8 @@ import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
+import { checkedFailureLedger } from "./component-failures.ts";
+import type { CheckedFailures } from "./component-failures.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
@@ -150,6 +152,22 @@ export interface ExecuteSettings {
    * alone and never accumulates the bytes on their way to the reader (#441).
    */
   retainProcessOutput?: boolean;
+  /**
+   * Component functions whose invocation contains a checked command failure
+   * rather than letting it end the run.
+   *
+   * Identities, not names: the exact function objects a first-party package
+   * built and handed to the host that starts the run. `<Test>` is the one that
+   * has this, because a failing test is the outcome of that test rather than of
+   * the run, and the testing session's own completion policy fails the run
+   * afterwards.
+   *
+   * It travels on the host's own options for the same reason `retainProcessOutput`
+   * does: the object belongs to whoever starts the execution, a document never
+   * holds it, and the collection is fixed before the root import. A repository
+   * component named `Test` is a different function object and receives nothing.
+   */
+  containCheckedFailures?: readonly FunctionComponent[];
 }
 
 /**
@@ -1385,6 +1403,8 @@ function* runValueRoot(
   /** What this root emitted, held by the caller so a failure still finds it. */
   chunks: string[],
   path: string,
+  /** This run's record of an unauthorized checked command failure (#441). */
+  checkedFailures: CheckedFailures,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -1411,6 +1431,8 @@ function* runValueRoot(
         counter,
         undefined,
         path,
+        0,
+        checkedFailures,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1422,13 +1444,39 @@ function* runValueRoot(
     }
   });
 
+  yield* refuseCheckedFailure(checkedFailures);
   if (!produced) {
     throw new Error("The root document declares `returns` but produced no <Return> value.");
   }
   return { status: "ok", output: chunks.join(""), value: produced.value };
 }
 
-function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
+/**
+ * Refuse a successful outcome for a run that suffered an unauthorized checked
+ * command failure.
+ *
+ * The failure was already raised where the command ran, and something enclosing
+ * it — a `printErrors(fn)` component like `<TempDir>`, or one that caught the
+ * `ContentError` its projected content raised — printed it and returned. Those
+ * boundaries decide how a failure of their own is reported. Whether a command
+ * that exited nonzero failed the run is not theirs to decide, and this is where
+ * the run says so (#441).
+ */
+function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
+  const segment = checkedFailures.failure;
+  if (segment !== undefined) {
+    throw yield* documentationError(segment, "output");
+  }
+}
+
+function* documentWorkflow(
+  props: Record<string, Json>,
+  contains: readonly FunctionComponent[],
+): Workflow<DocumentResult> {
+  // This run's memory of a checked command failure it never authorized. Passed
+  // by value into core's own expansion and reachable from nowhere else, so no
+  // document, component, or printing boundary can clear it (#441).
+  const checkedFailures = checkedFailureLedger(contains);
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
@@ -1497,6 +1545,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         counter,
         streamed,
         rootPath,
+        checkedFailures,
       );
     }
 
@@ -1516,12 +1565,14 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         undefined,
         selected,
         rootPath,
+        checkedFailures,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
       if (text) {
         yield* ephemeral(DocumentOutput.operations.output(text));
       }
+      yield* refuseCheckedFailure(checkedFailures);
       return { status: "ok", output: text, value: text };
     }
 
@@ -1538,6 +1589,8 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         counter,
         produced,
         rootPath,
+        0,
+        checkedFailures,
       );
 
       while (emittedThrough < produced.length) {
@@ -1556,6 +1609,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     const text = streamed.join("");
+    yield* refuseCheckedFailure(checkedFailures);
     return { status: "ok", output: text, value: text };
   });
 
@@ -1655,6 +1709,7 @@ function* executeDocument(
     modifiers: customModifiers = {},
     secretDetection,
     retainProcessOutput = true,
+    containCheckedFailures = [],
   } = options;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
@@ -1758,7 +1813,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed),
+            documentWorkflow(claimed, containCheckedFailures),
           );
           try {
             return yield* beforeAnyImport(issued);

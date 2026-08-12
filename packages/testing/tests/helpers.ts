@@ -17,7 +17,7 @@ import { installHandlers, installTestingComponents } from "../src/components.ts"
 import type { TestHandlers } from "../src/handlers.ts";
 import { Test } from "../src/test-api.ts";
 import type { BoundaryOutcome, TestResult } from "../src/test-api.ts";
-import type { Json } from "@executablemd/core";
+import type { FunctionComponent, Json } from "@executablemd/core";
 
 export interface DocRun {
   /** Chunks received while streaming. */
@@ -60,20 +60,24 @@ export function* runDoc(
       },
     });
 
+    // The identity this session built, handed back on the host's own options so
+    // a checked command failure inside a test is that test's outcome (#441).
+    let test: FunctionComponent;
     if (options.handlers) {
-      yield* installHandlers(options.handlers, { verbose: options.verbose });
+      test = yield* installHandlers(options.handlers, { verbose: options.verbose });
       if (options.testing) {
         yield* Test.around({ testing: () => true });
       }
     } else if (options.testing) {
-      yield* useTesting({ verbose: options.verbose });
+      test = (yield* useTesting({ verbose: options.verbose })).test;
     } else {
-      yield* installTestingComponents({ verbose: options.verbose });
+      test = yield* installTestingComponents({ verbose: options.verbose });
     }
 
     const execution = yield* execute({
       path: options.path ?? "README.md",
       stream: options.stream ?? new InMemoryStream(),
+      containCheckedFailures: [test],
     });
 
     const chunks: string[] = [];

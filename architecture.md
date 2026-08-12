@@ -1133,11 +1133,20 @@ child → enclosing host stdio middleware → the per-exec boundary → this
 document's display policy → terminal
 ```
 
-**Enclosing host middleware is trusted preprocessing.** The process stdio chain
-is a documented extension point: middleware installed around an execution may
-consume, transform, redact, or redirect a channel before the run receives it,
-and a host that does so is exercising its own authority over its own child
-processes. What it forwards is what exists as far as the document is concerned.
+**Middleware enclosing an execution is treated as preprocessing.** The process
+stdio chain is a documented extension point: middleware installed around an
+execution may consume, transform, redact, or redirect a channel before the run
+receives it, and a host that does so is exercising its own authority over its
+own child processes. What it forwards is what exists as far as the document is
+concerned.
+
+*Known gap.* That authority is currently conferred by enclosing an execution,
+not by being a host. A component installs stdio middleware the same way a host
+does, so a component's middleware can today rewrite what a run retains — which
+means document-selected code can change durable history and remove material
+before the pre-persistence secret gate. Host authority is not yet represented
+explicitly at the runtime boundary, and this section describes what the
+implementation does rather than what it should guarantee.
 So transformed text is what a run captures and journals, consumed output is
 absent from both, and output an enclosing handler forwards on the other channel
 is recorded as that other channel.
@@ -1180,7 +1189,27 @@ another:
   `<Output>` declaration. `<Output>` governs rendered document selection only.
 
 Recovery is the one exception, and its authority has a single origin: an
-explicit error-handling construct written in the document. `<PrintErrors>` is
+explicit error-handling construct written in the document. Nothing else confers
+it: not `printErrors(fn)`, not a built-in printing boundary like `<TempDir>`,
+not ordinary printing mode, not component failure middleware, and not a
+component catching the `ContentError` its projected content raised. Those decide
+how a failure of their own is reported; whether a command that exited nonzero
+failed the run is not theirs to decide. A run that suffered an unauthorized
+checked failure records it in an execution-owned ledger passed by value through
+core's own calls, so an enclosing boundary that prints and returns cannot make
+the run succeed, and no later work in any frame begins. `<File>` and `<TempDir>`
+are covered by that rule like any other printing boundary: their own cleanup and
+their own report still happen, and neither writes, replaces, or continues.
+
+One construct contains a checked failure rather than recovering it. An
+invocation of the `<Test>` a testing session built keeps its checked failures to
+itself: the failure becomes that test's failed result, the run's own record
+stays clear, the tests after it still run, and the session's completion policy
+is what fails the run. Containment is granted by function identity, not by name
+— the session hands the exact object it built back to the host that starts the
+execution, on the host's own options, so a repository component called `Test`
+is a different function and receives nothing, and no document, component, or
+middleware is offered a way to nominate one. `<PrintErrors>` is
 that construct — a region that says the failures inside it are printed and the
 document continues. A root that prints errors by default has not asked for
 anything, and does not get to call a failed run a success.

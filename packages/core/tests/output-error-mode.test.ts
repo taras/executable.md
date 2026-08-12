@@ -27,7 +27,7 @@ import { expandSegments } from "../src/expand.ts";
 import { Component, content } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { registerComponents } from "../src/components/registration.ts";
-import { DocumentationError, ErrorMode } from "../src/errors.ts";
+import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
 import { scanSegments } from "../src/scanner.ts";
 import { renderSegments } from "../src/render.ts";
 import type { FunctionComponentDefinition, Segment } from "../src/types.ts";
@@ -202,6 +202,26 @@ const RELAYING: FunctionComponentDefinition = {
   fn: printErrors(function* () {
     return yield* content();
   }),
+};
+
+/**
+ * A component that catches its content's failure and renders something else —
+ * the supported recovery `ContentError` exists for.
+ */
+const CATCHING: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Catching",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  *fn(): Operation<string> {
+    try {
+      return yield* content();
+    } catch (error) {
+      if (error instanceof ContentError) {
+        return "RECOVERED";
+      }
+      throw error;
+    }
+  },
 };
 
 const PRINTING: FunctionComponentDefinition = {
@@ -576,6 +596,63 @@ describe("Tier OM — <PrintErrors> is how a region prints instead", () => {
     expect(String((result.error as Error).message)).toContain("Command failed");
     expect(result.output).not.toContain("MARKER");
     expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
+  /**
+   * A component may catch the `ContentError` its projected content raised and
+   * render something else. That decides what the component reports; it does not
+   * decide that a command which exited nonzero left the run intact.
+   */
+  it("OM5l: a component catching ContentError cannot accept a checked failure", function* () {
+    const result = yield* runRegistered(
+      {
+        "doc.md": [
+          "<Catching>",
+          "",
+          "```bash exec",
+          "FAIL",
+          "```",
+          "",
+          "</Catching>",
+          "",
+          "MARKER",
+          "",
+          "```bash exec",
+          "echo LATER",
+          "```",
+        ].join("\n"),
+      },
+      { Catching: CATCHING },
+    );
+
+    // The recovery return is not accepted as the run's outcome.
+    expect(result.ok).toBe(false);
+    expect(String((result.error as Error).message)).toContain("Command failed");
+    expect(result.output).not.toContain("MARKER");
+    expect(commands(result.events).some((name) => name.includes("LATER"))).toBe(false);
+  });
+
+  /**
+   * The control for OM5l: the same component, the same catch, and an ordinary
+   * content failure. Nothing about that path changed — the caller's content
+   * failure is still reported as the caller's, under the rule that decided it
+   * before checked failures existed, and the failure the run reports is the
+   * component's own rather than a command's.
+   */
+  it("OM5m: an ordinary content failure takes the same path it always did", function* () {
+    const result = yield* runRegistered(
+      {
+        "doc.md": ["<Catching>", "", "<Broken />", "", "</Catching>", "", "MARKER"].join("\n"),
+      },
+      { Catching: CATCHING, Broken: BROKEN },
+    );
+
+    // Unchanged: the projected content's failure is the caller's, and it is
+    // what the run reports — not a checked command failure, and not something
+    // the ledger decided.
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain("broken thing");
+    expect(String(result.error)).not.toContain("Command failed");
   });
 
   it("OM5f: a checked command failure fails a root without <Output>", function* () {

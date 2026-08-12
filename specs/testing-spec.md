@@ -143,6 +143,24 @@ The `name` prop is optional metadata. An unnamed test is identified by its
 source location; headings in the body remain ordinary output and are not
 inferred as names.
 
+### Checked command failures inside a test
+
+A foreground command that exits nonzero is a checked failure, and outside a test
+it fails the run (executable-mdx-spec §3.6). Inside a `<Test>` it is
+**contained**: it becomes that test's failed result, the run's own fatal record
+stays clear, the tests after it still run, and the testing session's existing
+completion policy is what fails the overall run. A contained outcome is decided
+once — replay restores the failed result and the failing testing outcome from
+the journal without running the command again.
+
+Containment belongs to the `<Test>` a testing session built, by function
+identity. The session reports that exact object to the host that starts the
+execution, which hands it back on its own options; nothing a document reaches is
+offered the identity or a way to nominate another. A repository component named
+`Test` is chosen ahead of the package's, is a different function, and receives
+no containment: a checked failure inside it is the run's, exactly as it would be
+anywhere else the document did not authorize one.
+
 A test body behaves like any regular component body. Tests run sequentially in
 expansion order. Each test runs in a child Effection scope and an isolated
 binding environment. It inherits ambient context and bindings, but its context

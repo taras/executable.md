@@ -41,11 +41,23 @@ import {
   TEST_PROPS,
 } from "./test-component.ts";
 import type { TestHandlers } from "./handlers.ts";
+import type { FunctionComponent } from "@executablemd/core";
 
 const TEST_TIMEOUT_MS = 20_000;
 
-export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
-  yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
+/**
+ * Install the testing components, and report the `<Test>` this session built.
+ *
+ * The identity is returned rather than published: a host that starts an
+ * execution passes it back through its own options so a checked command failure
+ * inside a test is that test's outcome. A caller that ignores it gets the
+ * previous behaviour, and nothing a document reaches is offered the identity or
+ * a way to nominate another (#441).
+ */
+export function* installTestingComponents(options?: {
+  verbose?: boolean;
+}): Operation<FunctionComponent> {
+  return yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
 }
 
 /**
@@ -55,7 +67,7 @@ export function* installTestingComponents(options?: { verbose?: boolean }): Oper
 export function* installHandlers(
   handlers: TestHandlers,
   options?: { verbose?: boolean },
-): Operation<void> {
+): Operation<FunctionComponent> {
   if (options?.verbose) {
     yield* Test.around({ verbose: () => true });
   }
@@ -88,6 +100,12 @@ export function* installHandlers(
       };
     },
   });
+  // Built once, so the identity registered below and the identity enrolled for
+  // containment are the same object. A repository `Test` is chosen ahead of
+  // this one and is a different function, which is exactly why containment is
+  // asked for by identity rather than by name.
+  const test = createTest(handlers.timeoutMs);
+
   // Non-reserved defaults: a repository component of either name is chosen
   // ahead of these, as it would be ahead of any other package's.
   const registrations: ComponentRegistration[] = [
@@ -95,7 +113,7 @@ export function* installHandlers(
     {
       name: "Test",
       origin: "@executablemd/testing",
-      fn: createTest(handlers.timeoutMs),
+      fn: test,
       props: TEST_PROPS,
     },
     // The table stays data: it names the comparison and the props each kind
@@ -159,6 +177,8 @@ export function* installHandlers(
       yield* next(request);
     },
   });
+
+  return test;
 }
 
 /** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */
