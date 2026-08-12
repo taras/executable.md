@@ -407,11 +407,25 @@ transaction ([#365](https://github.com/taras/executable.md/issues/365), shipped)
 Two things still keep *this* document from being started that way, and neither
 is durability. The run's Workspace holds no repository until `<Repository>` and
 `<Worktree>` exist (#293), so the `<Glob>` above would search an empty
-filesystem. And a run pins its definition to one committed Git object and
-installs no component search path, so the stages beside it — `InstructionFiles`,
-`Discovery`, `UserCheckpoint`, `Planning`, `Implementation` — resolve to nothing
-under `xmd workflow start`. Under `xmd run` they resolve as ordinary repository
-components on its search path, which is where the shipped subset is exercised.
+filesystem. And a run pins its definition to one committed Git object and passes
+no repository component search path, so the stages beside it —
+`InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, `Implementation` —
+resolve to nothing under `xmd workflow start` and `xmd workflow resume`. Under
+`xmd run` they resolve as ordinary repository components on its search path,
+which is where the shipped subset is exercised.
+
+Making `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, and
+`Implementation` reachable under `xmd workflow start` and `xmd workflow resume`
+is [#301](https://github.com/taras/executable.md/issues/301)'s, along with
+composing the supervised workflow they belong to. The outcome it owes is an
+authority and identity one: the trusted host authorizes the component code the
+retained definition invokes, and workflow-definition identity and
+retained-history admission account for it, so a resume or a replay cannot
+substitute what a mutable checkout holds now for the retained component code, and
+missing, incompatible, or unauthorized code is refused before it executes.
+Ordinary `xmd run` resolution is unchanged and workflow execution gains no
+generic repository component search path. How that is achieved is #301's design,
+still to pass architecture review; nothing here selects it.
 
 ## Rendered data flow
 
