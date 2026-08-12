@@ -928,6 +928,18 @@ projects keeps the mode of the region it is written in (rule 3), and a failure
 of it the component does not recover from passes outward wherever that region
 does not print.
 
+**Describing a failure is not owning it.** A component that could not use its
+caller's content may still have something worth saying about what it therefore
+did not do — a file that was not written. Saying it does not move the decision:
+the region that decided the failure still settles it, and the component's
+sentence travels as an account of that decision rather than in place of it.
+Only a decision the region has not made is the component's to make, which is
+why content that merely *printed* its errors leaves the component free to
+refuse on its own terms. The distinction is carried explicitly by the failure a
+component throws, never inferred from what a cause graph happens to contain: a
+component that recovers and then fails on its own terms owns that failure,
+however much of the content's wreckage is still reachable beneath it.
+
 ### 5. Raise decides by value
 
 An error that emerges from the middleware is raised where it stands. Raise

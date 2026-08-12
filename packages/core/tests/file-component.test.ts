@@ -29,7 +29,12 @@ import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
 import { scanSegments } from "../src/scanner.ts";
-import { ContentError, DocumentationError, ErrorMode } from "../src/errors.ts";
+import {
+  ContentError,
+  DocumentationError,
+  ErrorMode,
+  ProjectedContentError,
+} from "../src/errors.ts";
 import type { ErrorSegment, FunctionComponentDefinition, Segment } from "../src/types.ts";
 import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -648,50 +653,57 @@ describe("Tier FL — File", () => {
     expect(yield* exists(join(fixture.workspace, "sibling-ran.txt"))).toBe(false);
   });
 
-  // FL12b: the same translation under fail-fast, where a failure is an object
-  // rather than a rendered line. What ends the execution is `<File>`'s own
-  // failure — the write is what the document asked for — and the content failure
-  // it was translated from stays reachable beneath it, segments and all, so
-  // nothing is lost by reporting the component's account instead of the child's.
-  it("FL12b: the reported failure is File's own, with the content failure beneath it", function* () {
+  // FL12b: the same translation where the caller's region *decided* the content
+  // failed. Saying what was not written is `<File>`'s to say; the failure is
+  // not its to own, so the sentence travels as an account of the caller's
+  // decision and is settled where the element was written (§6.8.1). The write
+  // is refused either way.
+  it("FL12b: a decided content failure keeps the caller's ownership, in File's words", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
 
-    const observed = yield* observe(fixture, '<File path="notes.md"><Broken /></File>', "throw");
+    // A child nothing recovers, so the region decides the failure rather than
+    // the child printing it: that decision is the caller's, and the whole
+    // question is whether `<File>` may take it over.
+    const observed = yield* observe(fixture, '<File path="notes.md"><Missing /></File>', "output");
 
     expect(yield* read(fixture, "notes.md")).toBe("first");
 
-    // Two errors exist, each reported once: the child's, and the one `<File>`
-    // chose in its place.
-    expect(observed.raised).toHaveLength(2);
-    expect(observed.raised[0].message).toBe(BROKE);
-    expect(observed.failures).toHaveLength(2);
+    // One error, reported once, where it was created. `<File>` described it
+    // rather than deciding it a second time.
+    expect(observed.raised).toHaveLength(1);
+    expect(observed.raised[0].message).toContain("Missing");
+    expect(observed.failures).toHaveLength(1);
     expect(observed.failures[0].segment).toBe(observed.raised[0]);
-    expect(observed.failures[1].segment).toBe(observed.raised[1]);
 
     const thrown = observed.thrown;
-    expect(thrown).toBeInstanceOf(DocumentationError);
-    if (!(thrown instanceof DocumentationError)) {
-      throw new Error("expected a DocumentationError to leave the expansion");
+    expect(thrown).toBeInstanceOf(ProjectedContentError);
+    if (!(thrown instanceof ProjectedContentError)) {
+      throw new Error("expected the caller's failure to leave the expansion, in File's words");
     }
-    expect(thrown).toBe(observed.failures[1]);
-    // Not the child's decision resurrected: a different object, carrying the
-    // printed error about the write that did not happen.
-    expect(thrown).not.toBe(observed.failures[0]);
+    // File's sentence, about File's own work.
     expect(thrown.message).toContain('did not write "notes.md": its content failed to expand.');
-    expect(thrown.message).toContain(BROKE);
+    expect(thrown.message).toContain("Missing");
+    // Carrying the caller's decision by identity, which is what makes it the
+    // document failure the execution boundary records.
+    expect(thrown.decided).toBe(observed.failures[0]);
+    expect(causes(thrown).includes(observed.failures[0])).toBe(true);
+  });
 
-    const chain = causes(thrown);
-    const recovered = chain.find((link) => link instanceof ContentError);
-    expect(recovered).toBeInstanceOf(ContentError);
-    if (!(recovered instanceof ContentError)) {
-      throw new Error("expected a ContentError in the reported failure's cause chain");
-    }
-    // The same segment objects the document reported, not copies.
-    expect(recovered.errors).toHaveLength(1);
-    expect(recovered.errors[0]).toBe(observed.raised[0]);
-    // And the child's own failure, by identity.
-    expect(chain.includes(observed.failures[0])).toBe(true);
+  // FL12b-throw: documentation renders nothing, so there is nothing for a
+  // sentence about the write to be read in. A `throw` decision is final and
+  // travels alone, exactly as it does when a component lets the content failure
+  // pass without translating it.
+  it("FL12b-throw: a throw decision leaves the expansion as the caller's own", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const observed = yield* observe(fixture, '<File path="notes.md"><Missing /></File>', "throw");
+
+    expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(observed.raised).toHaveLength(1);
+    expect(observed.raised[0].message).toContain("Missing");
+    expect(observed.thrown).toBe(observed.failures[0]);
   });
 
   // FL12c: the printing half of the same translation. The component reports

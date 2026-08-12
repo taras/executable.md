@@ -1660,9 +1660,16 @@ describe("Tier OM — caller content at a plain root leaves the printing compone
   /** The paths a write was asked for, with the host provider never reached. */
   function runRecordingWrites(
     files: Record<string, string>,
-  ): Operation<Run & { writes: string[] }> {
+  ): Operation<Run & { writes: string[]; raised: ErrorSegment[] }> {
     return scoped(function* () {
       const writes: string[] = [];
+      const raised: ErrorSegment[] = [];
+      yield* Component.around({
+        *raise([segment], next) {
+          raised.push(segment);
+          return yield* next(segment);
+        },
+      });
       yield* API.Files.around({
         // deno-lint-ignore require-yield
         *writeTextFile([input]) {
@@ -1670,27 +1677,54 @@ describe("Tier OM — caller content at a plain root leaves the printing compone
           return Ok(fileWriteSuccess("host-committed"));
         },
       });
-      return { ...(yield* run(files)), writes };
+      return { ...(yield* run(files)), writes, raised };
     });
   }
 
   /**
-   * `<File>` is the one printing component that recovers deliberately: a write
-   * has nowhere to show a printed error, so it catches the content failure and
-   * reports a failure of its own instead (§6.13). That own failure is what its
-   * `printErrors(fn)` declaration prints, which is a decision about the write
-   * and not about the region — so the write is refused, the reader is told, and
-   * the root is not settled by somebody else's recovery.
+   * `<File>` says what it did not write, which is a sentence about its own
+   * work. It is not a claim on the failure: the caller's region decided that
+   * one, so the account of it passes outward through `<File>`'s own
+   * `printErrors(fn)` declaration and is settled where the element was written
+   * (§6.8.1, §6.13). At a plain root that ends the run.
    */
-  it("OM21: an ordinary failure in <File>'s children writes nothing and is reported once", function* () {
+  it("OM21: an ordinary failure in <File>'s children writes nothing and ends the run", function* () {
     const result = yield* runRecordingWrites({
       "doc.md": '<File path="out.txt">\n<NoSuchComponent />\n</File>\n\nMARKER',
     });
 
+    // Nothing reached the provider: the write is refused before it is asked for.
     expect(result.writes).toEqual([]);
-    expect(result.output).toContain('did not write "out.txt"');
-    expect(result.output).toContain("NoSuchComponent");
+    expect(result.ok).toBe(false);
+    // The translated sentence is what the run reports, carrying the underlying
+    // failure with it.
+    const reported = String((result.error as Error).message);
+    expect(reported).toContain('did not write "out.txt"');
+    expect(reported).toContain("NoSuchComponent");
+    // Once. The caller's region decided the failure, and `<File>` described it
+    // rather than deciding it a second time.
+    expect(
+      result.raised.filter((segment) => segment.message.includes("NoSuchComponent")),
+    ).toHaveLength(1);
+    expect(result.output).not.toContain('did not write "out.txt"');
+    expect(result.output).not.toContain("MARKER");
+  });
+
+  /**
+   * The authored-recovery half. Inside a region that prints, the caller's
+   * content settles its own errors as data — so what `<File>` refuses to write
+   * is a document holding a printed error, and refusing *that* is its own
+   * decision, printed by its own declaration. The run continues.
+   */
+  it("OM21b: <PrintErrors> around the same element prints and continues", function* () {
+    const result = yield* runRecordingWrites({
+      "doc.md":
+        '<PrintErrors>\n<File path="out.txt">\n<NoSuchComponent />\n</File>\n</PrintErrors>\n\nMARKER',
+    });
+
+    expect(result.writes).toEqual([]);
     expect(result.ok).toBe(true);
+    expect(result.output).toContain('did not write "out.txt"');
     expect(result.output).toContain("MARKER");
   });
 

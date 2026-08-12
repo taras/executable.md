@@ -5754,17 +5754,38 @@ A code block that fails is ordinarily a printed error (§6.9): the content still
 renders, with the printed error in place. A component that renders its content
 shows it to the reader. `<File>` renders nothing, so the same printed error would
 be written into the file instead. It therefore fails the invocation rather
-than writing, and carries the underlying messages in its own printed error —
+than writing, and carries the underlying messages in its own diagnostic —
 which is the only place a reader would otherwise learn what went wrong.
 
-When the failure propagates, the reported failure is `<File>`'s as well: the
-write is what the document asked for, and that it did not happen is the fact a
-reader needs. The
-general rule then applies (§5.1.2) — the `DocumentationError` keeps `<File>`'s own
-error as its cause, and the content failure that error was translated from stays
-reachable beneath it, carrying the same error segments the document reported — so
-reporting the component's account costs nothing that a host inspecting the
-failure needs.
+**Saying what was not written is not the same as owning the failure.** The
+sentence is the component's, because the write is the component's work. Whose
+failure it is stays with whoever wrote the content that failed, and the two
+cases are told apart by what the caller's region already did with the error:
+
+- **The region printed it.** The content settled its errors as data, so there
+  is no failure outstanding, and refusing to write a document that holds a
+  printed error is `<File>`'s own decision. It reports that refusal like any
+  other failure of its own, its `printErrors(fn)` declaration prints it, and
+  the run continues. The general rule applies (§5.1.2): the content failure the
+  refusal was translated from stays reachable beneath it, carrying the same
+  error segments the document reported.
+- **The region decided the failure.** That decision is the caller's.
+  `<File>` describes what it did not write and hands the decision on unchanged:
+  the account passes outward through `<File>`'s own printing declaration —
+  which speaks for the component and never for the text somebody else put
+  inside it (§6.8.1) — and is settled by the region the element is written in.
+  At a plain root that ends the document execution, no later sibling starts,
+  and the reported failure carries `<File>`'s sentence with the caller's
+  decision as its cause. Inside a `<PrintErrors>` region the content prints
+  instead, which is the first case.
+
+A `throw` decision is final, as it is everywhere else: documentation renders
+nothing, so there is nothing for a sentence about the write to be read in, and
+the caller's decision travels alone.
+
+Either way the write is refused before the provider is asked for it, and the
+failure is reported exactly once — `<File>` describes a decision, it never makes
+a second one.
 
 #### The provider boundary
 
@@ -7946,6 +7967,9 @@ visible warning blocks, gather into a separate error report).
 | FL10 | Escaping file symlink | Rejected, the outside content never appears, and the destination it pointed at is not named |
 | FL11 | Escaping parent symlink | Rejected for a file that does not exist yet, nothing is created outside, and no absolute path is named |
 | FL12 | Failing child | The invocation fails instead of writing, carries the block's own failure, and the existing file is unchanged |
+| FL12b | A decided content failure | `<File>` describes what it did not write and leaves the decision the caller's: the account carries that decision by identity, is reported once where the error was created, and the existing file is unchanged |
+| FL12b-throw | The same under `throw` | The caller's decision leaves the expansion alone; documentation has nowhere to read a sentence about the write |
+| FL12c | Content that printed | The refusal to write a document holding a printed error is `<File>`'s own, printed once by its own declaration |
 | FL13 | Failed replacement | A directory that refuses new files stops the write with the previous content in place |
 | FL14 | No temporary left behind | A successful write leaves only the target |
 | FL15 | Completed-root replay | A journal with the root's close restores the result without running `<File>`: the file it read is removed first and the output is unchanged |
@@ -8082,7 +8106,9 @@ platform's.
 | OM17 | Chunks, not the close value | A streamed prefix arrives before the failing region's output, and both reach the stream |
 | OM18–OM19 | A printed error is data | A child's printed error does not fail a parent's documentation; an uncaptured failure in the same position still propagates |
 | OM20 | A bound command in the region | Its nonzero status is data and the region continues; the same command unbound stops the run and the block after it never starts |
-| OM21–OM22 | Caller content at a plain root | `<File>` refuses the write and reports its own failure, which is the one decision a write's author owns; a relaying component passes the content failure outward, where it ends the run and is observed once |
+| OM21 | Caller content through `<File>` at a plain root | Nothing reaches the provider, the run ends `Err` carrying `<File>`'s sentence and the underlying failure, the diagnostic is observed once, and the sibling after it never renders |
+| OM21b | The same element inside `<PrintErrors>` | The content prints instead, so refusing the write is `<File>`'s own decision: it is printed, and the run continues |
+| OM22 | The same failure through a relaying component | Passed outward unchanged, ending the run, and observed once |
 
 ### Tier RF — Root failure settlement
 

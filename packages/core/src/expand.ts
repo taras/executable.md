@@ -51,6 +51,7 @@ import {
   ErrorMode,
   fatalCause,
   filesFatalFailure,
+  projectedContentFailure,
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
@@ -2784,6 +2785,33 @@ function* expandFunctionComponent(
       // Everything below runs after `withInvocation()` has dismantled the
       // invocation, so what is handled here accounts for the body and its
       // teardown together.
+
+      // A component's account of a failure that is not its own. Asked first,
+      // because the decision it carries is this failure's *subject* rather than
+      // a fatal error discovered beneath it — the same reason a
+      // `ContentExpansionFailure` holding one is not fatal here either. Nothing
+      // fatal can be the subject: a durability or Files failure is rethrown
+      // wherever a segment would otherwise be raised, so it never becomes the
+      // decision a region settled.
+      const projected = projectedContentFailure(error);
+      if (projected !== undefined) {
+        // A `throw` decision is final and no boundary may print what left the
+        // region, so the decision travels alone (see the same rule below).
+        if (!decidedByOutput(projected)) {
+          throw projected;
+        }
+        return [
+          yield* handleFailure({
+            name,
+            ...(expansion.position === undefined ? {} : { position: expansion.position }),
+            error: asFailure(error),
+            // The sentence is this component's; the failure is the caller's.
+            // A declaration the component made about itself passes it outward
+            // (§6.8.1), so the region the content was written in settles it.
+            origin: "content",
+          }),
+        ];
+      }
 
       // Not the document's failure to render: a journal that no longer describes
       // this run, or an error mode that has already decided the document fails.

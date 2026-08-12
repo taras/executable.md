@@ -190,6 +190,50 @@ export class ContentError extends Error {
 }
 
 /**
+ * A component's account of a failure that is not its own.
+ *
+ * A component may ask for the content its caller wrote, find it already
+ * decided against, and still have something worth saying about what it
+ * therefore did not do — a file that was not written. The sentence is the
+ * component's. **Whose failure it is does not change**: the region the content
+ * is written in decided it, and a `printErrors(fn)` declaration speaks for the
+ * component and never for the text somebody else put inside it (§6.8.1). So
+ * this carries that decision, and the invocation boundary reports the
+ * component's sentence with the ownership left where it was.
+ *
+ * Recognized on the thrown object exactly, by class, and never through a cause
+ * graph. A component that recovers from failed content and then fails on its
+ * own terms reports an ordinary failure that merely happens to have a
+ * `ContentError` underneath it, and that one is the component's own — which is
+ * the distinction a search of the causes could not make.
+ *
+ * Internal to canonical core and its own components. Nothing a document, a
+ * repository component or a middleware package supplies constructs one.
+ */
+export class ProjectedContentError extends Error {
+  /** The caller's failure, as the region the content is written in decided it. */
+  readonly decided: DocumentationError;
+
+  constructor(message: string, decided: DocumentationError) {
+    // The decision is the cause, so the failure that reaches the execution
+    // boundary is discoverable as the document failure it already is.
+    super(message, { cause: decided });
+    this.name = "ProjectedContentError";
+    this.decided = decided;
+  }
+}
+
+/**
+ * The decided caller failure this one is an account of, if it is one.
+ *
+ * One read of the value itself. A component failure carrying a `ContentError`
+ * is not this, however deep the resemblance.
+ */
+export function projectedContentFailure(error: unknown): DocumentationError | undefined {
+  return error instanceof ProjectedContentError ? error.decided : undefined;
+}
+
+/**
  * A failure that says the journal no longer describes this run: a stale
  * recorded input (§6.11), or a divergence between what the journal holds and
  * what the run reached.
