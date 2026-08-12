@@ -29,6 +29,7 @@ import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
+import { Component } from "../src/component-api.ts";
 import { useStubFs } from "@executablemd/runtime/test";
 import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
@@ -1098,5 +1099,193 @@ describe("Tier FG — bound command results", () => {
     expect(ran).toBe(0);
     expect(starts.count).toBe(0);
     expect(run.output).toContain("{probe.exitCode}");
+  });
+  /**
+   * `Component.applyModifiers` is a supported public override surface, so what
+   * passes through it is middleware's to rewrite. That is exactly why neither
+   * the fact that authorizes a bound block nor the outcome it settles to may
+   * travel that way: a handler that stripped the fact would have the block
+   * composed as an ordinary one — `silent exec as="probe"` composing and
+   * starting a child — and a handler that invented a result would decide what
+   * the document read.
+   */
+  it("FG35: a handler cannot make a refused chain run by rewriting what it delegates", function* () {
+    const rewritten = [
+      '```bash silent exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+    const starts = { count: 0 };
+    let delegated = 0;
+
+    const copied = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        // The reproduction: take the block apart and hand over an ordinary
+        // object carrying the same public members.
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            delegated += 1;
+            return yield* next(modifiers, { ...request });
+          },
+        });
+        return yield* runDocument(rewritten, { retainProcessOutput: false });
+      });
+    });
+
+    expect(delegated).toBe(1);
+    expect(copied.output).toContain("canonical execution did not issue");
+    expect(starts.count).toBe(0);
+    expect(copied.output).toContain("{probe.exitCode}");
+
+    // And delegating the genuine request does not smuggle the chain past the
+    // authorization either: `silent` is still not middleware a binding accepts.
+    const genuine = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(rewritten, { retainProcessOutput: false });
+      });
+    });
+
+    expect(genuine.output).toContain("only the built-in `timeout` modifier");
+    expect(starts.count).toBe(0);
+    expect(genuine.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG36: a handler cannot manufacture a bound outcome", function* () {
+    const source = [
+      '```bash exec as="probe"',
+      "echo ran",
+      "```",
+      "",
+      "[{probe.exitCode}]",
+      "",
+    ].join("\n");
+    const starts = { count: 0 };
+
+    // Short-circuited: the operation returns without delegating, so canonical
+    // execution never ran and there is no outcome to bind.
+    const quiet = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyBoundModifiers(_args, _next) {},
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(quiet.output).toContain("returned without delegating");
+    expect(starts.count).toBe(0);
+    expect(quiet.output).toContain("{probe.exitCode}");
+
+    // Fabricated: a handler answering with an outcome of its own decides
+    // nothing, because what it returns is never read.
+    const invented = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyBoundModifiers(_args, _next) {
+            return {
+              output: "",
+              exitCode: 0,
+              stderr: "",
+              bound: { exitCode: 0, stdout: "invented", stderr: "" },
+            } as unknown as void;
+          },
+        });
+        return yield* runDocument(source, { retainProcessOutput: false });
+      });
+    });
+
+    expect(invented.output).not.toContain("invented");
+    expect(invented.output).toContain("returned without delegating");
+    expect(starts.count).toBe(0);
+    expect(invented.output).toContain("{probe.exitCode}");
+  });
+
+  it("FG37: ordinary instrumentation and overrides are unaffected", function* () {
+    const seenBlocks: string[] = [];
+
+    const instrumented = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* Component.around({
+          *applyModifiers([modifiers, block], next) {
+            seenBlocks.push(block.content.trim());
+            return yield* next(modifiers, block);
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo watched", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return seen;
+    });
+
+    expect(seenBlocks).toEqual(["echo watched"]);
+    expect(instrumented.stdout).toContain("watched");
+
+    // A full override still decides an ordinary block's result.
+    const overridden = yield* watching(function* (seen) {
+      const run = yield* scoped(function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *applyModifiers(_args, _next) {
+            return { output: "substituted\n", exitCode: 0, stderr: "" };
+          },
+        });
+        return yield* runDocument(["```bash exec", "echo never-run", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+        });
+      });
+      return { output: run.output, seen };
+    });
+
+    expect(overridden.output).toContain("substituted");
+    expect(overridden.seen.stdout).not.toContain("never-run");
+  });
+
+  it("FG38: the authorized chains still produce the bound outcome under a handler", function* () {
+    const delegated: string[] = [];
+
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* Component.around({
+          *applyBoundModifiers([modifiers, request], next) {
+            delegated.push(request.blockId);
+            return yield* next(modifiers, request);
+          },
+        });
+        return yield* runDocument(
+          [
+            '```bash exec as="plain"',
+            "printf one; exit 1",
+            "```",
+            "",
+            '```bash timeout=30s exec as="bounded"',
+            "printf two; exit 2",
+            "```",
+            "",
+            "[{plain.exitCode}|{plain.stdout}][{bounded.exitCode}|{bounded.stdout}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false },
+        );
+      });
+    });
+
+    // The handler saw both blocks, and both bound what their command settled to.
+    expect(delegated).toHaveLength(2);
+    expect(run.output).toContain("[1|one][2|two]");
   });
 });

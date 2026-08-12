@@ -1526,6 +1526,32 @@ normally — there is no canonical outcome for them to be ranked against.
 Cancellation keeps structured teardown semantics and is never reported as an
 ordinary policy failure.
 
+### Capability-backed bound commands
+
+`exec as="name"` turns a command's exit status into data, so two facts decide
+what a document ends up believing: that the block is bound — which is what
+holds its chain to the built-in exec terminal and the built-in `timeout` — and
+what the process settled to. Neither is block data.
+
+`Component.applyModifiers` is a supported override surface, and what passes
+through it is middleware's to rewrite or to answer. So a bound block is asked
+for through `applyBoundModifiers`, with a one-use request canonical core issues
+and claims. Public middleware composes around it on the same terms it composes
+anywhere: it may observe the request, refuse by throwing, and delegate. It
+cannot produce the command. Canonical core composes the chain against the
+context the block was issued with, so a rewritten, copied or fabricated request
+runs nothing rather than running something else; the outcome goes to the
+expansion that issued the request rather than through the operation's return
+value; a handler that does not delegate leaves the command unrun and nothing
+bound; and a failure canonical execution raised stays raised whether or not a
+handler catches it.
+
+Authorization inside that chain is by factory identity, not by registered name.
+A registry answers a name with whatever was registered under it, so admitting
+`timeout` or `exec` as words would let `ExecuteOptions.modifiers` substitute the
+middleware a binding contract names. Ordinary blocks are unaffected: a document
+still reaches a registered modifier by name, a replaced `timeout` included.
+
 ### Trusted host orchestration
 
 A **trusted host** is the code that decides what an execution is for — a CLI
@@ -1664,7 +1690,7 @@ Status is measured against main.
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
-| `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name | built on the #447 stack |
+| `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |

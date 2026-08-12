@@ -32,6 +32,7 @@ import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
 import { ExecutionProtocolError, issueExecution } from "./execution-request.ts";
 import { DocumentProtocolError, issueDocument } from "./document-request.ts";
+import { claimBoundExec } from "./bound-exec.ts";
 import type { DocumentSettlement, IssuedDocument } from "./document-request.ts";
 import type { DocumentRequest, DurablePreparation } from "./document-request.ts";
 import type { CompletionFailure, ExecutionRequest } from "./execution-request.ts";
@@ -1808,6 +1809,16 @@ function* executeDocument(
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry, boundChain);
             return yield* chain();
+          },
+          // The terminal for one bound block: it composes against the context
+          // that block was issued with, so what a handler delegated decides
+          // nothing about what runs, and the outcome goes back to the issuing
+          // expansion rather than through this operation's return value.
+          *applyBoundModifiers([modifiers, request], _next) {
+            yield* claimBoundExec(request, (context) => {
+              const chain = composeModifierChain(modifiers, context, registry, boundChain);
+              return chain() as unknown as Operation<CodeBlockResult>;
+            });
           },
           evalScope: () => rootEvalScope,
         },

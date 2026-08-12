@@ -1064,6 +1064,21 @@ block refuses it before that middleware or a process runs. Registration is
 otherwise unaffected — an ordinary block still reaches a registered modifier by
 name, that one included.
 
+Neither the fact that authorizes that chain nor the outcome it settles to
+travels as block data. `Component.applyModifiers` is a supported override
+surface, so what passes through it is middleware's to rewrite: a handler that
+removed the bound fact would have the block composed as an ordinary one, and one
+that answered with a result of its own would decide what the document read. A
+bound block is therefore asked for through `applyBoundModifiers`, with a request
+canonical execution issues and claims. Middleware composes around it exactly as
+it does around an ordinary block — it may observe the request, refuse it by
+throwing, and delegate it — while canonical execution composes the chain against
+the context the block was issued with and reports the outcome to the expansion
+that issued it. A request that was not issued by canonical execution, or one
+already claimed, runs nothing at all; a handler that does not delegate leaves
+the command unrun and nothing bound; whatever a handler returns is not read; and
+a failure canonical execution raised stays raised even if a handler catches it.
+
 A binding is not a retention decision. Both channels are buffered for the
 current binding whether or not the host asked for a record, and that buffer adds
 nothing to the durable exec result: a transient run still retains the exit
@@ -1795,7 +1810,7 @@ run but are absent from the diagnostic trace.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`) — §5.5 |
+| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`) — §5.5 |
 | `src/eval-context.ts` | `compileBlock()` — delegates to `API.Env.compile` |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
@@ -1825,6 +1840,7 @@ run but are absent from the diagnostic trace.
 | `packages/runtime/service.ts` | provider-neutral `API.Service`, XMD service handshake types and `startService()` attachment |
 | `src/api.ts` | Document Output Api definition, exports `output` (§9.2) |
 | `src/document-request.ts` | `DocumentRequest` and `DocumentProtocolError` — the one-use capability one document expansion is asked through, its detached prop snapshot, and the settlement canonical core reconciles |
+| `src/bound-exec.ts` | `BoundExecRequest` and `BoundExecProtocolError` — the one-use capability one `exec as="name"` block is run through, and the settlement the issuing expansion binds |
 | `src/collect.ts` | `collect()` — stream consumption helper, returns `Result<string>` |
 | `src/output/mod.ts` | Barrel export for output middleware |
 | `src/output/normalize.ts` | `useNormalizedOutput()` — whitespace normalization middleware (§9.4) |
@@ -3443,6 +3459,7 @@ interface, and each operation is also exported directly:
 |---|---|---|
 | `importComponent(name)` | Resolve and import a component; `"__root__"` is the root document | throws a missing-provider error |
 | `applyModifiers(modifiers, block)` | Execute a code block through its modifier chain | throws a missing-provider error |
+| `applyBoundModifiers(modifiers, request)` | Run one `exec as="name"` block (§3.6). Returns nothing: a handler may observe, refuse or delegate the request, and only canonical execution runs the command | throws a missing-provider error |
 | `raise(error)` | Report an `ErrorSegment` under the ambient error mode (§6.9); whoever creates one calls this | decides it: printed under `print`, thrown under `output` or `throw` |
 | `env` | The current binding environment (§4.3) | `undefined` |
 | `evalScope` | The current eval scope (§4.4) | `undefined` |
@@ -7545,6 +7562,10 @@ visible warning blocks, gather into a separate error report).
 | FG32 | A registered modifier named `timeout` | Refused for a bound block before it runs, with no process started, while an ordinary block still reaches it by name |
 | FG33 | The built-in `timeout` | Still wraps a bound `exec`, which still binds its outcome |
 | FG34 | A registered modifier named `exec` | Is not the exec terminal a binding names: refused, never invoked, and no process started |
+| FG35 | A handler that rewrites what it delegates | A copied request runs nothing, and the genuine one is still held to the authorized chain; no process starts and nothing is bound |
+| FG36 | A handler that short-circuits or invents an outcome | Neither creates a bound command: no process starts, nothing is bound, and what a handler returns is not read |
+| FG37 | Ordinary instrumentation and overrides | An `applyModifiers` handler still observes an unbound block, and a full override still decides its result |
+| FG38 | Both authorized chains under a handler | `exec as` and `timeout= exec as` each bind what their command settled to while a public handler composes around them |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |

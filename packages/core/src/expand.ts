@@ -34,6 +34,7 @@ import { interpolate } from "./interpolate.ts";
 import { interpolateEvalBindings } from "./eval-interpolate.ts";
 import {
   Component,
+  applyBoundModifiers,
   applyModifiers,
   env,
   evalScope,
@@ -57,6 +58,7 @@ import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import CoreTest from "./components/Test.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
+import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -910,43 +912,67 @@ export function* expandSegments(
           ...(bindingName === undefined ? {} : { bound: true }),
         };
 
-        if (bindingName !== undefined && !evalEnv) {
-          result.push(
-            yield* raise({
-              type: "error",
-              message: '`as="name"` requires an evaluation environment.',
-              source: segment.content,
-            }),
-          );
+        if (bindingName !== undefined) {
+          if (!evalEnv) {
+            result.push(
+              yield* raise({
+                type: "error",
+                message: '`as="name"` requires an evaluation environment.',
+                source: segment.content,
+              }),
+            );
+            break;
+          }
+          // A bound command's outcome is data the document decides on: the
+          // block renders nothing, displays neither channel, and a nonzero
+          // status is a field rather than a failure — including inside
+          // `<Output>`, where an ordinary command's would end the run (§3.6).
+          //
+          // Asked for through a request rather than by handing the block over:
+          // middleware composes around this exactly as it does around an
+          // ordinary block, and neither the fact that authorizes the chain nor
+          // the outcome it settles to passes through its hands. What comes back
+          // from the operation is not read at all.
+          const issued = issueBoundExec(context);
+          let thrown: { raised: unknown } | undefined;
+          try {
+            yield* applyBoundModifiers(segment.modifiers, issued.request);
+          } catch (error) {
+            thrown = { raised: error };
+          }
+          const settled = issued.settlement();
+          const failure =
+            settled.status === "raised"
+              ? settled.raised
+              : settled.status === "absent"
+                ? (thrown?.raised ?? settled.refusal)
+                : thrown?.raised;
+          if (failure !== undefined) {
+            const fatal = fatalCause(failure);
+            if (fatal !== undefined) {
+              throw fatal;
+            }
+            result.push(
+              yield* raise({
+                type: "error",
+                message: failure instanceof Error ? failure.message : String(failure),
+                source: segment.content,
+              }),
+            );
+            break;
+          }
+          if (settled.status === "produced") {
+            evalEnv.values[bindingName] = {
+              exitCode: settled.outcome.exitCode,
+              stdout: settled.outcome.stdout,
+              stderr: settled.outcome.stderr,
+            };
+          }
           break;
         }
 
         try {
           const codeResult = yield* applyModifiers(segment.modifiers, context);
-
-          // A bound command's outcome is data the document decides on: the
-          // block renders nothing, displays neither channel, and a nonzero
-          // status is a field rather than a failure — including inside
-          // `<Output>`, where an ordinary command's would end the run (§3.6).
-          if (bindingName !== undefined && evalEnv) {
-            const outcome = codeResult.bound;
-            if (outcome === undefined) {
-              result.push(
-                yield* raise({
-                  type: "error",
-                  message: `\`as="${bindingName}"\` bound nothing: the chain produced no process outcome.`,
-                  source: segment.content,
-                }),
-              );
-              break;
-            }
-            evalEnv.values[bindingName] = {
-              exitCode: outcome.exitCode,
-              stdout: outcome.stdout,
-              stderr: outcome.stderr,
-            };
-            break;
-          }
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
