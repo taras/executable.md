@@ -100,7 +100,7 @@ import {
   createModifierRegistry,
   useCodeBlock,
 } from "./modifiers.ts";
-import type { ModifierFactory } from "./modifiers.ts";
+import type { BoundExecChain, ModifierFactory } from "./modifiers.ts";
 import { evalFactory } from "./eval-handler.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
@@ -1725,11 +1725,18 @@ function* executeDocument(
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
-  registry.set("exec", createExecFactory(retainProcessOutput));
+  // Held by identity as well as by name: a bound block is authorized against
+  // these exact factories, so a modifier registered under either name is a
+  // replacement rather than the middleware the binding contract names.
+  const boundChain: BoundExecChain = {
+    exec: createExecFactory(retainProcessOutput),
+    timeout: timeoutFactory,
+  };
+  registry.set("exec", boundChain.exec);
   registry.set("silent", silentFactory);
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
-  registry.set("timeout", timeoutFactory);
+  registry.set("timeout", boundChain.timeout);
   registry.set("daemon", daemonFactory);
   registry.set("ephemeral", ephemeralFactory);
   registry.set("service", serviceFactory);
@@ -1799,7 +1806,7 @@ function* executeDocument(
             );
           },
           *applyModifiers([modifiers, context], _next) {
-            const chain = composeModifierChain(modifiers, context, registry);
+            const chain = composeModifierChain(modifiers, context, registry, boundChain);
             return yield* chain();
           },
           evalScope: () => rootEvalScope,

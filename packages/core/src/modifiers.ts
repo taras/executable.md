@@ -67,6 +67,27 @@ export type ModifierFactory = (params: string | undefined) => ModifierMiddleware
 export type ModifierRegistry = Map<string, ModifierFactory>;
 
 /**
+ * The exact middleware a bound `exec` may be composed from.
+ *
+ * A binding turns a command's status into data, so what stands between the
+ * annotation and the process must not be able to change that outcome. Which
+ * middleware that is cannot be read off the info string: a registered modifier
+ * may carry any name, `timeout` included, and the registry answers the name the
+ * document wrote with whatever was registered last. So authorization is by
+ * factory identity — these exact objects, which only the execution that built
+ * them can supply — and a replacement is refused however it is spelled.
+ *
+ * Naming stays the document's: an ordinary block reaches its registered
+ * modifier by name exactly as before, this one included.
+ */
+export interface BoundExecChain {
+  /** The built-in exec terminal this execution created. */
+  exec: ModifierFactory;
+  /** The built-in `timeout` middleware. */
+  timeout: ModifierFactory;
+}
+
+/**
  * Create a new modifier registry, optionally inheriting from a parent.
  */
 export function createModifierRegistry(parent?: ModifierRegistry): ModifierRegistry {
@@ -98,11 +119,22 @@ export function composeModifierChain(
   modifiers: Modifier[],
   context: CodeBlockContext,
   registry: ModifierRegistry,
+  bound?: BoundExecChain,
 ): () => CodeBlockWorkflow {
   // deno-lint-ignore require-yield
   const terminal: () => CodeBlockWorkflow = function* () {
     throw new Error("No terminal modifier (exec/eval) in chain");
   };
+
+  if (context.bound === true) {
+    const refusal = refuseUnauthorizedBinding(modifiers, registry, bound);
+    if (refusal !== undefined) {
+      // deno-lint-ignore require-yield
+      return function* () {
+        throw new Error(refusal);
+      };
+    }
+  }
 
   const terminalNames = new Set(["exec", "eval", "daemon", "service"]);
   const firstTerminal = modifiers.find((modifier) => terminalNames.has(modifier.name));
@@ -163,6 +195,39 @@ export function composeModifierChain(
       }),
     );
   };
+}
+
+/**
+ * Why a bound block's chain is not the one it is allowed to have.
+ *
+ * Every word is resolved through the registry the document will actually run,
+ * and compared with the middleware this execution built. A registered
+ * replacement is therefore refused whether it took the name of the terminal or
+ * the name of the one wrapping modifier — and refused here, where nothing has
+ * been composed, so neither it nor a process runs.
+ */
+function refuseUnauthorizedBinding(
+  modifiers: Modifier[],
+  registry: ModifierRegistry,
+  bound: BoundExecChain | undefined,
+): string | undefined {
+  if (bound === undefined) {
+    return '`as="name"` requires the built-in exec terminal, which this execution did not install.';
+  }
+  const terminal = modifiers.at(-1);
+  if (terminal === undefined || registry.get(terminal.name) !== bound.exec) {
+    return '`as="name"` is supported only with the `exec` terminal.';
+  }
+  const wrapping = modifiers
+    .slice(0, -1)
+    .find((modifier) => registry.get(modifier.name) !== bound.timeout);
+  if (wrapping !== undefined) {
+    return (
+      `only the built-in \`timeout\` modifier may wrap a bound \`exec\`. ` +
+      `Got: "${wrapping.name}".`
+    );
+  }
+  return undefined;
 }
 
 /**

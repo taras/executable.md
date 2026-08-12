@@ -32,6 +32,7 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { useStubFs } from "@executablemd/runtime/test";
 import { FOREGROUND, route } from "../src/foreground.ts";
 import type { ForegroundOutput } from "../src/foreground.ts";
+import type { ModifierFactory } from "../src/modifiers.ts";
 import { API } from "@executablemd/runtime";
 
 interface Seen {
@@ -77,7 +78,11 @@ function* useDirectory(): Operation<string> {
 
 function* runDocument(
   source: string,
-  options: { retainProcessOutput?: boolean; stream?: InMemoryStream } = {},
+  options: {
+    retainProcessOutput?: boolean;
+    stream?: InMemoryStream;
+    modifiers?: Record<string, ModifierFactory>;
+  } = {},
 ): Operation<{ output: string; stream: InMemoryStream }> {
   const stream = options.stream ?? new InMemoryStream();
   yield* useStubFs({ "doc.md": source });
@@ -89,6 +94,7 @@ function* runDocument(
         ...(options.retainProcessOutput === undefined
           ? {}
           : { retainProcessOutput: options.retainProcessOutput }),
+        ...(options.modifiers === undefined ? {} : { modifiers: options.modifiers }),
       }),
     ),
   );
@@ -987,5 +993,110 @@ describe("Tier FG — bound command results", () => {
       expect(run.output).toContain(expected!);
       expect(starts.count).toBe(0);
     }
+  });
+  /**
+   * Authorization is by identity, not by the word the document wrote. A
+   * registered modifier may carry any name — `timeout` included — and the
+   * registry answers that name with whatever was registered last, so a bound
+   * block that admitted middleware by name would let a replacement run around a
+   * command whose status it exists to settle.
+   */
+  it("FG32: a registered replacement named timeout cannot wrap a bound exec", function* () {
+    let wrapped = 0;
+    const custom: ModifierFactory = (_params) => (_args, next) =>
+      (function* () {
+        wrapped += 1;
+        return yield* next();
+      })();
+
+    const starts = { count: 0 };
+    const bound = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(
+          [
+            '```bash timeout=30s exec as="probe"',
+            "echo ran",
+            "```",
+            "",
+            "[{probe.exitCode}]",
+            "",
+          ].join("\n"),
+          { retainProcessOutput: false, modifiers: { timeout: custom } },
+        );
+      });
+    });
+
+    // Refused: the replacement never ran, no child started, nothing was bound.
+    expect(bound.output).toContain("only the built-in `timeout` modifier");
+    expect(wrapped).toBe(0);
+    expect(starts.count).toBe(0);
+    expect(bound.output).toContain("{probe.exitCode}");
+
+    // The same registration is ordinary middleware for an ordinary block.
+    const unbound = yield* watching(function* (seen) {
+      yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(["```bash timeout=30s exec", "echo ran", "```", ""].join("\n"), {
+          retainProcessOutput: false,
+          modifiers: { timeout: custom },
+        });
+      });
+      return seen;
+    });
+
+    expect(wrapped).toBe(1);
+    expect(starts.count).toBe(1);
+    expect(unbound.stdout).toContain("ran");
+  });
+
+  it("FG33: the built-in timeout still wraps a bound exec", function* () {
+    const run = yield* watching(function* (seen) {
+      const { output } = yield* runDocument(
+        [
+          '```bash timeout=30s exec as="probe"',
+          "printf bounded; exit 4",
+          "```",
+          "",
+          "[{probe.exitCode}|{probe.stdout}]",
+          "",
+        ].join("\n"),
+        { retainProcessOutput: false },
+      );
+      return { output, seen };
+    });
+
+    expect(run.output).toContain("[4|bounded]");
+    expect(run.seen.stdout).not.toContain("bounded");
+  });
+
+  /**
+   * The terminal is authorized the same way: a registration that took the name
+   * `exec` is not the exec terminal a binding contract names.
+   */
+  it("FG34: a registered replacement named exec cannot terminate a bound block", function* () {
+    let ran = 0;
+    // deno-lint-ignore require-yield
+    const custom: ModifierFactory = (_params) => (_args, _next) =>
+      (function* () {
+        ran += 1;
+        return { output: "", exitCode: 0, stderr: "" };
+      })();
+
+    const starts = { count: 0 };
+    const run = yield* watching(function* () {
+      return yield* scoped(function* () {
+        yield* counting(starts);
+        return yield* runDocument(
+          ['```bash exec as="probe"', "echo ran", "```", "", "[{probe.exitCode}]", ""].join("\n"),
+          { retainProcessOutput: false, modifiers: { exec: custom } },
+        );
+      });
+    });
+
+    expect(run.output).toContain("supported only with the `exec` terminal");
+    expect(ran).toBe(0);
+    expect(starts.count).toBe(0);
+    expect(run.output).toContain("{probe.exitCode}");
   });
 });

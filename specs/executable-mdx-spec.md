@@ -1056,6 +1056,14 @@ no other terminal. Every other modifier — `silent`, `eval`, `daemon`,
 binding turns a status into data and what stands between the annotation and the
 process must not be able to change that outcome.
 
+Which middleware those are is decided by the exact built-ins the execution
+installed, not by the word the block wrote. A registry answers a name with
+whatever was registered under it, so a modifier registered through
+`ExecuteOptions.modifiers` as `timeout` or as `exec` is a replacement: a bound
+block refuses it before that middleware or a process runs. Registration is
+otherwise unaffected — an ordinary block still reaches a registered modifier by
+name, that one included.
+
 A binding is not a retention decision. Both channels are buffered for the
 current binding whether or not the host asked for a record, and that buffer adds
 nothing to the durable exec result: a transient run still retains the exit
@@ -7534,6 +7542,9 @@ visible warning blocks, gather into a separate error report).
 | FG29 | A command that cannot start | Fails as any block does and binds nothing |
 | FG30 | A bound block that times out | The timeout still wins as a failure; nothing is bound |
 | FG31 | A refused annotation or modifier | `silent`, a non-`exec` terminal, an unquoted, duplicated, non-trailing or invalid name — refused, and no process starts |
+| FG32 | A registered modifier named `timeout` | Refused for a bound block before it runs, with no process started, while an ordinary block still reaches it by name |
+| FG33 | The built-in `timeout` | Still wraps a bound `exec`, which still binds its outcome |
+| FG34 | A registered modifier named `exec` | Is not the exec terminal a binding names: refused, never invoked, and no process started |
 | FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
 | FG21 | `xmd run --journal` | The record keeps both channels |
 | FG22 | `xmd workflow start` | Retains its process results though it names no journal |

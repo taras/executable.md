@@ -1065,32 +1065,18 @@ function* checkedCommandFailure(
 /**
  * Why this block's `as="name"` annotation binds nothing, if it binds nothing.
  *
- * A binding turns a command's status into data, so what may stand between the
- * annotation and the process is exactly what cannot change that outcome: the
- * built-in `timeout`, which bounds the command and stays a failure when it
- * wins. Every other modifier — a second terminal, a display policy, anything a
- * caller registered — is refused here, where no process has started yet.
+ * This is the half of the refusal the source settles by itself: an annotation
+ * that never named a binding names nothing here either. Which middleware a
+ * bound block may be composed from is not a question about words — a registered
+ * modifier may carry any name — so it is decided against the resolved factories
+ * where the chain is composed, before either the middleware or a process runs.
  */
 function bindingRefusal(segment: ExecutableCodeBlock): string | undefined {
   const binding = segment.binding;
-  if (binding === undefined) {
+  if (binding === undefined || binding.ok) {
     return undefined;
   }
-  if (!binding.ok) {
-    return binding.error.message;
-  }
-  const terminal = segment.modifiers.at(-1);
-  if (terminal?.name !== "exec") {
-    return '`as="name"` is supported only with the `exec` terminal.';
-  }
-  const wrapping = segment.modifiers.slice(0, -1).find((modifier) => modifier.name !== "timeout");
-  if (wrapping !== undefined) {
-    return (
-      `only the built-in \`timeout\` modifier may wrap a bound \`exec\`. ` +
-      `Got: "${wrapping.name}".`
-    );
-  }
-  return undefined;
+  return binding.error.message;
 }
 
 function captureError(message: string): ErrorSegment {
