@@ -42,6 +42,7 @@ import {
 } from "@executablemd/durable-streams";
 
 import { forEach } from "@effectionx/stream-helpers";
+import { Stdio } from "@effectionx/process";
 import { open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { inspect } from "node:util";
@@ -487,6 +488,18 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
   yield* installPermissionMode(permissionMode);
 }
 
+/**
+ * Whether a document run started from the command line keeps its commands'
+ * output.
+ *
+ * `--journal` is a request for a diagnostic record, and on this path it is the
+ * only thing that asks for one. It is read here, at the command that owns the
+ * flag, so no shared runner has to guess what an absent pathname meant.
+ */
+function keepsProcessOutput(journal: string | undefined): boolean {
+  return journal !== undefined;
+}
+
 interface DocumentConfig {
   root: RootDocumentSource;
   componentDir: string[];
@@ -503,6 +516,15 @@ interface DocumentConfig {
    * `xmd run` supplies none and gets the empty stream below.
    */
   stream?: DurableStream;
+  /**
+   * Whether this execution keeps what its commands printed.
+   *
+   * Stated by the host path that starts the run, never inferred here. A
+   * pathname is not a retention policy: a workflow owns its journal without
+   * naming one, and reading `journal === undefined` as "keep nothing" would
+   * quietly empty the process results a resumed workflow reads back.
+   */
+  retainProcessOutput: boolean;
 }
 
 interface DocumentMode {
@@ -535,7 +557,8 @@ function* runDocument(
   mode: DocumentMode,
   installService: HostServiceInstaller,
 ): Operation<Result<void>> {
-  const { root, componentDir, verbose, journal, raw, secretDetection } = config;
+  const { root, componentDir, verbose, journal, raw, secretDetection, retainProcessOutput } =
+    config;
 
   // Every CLI invocation starts from an empty stream unless the caller owns
   // one. --journal writes current-run diagnostics only; existing traces are
@@ -619,6 +642,23 @@ function* runDocument(
   // alone. Reading the mode costs no document effects.
   const valueRoot = !mode.testing && (yield* readsValue(root));
 
+  if (valueRoot) {
+    // This run's stdout carries the JSON result and nothing else, so a
+    // command's stdout is shown on the stream that is free. Which of this
+    // process's streams a channel lands on is this process's own business, and
+    // it is settled here, at the boundary that owns them. This is display
+    // policy, downstream of the per-exec boundary: the channel was recorded
+    // when it was received there, and showing it elsewhere leaves that alone.
+    yield* Stdio.around(
+      {
+        *stdout([bytes]) {
+          process.stderr.write(bytes);
+        },
+      },
+      { at: "min" },
+    );
+  }
+
   // Native service authority belongs only to document execution. Help,
   // document inspection, and the agent worker never enter this scope.
   //
@@ -638,6 +678,9 @@ function* runDocument(
       props: mode.props,
       componentDirs: componentDir,
       secretDetection,
+      // Whatever the host path decided. A run that keeps nothing forwards its
+      // commands' output to the reader and accumulates none of it.
+      retainProcessOutput,
     },
     mode.installations ?? [],
   );
@@ -1569,7 +1612,7 @@ function* dispatch(
       const root = propsPhase.root;
       announceSecretDetection(config.secretDetection);
       const result = yield* runScopedDocument(
-        { ...config, root },
+        { ...config, root, retainProcessOutput: keepsProcessOutput(config.journal) },
         {
           testing: false,
           props: props.value,
@@ -1647,7 +1690,11 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      yield* test(command.config, evalFlags.rest, installService);
+      yield* test(
+        { ...command.config, retainProcessOutput: keepsProcessOutput(command.config.journal) },
+        evalFlags.rest,
+        installService,
+      );
       break;
     }
     case "test-agent":
@@ -1703,6 +1750,12 @@ function* dispatch(
               raw: request.value.raw,
               secretDetection: request.value.secretDetection,
               stream: execution.stream,
+              // A workflow owns its journal, so its process results are part of
+              // the run's retained history: a resumed procedure reads back what
+              // its commands printed rather than re-running them to find out.
+              // It names no `--journal`, which is exactly why this is stated
+              // here and never derived from that pathname.
+              retainProcessOutput: true,
             },
             { testing: false, props: execution.props, installations: execution.installations },
             // The workflow authority boundary sits exactly where a host

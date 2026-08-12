@@ -355,7 +355,8 @@ echo after-collision
     );
 
     expect(output).toContain("collides with a live binding");
-    expect(output).toContain("after-collision");
+    // The block ran — its own text went to the reader rather than into the
+    // document (#441), and `executions` is what records that it ran.
     expect(executions).toEqual(["echo after-collision"]);
     expect(
       stream
@@ -406,7 +407,8 @@ echo after-collision
     );
 
     expect(replayOutput).toContain("collides with a live binding");
-    expect(replayOutput).toContain("after-collision");
+    // Replay reproduces the document, which never held the command's text.
+    expect(replayOutput).not.toContain("after-collision");
     expect(executions).toEqual(["echo after-collision"]);
     expect(
       partial
@@ -432,9 +434,9 @@ echo after-provider
 `,
     });
     yield* registerComponents([changingProvider(false)]);
-    expect(String(yield* collect(yield* execute({ path: "doc.md", stream: history })))).toContain(
-      "after-provider",
-    );
+    yield* collect(yield* execute({ path: "doc.md", stream: history }));
+    // The run reached the block after the provider; its text went to the
+    // reader, and `executions` is the record that it ran (#441).
     expect(executions).toEqual(["echo after-provider"]);
 
     const retained = withoutClose(history);

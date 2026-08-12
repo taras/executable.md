@@ -514,7 +514,9 @@ Custom factories can be provided via `ExecuteOptions.modifiers`.
 **`exec`** — executes the code block as a shell command via
 `durableExec`. This is a terminal handler — it does not call `next()`.
 It reads the code block info from the Effection context via
-`useCodeBlock()`. It resolves the exec default at the block —
+`useCodeBlock()`. It forwards the child's channels as they arrive and retains
+their text only when the host asked for a record (§3.6). It resolves the exec
+default at the block —
 `timeoutExec` (`specs/acp-client-spec.md` §Config), which is what a
 `timeout=` modifier around it has already overridden, or what
 `xmd run --timeout-exec` established, or nothing — and hands it to the
@@ -913,7 +915,147 @@ function parseInfoString(infoString: string): ParsedInfoString {
 }
 ```
 
-### 3.6 What is the command?
+### 3.6 Foreground execution, capture, and retention
+
+An `exec` block is a foreground child process.
+
+**The boundary.** A command's output passes through several hands:
+
+```
+child → enclosing host stdio middleware → the per-exec boundary → this
+document's display policy → terminal
+```
+
+Middleware installed around an execution is preprocessing by the run's
+configured execution environment: the process stdio chain is a documented
+extension point, and what is installed there may consume, transform, redact, or
+redirect a channel before the run receives it. One wrapper per `exec` is
+installed before the child is acquired, and the result is snapshotted when the
+`Process` operation settles — which, as **Channels** below records, may be
+before the pumps have finished. Everywhere below, **exact output means exactly
+what reaches the per-exec boundary** — never a claim about what the child wrote
+to its pipe, which no execution observes, and never a claim of pump-complete
+tail delivery. So text a host rewrote is what is captured and
+journaled, output it consumed is absent from both, and output it forwarded on
+the other channel is recorded as that other channel.
+
+`silent`, a capture region's suppression of terminal stdout, quiet runtime
+output, and the command line's value-root stream selection are all *downstream
+display policies*. They decide what a reader sees and never what the run keeps.
+
+**Routing.** stdout and stderr are forwarded to the host's corresponding
+channels as they are received. The first chunk is observable before the child
+exits, and each byte is displayed once: a forwarded block renders nothing into
+the document at completion.
+
+| Context | stdout | stderr |
+| --- | --- | --- |
+| ordinary `exec` | forwarded live | forwarded live |
+| inside `<Capture as>` | collected into the captured value | forwarded live |
+| `silent exec` | neither | neither |
+
+Routing decides whether a channel reaches the terminal, not which of the host's
+streams it lands on. That second question is the host's, and is answered
+downstream: under `xmd run` a value root's stdout carries the JSON result, so
+the command line shows a command's stdout on the stream the result leaves free
+while still retaining it as stdout, and stdout stays JSON-only.
+
+Capture is structural, not a modifier: a `<Capture as>` region may hold prose,
+components and several blocks, and every foreground block inside it writes its
+stdout into the binding rather than to the reader. Streaming and capturing at
+once is not implied.
+
+```md
+<Capture as="buildOutput">
+```bash exec
+deno task build
+```
+</Capture>
+```
+
+**Retention.** What a run keeps is the host's explicit choice, carried by
+`ExecuteSettings.retainProcessOutput` and defaulting to keeping output so an
+existing programmatic caller is unchanged. The path that starts a run states it;
+no shared runner infers it from whether a journal pathname was named.
+
+| Invocation | Live routing | Retained result |
+| --- | --- | --- |
+| `xmd run`, `xmd test` | as the table above | exit status only |
+| `xmd run --journal <path>` | unchanged | exit status, stdout, and stderr — diagnostic persistence of what the configured execution environment forwarded |
+| `xmd workflow start`, `xmd workflow resume` | unchanged | exit status, stdout, and stderr |
+| programmatic `execute()` | unchanged | exit status, stdout, and stderr |
+
+A workflow names no journal — it owns one — and retains durably within the
+environment it authorized, because its process results are part of the run's
+retained history: a resumed procedure reads back
+what a command printed rather than running it again to find out.
+
+Where nothing is retained the run never builds the complete strings: the Process
+operation accumulates only when the caller asked it to. The one exception is a
+structural capture, whose buffer has the capture's scope and holds received
+stdout alone. Where output is retained it is kept in addition to the routing the
+document chose — including for `silent` and captured blocks, because a display
+policy does not weaken an audit record. Silencing output for the host's terminal
+likewise leaves the record intact: not showing something and not knowing it are
+different decisions.
+
+Retained output crosses the pre-persistence secret gate, which examines what the
+boundary received — after enclosing middleware, not before. A host may therefore
+redact a credential upstream so that it never reaches the gate, and a host that
+introduces credential-shaped text upstream is refused like any other run that
+would persist one. Output that is not retained is never accumulated for a
+scanner to inspect.
+
+**Channels.** A channel is the stdio operation on which the boundary receives
+bytes. Enclosing middleware that forwards a command's stdout on stderr has
+reclassified it, and the result says stderr. Below the boundary nothing
+reclassifies anything: no path hands one channel's bytes to the other channel's
+operation, so the received channel is never restated and never recovered from a
+byte payload, from contextual state, or from state held for the run. A
+downstream policy showing one channel on another of the host's streams changes
+nothing about the result. Each received channel decodes independently, so a
+character split across two chunks survives interleaving with the other channel.
+`Process.join()` may settle before the stdout and stderr pumps and their stdio
+middleware finish, so output a child writes as the pumps settle may not be
+received at all and may therefore be missing from what is retained or captured.
+effectionx #244 owns that limitation, and nothing here claims pump-complete tail
+delivery or retention until it is integrated.
+
+**Failure.** A nonzero exit is a checked failure. The ambient printing mode may
+decide how it is reported, never that the run succeeded: later executable
+blocks do not run and the execution fails, with no `<Output>` declaration
+required. `<Output>` selects rendered document content and nothing else.
+`silent` hides output; it does not convert a failure into success.
+
+Exactly one thing recovers a checked failure: an explicit error-handling
+construct written in the document, which is `<PrintErrors>`. `printErrors(fn)`,
+built-in printing boundaries such as `<File>` and `<TempDir>`, component failure
+middleware, and a component that catches the `ContentError` its projected
+content raised all decide how their own failure is reported and none of them
+recovers a checked command failure: the run fails, nothing is written or
+replaced, required cleanup still runs, and no later executable work begins.
+
+`<PrintErrors>` recovers. A checked failure inside an invocation of `<Test>` is
+*contained* instead, which is a different outcome: it becomes that test's failed
+result, the run's record stays clear, and later tests run. `<Test>` is one of
+core's registered defaults, and containment is granted while core expands that
+definition and at no other time — no name, origin, context, marker, option, or
+installation confers it, and a repository `Test` selected ahead of core's
+default receives none. What a test does is supplied by the testing package
+through a contextual operation that names no component; see
+`specs/testing-spec.md`.
+
+`<PrintErrors>`'s authority is
+carried by execution-owned structure — the element hands it to the expansion of
+its own body, which carries it to everything the region causes: the branches,
+iterations, captures and answers written inside it, the bodies of components its
+elements invoke, and the content those invocations project back. It reaches
+nothing else; a sibling after the region, a later invocation, and a root all
+start outside it. Ambient replaceable state never determines it: contexts
+resolve by name, so a same-name binding created outside the document must not be
+able to turn a failed run into a successful one.
+
+### 3.7 What is the command?
 
 The content of the code block is the command. The language determines
 how it is invoked:
@@ -927,30 +1069,36 @@ how it is invoked:
 
 Multi-line code blocks are passed as a single string to the `-c` flag.
 
-### 3.7 Examples of modifier chain execution
+### 3.8 Examples of modifier chain execution
 
-**`exec` alone** — `exec` runs the command via `durableExec`
-(one journal entry). stdout becomes the output.
+**`exec` alone** — `exec` runs the command as a foreground child (§3.6). Its
+stdout and stderr reach the reader's corresponding channels as the child
+produces them, and the block renders nothing: those bytes were displayed once
+already. One journal entry is written. It holds the exit status, and holds
+stdout and stderr as well when the host asked for a record.
 
-Whether a block failed is a separate question from what it printed, and
-the exit code alone answers it. A non-zero exit produces an
-`ErrorSegment` — decided by the ambient error mode, so a comment under
-`print` and a failure under `output` or `throw` (§6.9) —
-whatever the command wrote. Output the command produced is kept as its
-`execOutput` segment and precedes that printed error, because a command
-that prints before it fails is usually explaining itself.
+Whether a block failed is a separate question from what it printed, and the
+exit code alone answers it. A non-zero exit is a **checked failure**: the
+ambient error mode may decide how it is reported, never that the run succeeded.
+Later executable blocks do not run, the execution fails, and no `<Output>`
+declaration is required. A `<PrintErrors>` region is the construct that
+deliberately handles one — inside it the failure is printed and the region
+continues, which is what makes printing an explicit act rather than the default
+a root falls into. That recovery is authorized by the element itself and reaches
+its body as an argument, never as ambient state something outside the document
+could set (§3.6).
 
-**`silent exec`** — `exec` runs the command and journals the
-result as usual. `silent` calls `next()` (so exec runs), then returns
-the same outcome with empty output. No extra journal entry from
-`silent`. A non-zero exit is still a failure: `silent` hides what the
-command printed, not whether it worked.
+**`silent exec`** — `exec` runs the command and journals the result as usual.
+`silent` displays neither channel. A non-zero exit is still a failure: `silent`
+hides what the command printed, not whether it worked. It does not weaken a
+record either — with `--journal`, a silent block's stdout and stderr are
+retained exactly.
 
-**`silent timeout[30s] exec`** — `exec` journals the command result.
-`timeout` cancels the block if it overruns. `silent` discards the
-output. The journal entry is still written; the document gets nothing.
-The inner chain still runs because `silent` wraps `timeout` — it calls
-`next()` which runs the entire inner chain before discarding.
+**`silent timeout[30s] exec`** — `exec` journals the command result. `timeout`
+cancels the block if it overruns. `silent` displays nothing. The journal entry
+is still written; the reader sees nothing. The inner chain still runs because
+`silent` wraps `timeout` — it calls `next()`, which runs the entire inner
+chain.
 
 **`daemon exec`** — `daemon` is the outermost terminal modifier. It
 ignores `next` entirely — `exec` is never invoked. `daemon` forks the
@@ -7249,10 +7397,10 @@ visible warning blocks, gather into a separate error report).
 
 | # | Test | Verify |
 |---|------|--------|
-| D1 | `bash exec` golden run | `execHandler` runs, stdout in output, journal has exec entry |
-| D2 | Exec repeated run | Command executes again and current stdout is used |
-| D3 | Non-zero exit code | ErrorSegment in output. The exit code alone decides — what the command printed does not enter into it |
-| D3b | **Non-zero exit with stdout** | `execOutput` segment, then the ErrorSegment it explains; a throw under a documentation error mode, which stops the next sibling from running |
+| D1 | `bash exec` golden run | `execHandler` runs, stdout is displayed as it arrives and rendered nowhere, journal has exec entry |
+| D2 | Exec repeated run | Command executes again and its output is displayed again |
+| D3 | Non-zero exit code | A checked failure: the execution fails and later blocks do not run, with or without `<Output>`. The exit code alone decides — what the command printed does not enter into it |
+| D3b | **Non-zero exit with stdout** | What the command printed was displayed as it ran and is rendered nowhere; the checked failure follows through the failure boundary, and the next sibling does not run |
 | D4 | Multi-line command | Full script passed to `-c` |
 | D5 | `python exec` | `python -c` invocation |
 | D6 | `bash silent exec` | Chain: silent wraps exec. Exec journals. Silent returns empty output and the inner outcome |
@@ -7272,6 +7420,40 @@ visible warning blocks, gather into a separate error report).
 | D18 | Modifier override in child scope | Parent registers `sample`, child overrides with different handler |
 | D19 | Modifier parsing: `timeout=30s` | Modifier has name "timeout", params "30s" |
 | D20 | Info string with language only | Not executable, treated as passive text |
+
+### Tier FG — Foreground execution, capture, and retention (§3.6)
+
+| # | Test | Verify |
+|---|------|--------|
+| FG1 | A held-open child | A chunk is displayed before the child exits |
+| FG2 | stdout and stderr | Each keeps its own channel and appears exactly once |
+| FG3 | No journal | The record holds exit status alone; nothing is accumulated |
+| FG4 | `--journal` | Streams live and records exactly what the boundary received |
+| FG5 | `<Capture as>` | stdout fills the binding without being displayed; stderr stays diagnostic |
+| FG6 | `silent` with a journal | Displays neither channel; the record keeps both |
+| FG7 | Non-zero exit | Earlier output survives, the next block never starts, no `<Output>` |
+| FG8 | Cancellation | Child and forwarding stop; nothing arrives afterwards |
+| FG9 | An emission during acquisition | The per-exec wrapper is already active; retained exactly, displayed once |
+| FG10 | A same-name Context | Cannot suppress a record the host asked for |
+| FG11 | A same-name Context | Cannot make a transient run retain output |
+| FG12 | Capture without a journal | Binds its stdout, retains nothing, and the next block forwards again |
+| FG13 | Two channels | Each is forwarded and recorded on the channel it was received on |
+| FG14 | A code point split across chunks | Survives interleaving with the other channel |
+| FG15 | A journaled capture | The binding and the record agree byte for byte |
+| FG16 | A real child splitting a code point | Each channel decodes its own; neither disturbs the other |
+| FG16a | `exec({ retain: true })` | Reports a real child's two channels exactly |
+| FG16b | `exec({ retain: false })` | Reports the status; keeps neither channel |
+| FG16c | Quiet subprocess output | Hidden from the host, still reported to its caller |
+| FG17 | A resumed journaled capture | Rebuilds its binding without running the child again |
+| FG18 | A chunk held up in downstream middleware | Cannot take the other channel's bytes with it |
+| FG19 | Enclosing middleware that transforms the bytes | What it forwards is what is displayed and retained |
+| FG23 | Handlers above and below the boundary | The one above decides the record; the one below decides nothing about it |
+| FG24 | An upstream redaction | Captured, journaled and replayed as the safe text; the original is nowhere, and replay starts no child |
+| FG25 | Upstream consumption | Displayed and retained nowhere; exit status and the other channel are unaffected |
+| FG26 | An upstream redirect | Reclassifies the channel the run records; retained stdout is empty |
+| FG20 | `xmd run` without `--journal` | Forwards live; the record keeps the status and neither channel |
+| FG21 | `xmd run --journal` | The record keeps both channels |
+| FG22 | `xmd workflow start` | Retains its process results though it names no journal |
 
 ### Tier E — End-to-end
 
@@ -7710,9 +7892,17 @@ platform's.
 | OM1–OM2 | A region fails the run | A root region and a component region each emit what they rendered first, fail, and start nothing after the failure |
 | OM3 | A command that printed before it failed | The stdout stays visible and the document stops there (#307/#310) |
 | OM4 | Later regions and documentation | Neither the documentation after a failing region nor the region after that begins |
-| OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a root without `<Output>` still prints |
+| OM5a–OM5f | `<PrintErrors>` | Prints once and the region continues; fails without the boundary; the same for `printErrors(fn)`; `throw` is not overridden; a checked command failure fails a root without `<Output>` |
+| OM5g | A counterfeit `printsCheckedFailures` context | Cannot keep a run a document never authorized: the run fails, the marker is absent, and the later block never starts |
+| OM5h | A real `<PrintErrors>` region | Prints the same checked failure and the document continues |
+| OM5i | A checked failure inside an `<Each>` in the region | Covered: printed, and the marker and later work are reached |
+| OM5j | Caller content projected through a component in the region | Covered the same way |
+| OM5k | A checked failure after the region closes | Not covered: the run fails and no later work starts |
+| OM5l | A component catching `ContentError` around a checked failure | Its recovery return is not accepted: the run fails and no later work starts |
+| OM5m | The same component, an ordinary content failure | Unchanged: the caller's content failure is reported as the caller's |
 | OM6–OM6c | The live failure | The original object, a settled printed error's `DocumentationError` with its mode, and a body-plus-teardown aggregate each reach the completion intact |
 | OM7 | Replay | The same partial output and failure, with no command run again |
+| OM7b | Replay of a recovered outcome | An explicitly recovered run replays as recovered, with no command run again |
 | OM8 | The close | The root closes `ok` around a recorded `err` outcome |
 | OM9/OM10 a–e | Every visible producer | `<If>`, `<Loop>`, `<Each>`, projected `<Content />` and an answered `<Answers>` body each keep their prefix on failure and render exactly once on success |
 | OM11a–OM11e | Private buffers | A `<Capture as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |
@@ -8662,6 +8852,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV17 | Replay | Golden run and replay produce the same value and output with no re-execution |
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
+| VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |
 
 ---
 

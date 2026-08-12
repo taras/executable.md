@@ -1119,6 +1119,172 @@ hidden inside library objects that accumulate. One exception: metadata an
 author declares at module evaluation, about a value the author owns, may live
 on that value.
 
+## Foreground commands
+
+An executable block is a foreground child process. Its output reaches the reader
+as the child produces it, before it exits, and each byte is displayed once: what
+was forwarded is never rendered into the document again at completion.
+
+A command's output passes through several hands, and where a run observes it
+decides what "the command's output" means:
+
+```
+child → enclosing host stdio middleware → the per-exec boundary → this
+document's display policy → terminal
+```
+
+**Middleware enclosing an execution is treated as preprocessing.** The process
+stdio chain is a documented extension point: middleware installed around an
+execution may consume, transform, redact, or redirect a channel before the run
+receives it, and a host that does so is exercising its own authority over its
+own child processes. What it forwards is what exists as far as the document is
+concerned.
+
+What a run retains is therefore what its **configured execution environment**
+forwarded. `xmd run --journal` is diagnostic persistence: it records what that
+environment forwarded, not what a child wrote to its pipe, which nothing here
+observes and nothing here claims. A workflow's process results are durable
+within the environment the workflow authorized. Middleware enclosing an
+execution — the host's own, and anything the host composed into it — may
+preprocess that output before either sees it.
+
+*Current limitation.* `Process.join()` may settle before the pumps and their
+`Stdio` middleware finish, so output a child writes as the pumps settle may
+never reach the boundary and may therefore be absent from what a run retains.
+effectionx #244 owns that, and until its solution is integrated nothing here
+claims pump-complete tail delivery or retention.
+So transformed text is what a run captures and journals, consumed output is
+absent from both, and output an enclosing handler forwards on the other channel
+is recorded as that other channel.
+
+**The per-exec boundary is where a run observes.** One wrapper is installed
+before `Process.exec` begins, so a chunk forwarded while the child is being
+started is received like any other rather than raced for. The snapshot is taken
+when the current `Process` operation settles, and that is as strong as the tail
+guarantee gets today: `Process.join()` may settle before the stdout and stderr
+pumps and their `Stdio` middleware have finished, so output written as the pumps
+settle may never reach this boundary. effectionx #244 owns the stronger
+guarantee. "Exactly what the command produced" means, throughout this
+repository, *exactly the bytes received here* — never a claim about what the
+child wrote to its pipe, which no execution observes, and never a claim of
+pump-complete tail delivery.
+
+**A run's own display policies are downstream and change nothing.** `silent`, a
+`<Capture as>` region's suppression of terminal stdout, quiet runtime output for
+a caller whose subprocess output is an answer, the command line's choice of
+which stream a value root's diagnostics land on, and the terminal writers all
+sit below the boundary. They decide what a reader sees; they never decide what
+the run keeps. Not showing something and not knowing it are different decisions.
+
+Three questions about a command are separate, and answering one never answers
+another:
+
+- **Routing** is what a reader sees. An ordinary block forwards both channels;
+  a `<Capture as>` region takes stdout into the captured value and leaves
+  stderr diagnostic; `silent` displays neither. Routing answers "does this
+  channel reach the terminal, and does anything else want it" — never "which of
+  the host's streams does it land on". It is visible in document structure,
+  never selected by a root-level presentation declaration or by which runtime is
+  executing.
+- **Retention** is what the run keeps. The host path that starts a run states
+  it; nothing infers it from which stream implementation a journal happens to
+  use, or from whether a pathname was named. A run that keeps no diagnostic
+  record keeps the exit status alone, and the transient path never accumulates
+  the bytes on their way past — a command that writes a gigabyte costs a
+  gigabyte of nothing. A run that retains keeps both received channels in
+  addition to whatever routing the document chose, because a display policy does
+  not weaken an explicit audit record.
+- **Failure** is neither. A nonzero exit is a checked failure: a printing
+  boundary may decide how it is reported, never that the run succeeded anyway.
+  Later executable work does not start, and the run fails without any
+  `<Output>` declaration. `<Output>` governs rendered document selection only.
+
+Recovery is the one exception, and its authority has a single origin: an
+explicit error-handling construct written in the document. Nothing else confers
+it: not `printErrors(fn)`, not a built-in printing boundary like `<TempDir>`,
+not ordinary printing mode, not component failure middleware, and not a
+component catching the `ContentError` its projected content raised. Those decide
+how a failure of their own is reported; whether a command that exited nonzero
+failed the run is not theirs to decide. A run that suffered an unauthorized
+checked failure records it in an execution-owned ledger passed by value through
+core's own calls, so an enclosing boundary that prints and returns cannot make
+the run succeed, and no later work in any frame begins. `<File>` and `<TempDir>`
+are covered by that rule like any other printing boundary: their own cleanup and
+their own report still happen, and neither writes, replaces, or continues.
+
+`<PrintErrors>` *recovers*: a region that says the failures inside it are
+printed and the document continues. A root that prints errors by default has not
+asked for anything, and does not get to call a failed run a success.
+
+One other construct *contains* a failure instead, which is a different thing.
+An invocation of `<Test>` keeps its checked failures to itself: the failure
+becomes that test's failed result, the run's own record stays clear, the tests
+after it still run, and the testing completion policy is what fails the run.
+
+Canonical core owns that construct. `<Test>` is one of core's registered
+defaults, and containment is granted while core expands that definition and at
+no other time. Nothing nominates it: not a function another package supplies,
+not a component name or registration origin, not a context, marker or metadata,
+not the options or the request, not an installation. There is no public API that
+accepts a component and confers containment, so there is nothing for a handler
+to replace, counterfeit, or hand to itself.
+
+What core does not own is testing. Activation, isolated bindings, the timeout,
+how a failure is classified, what is recorded and how it is reported are
+`@executablemd/testing`'s, supplied through a contextual operation core calls
+from inside the invocation. That surface accepts no function, component name or
+container, and cannot make another component contain a failure: it says what a
+test does, while canonical core says which element is one. Its name is stable,
+so a testing package loaded beside a second copy of core reaches the copy
+expanding the document without either comparing the other's private function.
+
+Being a default is what makes the rule hold at the edges. A repository `Test`,
+or a package that registers the name, is selected ahead of core's — so core's
+definition was not expanded, and the definition that was receives the ordinary
+disposition, whatever it is called and whoever registered it.
+
+That authority travels by execution-owned structure: the element hands it to the
+expansion of its own body as an argument, and expansion carries it to everything
+the region causes — the branches, iterations, captures and answers written
+inside it, the bodies of the components its elements invoke, and the content
+those invocations project back, which the document wrote inside the region. It
+reaches nothing else: a sibling after the region closes, a later invocation, or
+a root all start outside it. Ambient replaceable state never decides it. Contexts resolve by name, so a separately
+created context with the same name is the same binding, and anything able to
+name one could otherwise turn a failed run into a successful one from outside
+the document — which is precisely the authority a document's own text is
+supposed to hold.
+
+Retained output crosses the pre-persistence secret gate exactly as any other
+journaled field does, and the gate examines what the boundary received — after
+enclosing middleware, not before. Two consequences follow, and both are
+intended: a host may redact a credential upstream so that the material never
+reaches the gate at all, and a host that introduces credential-shaped text
+upstream is refused by the gate like any other run that would persist one.
+Output that is never retained is never scanned, because there is nothing to
+persist and nothing was accumulated for a scanner to inspect.
+
+Which host paths retain is a property of the path, stated where the run starts:
+`xmd run` and `xmd test` retain when the caller asked for a diagnostic trace and
+keep nothing otherwise; a workflow retains, because it owns its journal and a
+resumed procedure reads its process results back rather than re-running the
+commands that produced them; programmatic execution retains unless its trusted
+caller selects transient execution. A shared runner never decides this from what
+it was given.
+
+A channel is the operation the boundary receives bytes on, and nothing below it
+reclassifies anything: no path hands one channel's bytes to the other channel's
+operation, so the received channel is never restated and never has to be
+recovered from a byte payload, from contextual state, or from state held for a
+run whose channels are forwarded concurrently. A value root's stdout carries its
+JSON result, so the command line shows a command's stdout on the stream the
+result leaves free — visible, never mistaken for the result, and still recorded
+as stdout, because stdout is what reached the boundary.
+
+Forwarding, completion, cancellation and teardown belong to the executable
+block's own Effection scope. Cancelling the block stops the child and the tasks
+forwarding its output before the block settles.
+
 ## Configured timeouts
 
 Nothing has a timeout by default. Three contextual values bound three different
@@ -1487,6 +1653,7 @@ Status is measured against main.
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
+| foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |

@@ -8,6 +8,7 @@ import { execute } from "../src/execute.ts";
 import { beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import type { Operation } from "effection";
+import { Stdio } from "@effectionx/process";
 
 function* runDocument(
   files: Record<string, string>,
@@ -15,14 +16,25 @@ function* runDocument(
 ): Operation<OperationResult> {
   yield* useStubFs(files);
   yield* useEchoExec();
+  // An interpolated command writes to the reader, not into the document
+  // (#441), so a claim about what a block received reads the display.
+  let displayed = "";
+  const decoder = new TextDecoder();
+  yield* Stdio.around({
+    *stdout([bytes]) {
+      displayed += decoder.decode(bytes);
+    },
+  });
   const execution = yield* execute({ path: "root.md", stream: new InMemoryStream(), props });
   const output = yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
-  return { output, result };
+  return { output, displayed, result };
 }
 
 interface OperationResult {
   output: string;
+  /** What the document's foreground commands displayed. */
+  displayed: string;
   result: { ok: boolean };
 }
 
@@ -50,7 +62,7 @@ const ROOT_PROPS = [
 describe("props binding", () => {
   beforeAll(() => useTempFileCompiler());
   it("installs root props for text, eval, expression, and executable interpolation", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [
           ROOT_PROPS,
@@ -75,11 +87,11 @@ describe("props binding", () => {
       "text=Ada bare={name} dotted=1.2.3 tags=a, b missing= escaped={props.name}",
     );
     expect(output).toContain("eval=Ada dotted=1.2.3 bare=undefined");
-    expect(output).toContain("Ada/1.2.3");
+    expect(displayed).toContain("Ada/1.2.3");
   });
 
   it("keeps eval-created locals independent from props", function* () {
-    const { output } = yield* runDocument(
+    const { output, displayed } = yield* runDocument(
       {
         "root.md": [
           ROOT_PROPS,
@@ -100,7 +112,7 @@ describe("props binding", () => {
   });
 
   it("does not begin body effects for invalid root props", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [ROOT_PROPS, "", "```bash exec", "echo BODY_EFFECT", "```", ""].join("\n"),
       },
@@ -112,7 +124,7 @@ describe("props binding", () => {
   });
 
   it("uses caller props for projected content and callee props for authored content", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [
           ROOT_PROPS,
@@ -178,7 +190,7 @@ describe("props binding", () => {
     expect(output).toContain("forwarded=caller");
     expect(output).toContain("authored-label=callee");
     expect(output).toContain("component-eval=callee");
-    expect(output).toContain("authored-exec=callee");
+    expect(displayed).toContain("authored-exec=callee");
     expect(output).toContain("rendered=callee label=callee");
     expect(output).toContain("projected=caller");
     expect(output).toContain("projected-label=callee");
@@ -188,7 +200,7 @@ describe("props binding", () => {
   });
 
   it("restores the enclosing props binding after scoped and nested expansion", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [
           ROOT_PROPS,
@@ -230,7 +242,7 @@ describe("props binding", () => {
     expect(result.ok).toBe(true);
     expect(output).toContain("text=shadow");
     expect(output).toContain("eval=shadow");
-    expect(output).toContain("exec=shadow");
+    expect(displayed).toContain("exec=shadow");
     expect(output).toContain("after=caller");
     expect(output).toContain("outer=outer");
     expect(output).toContain("inner=inner");
@@ -238,7 +250,7 @@ describe("props binding", () => {
   });
 
   it("uses one validated object for the props binding and text interpolation", function* () {
-    const { output, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument({
       "root.md": '<Mutator nested={{ value: "original" }} />\n',
       "Mutator.md": [
         "---",
@@ -267,7 +279,7 @@ describe("props binding", () => {
   });
 
   it("uses defaults before root and Markdown-component body effects", function* () {
-    const { output, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument({
       "root.md": [
         "---",
         "props:",
@@ -301,13 +313,13 @@ describe("props binding", () => {
 
     expect(result.ok).toBe(true);
     expect(output).toContain("root-text=root-default");
-    expect(output).toContain("root-effect=root-default");
+    expect(displayed).toContain("root-effect=root-default");
     expect(output).toContain("component-text=component-default");
-    expect(output).toContain("component-effect=component-default");
+    expect(displayed).toContain("component-effect=component-default");
   });
 
   it("does not begin a Markdown-component body effect for invalid props", function* () {
-    const { output, result } = yield* runDocument({
+    const { output, displayed, result } = yield* runDocument({
       "root.md": "<Invalid name={42} />\n",
       "Invalid.md": [
         "---",
@@ -333,7 +345,7 @@ describe("props binding", () => {
   });
 
   it("uses one shadowed props binding for text, eval, and exec, then restores it", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [ROOT_PROPS, "", "<Shadow />", "after={props.name}", ""].join("\n"),
         "Shadow.md": [
@@ -364,12 +376,12 @@ describe("props binding", () => {
     expect(output).toContain("eval=shadow");
     expect(output).toContain("after-eval=shadow");
     expect(output).toContain("text=shadow");
-    expect(output).toContain("exec=shadow");
+    expect(displayed).toContain("exec=shadow");
     expect(output).toContain("after=caller");
   });
 
   it("allows an authored props binding to shadow the namespace locally", function* () {
-    const { output, result } = yield* runDocument(
+    const { output, displayed, result } = yield* runDocument(
       {
         "root.md": [
           ROOT_PROPS,

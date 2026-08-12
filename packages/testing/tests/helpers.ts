@@ -71,6 +71,8 @@ export function* runDoc(
       yield* installTestingComponents({ verbose: options.verbose });
     }
 
+    // Plain `execute()`: containment is core's, so a host attaches nothing to
+    // get it (#441).
     const execution = yield* execute({
       path: options.path ?? "README.md",
       stream: options.stream ?? new InMemoryStream(),

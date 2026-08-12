@@ -609,7 +609,10 @@ describe("Tier FL — File", () => {
   it("FL12: a failing child leaves an existing file untouched", function* () {
     const fixture = yield* useFixture();
 
-    const output = text(
+    // `<File>` reports what it did not write, and the checked failure inside it
+    // is still the run's: no write, no replacement, and nothing after it (#441).
+    let failure = "";
+    try {
       yield* run(
         fixture,
         [
@@ -619,14 +622,19 @@ describe("Tier FL — File", () => {
           "echo nope >&2; exit 4",
           "```",
           "</File>",
+          "",
+          "```sh exec",
+          `touch ${join(fixture.workspace, "sibling-ran.txt")}`,
+          "```",
         ].join("\n"),
-      ),
-    );
+      );
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
 
-    expect(output).toContain('did not write "notes.md": its content failed to expand.');
-    // The block's own failure travels with it — nothing else would report it.
-    expect(output).toContain("Command failed (exit 4)");
+    expect(failure).toContain("Command failed (exit 4)");
     expect(yield* read(fixture, "notes.md")).toBe("first");
+    expect(yield* exists(join(fixture.workspace, "sibling-ran.txt"))).toBe(false);
   });
 
   // FL12b: the same translation under fail-fast, where a failure is an object

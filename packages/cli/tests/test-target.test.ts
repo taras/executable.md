@@ -331,4 +331,26 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     const encoded = yield* runCli(["test", path.join(root, "we%23ird.test.md")]).join();
     expect(encoded.code).toBe(1);
   });
+
+  /**
+   * The containment contract, as `xmd test` performs it (#441).
+   *
+   * A command that exits nonzero inside a `<Test>` is that test's outcome:
+   * `xmd test` attaches nothing to arrange it, because the construct that
+   * contains the failure is core's own `<Test>`. The evidence that the run went
+   * on is the second command's output — a document whose disposition was the
+   * ordinary one would stop at the first.
+   */
+  it("DT31: a failing command inside a test fails that test, and the next runs", function* () {
+    const { code, stdout, stderr } = yield* runCli([
+      "test",
+      fixture("containment", "commands.test.md"),
+    ]).join();
+
+    expect(code).toBe(1);
+    expect(stdout).toContain("BEFORE_FAILURE");
+    expect(stdout).toContain("AFTER_CONTAINMENT");
+    expect(stderr).toContain("1 of 2 tests failed");
+    expect(stderr).toContain("a failing command fails its own test: Command failed (exit 3)");
+  });
 });

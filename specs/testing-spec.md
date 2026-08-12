@@ -19,11 +19,22 @@ effect.
 </Testing>
 ```
 
-Installing the package registers `<Testing>` and `<Test>` as ordinary
-**non-reserved defaults** (executable-mdx-spec.md §5.3): a repository component
-of either name is chosen ahead of the registered one, exactly as it would be
-ahead of any other package's default, and then decides for itself what a testing
-boundary — or a test — means.
+Installing the package registers `<Testing>`, `<AssertThrows>` and the value
+assertions as ordinary **non-reserved defaults** (executable-mdx-spec.md §5.3):
+a repository component of any of those names is chosen ahead of the registered
+one, exactly as it would be ahead of any other package's default, and then
+decides for itself what a testing boundary means.
+
+`<Test>` is not among them. Canonical core registers and owns the default
+`<Test>` construct, because core owns what an invocation of one means for the
+run (see *Checked command failures inside a test* below). Installing this
+package supplies that construct's testing behavior — activation, isolated
+bindings and scope, the timeout, assertion and unexpected-failure
+classification, TestResult staging and recording, reporting, and the testing
+completion failure — through the `TestBehavior` operation core calls from
+inside the invocation. `<Test>` is still an ordinary non-reserved default, so a
+repository component of that name is chosen ahead of core's and decides for
+itself what a test means.
 
 A test result is journaled once the invocation that produced it has been
 dismantled, so a teardown failure is part of the outcome recorded for it. That
@@ -142,6 +153,33 @@ Atomic tests use `<Test>`:
 The `name` prop is optional metadata. An unnamed test is identified by its
 source location; headings in the body remain ordinary output and are not
 inferred as names.
+
+### Checked command failures inside a test
+
+A foreground command that exits nonzero is a checked failure, and outside a test
+it fails the run (executable-mdx-spec §3.6). Inside a `<Test>` it is
+**contained**: it becomes that test's failed result, the run's own fatal record
+stays clear, the tests after it still run, and the testing session's existing
+completion policy is what fails the overall run. A contained outcome is decided
+once — replay restores the failed result and the failing testing outcome from
+the journal without running the command again.
+
+Containment belongs to the `<Test>` construct, and canonical core owns it.
+Core registers `<Test>` as one of its own defaults, and grants containment only
+to that exact definition, only while it is expanding it. Nothing else confers
+it: not a name, an origin, a context, a marker, an option, the request, or an
+installation. `TestBehavior` supplies what a test *does* and decides nothing
+about which element is one — it accepts no function, component name, marker or
+container, and cannot make any other component contain a failure.
+
+A repository component named `Test`, or another package that registers the name,
+still wins ordinary default resolution and is chosen ahead of core's. Core's
+definition was therefore not expanded, and the one that was receives no
+containment: a checked failure inside it is the run's, exactly as it would be
+anywhere else the document did not authorize one.
+
+`useTesting()` with `execute()` needs nothing else. The host attaches no
+installation, names no component, and receives no identity.
 
 A test body behaves like any regular component body. Tests run sequentially in
 expansion order. Each test runs in a child Effection scope and an isolated

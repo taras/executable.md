@@ -9,7 +9,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -40,6 +40,20 @@ const OBJECT_ROOT = [
   "BODY_MARKER",
   "",
   '<Return value={{ passed: true, summary: "looks good" }} />',
+  "",
+].join("\n");
+
+const PRINTING_ROOT = [
+  "---",
+  "returns:",
+  "  ok: { type: boolean }",
+  "---",
+  "",
+  "```bash exec",
+  `printf 'to-out'; printf 'to-err' >&2`,
+  "```",
+  "",
+  "<Return value={{ ok: true }} />",
   "",
 ].join("\n");
 
@@ -188,6 +202,40 @@ describe("Tier VR — xmd run value roots", { sanitizeOps: false, sanitizeResour
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no direct top-level <Return>");
+  });
+
+  /**
+   * A value root's stdout is the result's, so this process shows a command's
+   * stdout on the stream the result leaves free. Which stream that is belongs
+   * to this process, and choosing it is display policy: it runs downstream of
+   * the per-exec boundary, so the channel recorded when the bytes were received
+   * there is the channel the record still names.
+   */
+  it("VR10: a command's stdout is shown beside the result, and recorded as stdout", function* () {
+    const result = yield* useFixture({ "doc.md": PRINTING_ROOT }, function* (dir) {
+      const trace = path.join(dir, "trace.jsonl");
+      const run = yield* runCli(["run", "doc.md", "--journal", trace], {
+        cwd: dir,
+        env: { HOME: dir },
+      }).expect();
+      return { run, record: yield* readTextFile(trace) };
+    });
+
+    // The result's channel carries the result and nothing else.
+    expect(result.run.code).toBe(0);
+    expect(result.run.stdout).toBe('{"ok":true}\n');
+    // Both of the command's channels reached the reader once, beside it.
+    expect(result.run.stderr).toContain("to-out");
+    expect(result.run.stderr).toContain("to-err");
+    expect(result.run.stderr.match(/to-out/g) ?? []).toHaveLength(1);
+    expect(result.run.stderr.match(/to-err/g) ?? []).toHaveLength(1);
+    // And the record still names the channel each was received on.
+    const exec = result.record
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line))
+      .find((event) => event.description?.type === "exec");
+    expect(exec?.result?.value).toMatchObject({ exitCode: 0, stdout: "to-out", stderr: "to-err" });
   });
 
   it("VR9: <Output> in a projected text root still selects what is emitted", function* () {

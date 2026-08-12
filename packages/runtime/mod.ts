@@ -68,6 +68,7 @@ export type {
 export { Config, timeout, timeoutExec, timeoutFetch } from "./config.ts";
 export type { ConfigApi } from "./config.ts";
 export { asDuration, durationError, parseDuration } from "./duration.ts";
+export type { ProcessExecOptions, ProcessOutcome } from "./apis.ts";
 export {
   asFilesFatal,
   FILES_ERROR,

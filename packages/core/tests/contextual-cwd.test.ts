@@ -18,6 +18,7 @@ import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { Stdio } from "@effectionx/process";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -94,16 +95,30 @@ function writeDocument(fixture: Fixture, source: string): Operation<void> {
   return writeTextFile(join(fixture.root, "doc.md"), source);
 }
 
-/** One bounded run, so every scope closes before effects are read. */
+/**
+ * One bounded run, so every scope closes before effects are read.
+ *
+ * A foreground command writes to the reader's channels rather than into the
+ * document (#441), so what these cases inspect — the directory a command
+ * reported — is collected from the display.
+ */
 function run(fixture: Fixture): Operation<Json> {
   return scoped(function* () {
-    return yield* collect(
+    let displayed = "";
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+    });
+    yield* collect(
       yield* execute({
         path: join(fixture.root, "doc.md"),
         stream: new InMemoryStream(),
         componentDirs: [fixture.root],
       }),
     );
+    return displayed;
   });
 }
 

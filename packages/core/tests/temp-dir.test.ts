@@ -8,6 +8,7 @@
 
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { Stdio } from "@effectionx/process";
 import {
   ensure,
   race,
@@ -56,16 +57,33 @@ function writeDocument(dir: string, source: string): Operation<void> {
 }
 
 /** One bounded run, so the document scope closes before effects are read. */
+/**
+ * One run, reported as what a reader saw.
+ *
+ * These cases learn which directory a command ran in from the command itself,
+ * and a foreground command writes to the reader rather than into the document
+ * (#441), so the display is where that answer arrives.
+ */
 function run(dir: string): Operation<Json> {
   return scoped(function* () {
     yield* useHostFiles();
-    return yield* collect(
-      yield* execute({
-        path: join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-        componentDirs: [dir],
-      }),
+    let displayed = "";
+    const decoder = new TextDecoder();
+    yield* Stdio.around({
+      *stdout([bytes]) {
+        displayed += decoder.decode(bytes);
+      },
+    });
+    const rendered = String(
+      yield* collect(
+        yield* execute({
+          path: join(dir, "doc.md"),
+          stream: new InMemoryStream(),
+          componentDirs: [dir],
+        }),
+      ),
     );
+    return `${rendered}\n${displayed}`;
   });
 }
 
@@ -252,7 +270,15 @@ describe("Tier TD — TempDir", () => {
       ].join("\n"),
     );
 
-    yield* run(dir);
+    // The command exited nonzero, which fails the run (#441). What this case
+    // is about is what the failing run left behind.
+    let failure = "";
+    try {
+      yield* run(dir);
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    expect(failure).toContain("Command failed");
 
     const [created] = yield* recorded(dir, "seen.txt");
     expect(created).toContain("xmd-tempdir-");
@@ -408,9 +434,19 @@ describe("Tier TD — TempDir", () => {
     const first = String(
       yield* scoped(function* () {
         yield* useHostFiles();
-        return yield* collect(
-          yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+        let displayed = "";
+        const decoder = new TextDecoder();
+        yield* Stdio.around({
+          *stdout([bytes]) {
+            displayed += decoder.decode(bytes);
+          },
+        });
+        const rendered = String(
+          yield* collect(
+            yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+          ),
         );
+        return `${rendered}\n${displayed}`;
       }),
     );
     const [recordedDirectory] = directories(first);
@@ -533,15 +569,27 @@ describe("Tier TD — TempDir", () => {
   // TD14: an ordinary failure inside the directory is still an ordinary
   // printed error — the fatal rule is for stale journal entries, not for
   // everything that goes wrong inside a `<TempDir>`.
-  it("TD14: an ordinary failure inside TempDir stays a rendered printed error", function* () {
+  /**
+   * `<TempDir>` prints the failures inside it, which decides how its own
+   * failure is reported and nothing else. A command that exited nonzero is a
+   * checked failure, and only an authored `<PrintErrors>` region may keep a run
+   * that suffered one (#441). The directory is still cleaned up: the run fails,
+   * it does not leak.
+   */
+  it("TD14: a checked command failure inside TempDir still fails the run", function* () {
     const dir = yield* useFixture();
     const after = join(dir, "sibling-ran.txt");
+    const inside = join(dir, "later-inside.txt");
     yield* writeDocument(
       dir,
       [
         "<TempDir>",
         "```sh exec",
-        "echo nope >&2; exit 4",
+        `pwd > ${join(dir, "seen.txt")}; echo nope >&2; exit 4`,
+        "```",
+        "",
+        "```sh exec",
+        `touch ${inside}`,
         "```",
         "</TempDir>",
         "",
@@ -561,9 +609,16 @@ describe("Tier TD — TempDir", () => {
       return yield* execution;
     });
 
-    expect(outcome.ok).toBe(true);
-    // The sibling after the component still ran.
-    expect(yield* exists(after)).toBe(true);
+    // No successful root outcome, and the failure is the command's.
+    expect(outcome.ok).toBe(false);
+    expect(String(outcome.ok === false && outcome.error)).toContain("Command failed");
+    // Nothing after it started, inside the region or after it.
+    expect(yield* exists(inside)).toBe(false);
+    expect(yield* exists(after)).toBe(false);
+    // And the directory it made is gone.
+    const [created] = yield* recorded(dir, "seen.txt");
+    expect(created).toContain("xmd-tempdir-");
+    expect(yield* exists(created)).toBe(false);
   });
 
   /**
@@ -608,12 +663,12 @@ describe("Tier TD — TempDir", () => {
 
     const outcome = yield* runOutcome(dir);
 
-    // The document fails, and what the region rendered before the failure —
-    // the text ahead of it and the failing command's own output — is still
-    // emitted.
+    // The document fails, and the prose the region rendered before the failure
+    // is still emitted. What the command printed reached the reader as it ran
+    // and is rendered nowhere, so it is not part of the document (#441).
     expect(outcome.ok).toBe(false);
     expect(outcome.output).toContain("PREVIEW-HEADING");
-    expect(outcome.output).toContain("VISIBLE-BEFORE-FAILURE");
+    expect(outcome.output).not.toContain("VISIBLE-BEFORE-FAILURE");
     // Nothing later inside the directory started, and neither did the sibling
     // after it: the two probes a printed error would have let through.
     expect(yield* exists(join(dir, "later-inside.txt"))).toBe(false);

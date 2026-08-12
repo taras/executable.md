@@ -25,7 +25,8 @@ import {
   type DurableStream,
   type Yield,
 } from "@executablemd/durable-streams";
-import { exec, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
+import { API, readTextFile, cwd, timeoutExec } from "@executablemd/runtime";
+import type { ProcessOutcome } from "@executablemd/runtime";
 import { cwd as processCwd } from "@effectionx/fs";
 import type { Workflow, Json } from "@executablemd/durable-streams";
 import { createReplayStream } from "./replay-stream.ts";
@@ -112,11 +113,13 @@ import {
   selectComponent,
   unresolvedMessage,
 } from "./components/select.ts";
-import type { EvalEnv } from "./types.ts";
+import type { CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
-import { Stdio } from "@effectionx/process";
+import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
+import { checkedFailureLedger } from "./component-failures.ts";
+import type { CheckedFailures } from "./component-failures.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
@@ -139,6 +142,16 @@ export interface ExecuteSettings {
    * Enabled unless the trusted host explicitly supplies `false`.
    */
   secretDetection?: boolean;
+
+  /**
+   * Retain each foreground command's stdout and stderr in its durable record.
+   *
+   * Defaults to `true`, so a caller that hands over a durable stream keeps the
+   * record it has always had. A host that wants no diagnostic record — the CLI
+   * without `--journal` — passes `false`, and the run then keeps exit status
+   * alone and never accumulates the bytes on their way to the reader (#441).
+   */
+  retainProcessOutput?: boolean;
 }
 
 /**
@@ -1055,36 +1068,71 @@ function admitRootSelection(event: Yield, root: RootDocumentSource): void {
   }
 }
 
-const execFactory: ModifierFactory = (_params) => (_args, _next) =>
-  (function* () {
-    const context = yield* useCodeBlock();
-    const command = buildCommand(context.language, context.content);
-    // Resolved here, where the block is, and handed to the Process operation
-    // explicitly: an enclosing `timeout=` has already made this its own value,
-    // and the Process Api itself defaults to nothing (spec §Config).
-    const timeout = yield* ephemeral(timeoutExec);
-    const result = (yield createDurableOperation<Json>(
-      {
-        type: "exec",
-        name: `exec:${context.content.slice(0, 40).replace(/\n/g, " ")}`,
-        command: command as unknown as Json,
-      },
-      function* (): Operation<Json> {
-        const execResult = yield* exec({
-          command,
-          cwd: yield* cwd(),
-          timeout,
-        });
-        return execResult as unknown as Json;
-      },
-    )) as unknown as { exitCode: number; stdout: string; stderr: string };
+/**
+ * The exec terminal for one execution.
+ *
+ * `retainProcessOutput` is the trusted host's accepted choice and is captured
+ * here by value. It decides what reaches durable storage and therefore what
+ * crosses the secret gate, so it is not contextual state: no public middleware
+ * and no separately loaded same-name Context can turn a journal's record off,
+ * or make a run that asked for no record start keeping one. Routing stays
+ * lexical and composable, because routing decides only what a reader sees.
+ */
+function createExecFactory(retainProcessOutput: boolean): ModifierFactory {
+  return (_params) => (_args, _next) =>
+    (function* () {
+      const context = yield* useCodeBlock();
+      const command = buildCommand(context.language, context.content);
+      // Resolved here, where the block is, and handed to the Process operation
+      // explicitly: an enclosing `timeout=` has already made this its own value,
+      // and the Process Api itself defaults to nothing (spec §Config).
+      const timeout = yield* ephemeral(timeoutExec);
+      // Where this block's output goes: a `<Capture as>` region decided that
+      // lexically, and a modifier inside the chain may have narrowed it.
+      const selected = (yield* ephemeral(declaredRouting())) ?? context.routing ?? FOREGROUND;
 
-    return {
-      output: result.stdout,
-      exitCode: result.exitCode,
-      stderr: result.stderr,
-    };
-  })();
+      const captured = selected.stdout === "capture";
+      let live = "";
+      const result = (yield createDurableOperation<Json>(
+        {
+          type: "exec",
+          name: `exec:${context.content.slice(0, 40).replace(/\n/g, " ")}`,
+          command: command as unknown as Json,
+        },
+        function* (): Operation<Json> {
+          // Routing and retention are established before the child exists, so
+          // startup chunks are treated like every other byte.
+          const finished = yield* route(selected, retainProcessOutput);
+          // `retain: false`: this execution keeps what it decided to keep, on
+          // the chain above, where silencing cannot hide it from a record.
+          const execResult = yield* API.Process.operations.exec({
+            command,
+            cwd: yield* cwd(),
+            timeout,
+            retain: false,
+          });
+          const kept = finished();
+          live = kept.captured;
+          return {
+            exitCode: execResult.exitCode,
+            ...(kept.retainedStdout === undefined ? {} : { stdout: kept.retainedStdout }),
+            ...(kept.retainedStderr === undefined ? {} : { stderr: kept.retainedStderr }),
+          } as unknown as Json;
+        },
+      )) as unknown as ProcessOutcome;
+
+      return {
+        // A capture's binding comes from the record when there is one and from
+        // the region's own live buffer when there is not. That is what lets a
+        // journaled run resume: replay never runs the child, so the retained
+        // stdout — and only stdout, never stderr — is the binding. Forwarded
+        // bytes reached the reader already and are never rendered again.
+        output: captured ? (result.stdout ?? live) : "",
+        exitCode: result.exitCode,
+        stderr: result.stderr ?? "",
+      };
+    })();
+}
 
 // `silent` suppresses output; it does not convert failure into success (#307).
 // The outcome it hands back is the inner chain's, so a silenced command that
@@ -1092,7 +1140,15 @@ const execFactory: ModifierFactory = (_params) => (_args, _next) =>
 // so, with only the channel the author asked to hide removed.
 const silentFactory: ModifierFactory = (_params) => (_args, next) =>
   (function* () {
-    const result = yield* next(); // inner chain runs — exec journals its result
+    // Silence is a routing decision, so it is made before the child starts:
+    // neither channel is displayed. What the run retains is the host's choice
+    // and is unaffected — a journaled silent block still records its output.
+    const result = yield* ephemeral(
+      withRouting(
+        { stdout: "hidden", stderr: "hidden" },
+        () => next() as unknown as Operation<CodeBlockResult>,
+      ),
+    );
     return { ...result, output: "" };
   })();
 
@@ -1331,6 +1387,8 @@ function* runValueRoot(
   /** What this root emitted, held by the caller so a failure still finds it. */
   chunks: string[],
   path: string,
+  /** This run's record of an unauthorized checked command failure (#441). */
+  checkedFailures: CheckedFailures,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -1357,6 +1415,8 @@ function* runValueRoot(
         counter,
         undefined,
         path,
+        0,
+        checkedFailures,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1368,13 +1428,36 @@ function* runValueRoot(
     }
   });
 
+  yield* refuseCheckedFailure(checkedFailures);
   if (!produced) {
     throw new Error("The root document declares `returns` but produced no <Return> value.");
   }
   return { status: "ok", output: chunks.join(""), value: produced.value };
 }
 
+/**
+ * Refuse a successful outcome for a run that suffered an unauthorized checked
+ * command failure.
+ *
+ * The failure was already raised where the command ran, and something enclosing
+ * it — a `printErrors(fn)` component like `<TempDir>`, or one that caught the
+ * `ContentError` its projected content raised — printed it and returned. Those
+ * boundaries decide how a failure of their own is reported. Whether a command
+ * that exited nonzero failed the run is not theirs to decide, and this is where
+ * the run says so (#441).
+ */
+function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void> {
+  const segment = checkedFailures.failure;
+  if (segment !== undefined) {
+    throw yield* documentationError(segment, "output");
+  }
+}
+
 function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
+  // This run's memory of a checked command failure it never authorized. Passed
+  // by value into core's own expansion and reachable from nowhere else, so no
+  // document, component, or printing boundary can clear it (#441).
+  const checkedFailures = checkedFailureLedger();
   // Import root — same pipeline as any component. The provider middleware
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
@@ -1431,7 +1514,20 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     if (root.returns !== undefined) {
-      return yield* runValueRoot(root, root.returns, validatedProps, counter, streamed, rootPath);
+      // Each channel is forwarded on the operation it was received on. stdout
+      // belongs to the result here, so a host that prints the result on its own
+      // stdout shows a command's stdout on the stream it leaves free — that is
+      // a decision about the host's streams, taken downstream of the per-exec
+      // boundary, and it does not change the channel already retained.
+      return yield* runValueRoot(
+        root,
+        root.returns as ReturnsSchema,
+        validatedProps,
+        counter,
+        streamed,
+        rootPath,
+        checkedFailures,
+      );
     }
 
     // A root declaring top-level <Output> buffers completely (spec §5.4):
@@ -1450,12 +1546,14 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         undefined,
         selected,
         rootPath,
+        checkedFailures,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
       if (text) {
         yield* ephemeral(DocumentOutput.operations.output(text));
       }
+      yield* refuseCheckedFailure(checkedFailures);
       return { status: "ok", output: text, value: text };
     }
 
@@ -1472,6 +1570,8 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         counter,
         produced,
         rootPath,
+        0,
+        checkedFailures,
       );
 
       while (emittedThrough < produced.length) {
@@ -1490,6 +1590,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
     }
 
     const text = streamed.join("");
+    yield* refuseCheckedFailure(checkedFailures);
     return { status: "ok", output: text, value: text };
   });
 
@@ -1588,6 +1689,7 @@ function* executeDocument(
     componentDirs = [...DEFAULT_COMPONENT_DIRS],
     modifiers: customModifiers = {},
     secretDetection,
+    retainProcessOutput = true,
   } = options;
 
   // Carried through exactly as supplied. Rewriting an identity here would let
@@ -1596,7 +1698,7 @@ function* executeDocument(
 
   // Build modifier registry — pure data, no scope side effects.
   const registry = createModifierRegistry();
-  registry.set("exec", execFactory);
+  registry.set("exec", createExecFactory(retainProcessOutput));
   registry.set("silent", silentFactory);
   registry.set("eval", evalFactory);
   registry.set("persist", persistFactory);
@@ -1636,17 +1738,6 @@ function* executeDocument(
           yield* channel.send(text);
         },
       });
-
-      // The discard provider is the base so an attached-service observer can
-      // authenticate and forward its own process output without unsilencing
-      // unrelated document subprocesses.
-      yield* Stdio.around(
-        {
-          *stdout() {},
-          *stderr() {},
-        },
-        { at: "min" },
-      );
 
       // The state this run owns: the table its printed errors record their
       // causes in, the schema compilers, and the slot its completion reads its

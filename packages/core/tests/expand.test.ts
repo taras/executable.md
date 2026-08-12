@@ -128,6 +128,18 @@ function expand(
   });
 }
 
+/** The message an expansion failed with, for a document the contract fails. */
+function failed(body: () => Operation<unknown>): Operation<string> {
+  return scoped(function* () {
+    try {
+      yield* body();
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("expected the expansion to fail");
+  });
+}
+
 /**
  * The same expansion, stopping at the segments rather than their rendering, so
  * a test can assert the shape and the order the engine produced rather than the
@@ -149,13 +161,23 @@ function expandWithEnv(
   segments: Segment[],
   components: Record<string, ComponentDefinition | FunctionComponentDefinition>,
   codeResult?: CodeResultStub,
-): Operation<{ output: string; env: Record<string, unknown> }> {
+): Operation<{ output: string; env: Record<string, unknown>; failure: string | undefined }> {
   return scoped(function* () {
     const testEnv: EvalEnv = { values: {} };
     yield* useTestComponents(components, codeResult);
     yield* useTestEnv(testEnv);
-    const expanded = yield* expandSegments(segments, {}, {}, new Set());
-    return { output: renderSegments(expanded), env: testEnv.values };
+    // A checked command failure ends the expansion (#441). The environment is
+    // still this frame's, so what the run did or did not bind stays readable.
+    try {
+      const expanded = yield* expandSegments(segments, {}, {}, new Set());
+      return { output: renderSegments(expanded), env: testEnv.values, failure: undefined };
+    } catch (error) {
+      return {
+        output: "",
+        env: testEnv.values,
+        failure: error instanceof Error ? error.message : String(error),
+      };
+    }
   });
 }
 
@@ -348,47 +370,39 @@ describe("expansion", () => {
   });
 
   // Code block with non-zero exit
-  it("code block with non-zero exit → error", function* () {
+  // A nonzero exit is checked: it ends the expansion rather than rendering a
+  // diagnostic and continuing (#441).
+  it("code block with non-zero exit → the expansion fails", function* () {
     const segments = scanSegments("```bash exec\nfoo\n```\n");
-    const output = yield* expand(
-      segments,
-      {},
-      {
-        codeResult: { output: "", exitCode: 1, stderr: "not found" },
-      },
+    const message = yield* failed(() =>
+      expand(segments, {}, { codeResult: { output: "", exitCode: 1, stderr: "not found" } }),
     );
-    expect(output).toContain("ERROR");
-    expect(output).toContain("not found");
+    expect(message).toContain("not found");
   });
 
-  // A non-zero exit is a failure whatever the command printed (#307). What it
-  // printed is usually the explanation, so it is kept — the output segment
-  // first, then the printed error, once.
-  it("code block with non-zero exit and stdout → output, then one printed error", function* () {
+  // The command's stdout reached the reader before it failed; the expansion
+  // then fails rather than rendering the pair (#441).
+  it("code block with non-zero exit and stdout → the expansion fails", function* () {
     const segments = scanSegments("```bash exec\nfoo\n```\n");
-    const output = yield* expand(
-      segments,
-      {},
-      {
-        codeResult: { output: "partial\n", exitCode: 1, stderr: "boom" },
-      },
+    const message = yield* failed(() =>
+      expand(segments, {}, { codeResult: { output: "partial\n", exitCode: 1, stderr: "boom" } }),
     );
-    expect(output).toBe("partial\n<!-- ERROR: Command failed (exit 1): boom -->");
+    expect(message).toContain("boom");
   });
 
-  it("keeps the output segment ahead of the printed error it explains", function* () {
-    const expanded = yield* expandToSegments(
-      scanSegments("```bash exec\nfoo\n```\n"),
-      {},
-      {
-        output: "partial\n",
-        exitCode: 1,
-        stderr: "boom",
-      },
+  it("produces no rendered pair for a failed foreground block", function* () {
+    const message = yield* failed(() =>
+      expandToSegments(
+        scanSegments("```bash exec\nfoo\n```\n"),
+        {},
+        {
+          output: "partial\n",
+          exitCode: 1,
+          stderr: "boom",
+        },
+      ),
     );
-    expect(expanded.map((segment) => segment.type)).toEqual(["execOutput", "error"]);
-    const [execOutput] = expanded;
-    expect(execOutput.type === "execOutput" && execOutput.result.exitCode).toBe(1);
+    expect(message).toContain("boom");
   });
 
   // Silent code block → no output
@@ -408,7 +422,7 @@ describe("expansion", () => {
     const comp = makeComponent("Greeting", "Hello world!");
     const ctx = { Greeting: comp };
     const segments = scanSegments('<Greeting as="saved" />');
-    const { output, env } = yield* expandWithEnv(segments, ctx);
+    const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["saved"]).toBe("Hello world!");
   });
@@ -416,7 +430,7 @@ describe("expansion", () => {
   it("Capture stores children output into env and stays silent", function* () {
     const ctx = {};
     const segments = scanSegments('<Capture as="x">hello\n</Capture>');
-    const { output, env } = yield* expandWithEnv(segments, ctx);
+    const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["x"]).toBe("hello");
   });
@@ -427,7 +441,7 @@ describe("expansion", () => {
   // the new segment shape; #309 owns failed-capture output visibility.
   it("Capture leaves the binding unset when a block failed after printing", function* () {
     const segments = scanSegments('<Capture as="x">\n```bash exec\nfoo\n```\n</Capture>');
-    const { output, env } = yield* expandWithEnv(
+    const { output, env, failure } = yield* expandWithEnv(
       segments,
       {},
       {
@@ -437,13 +451,14 @@ describe("expansion", () => {
       },
     );
     expect(env["x"]).toBeUndefined();
-    expect(output).toBe("<!-- ERROR: Command failed (exit 1): boom -->");
+    expect(failure).toContain("Command failed (exit 1): boom");
+    expect(output).toBe("");
   });
 
   it("component as= leaves the binding unset when a block failed after printing", function* () {
     const comp = makeComponent("Preview", "```bash exec\nfoo\n```\n");
     const segments = scanSegments('<Preview as="saved" />');
-    const { output, env } = yield* expandWithEnv(
+    const { output, env, failure } = yield* expandWithEnv(
       segments,
       { Preview: comp },
       {
@@ -453,7 +468,8 @@ describe("expansion", () => {
       },
     );
     expect(env["saved"]).toBeUndefined();
-    expect(output).toBe("<!-- ERROR: Command failed (exit 1): boom -->");
+    expect(failure).toContain("Command failed (exit 1): boom");
+    expect(output).toBe("");
   });
 
   it("Capture rejects expression as prop", function* () {
@@ -485,7 +501,7 @@ describe("expansion", () => {
     const segments = scanSegments(
       '<Capture as="data" select="code[lang=json]">prose text\n\n```json\n{"key":"val"}\n```\n\nmore prose\n</Capture>',
     );
-    const { output, env } = yield* expandWithEnv(segments, ctx);
+    const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe('{"key":"val"}');
   });
@@ -495,7 +511,7 @@ describe("expansion", () => {
     const segments = scanSegments(
       '<Capture as="data" select="code[lang=json]">no code here\n</Capture>',
     );
-    const { output, env } = yield* expandWithEnv(segments, ctx);
+    const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe("no code here");
   });
@@ -503,7 +519,7 @@ describe("expansion", () => {
   it("Capture with select extracts paragraph text", function* () {
     const ctx = {};
     const segments = scanSegments('<Capture as="data" select="paragraph">Hello world\n</Capture>');
-    const { output, env } = yield* expandWithEnv(segments, ctx);
+    const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe("Hello world");
   });

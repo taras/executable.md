@@ -43,6 +43,56 @@ import type { Operation } from "effection";
 const PRINTS_ERRORS = "executablemd.core.printsErrors";
 
 /**
+ * What an expansion is allowed to do about a checked command failure, and what
+ * one already did to this run.
+ *
+ * Created by the execution and handed down through core's own calls. Neither
+ * half is ambient: a document or component cannot read it, set it, or shadow
+ * it, which is what keeps the outcome of a run something the document's own
+ * text decides.
+ *
+ * `authorized` is granted only by an authored `<PrintErrors>` element, for the
+ * work its region causes. Everywhere else a nonzero command records itself in
+ * `failure` on the way out, and that record is what makes the failure survive
+ * an enclosing boundary that would otherwise print it and continue —
+ * `printErrors(fn)`, a built-in like `<TempDir>`, or a component catching the
+ * `ContentError` its projected content raised. Those recover their own
+ * failures; none of them may decide that a command which exited nonzero was
+ * not a failure of the run.
+ */
+export interface CheckedFailures {
+  /** Whether an authored `<PrintErrors>` region covers this work. */
+  readonly authorized: boolean;
+  /** The first unauthorized checked failure this run suffered, once it has. */
+  failure?: ErrorSegment;
+}
+
+/** The ledger an execution starts with: no authority, nothing suffered yet. */
+export function checkedFailureLedger(): CheckedFailures {
+  return { authorized: false };
+}
+
+/**
+ * The ledger for work a `<PrintErrors>` region causes: recovery is authorized,
+ * so nothing it prints is a failure the run suffered.
+ */
+export function recoveringLedger(): CheckedFailures {
+  return { authorized: true };
+}
+
+/**
+ * The ledger for the body of a contained invocation.
+ *
+ * A fresh record with the inherited authority: a checked failure inside it
+ * fails that invocation — which is how a test reports a failing test — and the
+ * run's own record stays clear, so the tests after it still run and the testing
+ * session's completion policy is what decides the run.
+ */
+export function containedLedger(inherited: CheckedFailures | undefined): CheckedFailures {
+  return { authorized: inherited?.authorized ?? false };
+}
+
+/**
  * Continue after this component fails, reporting the failure as a printed error.
  *
  * The component is returned unchanged — declaring is marking, not wrapping — so

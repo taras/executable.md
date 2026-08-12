@@ -1,7 +1,8 @@
 import { describe, it, beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "@executablemd/core";
 import { expect } from "@executablemd/test-support/expect";
-import { sleep } from "effection";
+import { scoped, sleep } from "effection";
+import { InMemoryStream } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
 import { useFailingExec } from "@executablemd/runtime/test";
 import { TestFailureError } from "../src/test-api.ts";
@@ -318,5 +319,88 @@ describe("testing mode", () => {
     const run = yield* runDoc({ "README.md": doc });
     expect(run.results[0]?.location).toBe("README.md:5:1");
     expect(run.output).toContain("test at README.md:5:1");
+  });
+
+  /**
+   * Containment belongs to the `<Test>` this session built, by identity. A
+   * repository component of the same name is chosen ahead of it and is a
+   * different function, so a checked command failure inside it is the run's,
+   * exactly as it would be anywhere else a document did not authorize one
+   * (#441).
+   */
+  it("a repository Test of the same name contains nothing", function* () {
+    yield* useFailingExec(3, "command exploded");
+    const doc = [
+      "<Testing>",
+      '<Test name="broken">',
+      "```bash exec",
+      "false",
+      "```",
+      "</Test>",
+      '<Test name="fine"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
+    const run = yield* runDoc({
+      "README.md": doc,
+      // Chosen ahead of the package's, and a different function object.
+      "Test.md": "<Content />\n",
+    });
+
+    // No containment: nothing became a test result, the work after the failing
+    // command never ran, and the run failed.
+    expect(failureOf(run)).toBeDefined();
+    expect(run.results).toHaveLength(0);
+    expect(run.results.map((r) => r.name)).not.toContain("fine");
+  });
+
+  /**
+   * A contained failure is decided once. Replay restores the failed result and
+   * the failing testing outcome from the journal, and starts no child.
+   */
+  it("replays a contained test failure without running the command again", function* () {
+    let starts = 0;
+    const doc = [
+      "<Testing>",
+      '<Test name="broken">',
+      "```bash exec",
+      "false",
+      "```",
+      "</Test>",
+      '<Test name="fine"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
+    const stream = new InMemoryStream();
+
+    const first = yield* scoped(function* () {
+      yield* useFailingExec(3, "command exploded");
+      yield* API.Process.around({
+        *exec([options], next) {
+          starts += 1;
+          return yield* next(options);
+        },
+      });
+      return yield* runDoc({ "README.md": doc }, { stream });
+    });
+    const after = starts;
+
+    const second = yield* scoped(function* () {
+      yield* useFailingExec(3, "command exploded");
+      yield* API.Process.around({
+        *exec([options], next) {
+          starts += 1;
+          return yield* next(options);
+        },
+      });
+      return yield* runDoc({ "README.md": doc }, { stream });
+    });
+
+    expect(starts).toBe(after);
+    expect(failureOf(first)).toBeInstanceOf(TestFailureError);
+    expect(failureOf(second)).toBeInstanceOf(TestFailureError);
+    expect(second.results.map((r) => [r.name, r.status])).toEqual(
+      first.results.map((r) => [r.name, r.status]),
+    );
   });
 });

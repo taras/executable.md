@@ -46,7 +46,6 @@ import { installTestAgentComponents } from "../src/components.ts";
 const AGENT = ["AgentProvider", "Agent", "Session", "Prompt", "ApproveAll", "AskPermission"];
 const TESTING = [
   "Testing",
-  "Test",
   "AssertThrows",
   // The fourteen entries of the assertion table, each registered from it.
   "Assert",
@@ -65,7 +64,18 @@ const TESTING = [
   "AssertLessOrEqual",
 ];
 const TEST_AGENT = ["TestAgent", "TestAgent.Scenario"];
-const REGISTERED = [...AGENT, ...TESTING, ...TEST_AGENT];
+
+/**
+ * `<Test>` is core's, not the testing package's (#441).
+ *
+ * Core owns the construct because core owns what an invocation of it means for
+ * the run — a checked command failure inside one is that test's outcome — and
+ * the testing package supplies what a test does. It is still an ordinary
+ * default, which is what the cases below check: a repository file replaces it
+ * exactly as it replaces the three packages' own registrations.
+ */
+const CORE = ["Test"];
+const REGISTERED = [...AGENT, ...TESTING, ...TEST_AGENT, ...CORE];
 
 type Order = "agent-first" | "test-agent-first";
 
@@ -178,7 +188,10 @@ describe("Tier XP — cross-package resolution", () => {
       return [...(yield* Component.operations.registry).keys()].sort();
     });
 
-    expect(installed).toEqual([...REGISTERED].sort());
+    // Core's own defaults are not in a scope's registrations: they are the
+    // terminal `selectComponent()` resolves against, so `<Test>` is covered by
+    // the resolution cases rather than by this inventory.
+    expect(installed).toEqual([...AGENT, ...TESTING, ...TEST_AGENT].sort());
   });
 
   it("XP1: a repository component runs in place of every registered default", function* () {
@@ -221,6 +234,9 @@ describe("Tier XP — cross-package resolution", () => {
     }
     for (const name of TEST_AGENT) {
       expect(resolved.get(name)).toBe("registered:@executablemd/test-agent");
+    }
+    for (const name of CORE) {
+      expect(resolved.get(name)).toBe("registered:@executablemd/core");
     }
     expect([...(yield* resolveAll("test-agent-first")).entries()]).toEqual([...resolved.entries()]);
   });

@@ -2,9 +2,9 @@
  * @module
  * Testing components for executable.md documents (specs/testing-spec.md).
  *
- * `<Testing>` activates testing mode for its expanded subtree, `<Test>`
- * defines an atomic test, and the assertion components build on
- * `node:assert/strict`.
+ * `<Testing>` activates testing mode for its expanded subtree, `<Test>` — the
+ * construct core owns, whose behavior this package supplies — defines an atomic
+ * test, and the assertion components build on `node:assert/strict`.
  *
  * Composition with core execution:
  *

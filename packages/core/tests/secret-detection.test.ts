@@ -43,6 +43,7 @@ import type {
   Workflow,
 } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { Stdio } from "@effectionx/process";
 import { execute, Execution } from "../src/execute.ts";
 import { inlineSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
@@ -145,11 +146,20 @@ function label(event: DurableEvent): string {
 }
 
 /** Every command answers with `output`, so no real shell runs. */
+/**
+ * A stand-in child, which displays what it claims to have written.
+ *
+ * Retention reads the same chain a reader does (#441), so a stub that returned
+ * text without writing it would leave nothing for the journal to hold — and
+ * nothing for the secret gate to inspect.
+ */
 function* useExecOutput(output: string): Operation<void> {
   yield* API.Process.around({
-    // deno-lint-ignore require-yield
-    *exec() {
-      return { exitCode: 0, stdout: output, stderr: "" };
+    *exec([options]) {
+      yield* Stdio.operations.stdout(new TextEncoder().encode(output));
+      return options.retain === false
+        ? { exitCode: 0, stdout: undefined, stderr: undefined }
+        : { exitCode: 0, stdout: output, stderr: "" };
     },
   });
 }
@@ -569,6 +579,64 @@ describe("default-on secret detection", () => {
       // The counterfeit took effect — the read it governs failed — and the
       // journal was untouched by it, because the gate never asks.
       expect(read).toBe("CounterfeitSecretPolicyError");
+      expect(rejectedInPlace(result)).toBe(true);
+      expect(persistedText(backend)).not.toContain(CANARY);
+    });
+  });
+
+  /**
+   * The gate scans what a run retained, and a run retains what reached its
+   * per-exec boundary — after any middleware enclosing the execution, which is
+   * the host's own trusted preprocessing (#441). Both directions follow from
+   * that one fact, and both matter: a host may keep a credential out of the
+   * record entirely, and a host cannot smuggle one in.
+   */
+  describe("the boundary the gate scans", () => {
+    it("admits a run whose credential was redacted before the boundary", function* () {
+      const backend = new InMemoryStream();
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      let redactions = 0;
+
+      // Enclosing the execution, so this is what the run ever receives.
+      yield* Stdio.around({
+        *stdout([bytes], next) {
+          redactions += 1;
+          const text = decoder.decode(bytes, { stream: false });
+          return yield* next(encoder.encode(text.replace(CANARY, "redacted-upstream")));
+        },
+      });
+      yield* useExecOutput(`${CANARY}\n`);
+
+      const result = yield* yield* execute({ ...inlineSource(LEAKING), stream: backend });
+
+      expect(redactions).toBeGreaterThan(0);
+      // The run completed, the safe text persisted, and the credential is in
+      // no part of the record — it never reached the gate to be caught by.
+      expect(result.ok).toBe(true);
+      expect(persistedText(backend)).toContain("redacted-upstream");
+      expect(persistedText(backend)).not.toContain(CANARY);
+    });
+
+    it("refuses a run whose safe output was made credential-shaped before the boundary", function* () {
+      const backend = new InMemoryStream();
+      const encoder = new TextEncoder();
+      let injections = 0;
+
+      yield* Stdio.around({
+        *stdout([bytes], next) {
+          injections += 1;
+          void bytes;
+          return yield* next(encoder.encode(`${CANARY}\n`));
+        },
+      });
+      // What the command itself produced is harmless.
+      yield* useExecOutput("nothing-secret\n");
+
+      const result = yield* yield* execute({ ...inlineSource(LEAKING), stream: backend });
+
+      expect(injections).toBeGreaterThan(0);
+      // The gate reads the retained text, not the command's, so it catches it.
       expect(rejectedInPlace(result)).toBe(true);
       expect(persistedText(backend)).not.toContain(CANARY);
     });
