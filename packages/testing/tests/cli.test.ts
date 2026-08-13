@@ -46,8 +46,15 @@ describe("xmd CLI", () => {
     expect(result.stderr).toContain("tests failed");
   });
 
+  // A fixture that owns its inertness. The repository README used to stand in
+  // here, and it is executable now (#414): `xmd test` runs a document while it
+  // looks for `<Test>` regions, so pointing this case at production
+  // documentation made it run whatever that documentation does.
   it("test exits 1 when no tests are discovered", function* () {
-    const result = yield* runCli(["test", "README.md"], RUN).join();
+    const result = yield* runCli(
+      ["test", "packages/testing/tests/fixtures/no-tests.md"],
+      RUN,
+    ).join();
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("no tests were discovered");
   });

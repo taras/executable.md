@@ -50,6 +50,7 @@
   "tasks": {
     "xmd": "deno run --allow-all packages/cli/src/deno.ts",
     "setup": "deno run --allow-all scripts/setup.ts",
+    "verify:focused": "deno task xmd run README.md#Test/Focused",
     "verify:clean": "deno run --allow-all --node-modules-dir=none --cached-only --frozen scripts/verify-clean.ts",
     "deps": "deno run --allow-all scripts/deps.ts",
     "deps:target": "deno run --allow-all scripts/deps-target.ts",

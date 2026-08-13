@@ -133,6 +133,38 @@ function* runGreen(
   return result.code;
 }
 
+describe("the CI smoke job", () => {
+  /**
+   * The smoke job builds its binary by running the README's own Build target,
+   * which is the point: a documented build that stopped working stops a
+   * required check.
+   *
+   * Preparing the checkout is the installation owner's job. Under the root
+   * `nodeModulesDir: "auto"`, the *first* `deno task xmd` to run initializes
+   * `node_modules` itself — before any README block executes — so a job that
+   * reached a source-CLI invocation first would install as a side effect of
+   * running documentation, and would credit the README with work already done
+   * for it. Hence the ordering, and hence "the first one": a later `xmd` step
+   * added above the build would reintroduce exactly that.
+   */
+  it("prepares the checkout before its first source-CLI invocation", function* () {
+    const smoke = (yield* workflow()).smoke;
+    if (smoke === undefined) {
+      throw new Error("workflow.jobs.smoke is missing");
+    }
+
+    const commands = smoke.steps.map((step) => step.run ?? "");
+    const prepares = commands.findIndex((run) => run.includes("deno task setup"));
+    const sourceCli = commands.findIndex((run) => run.includes("deno task xmd"));
+
+    expect(prepares).toBeGreaterThanOrEqual(0);
+    expect(sourceCli).toBeGreaterThanOrEqual(0);
+    expect(prepares).toBeLessThan(sourceCli);
+    // And that first source-CLI invocation is the documented build.
+    expect(commands[sourceCli]).toContain("README.md#Build");
+  });
+});
+
 describe("the CI workflow aggregate", () => {
   it("defines green", function* () {
     expect(green(yield* workflow())).toBeDefined();

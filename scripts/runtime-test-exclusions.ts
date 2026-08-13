@@ -79,6 +79,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: DERIVED_SCOPE,
   },
   {
+    path: "scripts/tests/readme-targets.test.ts",
+    reason:
+      "runs the repository's own README through the source CLI with Deno.execPath() and a temporary `deno` shim; the subject is this Deno task graph, and the portable target mechanism is covered by Tier CT",
+    issue: "https://github.com/taras/executable.md/issues/414",
+  },
+  {
     path: "scripts/tests/publish-workflow-generator.test.ts",
     reason:
       "runs scripts/gen-publish-workflow.md through the xmd CLI with Deno.execPath(); the document is executed by Deno only",
