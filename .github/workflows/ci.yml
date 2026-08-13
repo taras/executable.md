@@ -101,6 +101,18 @@ jobs:
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
+      # Preparing the checkout is the installation owner's job, not a side
+      # effect of the first `deno task xmd` to run: under
+      # `nodeModulesDir: "auto"` that task would initialize `node_modules`
+      # itself, before any README block executed. So this job prepares first,
+      # exactly as the README tells a contributor to on a fresh clone.
+      #
+      # The Build target then prepares again, because preparation is its
+      # preamble and every target inherits it. The repeat is deliberate: what
+      # the document does is not conditional on who ran it.
+      - name: Prepare the checkout
+        run: deno task setup
+
       # The README documents how a contributor prepares a checkout and builds
       # the binary, and this is that document doing it. Everything below
       # consumes the `dist/xmd` it produced, so a README whose Build target

@@ -33,8 +33,17 @@ Locate the package that owns the behavior you are about to change:
   and the checks CI runs.
 - `specs/` — the specification each package is held to.
 
-This guide is itself an executable document: each section below is a target you
-can select, and selecting one runs the commands it describes.
+On a fresh clone, start here:
+
+```bash exec
+deno task setup
+```
+
+Success provides the prepared checkout every command in this guide reads from,
+including the source CLI the targets below run through.
+
+With that in place, this guide is itself an executable document: each section is
+a target you can select, and selecting one runs the commands it describes.
 
 ```bash
 deno task xmd targets README.md
@@ -48,12 +57,9 @@ README.md#Test/Focused
 README.md#Test/Complete
 ```
 
-Preparing the checkout is common to all of them, so it lives here and runs first
-whichever target you select:
-
-```bash exec
-deno task setup
-```
+Preparation is common to all of them, so the block above is the document's own
+preamble: whichever target you select runs it first, and the checkout is
+prepared again before the work you asked for.
 
 Each command's output reaches you as it is produced, the way it does when you
 type the command yourself. A command that exits nonzero ends the run there, with
@@ -73,13 +79,14 @@ deno task verify    # the whole applicable battery, concurrently
 
 ## Setup
 
-Run this on a fresh clone, and again after changing a dependency.
+Run this after changing a dependency, or whenever you want the checkout restored
+on its own without building or testing.
 
 ```bash
 deno task xmd run README.md#Setup
 ```
 
-It executes `deno task setup`, which is the block above and the only thing in
+It executes `deno task setup`, the preamble block above and the only thing in
 this repository that installs. Setup owns both dependency layouts —
 `node_modules/` and Deno's global cache — and prepares them in the order their
 union resolves in: Deno's frozen install and cached module graphs first, then
