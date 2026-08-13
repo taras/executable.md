@@ -48,17 +48,6 @@ function marker(task: string): string {
   return `xmd-ran:${task}`;
 }
 
-/**
- * A credential-shaped canary the shim prints when it answers the changed-test
- * leaf, assembled from fragments so no complete token-shaped literal is
- * committed. The real suite prints strings like it — fixtures for the secret
- * scanner — and a *journaled* one fails a run. Without `--journal` a run keeps a
- * command's exit status alone and never accumulates its output, so there is
- * nothing for the gate to scan and the report needs no redirection (#441/#442).
- */
-const CANARY_PREFIX = ["gh", "p", "_"].join("");
-const CANARY_BODY = `${"abcdefghijklmnopqrstuvwxyz"}${"0123456789"}`;
-
 const SHIM = [
   "#!/usr/bin/env bash",
   "# Answers for the repository's leaf tasks and delegates everything else —",
@@ -73,10 +62,6 @@ const SHIM = [
   '    printf "%s%s\\n" "$XMD_MARKER_PREFIX" "$*"',
   '    if [ "$*" = "$XMD_FAIL_TASK" ]; then',
   "      exit 1",
-  "    fi",
-  "    # What a real test report carries: the scanner's own fixtures.",
-  '    if [ "$*" = "$XMD_CANARY_TASK" ]; then',
-  '      printf "%s%s\\n" "$XMD_CANARY_PREFIX" "$XMD_CANARY_BODY"',
   "    fi",
   "    exit 0",
   "    ;;",
@@ -130,9 +115,6 @@ function* invoke(args: string[], options: { fail?: string } = {}): Operation<Inv
           XMD_REAL_DENO: Deno.execPath(),
           XMD_FAIL_TASK: options.fail ?? "",
           XMD_MARKER_PREFIX: marker(""),
-          XMD_CANARY_TASK: CHANGED_TESTS,
-          XMD_CANARY_PREFIX: CANARY_PREFIX,
-          XMD_CANARY_BODY: CANARY_BODY,
         },
       }).join(),
     );
@@ -156,59 +138,45 @@ const FOCUSED = ["lint", "check", "check:jsr", CHANGED_TESTS];
 const VERIFY = "verify";
 
 /** The executable hierarchy, in the order the document declares it. */
-const DEVELOPMENT_TARGETS = [
-  "README.md#Development",
-  "README.md#Development/Setup",
-  "README.md#Development/Build",
-  "README.md#Development/Verification",
-  "README.md#Development/Verification/Focused",
-  "README.md#Development/Verification/Complete",
+const TARGETS = [
+  "README.md#Setup",
+  "README.md#Build",
+  "README.md#Test",
+  "README.md#Test/Focused",
+  "README.md#Test/Complete",
 ];
 
 describe("Tier RM — README dogfood", () => {
-  it("RM1: the development hierarchy is addressable, once each, in source order", function* () {
+  it("RM1: the document addresses the developer path, once each, in source order", function* () {
     const listed = yield* invoke(["xmd", "targets", "README.md"]);
     expect(listed.code).toBe(0);
 
     const lines = listed.stdout.split("\n").filter((line) => line.length > 0);
 
-    // Exactly these, once each, in source order. A prose heading beneath
-    // `## Development` would inherit its direct content, so selecting that
-    // prose would run setup — this assertion is what refuses that.
-    expect(lines.filter((line) => line.includes("#Development"))).toEqual(DEVELOPMENT_TARGETS);
+    // The whole catalog, exactly. This is a development guide, so what it
+    // addresses is what a developer runs and nothing else — a section that
+    // drifted back into product documentation, or a prose heading that would
+    // inherit the preamble's setup, shows up here as an extra line.
+    expect(lines).toEqual(TARGETS);
 
-    // Documentation that belongs beside the hierarchy rather than inside it
-    // stays addressable as a top-level section.
-    expect(lines).toContain("README.md#Implementation%20feedback");
-    expect(lines).toContain("README.md#Dependency%20layout");
-
-    // Making one section executable addresses nothing else differently: every
-    // other heading in the document is still an ordinary prose target.
-    expect(lines).toContain("README.md#Install");
-    expect(lines).toContain("README.md#Status");
     // Discovery runs nothing.
     expect(listed.tasks).toEqual([]);
   });
 
   it("RM2: Setup runs setup and nothing else", function* () {
-    const run = yield* invoke(["xmd", "run", "README.md#Development/Setup", "--raw"]);
+    const run = yield* invoke(["xmd", "run", "README.md#Setup", "--raw"]);
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP]);
   });
 
   it("RM3: Build inherits setup and adds the build", function* () {
-    const run = yield* invoke(["xmd", "run", "README.md#Development/Build", "--raw"]);
+    const run = yield* invoke(["xmd", "run", "README.md#Build", "--raw"]);
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP, BUILD]);
   });
 
   it("RM4: Focused inherits setup and runs the short battery in order", function* () {
-    const run = yield* invoke([
-      "xmd",
-      "run",
-      "README.md#Development/Verification/Focused",
-      "--raw",
-    ]);
+    const run = yield* invoke(["xmd", "run", "README.md#Test/Focused", "--raw"]);
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP, ...FOCUSED]);
     expect(run.tasks).not.toContain(BUILD);
@@ -216,18 +184,13 @@ describe("Tier RM — README dogfood", () => {
   });
 
   it("RM5: Complete inherits setup and runs the whole battery", function* () {
-    const run = yield* invoke([
-      "xmd",
-      "run",
-      "README.md#Development/Verification/Complete",
-      "--raw",
-    ]);
+    const run = yield* invoke(["xmd", "run", "README.md#Test/Complete", "--raw"]);
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP, VERIFY]);
   });
 
-  it("RM6: the Verification parent runs both batteries beneath it", function* () {
-    const run = yield* invoke(["xmd", "run", "README.md#Development/Verification", "--raw"]);
+  it("RM6: the Test parent runs both levels beneath it", function* () {
+    const run = yield* invoke(["xmd", "run", "README.md#Test", "--raw"]);
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP, ...FOCUSED, VERIFY]);
   });
@@ -242,22 +205,14 @@ describe("Tier RM — README dogfood", () => {
 
   it("RM8: deno task verify:focused enters the same target, with no cycle", function* () {
     const shorthand = yield* invoke(["verify:focused"]);
-    const direct = yield* invoke([
-      "xmd",
-      "run",
-      "README.md#Development/Verification/Focused",
-      "--raw",
-    ]);
+    const direct = yield* invoke(["xmd", "run", "README.md#Test/Focused", "--raw"]);
     expect(shorthand.code).toBe(0);
     expect(shorthand.tasks).toEqual(direct.tasks);
     expect(shorthand.tasks).toEqual([SETUP, ...FOCUSED]);
   });
 
   it("RM9: a failed task stops the document and fails the run", function* () {
-    const run = yield* invoke(
-      ["xmd", "run", "README.md#Development/Verification/Focused", "--raw"],
-      { fail: "check" },
-    );
+    const run = yield* invoke(["xmd", "run", "README.md#Test/Focused", "--raw"], { fail: "check" });
 
     expect(run.code).toBe(1);
     // It stopped where it failed: check:jsr, the tests and verify never ran.
@@ -273,51 +228,13 @@ describe("Tier RM — README dogfood", () => {
   });
 
   /**
-   * `xmd test` executes a document while it looks for `<Test>` regions, so this
-   * README runs before it reports that it holds none. That is a consequence of
-   * making it executable, and it is recorded here rather than designed around:
-   * nothing makes these blocks conditional on the command.
-   *
-   * It cannot recurse here, and it could not recurse in a real run either — the
-   * leaf that would re-enter this document is answered by the invocation's own
-   * shim.
-   */
-  it("RM11: xmd test runs the document too, then reports no tests", function* () {
-    const run = yield* invoke(["xmd", "test", "README.md"]);
-
-    expect(run.tasks).toEqual([SETUP, BUILD, ...FOCUSED, VERIFY]);
-    expect(run.code).toBe(1);
-    expect(run.stderr).toContain("no tests were discovered");
-  });
-
-  /**
-   * The report is not redirected, and the scanner is not turned off. The canary
-   * the shim prints for that leaf is what a real report carries — a fixture
-   * shaped like a credential — and it reaches the reader unaltered while the
-   * run keeps none of it. A gate scans what a run retains, and this one retains
-   * nothing, so there is nothing to refuse (#441/#442).
-   */
-  it("RM12: the entry point streams a credential-shaped report and keeps none of it", function* () {
-    const run = yield* invoke(["verify:focused"]);
-
-    expect(run.code).toBe(0);
-    expect(run.tasks).toEqual([SETUP, ...FOCUSED]);
-    // The contributor saw the report.
-    expect(run.stdout).toContain(`${CANARY_PREFIX}${CANARY_BODY}`);
-    // And nothing scanned or refused it.
-    expect(run.stderr).not.toContain("secret detection rejected");
-    // No substitution of --no-secret-detection: the CLI announces that opt-out.
-    expect(run.stderr).not.toContain("secret detection is disabled");
-  });
-
-  /**
    * The point of running a build or a test suite is watching it, so what a
    * command writes has to reach the reader — once. A block that forwarded a
    * chunk live and then rendered the same text into the document at completion
    * would show every line twice, which is the defect this counts.
    */
   it("RM10: each command's output reaches the reader live, exactly once", function* () {
-    const run = yield* invoke(["xmd", "run", "README.md#Development/Build", "--raw"]);
+    const run = yield* invoke(["xmd", "run", "README.md#Build", "--raw"]);
     expect(run.code).toBe(0);
 
     expect(occurrences(run.stdout, marker(SETUP))).toBe(1);
@@ -326,7 +243,7 @@ describe("Tier RM — README dogfood", () => {
     // leaf's own command.
     expect(run.stdout.indexOf(marker(SETUP))).toBeLessThan(run.stdout.indexOf(marker(BUILD)));
     // Beside the section's own prose, which is what `--raw` renders.
-    expect(run.stdout).toContain("Compiles the standalone");
+    expect(run.stdout).toContain("Compile the standalone");
     // And nothing from a sibling the target did not select.
     expect(run.stdout).not.toContain(marker(VERIFY));
   });

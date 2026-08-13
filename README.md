@@ -1,392 +1,65 @@
 # executable.md
 
-**executable.md** treats markdown documents as executable workflows. A document can expand markdown components, execute annotated code blocks, and evaluate in-process [Effection](https://frontside.com/effection) operations while staying a valid, readable markdown file in any viewer.
+This is the development guide for the executable.md repository. It covers
+preparing a checkout, building the `xmd` binary, and running the verification a
+change owes before it is offered for review.
 
-The command-line tool is called **`xmd`** (eXecutable MarkDown).
+Three documents own the rest:
 
-This project is an implementation of the draft spec in [`specs/executable-mdx-spec.md`](specs/executable-mdx-spec.md).
+- [`AGENTS.md`](AGENTS.md) — the contribution, review and verification rules:
+  which evidence a change needs, when a feedback commit is given, and what the
+  delivery gate is.
+- [`architecture.md`](architecture.md) — the invariants any implementation of
+  the engine satisfies.
+- [`specs/executable-mdx-spec.md`](specs/executable-mdx-spec.md) — what the
+  product does, with the conformance matrix that pins it.
 
-## What it does
+Locate the package that owns the behavior you are about to change:
 
-- Expands JSX-style component invocations like `<Greeting name="world" />` from markdown files.
-- Executes fenced code blocks marked with `exec` or `eval`.
-- Optionally journals component imports and command results to a diagnostic JSONL trace.
-- Shares bindings across `eval` blocks inside a component.
-- Supports long-lived background processes with `daemon` and provider-style components for LLM-backed workflows.
+- `packages/core/` — the engine: the boundary scanner, component expansion,
+  `exec` and `eval`, modifiers, and the `execute()` entry point.
+- `packages/cli/` — the `xmd` command. `src/cli.ts` is runtime-neutral;
+  `src/{deno,node,bun,compiled}.ts` install the host adapters each runtime needs.
+- `packages/runtime/` — the contextual host APIs — process, filesystem, env,
+  config — that every other package reaches the host through.
+- `packages/durable-streams/` — the journal protocol, replay and divergence.
+- `packages/workflow/` — workflow runs, run storage, and the Workspace.
+- `packages/testing/` and `packages/test-agent/` — `<Test>` and the
+  deterministic agent; `packages/test-support/` is the one BDD surface all three
+  runtimes share.
+- `packages/acp/`, `packages/web/`, `packages/code-review-agent/` — the coding
+  agent bridge, the web form host, and the review agent.
+- `scripts/` — this repository's own tooling: setup, builds, release targets,
+  and the checks CI runs.
+- `specs/` — the specification each package is held to.
 
-## Example
-
-`README.md`
-
-````md
----
-title: My Project
----
-
-# {meta.title}
-
-<Greeting name="world" />
-
-```bash exec
-ls ./src
-```
-````
-
-`components/Greeting.md`
-
-```md
----
-emoji: Hello
-props:
-  type: object
-  properties:
-    name:
-      type: string
-  required: [name]
-  additionalProperties: false
----
-
-{meta.emoji}, {props.name}!
-```
-
-Rendered output:
-
-```md
-# My Project
-
-Hello, world!
-
-main.ts
-utils.ts
-```
-
-## Install
-
-Install the `xmd` binary (macOS/Linux):
+This guide is itself an executable document: each section below is a target you
+can select, and selecting one runs the commands it describes.
 
 ```bash
-curl -fsSL https://executable.md/install.sh | sh
+deno task xmd targets README.md
 ```
-
-Prebuilt binaries for each platform are published on the [releases page](https://github.com/taras/executable.md/releases). The binary is self-contained — no Node or Deno required to run it.
-
-### From npm
-
-`xmd` is also published to npm as [`@executablemd/cli`](https://www.npmjs.com/package/@executablemd/cli):
-
-```bash
-npm install -g @executablemd/cli
-```
-
-No registry configuration is needed — every `@executablemd` package resolves from the default npm registry.
-
-### Platform notes
-
-- **Size:** binaries are self-contained and fairly large (roughly 90–125 MB depending on platform) — the embedded Deno runtime dominates. Trimming this further is tracked in [#66](https://github.com/taras/executable.md/issues/66).
-- **Alpine / musl:** no musl build is published. On Alpine, run via `deno` or use the glibc binary under `gcompat`.
-- **macOS:** binaries are currently unsigned. The install script clears the Gatekeeper quarantine automatically; if you download a binary manually, run `xattr -d com.apple.quarantine ./xmd` before first use. Signing/notarization is tracked in [#68](https://github.com/taras/executable.md/issues/68).
-- **Windows:** the binary runs, but `exec` blocks that invoke shell commands need a shell (e.g. Git Bash or WSL) on `PATH`. Provider and `eval` documents work without one.
-
-## Run a document
-
-```bash
-xmd run packages/core/examples/hello-world.md
-```
-
-Run a document without writing one, for a quick experiment:
-
-```bash
-xmd -e '# Hello'
-xmd -e '<File path="README.md" />'
-```
-
-Write a diagnostic trace for one run:
-
-```bash
-xmd run packages/core/examples/hello-world.md --journal .xmd/events.jsonl
-```
-
-Useful flags:
-
-- `--eval`, `-e` - execute the given markdown as the root document instead of a path. Exactly one of the two is required; printed errors report the source as `<eval>` and relative paths resolve from the current directory.
-- `--journal`, `-j` - write current-run journal entries to a new JSONL file for debugging. The path must not exist and is never replayed.
-- `--verbose`, `-V` - print durable journal entries to stderr while running.
-- `--component-dir` - add component search directories. Defaults to `components` and `.`.
-
-## When a document fails
-
-A failure nothing handles ends the run. What the document rendered before it
-stays on stdout, the diagnostic goes to stderr, nothing after the failure
-starts, and `xmd run` exits 1:
-
-````md
-Checking the build.
-
-```sh exec
-./scripts/build.sh
-```
-
-Publishing.
-````
-
-If the build command exits nonzero, `Publishing.` never renders.
-
-Printing a failure and carrying on is something a document asks for, with
-`<PrintErrors>`:
-
-````md
-<PrintErrors>
-
-```sh exec
-./scripts/optional-check.sh
-```
-
-</PrintErrors>
-
-Publishing.
-````
-
-`<Output>` is a separate question. It chooses which regions of a document
-render, and a document that declares none simply renders all of them — it
-decides nothing about failure either way.
-
-## Run a workflow
-
-`xmd run` executes against the directory you are in and promises nothing
-afterwards. `xmd workflow` executes against a **run**: one retained Workspace and
-one filtered journal, in a database that outlives the process, so an interrupted
-procedure resumes from where it stopped instead of starting again.
-
-```bash
-xmd workflow start flows/prepare-release.md
-xmd workflow start --id=release-1.4 --props-channel=stable flows/prepare-release.md
-xmd workflow resume release-1.4
-```
-
-`start` names a document; `resume` names a run. A document path locates a
-definition and never selects a previous run, so starting the same document twice
-without `--id` creates two runs. Reusing an `--id` addresses the same run when
-the definition, base and normalized properties all agree, and is refused when
-any of them differ. `resume` takes no document and no properties: it uses the
-ones its run retained.
-
-What a run is, is a Git object: the repository containing the document, the
-commit `HEAD` resolves to, and the document's path inside it. **The committed
-document runs**, so uncommitted edits in your working tree do not change what a
-run is a run of, and a resume months later loads the same object rather than
-whatever the file says now.
-
-Inside a run, `<File>` and `<Glob>` name entries in the run's own logical
-filesystem rather than yours. Each read, write and search is one durable effect:
-the mutation, the Workspace root it produces and the journal result commit
-together, so a crash leaves all three or none, and a resume restores what was
-recorded instead of doing it again. Operations a run does not have — a temporary
-directory, a native service — fail explicitly rather than reaching your machine.
-
-Identity and outcome go to standard error, so piping stdout still gives you the
-document:
 
 ```text
-workflow run: release-1.4
-workflow status: completed
+README.md#Setup
+README.md#Build
+README.md#Test
+README.md#Test/Focused
+README.md#Test/Complete
 ```
 
-Only a completed run exits `0`. Failed exits `1`, suspended `2`, cancelled `3`
-and interrupted `130`, so a script cannot mistake an incomplete workflow for a
-finished one.
-
-Runs live under `~/.xmd/runs`; set `XMD_WORKFLOW_RUNS` to an absolute directory
-to keep them somewhere else. `xmd workflow` is available through the Deno
-entrypoint and the compiled binary; under Node and Bun the command exists and
-refuses before creating anything.
-
-Status, list, history, cancel and fork are designed but not yet shipped.
-
-## Coding agents
-
-Run ACP-compatible coding agents directly from a document with `<Agent>`,
-`<Session>`, and `<Prompt>`. The [coding-agent guide](https://executable.md/docs/agents)
-explains provider selection, permissions, timeouts, sessions, and deterministic
-tests with the bundled test agent.
-
-For the deterministic test-agent walkthrough and its scenario format, see
-[`packages/test-agent/README.md`](packages/test-agent/README.md).
-
-## Document model
-
-executable.md treats the root document like a component:
-
-- Frontmatter becomes `meta`.
-- JSX tags with capitalized names become component invocations.
-- `<Content />` acts as a slot for child content.
-- Text segments support `{meta.key}` and `{props.key}` interpolation.
-- `<If condition={...}>`, with an optional `<Else>` block, is a structural directive rather than a component.
-- Markdown is healed at execution boundaries with `remend` so formatting does not bleed across components or executable blocks.
-
-## Control flow
-
-`<If>` expands one branch and only one. `condition` selects by ordinary JavaScript truthiness — `false`, `0`, `-0`, `0n`, `NaN`, `""`, `null`, and `undefined` take the false branch, and everything else takes the true one, including `"false"`, `[]`, and `{}` — and the branch that is not selected never expands, so nothing in it imports a component, runs a block, or creates a binding.
-
-```md
-<If condition={hasFailures}>
-## Test failures
-
-<FailureReport />
-<Else>
-All checks passed.
-</Else>
-</If>
-```
-
-`<Else>` is optional and, when present, is the final substantive child of its `<If>`. See the [control-flow guide](https://executable.md/docs/control-flow) for nesting and binding examples.
-
-## Executable code blocks
-
-The first word in a fence info string is the language. The remaining words form a modifier chain. Standard renderers only read the first word, so the modifiers stay invisible everywhere else.
-
-````md
-```bash silent timeout=30s exec
-git diff --stat
-```
-````
-
-Built-in modifiers:
-
-- `exec` - run the block as a subprocess and render stdout.
-- `eval` - run JavaScript/TypeScript in-process as an Effection operation.
-- `silent` - execute but suppress rendered output.
-- `persist` - keep resources created by an eval block alive for the component lifetime.
-- `timeout=30s` - cancel a long-running block.
-- `daemon` - start an arbitrary fixed-configuration subprocess tied to the component scope.
-- `service=name` - start an attached service and publish its live loopback endpoint.
-- `ephemeral` - reconstruct live eval state without writing a journal event.
-
-LLM sampling is not a fence modifier — it happens through the `<Sample>` component installed by provider middleware (see [Provider components](#provider-components)).
-
-## Eval blocks
-
-Plain `eval` blocks run in a shared durable binding environment for the current component.
-
-````md
-```bash service=server exec
-node handshake-compatible-server.js
-```
-
-```ts persist ephemeral eval
-import { callService } from "./client.ts";
-
-const endpoint = server;
-yield* Sample.around({
-  *sample([request]) {
-    return yield* callService(endpoint, request);
-  },
-});
-```
-````
-
-Highlights:
-
-- Top-level bindings are exported automatically for later blocks.
-- Bare `{name}` interpolation inside executable block content reads from eval bindings.
-- `output("...")` lets an eval block render text into the document.
-- `renderChildren()` and `render(markdown)` let eval blocks render nested content intentionally.
-- `ephemeral eval` reruns during live execution and partial replay, exports only invocation-local live bindings, and cannot render output.
-- Attached-service endpoints are available only to `ephemeral eval`; they never enter interpolation, durable effect descriptions, or the journal.
-
-## Provider components
-
-The repo includes reusable markdown components (in `packages/core/components/`) that demonstrate the provider pattern:
-
-- `AnthropicProvider.md`
-- `OllamaProvider.md`
-- `Sample.md`
-- `Instruction.md`
-
-These components combine eval and `Sample` middleware so a document can talk to a cloud or already-running local model server without custom runtime wiring. A local process provider attaches a handshake-compatible command through `service=<binding>` and authenticates it with the XMD service handshake protocol.
-
-[`packages/core/examples/hello-world.md`](packages/core/examples/hello-world.md) shows the pattern combining a cloud model (Claude) and a local model (Ollama). Provider docs currently need the built-in components on the search path:
-
-```bash
-xmd run packages/core/examples/hello-world.md --component-dir packages/core/components
-```
-
-## Diagnostic journals
-
-`--journal` writes internal workflow journal entries for troubleshooting. A trace can include component source, command output, evaluated values, and errors, so treat it as potentially sensitive data.
-
-Each invocation requires a new path. If the path already exists, `xmd` exits without executing the document or modifying the file. An interrupted process may leave a partial trace; the CLI preserves it for inspection and does not use it as recovery input.
-
-## Project layout
-
-- `packages/core/src/execute.ts` - document entrypoint and durable import pipeline.
-- `packages/core/src/scanner.ts` - boundary scanner for components and executable fences.
-- `packages/core/src/` - component expansion, eval/exec handling, modifiers, and sampling helpers.
-- `packages/core/components/` - reusable provider and demo components.
-- `packages/cli/src/cli.ts` - the `xmd` command, runtime-neutral.
-- `packages/cli/src/{deno,node,bun,compiled}.ts` - entrypoints; each installs the
-  host adapters that command and compiler resolution need.
-- `packages/core/examples/hello-world.md` - end-to-end example.
-- `specs/executable-mdx-spec.md` - design and behavior spec.
-
-## Development
-
-This is a Deno-first project, and this section is executable. Every command
-below is an ordinary `bash` fence you can copy, and the same fences run through
-the source CLI when you address one of these headings as a document target:
-
-```bash
-deno task xmd targets README.md                               # list what this document addresses
-deno task xmd run README.md#Development/Setup                 # prepare a checkout
-deno task xmd run README.md#Development/Build                 # setup, then compile the binary
-deno task xmd run README.md#Development/Verification/Focused  # setup, then the short battery
-deno task xmd run README.md#Development/Verification/Complete # setup, then the whole battery
-```
-
-Preparing a checkout is common to all of them, so it lives here rather than in
-each one, and runs before whichever heading you selected:
+Preparing the checkout is common to all of them, so it lives here and runs first
+whichever target you select:
 
 ```bash exec
 deno task setup
 ```
 
-| Invocation | Commands, in order |
-| --- | --- |
-| `README.md#Development/Setup` | setup |
-| `README.md#Development/Build` | setup, build |
-| `README.md#Development/Verification/Focused` | setup, lint, check, check:jsr, changed tests |
-| `README.md#Development/Verification/Complete` | setup, verify |
-| `README.md#Development/Verification` | setup, lint, check, check:jsr, changed tests, verify |
-| `README.md` (unqualified) | setup, build, lint, check, check:jsr, changed tests, verify |
+Each command's output reaches you as it is produced, the way it does when you
+type the command yourself. A command that exits nonzero ends the run there, with
+that command's diagnostic on stderr and a nonzero exit status.
 
-Selecting the `Verification` parent, or running the whole document, repeats
-work that `deno task verify` does again. That is deliberate: this document runs
-preparation, a build and verification only. It never bumps a version,
-publishes, generates or rewrites a workflow, creates a release, or touches Git
-history — so the cost of the repetition is time, and nothing else.
-
-**What running these sections means.** They execute through `xmd run` in your
-own shell: the Deno, pnpm, compiler, test and shell commands receive exactly the
-host access they have when you type them yourself. The `API.Files` contract
-governs a document's own filesystem operations, not the native commands these
-blocks start. No Workspace and no workflow run is created; nothing about the
-commands, their output, or the files they change is retained for resume or
-rolled back after an interruption. A failed or interrupted invocation is
-restarted by invoking the target again, subject to each low-level command's own
-idempotence.
-
-A command that exits nonzero ends the document there: the blocks after it and
-the sections beside it do not run, and `xmd run` exits nonzero. Until then each
-command's output reaches you as it is produced, exactly as it would if you had
-typed the command yourself — you watch a build or a test run, you do not wait
-for a transcript of one. Nothing is kept: without `--journal` the run records a
-command's exit status and never accumulates its output.
-
-`xmd run` is how these sections are meant to be entered. `xmd test README.md`
-also executes this document — that command runs a document while looking for
-`<Test>` regions — so it runs the sequence below before reporting that this file
-holds no tests.
-
-Every low-level task stays directly callable, and nothing here replaces one:
+Every task these sections compose stays directly callable:
 
 ```bash
 deno task setup     # install both dependency layouts, build the browser bundle
@@ -396,34 +69,71 @@ deno task check     # typecheck
 deno task check:jsr # JSR publishability dry run
 deno task test      # the full Deno suite
 deno task verify    # the whole applicable battery, concurrently
-deno task xmd run packages/core/examples/hello-world.md   # run a document from source
 ```
 
-### Setup
+## Setup
 
-`deno task setup` is the only thing that installs, and it is the block above:
-selecting this target prepares a checkout and does nothing else. It installs
-both dependency layouts and builds the browser bundle. Run it again after
-changing a dependency.
+Run this on a fresh clone, and again after changing a dependency.
 
-### Build
+```bash
+deno task xmd run README.md#Setup
+```
 
-Compiles the standalone `xmd` binary into `dist/`, after building the browser
-bundle it embeds:
+It executes `deno task setup`, which is the block above and the only thing in
+this repository that installs. Setup owns both dependency layouts —
+`node_modules/` and Deno's global cache — and prepares them in the order their
+union resolves in: Deno's frozen install and cached module graphs first, then
+pnpm's store beside it, then the browser bundle.
+
+Success provides a prepared checkout: both dependency layouts resolved for Deno,
+`tsc`, Bun, oxlint and the site, and the generated browser bundle the binary
+embeds. Builds and checks read what setup prepared and leave tracked files,
+`node_modules` and `deno.lock` as they found them, so they compose with one
+another.
+
+## Build
+
+Compile the standalone `xmd` binary.
+
+```bash
+deno task xmd run README.md#Build
+```
+
+It prepares the checkout, then runs the build, which produces the browser bundle
+the binary embeds and compiles the CLI for this host.
 
 ```bash exec
 deno task build
 ```
 
-### Verification
+Success provides `dist/xmd`: a self-contained executable you can run directly.
 
-Selecting this heading runs both batteries below, in that order.
+## Test
 
-#### Focused
+Testing comes in two levels, and this heading is the parent of both. Focused is
+the evidence a change offers for review; Complete is the battery that decides
+whether it merges.
 
-The short loop: lint and format, typecheck, the JSR publishability dry run, and
-the tests this branch and worktree affect. Each command is its own block, so the
-first one to fail is where the document stops.
+```bash
+deno task xmd run README.md#Test
+```
+
+Selecting it runs Focused, then Complete, so one invocation produces both:
+implementation-feedback evidence, followed by delivery verification.
+
+### Focused
+
+The evidence an implementation offers with a feedback commit: enough to show the
+change is sound, in the time a feedback loop can afford. It runs the lint and
+format check, the typecheck, the JSR publishability dry run, and the tests this
+branch and worktree affect — each as its own block, so the first command to fail
+is where the run stops and what it stopped on is unambiguous.
+
+```bash
+deno task verify:focused
+```
+
+That task is this repository's entry point and enters this target directly.
 
 ```bash exec
 deno task lint
@@ -441,61 +151,28 @@ deno task check:jsr
 deno task test --changed=origin/main
 ```
 
-`deno task verify:focused` is the shorthand that enters this target:
+Success means all four reported clean: zero lint and format errors, no type
+errors, `Success Dry run complete` from the dry run, and every affected test
+passing. That is the state a feedback commit is offered from; `AGENTS.md`
+describes what happens next.
+
+### Complete
+
+The delivery battery — the same checks CI requires, started together.
 
 ```bash
-deno task verify:focused
+deno task xmd run README.md#Test/Complete
 ```
 
-#### Complete
-
-The whole applicable battery at once, which also fails if any of it leaves a
-tracked file changed:
+It runs `deno task verify`, which starts every applicable command at once,
+reports them in a fixed order however they finish, and prints the first
+failure's output in full.
 
 ```bash timeout=30m exec
 deno task verify
 ```
 
-## Implementation feedback
-
-Feedback on an implementation is given against a **feedback commit**: the stable
-revision an implementor commits as soon as the smallest affected evidence
-passes. Pick that evidence in order — a known regression or integration test
-when the changed boundary is known, otherwise `deno task test --changed`, and
-`deno task test --changed=origin/main` when branch-level changes belong in the
-selection. A subprocess, fixture, generated file, or dynamic import is invisible
-to import-based selection, so name each known test for it explicitly. The
-handoff carries the exact commit SHA and every focused command run.
-
-Lint, typecheck, the JSR dry run, the full suite, and CI are not prerequisites
-for that commit. They are the delivery gate: required CI and branch protection
-decide when the branch merges, and CI failures are delivery work.
-
-Review is bounded at both ends. An architecture review blocks only on a
-structural consequence — what executes, what durable identity or history is
-accepted, what durable state is published, whether replay resumes, ownership of
-a resource or lifecycle, or a public persistence boundary — reproduced or
-directly traced at the exact reviewed commit. Everything the plan must prove is
-the planner's to fix in advance as a frozen evidence matrix. Each review closes
-against its frozen list rather than against newly imagined permutations.
-
-`AGENTS.md` holds the complete review and specialized-verification contract.
-
-## Dependency layout
-
-`deno task setup` is the only thing that installs. Builds and checks read what
-it prepared and leave what this repository owns — tracked files, `node_modules`,
-`deno.lock` — exactly as they found it, so they compose instead of undoing one
-another. A build is cache-pure on top of that; verification may add to the
-runtime's own module cache, which is why it resolves graphs no build walks.
-`deno task verify` starts the entire applicable battery at once and fails if any
-of it leaves a tracked file changed, and `deno task verify:clean` runs that
-claim end to end against a clean clone (AGENTS.md).
-
-## Status
-
-This is an early, first public release and a draft spec, optimized for experimentation around executable markdown workflows, Effection-based evaluation, and provider-driven AI documents. Feedback, issues, and contributions are very welcome — please [open an issue](https://github.com/taras/executable.md/issues).
-
-## License
-
-[MIT](LICENSE)
+Success provides delivery verification: the whole battery passed, and the
+worktree it ran in is unchanged — `verify` compares tracked files afterwards and
+fails if any command moved one, so a green result is also evidence that the
+battery left the repository exactly as it found it.
