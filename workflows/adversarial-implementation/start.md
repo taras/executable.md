@@ -135,10 +135,11 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
               </If>
               <Else>
               <If condition={implementation.decision.proceed}>
-              # Stopped: the pull-request review never passed
+              # Awaiting direction: the pull-request review never passed
 
               The user kept approving and the verdict never passed, so the
-              change was never offered for acceptance.
+              change was never offered for acceptance. This is not a rejection
+              and not an acceptance: the workflow is asking what to do next.
 
               {implementation.review}
 
@@ -163,10 +164,11 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
           </If>
           <Else>
             <If condition={planning.decision.proceed}>
-            # Stopped: the plan review never passed
+            # Awaiting direction: the plan review never passed
 
             The user kept approving and the verdict never passed, so
-            authorization was never requested.
+            authorization was never requested. This is not a rejection and not
+            an approval: the workflow is asking what to do next.
 
             {planning.review}
 
@@ -284,8 +286,14 @@ authoritative pair, read where it is used.
 The same pair distinguishes the failure modes without a separate label. After a
 loop, `decision.proceed` false means the user declined; `decision.proceed` true
 with `verdictPassed` false means the loop reached `max` still failing. Neither
-passes the gate. What an exhausted loop *should* do remains an unresolved
-product decision under #290 — refusing to advance is not an answer to it.
+passes the gate, so neither starts implementation or any later durable effect.
+
+Those two are reported differently, because they are different requests. A
+decline is finished: the user said no. Exhaustion is not — it is the workflow
+asking the user what to do after five rounds failed to converge (#290, settled).
+Under a composed workflow that request is where the run suspends durably for
+user direction (#367, unbuilt); here it is where the report asks, and neither
+exhaustion nor an unchanged verdict is ever read as approval.
 
 A checkpoint that found no material choice still produces an explicit
 `proceed: true` with its reason, so nothing advances because a decision was
