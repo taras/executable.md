@@ -304,7 +304,8 @@ Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>
 is one durable operation, each `<Elicit>` answer is journaled against its
 question fingerprint, and under `xmd workflow` those filtered events are retained
 with the run and resumable from it (#291 and #366, shipped), and readable through
-`xmd workflow history` once that surface exists (#367, open). There is no `cancelled` loop outcome — run-level cancellation and stop
+`xmd workflow history` (#367's first slice, delivered by #460), which reports
+them without advancing the run. There is no `cancelled` loop outcome — run-level cancellation and stop
 reasons are retained run state rather than loop state. The component creates no
 handoff files either way.
 
