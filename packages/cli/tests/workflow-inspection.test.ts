@@ -308,9 +308,11 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       expect(verbose.code).toBe(1);
       expect(verbose.stderr).toContain("--verbose");
 
+      // `*` is a character in an id, not syntax: the grammar hands it on, and
+      // what refuses this is the operation having no answering provider yet.
       const wildcard = yield* xmd(fixture, ["workflow", "delete", "release-*"]).join();
       expect(wildcard.code).toBe(1);
-      expect(wildcard.stderr).toContain("wildcard");
+      expect(wildcard.stderr).toContain("delete()");
 
       const missing = yield* xmd(fixture, ["workflow", "status"]).join();
       expect(missing.code).toBe(1);
@@ -361,6 +363,48 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       const listed = yield* xmd(outside, ["workflow", "list"]).join();
       expect(listed.code).toBe(0);
       expect(listed.stdout).toContain("release-1");
+    });
+  });
+
+  it("WFI11: a run id holding * or ? is inspected exactly, and matches nothing else", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // Ids the local caller is authorized to choose. Hashing is what keeps
+      // them from becoming paths, so they are ordinary ids with awkward
+      // spelling rather than patterns.
+      yield* xmd(fixture, ["workflow", "start", "--id=release-*", "flows/release.md"]).expect();
+      yield* xmd(fixture, ["workflow", "start", "--id=release-?", "flows/release.md"]).expect();
+      yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
+
+      // Read from a directory that is not a working tree, so a lookup that
+      // consulted Git or reopened the definition would fail rather than pass.
+      const outside = { ...fixture, repository: fixture.home };
+
+      const star = yield* xmd(outside, ["workflow", "status", "release-*", "--json"]).join();
+      expect(star.code).toBe(0);
+      expect(JSON.parse(star.stdout).record.runId).toBe("release-*");
+
+      const question = yield* xmd(outside, ["workflow", "status", "release-?", "--json"]).join();
+      expect(question.code).toBe(0);
+      expect(JSON.parse(question.stdout).record.runId).toBe("release-?");
+
+      // One run, not the three whose ids the pattern would have matched.
+      const history = yield* xmd(outside, ["workflow", "history", "release-*", "--json"]).join();
+      expect(history.code).toBe(0);
+      expect(Array.isArray(JSON.parse(history.stdout))).toBe(true);
+
+      // The neighbours are still themselves, and an id that only looks like a
+      // match is still absent.
+      const exact = yield* xmd(outside, ["workflow", "status", "release-1", "--json"]).join();
+      expect(JSON.parse(exact.stdout).record.runId).toBe("release-1");
+      const absent = yield* xmd(outside, ["workflow", "status", "release-2"]).join();
+      expect(absent.code).toBe(1);
+
+      // Nothing executed: no run or status line, and the caller's own
+      // filesystem is untouched by an inspection.
+      for (const result of [star, question, history, exact]) {
+        expect(result.stderr).not.toContain("workflow run:");
+        expect(result.stderr).not.toContain("workflow status:");
+      }
     });
   });
 

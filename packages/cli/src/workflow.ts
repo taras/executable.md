@@ -467,14 +467,13 @@ function manageRequest(
       new Error(`xmd workflow ${action} requires a run id — \`xmd workflow ${action} <run-id>\``),
     );
   }
-  if (runId.includes("*") || runId.includes("?")) {
-    return Err(
-      new Error(
-        `xmd workflow ${action} names one exact run id: ${runId} — there is no wildcard, and ` +
-          "the explicit id is the confirmation",
-      ),
-    );
-  }
+  // The id is opaque, and every character in it is part of it. A run may be
+  // created as `release-*`, because the local caller may choose any
+  // storage-valid id and hashing is what keeps that id from becoming a path —
+  // so reading `*` as syntax here would make a run that exists impossible to
+  // ask about. Deletion's rule is that it expands nothing, not that it refuses
+  // the character: `delete release-*` addresses the run called `release-*` and
+  // never a set of runs.
   if (action === "cancel" || action === "delete") {
     return Ok({ kind: "manage", request: { action, runId } });
   }
