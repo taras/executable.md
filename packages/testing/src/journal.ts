@@ -16,14 +16,19 @@
 import { createDurableOperation } from "@executablemd/durable-streams";
 import type { DurableStream, Json, Workflow } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
+import { sourceDescription } from "@executablemd/core";
+import type { SourcePosition } from "@executablemd/core";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 
 const TEST_RESULT = "test_result";
 const TESTING_BOUNDARY = "testing_boundary";
 
-export function* persistTestResult(result: TestResult): Workflow<TestResult> {
+export function* persistTestResult(
+  result: TestResult,
+  position?: Readonly<SourcePosition>,
+): Workflow<TestResult> {
   const stored = yield createDurableOperation<Json>(
-    { type: TEST_RESULT, name: `test:${result.location}` },
+    { type: TEST_RESULT, name: `test:${result.location}`, ...sourceDescription(position) },
     // deno-lint-ignore require-yield
     function* (): Operation<Json> {
       return serializeTestResult(result);
@@ -39,9 +44,10 @@ export function* persistTestResult(result: TestResult): Workflow<TestResult> {
 export function* persistBoundaryOutcome(
   outcome: BoundaryOutcome,
   location: string,
+  position?: Readonly<SourcePosition>,
 ): Workflow<BoundaryOutcome> {
   const stored = yield createDurableOperation<Json>(
-    { type: TESTING_BOUNDARY, name: `testing:${location}` },
+    { type: TESTING_BOUNDARY, name: `testing:${location}`, ...sourceDescription(position) },
     // deno-lint-ignore require-yield
     function* (): Operation<Json> {
       return { tests: outcome.tests, failed: outcome.failed };

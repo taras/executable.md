@@ -24,7 +24,13 @@
  */
 
 import type { Operation } from "effection";
-import type { CodeBlockContext, CodeBlockResult, ExecResult, Modifier } from "./types.ts";
+import type {
+  CodeBlockContext,
+  CodeBlockResult,
+  ExecResult,
+  Modifier,
+  SourcePosition,
+} from "./types.ts";
 
 /** A protocol violation by whoever is composed around a bound command. */
 export class BoundExecProtocolError extends Error {
@@ -88,6 +94,7 @@ class CanonicalBoundRequest implements CodeBlockContext {
   readonly content: string;
   readonly blockId: string;
   readonly componentName?: string;
+  readonly position?: Readonly<SourcePosition>;
 
   constructor(block: BoundBlock) {
     this.#block = block;
@@ -96,6 +103,9 @@ class CanonicalBoundRequest implements CodeBlockContext {
     this.blockId = block.context.blockId;
     if (block.context.componentName !== undefined) {
       this.componentName = block.context.componentName;
+    }
+    if (block.context.position !== undefined) {
+      this.position = block.context.position;
     }
     Object.freeze(this);
   }

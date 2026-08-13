@@ -77,9 +77,11 @@ export default function* Elicit(props: Record<string, Json>): Operation<Json> {
 
   const message = yield* content();
 
+  const expansion = yield* getExpansion();
   const identity = {
-    location: formatLocation(yield* getExpansion()),
+    location: formatLocation(expansion),
     fingerprint: questionFingerprint({ schema: prepared.schema, message }),
+    position: expansion.position,
   };
 
   // Before the record is read, so a resumed document cannot bind an answer that

@@ -1,23 +1,29 @@
 /**
- * `xmd workflow start` and `xmd workflow resume` — running a document as a
- * retained workflow run.
+ * `xmd workflow` — running a document as a retained workflow run, and reading
+ * one back.
  *
  * The command selects the environment; the document describes the procedure.
  * `xmd run` executes against the caller's own filesystem and promises nothing
- * afterwards. These two execute against a run: one implicit logical Workspace,
- * one filtered journal, both in one database that outlives the process, so an
- * interrupted procedure continues from its journal frontier rather than from
- * the beginning.
+ * afterwards. `start` and `resume` execute against a run: one implicit logical
+ * Workspace, one filtered journal, both in one database that outlives the
+ * process, so an interrupted procedure continues from its journal frontier
+ * rather than from the beginning. The rest read that run back or control it,
+ * and never execute anything.
  *
  * ```sh
  * xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
  * xmd workflow resume <run-id>
+ * xmd workflow status <run-id> [--json]
+ * xmd workflow list [--status=<status>] [--json]
+ * xmd workflow history <run-id> [--json]
+ * xmd workflow cancel <run-id>
+ * xmd workflow delete <run-id>
  * ```
  *
- * `start` names a document; `resume` names a run. That asymmetry is the whole
- * lifecycle rule: a document path locates a definition and never selects a
- * previous run, and a run id addresses a run whose definition and props are
- * already retained. Starting the same document twice without `--id` therefore
+ * `start` names a document; every other action names a run. That asymmetry is
+ * the whole lifecycle rule: a document path locates a definition and never
+ * selects a previous run, and a run id addresses a run whose definition and
+ * props are already retained. Starting the same document twice without `--id` therefore
  * makes two runs, and `resume` accepts no definition, no props and no generated
  * prop arguments at all — supplying them would ask this run to be a different
  * one.
@@ -25,8 +31,9 @@
  * ## Where the boundary is
  *
  * This module is runtime-neutral: it names no SQLite, no DOFS and no host. What
- * it cannot do itself — open a run's storage, and attach that run's Workspace —
- * it asks a `WorkflowHost` for, and the entrypoints decide which one exists.
+ * it cannot do itself — open a run's storage, install its lifecycle, and attach
+ * that run's Workspace — it asks a `WorkflowHost` for, and the entrypoints
+ * decide which one exists.
  * Deno and the compiled binary supply the local one; Node and Bun supply a host
  * that refuses, so the grammar is the same everywhere and the refusal arrives
  * before anything is created or executed.
@@ -35,7 +42,9 @@
  *
  * Only a completed run exits zero. The rest are distinguishable, because shell
  * automation that could not tell a suspended run from a finished one would
- * treat every incomplete workflow as success.
+ * treat every incomplete workflow as success. A management command reports its
+ * own request instead: reading a failed run succeeds, and only a request this
+ * command cannot answer exits 1.
  */
 
 import { Err, Ok, ensure, scoped } from "effection";
@@ -45,7 +54,11 @@ import { z } from "zod";
 import type { DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
-import { retainedWorkflowInstallation, WorkflowRunStorage } from "@executablemd/workflow";
+import {
+  retainedWorkflowInstallation,
+  WORKFLOW_RUN_STATUSES,
+  WorkflowRunStorage,
+} from "@executablemd/workflow";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
   WorkflowRunDatabase,
@@ -58,13 +71,20 @@ import type { EstablishedDefinition } from "./workflow-definition.ts";
 /**
  * What this module cannot do without knowing the host.
  *
- * Two operations, both of which reach storage. Everything else about the
- * lifecycle — the grammar, the definition, the props, the statuses, the exit
- * codes — is the same wherever a run lives.
+ * Three operations, all of which reach a run's retained state. Everything else
+ * about the lifecycle — the grammar, the definition, the props, the statuses,
+ * the exit codes — is the same wherever a run lives.
  */
 export interface WorkflowHost {
   /** Install this host's run storage for the current scope and its descendants. */
   useStorage(): Operation<void>;
+  /**
+   * Install this host's run lifecycle for the current scope and its descendants.
+   *
+   * Separate from storage because a management command needs no writable
+   * database: reading a run is not a weaker form of executing one.
+   */
+  useLifecycle(): Operation<void>;
   /**
    * Attach one run's Workspace around a live or partial document execution.
    *
@@ -111,15 +131,46 @@ const HOST_FAILURE_CODE = "document-execution-failed";
 const HOST_INTERRUPTED_CODE = "executor-interrupted";
 const HOST_ORPHANED_CODE = "executor-disappeared";
 
-export const WORKFLOW_ACTIONS = ["start", "resume"];
+export const WORKFLOW_ACTIONS = [
+  "start",
+  "resume",
+  "status",
+  "list",
+  "history",
+  "cancel",
+  "delete",
+];
+
+/** The actions that read or control a run rather than executing one. */
+const MANAGEMENT_ACTIONS = ["status", "list", "history", "cancel", "delete"];
+
+/** The options that belong to executing a run. */
+const EXECUTION_OPTIONS = [
+  "--verbose",
+  "-V",
+  "--raw",
+  "--secret-detection",
+  "--no-secret-detection",
+];
+
+/** What each action accepts, beyond `start`'s generated `--props-*` arguments. */
+const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  start: [...EXECUTION_OPTIONS, "--id"],
+  resume: EXECUTION_OPTIONS,
+  status: ["--json"],
+  history: ["--json"],
+  list: ["--json", "--status"],
+  cancel: [],
+  delete: [],
+});
 
 export const workflowConfig = object({
   action: {
-    description: "start or resume",
+    description: "start, resume, status, list, history, cancel or delete",
     ...field(z.string().optional(), cli.argument()),
   },
   target: {
-    description: "markdown definition to start, or the run id to resume",
+    description: "markdown definition to start, or the run id every other action addresses",
     ...field(z.string().optional(), cli.argument()),
   },
   id: {
@@ -141,9 +192,17 @@ export const workflowConfig = object({
       "disable with --no-secret-detection",
     ...field(z.boolean(), field.default(true)),
   },
+  json: {
+    description: "write the inspection result as JSON (status, list and history only)",
+    ...field(z.boolean(), field.default(false)),
+  },
+  status: {
+    description: "list only runs retaining this status",
+    ...field(z.string().optional()),
+  },
 });
 
-/** What one invocation asks for, after the grammar has been read. */
+/** What one execution invocation asks for, after the grammar has been read. */
 export interface WorkflowRequest {
   readonly action: "start" | "resume";
   readonly target: string;
@@ -152,6 +211,29 @@ export interface WorkflowRequest {
   readonly raw: boolean;
   readonly secretDetection: boolean;
 }
+
+/**
+ * What one management invocation asks for.
+ *
+ * Separate from an execution request because the two share no parameters: an
+ * inspection has no props, no journal verbosity and no secret policy, and an
+ * execution has no output format and no status filter. Collapsing them would
+ * make every option applicable to every action, which is exactly what the
+ * grammar refuses.
+ */
+export type WorkflowManagementRequest =
+  | { readonly action: "status" | "history"; readonly runId: string; readonly json: boolean }
+  | {
+      readonly action: "list";
+      readonly status: WorkflowRunStatus | undefined;
+      readonly json: boolean;
+    }
+  | { readonly action: "cancel" | "delete"; readonly runId: string };
+
+/** One `xmd workflow` invocation, once its action has decided what it is. */
+export type WorkflowCommand =
+  | { readonly kind: "execute"; readonly request: WorkflowRequest }
+  | { readonly kind: "manage"; readonly request: WorkflowManagementRequest };
 
 /** What the shared CLI needs in order to execute this run's document. */
 export interface WorkflowExecution {
@@ -256,15 +338,32 @@ function* closeOrphanedExecutions(database: WorkflowRunDatabase): Operation<Resu
   return Ok(undefined);
 }
 
-/** The grammar this command accepts, refusing what it does not. */
-export function parseWorkflowRequest(config: {
-  action?: string;
-  target?: string;
-  id?: string;
-  verbose: boolean;
-  raw: boolean;
-  secretDetection: boolean;
-}): Result<WorkflowRequest> {
+/**
+ * The grammar this command accepts, refusing what it does not.
+ *
+ * By action, because the actions do not share a grammar: only `start` names a
+ * document and takes generated property arguments, only `list` takes no run id
+ * and accepts a status filter, and only the three inspections produce JSON. An
+ * option an action does not have is refused rather than ignored — silently
+ * accepting `--json` on a cancellation would answer a request nobody made.
+ *
+ * `args` is the invocation's own argv, needed because a boolean option carries
+ * its default whether or not it was written: whether `--verbose` reached a
+ * `status` cannot be read from the parsed configuration at all.
+ */
+export function parseWorkflowRequest(
+  config: {
+    action?: string;
+    target?: string;
+    id?: string;
+    verbose: boolean;
+    raw: boolean;
+    secretDetection: boolean;
+    json: boolean;
+    status?: string;
+  },
+  args: readonly string[] = [],
+): Result<WorkflowCommand> {
   const { action, target } = config;
   if (action === undefined) {
     return Err(
@@ -274,14 +373,24 @@ export function parseWorkflowRequest(config: {
       ),
     );
   }
-  if (action !== "start" && action !== "resume") {
+  if (!WORKFLOW_ACTIONS.includes(action)) {
     return Err(
       new Error(
         `unrecognized subcommand for xmd workflow: ${action} — ` +
-          `expected ${WORKFLOW_ACTIONS.join(" or ")}`,
+          `expected ${WORKFLOW_ACTIONS.join(", ")}`,
       ),
     );
   }
+
+  const refusal = optionRefusal(action, args);
+  if (refusal !== undefined) {
+    return Err(new Error(refusal));
+  }
+
+  if (action !== "start" && action !== "resume") {
+    return manageRequest(action, config);
+  }
+
   if (target === undefined || target === "") {
     return Err(
       new Error(
@@ -300,13 +409,132 @@ export function parseWorkflowRequest(config: {
     );
   }
   return Ok({
-    action,
-    target,
-    id: config.id,
-    verbose: config.verbose,
-    raw: config.raw,
-    secretDetection: config.secretDetection,
+    kind: "execute",
+    request: {
+      action,
+      target,
+      id: config.id,
+      verbose: config.verbose,
+      raw: config.raw,
+      secretDetection: config.secretDetection,
+    },
   });
+}
+
+function manageRequest(
+  action: string,
+  config: { target?: string; id?: string; json: boolean; status?: string },
+): Result<WorkflowCommand> {
+  if (config.id !== undefined) {
+    return Err(
+      new Error(
+        `unrecognized option for xmd workflow ${action}: --id — only a start names the run it ` +
+          "creates",
+      ),
+    );
+  }
+
+  if (action === "list") {
+    if (config.target !== undefined && config.target !== "") {
+      return Err(
+        new Error(
+          `unrecognized argument for xmd workflow list: ${config.target} — list reports every ` +
+            "run and names none",
+        ),
+      );
+    }
+    if (config.status === undefined) {
+      return Ok({
+        kind: "manage",
+        request: { action: "list", status: undefined, json: config.json },
+      });
+    }
+    const filter = WORKFLOW_RUN_STATUSES.find((status) => status === config.status);
+    if (filter === undefined) {
+      return Err(
+        new Error(
+          `unrecognized value for --status: ${config.status} — expected one of ` +
+            `${WORKFLOW_RUN_STATUSES.join(", ")}`,
+        ),
+      );
+    }
+    return Ok({ kind: "manage", request: { action: "list", status: filter, json: config.json } });
+  }
+
+  const runId = config.target;
+  if (runId === undefined || runId === "") {
+    return Err(
+      new Error(`xmd workflow ${action} requires a run id — \`xmd workflow ${action} <run-id>\``),
+    );
+  }
+  // The id is opaque, and every character in it is part of it. A run may be
+  // created as `release-*`, because the local caller may choose any
+  // storage-valid id and hashing is what keeps that id from becoming a path —
+  // so reading `*` as syntax here would make a run that exists impossible to
+  // ask about. Deletion's rule is that it expands nothing, not that it refuses
+  // the character: `delete release-*` addresses the run called `release-*` and
+  // never a set of runs.
+  if (action === "cancel" || action === "delete") {
+    return Ok({ kind: "manage", request: { action, runId } });
+  }
+  if (action === "status" || action === "history") {
+    return Ok({ kind: "manage", request: { action, runId, json: config.json } });
+  }
+  // Reached only if `WORKFLOW_ACTIONS` names an action this function does not,
+  // which is a disagreement inside the grammar rather than a caller's mistake.
+  return Err(new Error(`xmd workflow ${action} has no request to make`));
+}
+
+/**
+ * Why the options written are not this action's, or nothing when they are.
+ *
+ * Read from argv rather than from the parse, and stopping where option parsing
+ * stops: everything after `--` is positional however it is spelled, and a
+ * boolean option carries its default whether or not anybody wrote it. A
+ * generated property argument belongs to `start` and is named by prefix,
+ * because what a document declares is not knowable here.
+ *
+ * A second `--status` is refused rather than resolved. The parser keeps the
+ * last value, so accepting two would silently filter by one of the two statuses
+ * the caller named.
+ */
+function optionRefusal(action: string, args: readonly string[]): string | undefined {
+  const applicable = OPTIONS_BY_ACTION[action];
+  if (applicable === undefined) {
+    return undefined;
+  }
+  const start = args.indexOf("workflow");
+  if (start === -1) {
+    return undefined;
+  }
+  let filters = 0;
+  for (const arg of args.slice(start + 1)) {
+    if (arg === "--") {
+      return undefined;
+    }
+    if (!arg.startsWith("-") || arg === "-") {
+      continue;
+    }
+    const separator = arg.indexOf("=");
+    const name = arg.slice(0, separator === -1 ? arg.length : separator);
+    if (name === "--status") {
+      filters += 1;
+      if (filters > 1) {
+        return "xmd workflow list accepts one --status filter, and two name two different lists";
+      }
+    }
+    if (applicable.includes(name)) {
+      continue;
+    }
+    if (action === "start" && name.startsWith("--props-")) {
+      continue;
+    }
+    return (
+      `unrecognized option for xmd workflow ${action}: ${name} — it belongs to another ` +
+      "workflow action"
+    );
+  }
+  return undefined;
 }
 
 /** What the props phase already established for a `start`. */

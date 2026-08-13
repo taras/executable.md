@@ -6,6 +6,8 @@ import {
   StaleInputError,
 } from "@executablemd/durable-streams";
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
+import { sourceDescription } from "./source-position.ts";
+import type { SourcePosition } from "./types.ts";
 
 /**
  * The loop a `<Break>` exits (spec §6.5 `<Loop>`).
@@ -76,6 +78,8 @@ export interface IterationRecord extends Record<string, Json> {
 export interface LoopIdentity {
   id: number;
   name?: string;
+  /** Where the `<Loop>` was written, carried to the journal beside its identity. */
+  position?: Readonly<SourcePosition>;
 }
 
 function describe(identity: LoopIdentity, suffix?: string): EffectDescription {
@@ -84,6 +88,7 @@ function describe(identity: LoopIdentity, suffix?: string): EffectDescription {
     type: suffix === undefined ? "loop" : "loop_iteration",
     name,
     ...(identity.name === undefined ? {} : { loop: identity.name }),
+    ...sourceDescription(identity.position),
   };
 }
 

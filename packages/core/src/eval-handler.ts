@@ -26,6 +26,7 @@ import {
   validateLiveOverlay,
 } from "./live-env.ts";
 import { EphemeralEval, EphemeralEvalOutputError } from "./modifiers/ephemeral.ts";
+import { sourceDescription } from "./source-position.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 
 function* runEphemeralEval(
@@ -154,6 +155,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         type: "eval",
         name: `eval:${ctx.blockId}`,
         ...(ctx.language ? { language: ctx.language } : {}),
+        ...sourceDescription(ctx.position),
       },
       function* (): Operation<Json> {
         // Merge incoming bindings snapshot into env before execution

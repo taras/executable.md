@@ -54,6 +54,17 @@ export type {
   WorkflowRunTransaction,
 } from "./src/storage/api.ts";
 
+export { WorkflowLifecycle, WorkflowLifecycleProviderError } from "./src/lifecycle/api.ts";
+export type {
+  ExecutorAcquisition,
+  ExecutorLease,
+  WorkflowDeletion,
+  WorkflowLifecycleApi,
+  WorkflowLifecycleSnapshot,
+} from "./src/lifecycle/api.ts";
+export { readEventSource } from "./src/lifecycle/history.ts";
+export type { WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
+
 export { definitionToJson, parseWorkflowDefinition } from "./src/storage/definition.ts";
 export type { GitWorkflowDefinitionV1, WorkflowDefinition } from "./src/storage/definition.ts";
 
@@ -87,6 +98,7 @@ export {
   WorkflowRequestError,
   WorkflowRunConflictError,
   WorkflowRunIdMismatchError,
+  WorkflowRunLocationMismatchError,
   WorkflowRunNotFoundError,
   WorkflowSchemaVersionError,
   WorkflowStorageError,
