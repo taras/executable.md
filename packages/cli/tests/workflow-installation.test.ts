@@ -21,8 +21,9 @@ import { mkdtemp } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { useWorkflowLifecycle, useWorkflowRunStorage } from "@executablemd/workflow/deno";
-import { Git, WorkflowRunStorage } from "@executablemd/workflow";
+import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionAuthority } from "@executablemd/workflow/deno";
+import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import type { Json } from "@executablemd/core";
 import { runWorkflow } from "../src/workflow.ts";
@@ -108,8 +109,8 @@ function useRunStore(): Operation<string> {
 /** A host that records every attachment rather than opening a Workspace. */
 function recordingHost(root: string, attached: string[]): WorkflowHost {
   return {
-    useStorage(): Operation<void> {
-      return useWorkflowRunStorage({ root });
+    useRunHost(): Operation<WorkflowExecutionAuthority> {
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });
@@ -122,61 +123,38 @@ function recordingHost(root: string, attached: string[]): WorkflowHost {
 }
 
 /**
- * A host whose storage refuses one lifecycle write.
+ * A host whose settlement storage refuses.
  *
- * Substituted at the database boundary the CLI already depends on, so what is
- * being tested is how the lifecycle reacts to a refusal rather than how storage
- * produces one.
+ * Substituted at the authority boundary, which is the one the CLI depends on
+ * for lifecycle. Finishing the execution record and publishing the run state
+ * are one transaction now, so there is one place a refusal can happen — and one
+ * refusal, rather than a dependent write that a refused prerequisite skips.
  */
-function refusingHost(
-  root: string,
-  refuse: "finish" | "update" | "none",
-  attempted: string[],
-): WorkflowHost {
+function refusingHost(root: string, refuse: "settle" | "none", attempted: string[]): WorkflowHost {
   const host = recordingHost(root, []);
   return {
-    *useStorage(): Operation<void> {
-      yield* host.useStorage();
-      yield* WorkflowRunStorage.around({
-        *lookup([runId], next) {
-          const found = yield* next(runId);
-          return found.ok ? Ok(refusingDatabase(found.value, refuse, attempted)) : found;
+    *useRunHost(): Operation<WorkflowExecutionAuthority> {
+      const authority = yield* host.useRunHost();
+      return {
+        begin: authority.begin,
+        *settle(lease, completion) {
+          attempted.push(`settle:${completion.status}`);
+          if (refuse === "settle") {
+            return Err(new Error("PLANTED-STORAGE-REFUSAL"));
+          }
+          return yield* authority.settle(lease, completion);
         },
-      });
+      };
     },
     useLifecycle: host.useLifecycle,
     attach: host.attach,
   };
 }
 
-function refusingDatabase(
-  database: WorkflowRunDatabase,
-  refuse: "finish" | "update" | "none",
-  attempted: string[],
-): WorkflowRunDatabase {
-  return {
-    ...database,
-    *finishDocumentExecution(request) {
-      attempted.push(`finish:${request.status}`);
-      if (refuse === "finish") {
-        return Err(new Error("PLANTED-STORAGE-REFUSAL"));
-      }
-      return yield* database.finishDocumentExecution(request);
-    },
-    *updateRunState(state) {
-      attempted.push(`update:${state.status}`);
-      if (refuse === "update") {
-        return Err(new Error("PLANTED-STORAGE-REFUSAL"));
-      }
-      return yield* database.updateRunState(state);
-    },
-  };
-}
-
 /** Record a root terminal, so the next pass over this journal is a replay. */
 function* closeRoot(root: string, runId: string): Operation<void> {
   yield* scoped(function* () {
-    yield* useWorkflowRunStorage({ root });
+    yield* useWorkflowRunHost({ root });
     const found = yield* WorkflowRunStorage.operations.lookup(runId);
     if (!found.ok) {
       throw found.error;
@@ -192,14 +170,25 @@ function* closeRoot(root: string, runId: string): Operation<void> {
 /** Put a run into the state a previous invocation would have left it in. */
 function* endRun(root: string, runId: string, status: WorkflowRunStatus): Operation<void> {
   yield* scoped(function* () {
-    yield* useWorkflowRunStorage({ root });
-    const found = yield* WorkflowRunStorage.operations.lookup(runId);
-    if (!found.ok) {
-      throw found.error;
+    const authority = yield* useWorkflowRunHost({ root });
+    const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+    if (!acquired.ok) {
+      throw acquired.error;
     }
-    const updated = yield* found.value.updateRunState({ status });
-    if (!updated.ok) {
-      throw updated.error;
+    if (acquired.value.kind !== "acquired") {
+      throw new Error(`${runId} is already owned by a live executor`);
+    }
+    const { lease } = acquired.value;
+    const begun = yield* authority.begin(lease, { runId, action: "resume" });
+    if (!begun.ok) {
+      throw begun.error;
+    }
+    const settled = yield* authority.settle(lease, {
+      executionId: begun.value.execution.executionId,
+      status,
+    });
+    if (!settled.ok) {
+      throw settled.error;
     }
   });
 }
@@ -215,7 +204,7 @@ function* endRun(root: string, runId: string, status: WorkflowRunStatus): Operat
  */
 function* runSnapshot(root: string, runId: string): Operation<string> {
   return yield* scoped(function* () {
-    yield* useWorkflowRunStorage({ root });
+    yield* useWorkflowRunHost({ root });
     const found = yield* WorkflowRunStorage.operations.lookup(runId);
     if (!found.ok) {
       throw found.error;
@@ -431,9 +420,11 @@ describe("Tier WFI — what a run hands to canonical core", () => {
   });
 
   it("WFI5: a lifecycle write storage refused is never published as a status", function* () {
-    const faults: Array<{ refuse: "finish" | "update" | "none"; attempts: string[] }> = [
-      { refuse: "finish", attempts: ["finish:completed"] },
-      { refuse: "update", attempts: ["finish:completed", "update:completed"] },
+    // One transition, so one refusal. Finishing the record and publishing the
+    // status can no longer fail independently — which is the point of settling
+    // them together.
+    const faults: Array<{ refuse: "settle"; attempts: string[] }> = [
+      { refuse: "settle", attempts: ["settle:completed"] },
     ];
 
     for (const fault of faults) {
@@ -468,9 +459,8 @@ describe("Tier WFI — what a run hands to canonical core", () => {
   });
 
   it("WFI6: an interruption storage refusal is never published as a status", function* () {
-    const faults: Array<{ refuse: "finish" | "update" | "none"; attempts: string[] }> = [
-      { refuse: "finish", attempts: ["finish:interrupted"] },
-      { refuse: "update", attempts: ["finish:interrupted", "update:interrupted"] },
+    const faults: Array<{ refuse: "settle"; attempts: string[] }> = [
+      { refuse: "settle", attempts: ["settle:interrupted"] },
     ];
 
     for (const fault of faults) {
@@ -544,7 +534,8 @@ describe("Tier WFI — what a run hands to canonical core", () => {
 
     // Both writes landed, so the status this run publishes is one storage
     // accepted.
-    expect(attempted).toEqual(["finish:interrupted", "update:interrupted"]);
+    // One transition: the record and the status it implies commit together.
+    expect(attempted).toEqual(["settle:interrupted"]);
     expect(reported.some((line) => line.includes("workflow status: interrupted"))).toBe(true);
   });
 });
@@ -573,27 +564,34 @@ function* startedRun(root: string): Operation<Started> {
   const objectFormat = (yield* git(repository, ["rev-parse", "--show-object-format"])).trim();
 
   return yield* scoped(function* () {
-    yield* useWorkflowRunStorage({ root });
+    const authority = yield* useWorkflowRunHost({ root });
     const runId = crypto.randomUUID();
-    const created = yield* WorkflowRunStorage.operations.create({
-      runId,
-      base: "main",
-      definition: {
-        version: 1,
-        kind: "git",
-        objectFormat: objectFormat === "sha256" ? "sha256" : "sha1",
-        objectId,
-        rootDocumentPath: "workflow.md",
-      },
-      props: {},
-    });
-    if (!created.ok) {
-      throw created.error;
+    const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+    if (!acquired.ok) {
+      throw acquired.error;
     }
-    yield* created.value.replaceRetrievalMetadata({
-      kind: "local-checkout",
-      checkout: repository,
+    if (acquired.value.kind !== "acquired") {
+      throw new Error(`${runId} is already owned by a live executor`);
+    }
+    const begun = yield* authority.begin(acquired.value.lease, {
+      runId,
+      action: "start",
+      creation: {
+        base: "main",
+        definition: {
+          version: 1,
+          kind: "git",
+          objectFormat: objectFormat === "sha256" ? "sha256" : "sha1",
+          objectId,
+          rootDocumentPath: "workflow.md",
+        },
+        props: {},
+        retrieval: { kind: "local-checkout", checkout: repository },
+      },
     });
+    if (!begun.ok) {
+      throw begun.error;
+    }
     return { runId, repository, objectId, contents };
   });
 }

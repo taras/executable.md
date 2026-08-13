@@ -14,15 +14,28 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ensure, type Operation, resource, scoped } from "effection";
+import { ensure, type Operation, resource, type Result, scoped } from "effection";
 import { rm } from "@effectionx/fs";
 import {
   type CreateWorkflowRunRequest,
+  type ExecutorLease,
   type GitWorkflowDefinitionV1,
   parseWorkflowDefinition,
+  type DocumentExecutionRecord,
+  WorkflowLifecycle,
   type WorkflowRunDatabase,
+  type WorkflowRunRecord,
+  type WorkflowRunStatus,
   WorkflowRunStorage,
+  type WorkflowStopReason,
 } from "../../mod.ts";
+import type {
+  WorkflowBeginRequest,
+  WorkflowExecutionAuthority,
+  WorkflowExecutionBegun,
+  WorkflowRunCreation,
+} from "../../deno.ts";
+import { installWorkflowLifecycle } from "../../src/deno/lifecycle.ts";
 import { workflowRunPath } from "../../deno.ts";
 import { useWorkflowRunConnections } from "../../src/deno/connections.ts";
 import { SavepointObservation } from "../../src/deno/savepoints.ts";
@@ -200,4 +213,108 @@ export function relaxRunConstraints(database: DatabaseSync): void {
     INSERT INTO workflow_run SELECT * FROM workflow_run_relaxed;
     DROP TABLE workflow_run_relaxed;
   `);
+}
+
+/**
+ * Everything a Deno host installs, over one registry.
+ *
+ * Storage and lifecycle share the registry here for the same reason the real
+ * host does: they write to the same databases. The authority the host would
+ * keep to itself is handed to the body, because a test standing in for the host
+ * is the host.
+ */
+export function withRunHost<T>(
+  root: string,
+  body: (authority: WorkflowExecutionAuthority) => Operation<T>,
+  internal: PrivateWorkspaceOptions = {},
+): Operation<T> {
+  return scoped(function* () {
+    const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+    yield* installWorkflowRunStorage({ root }, internal, connections);
+    const authority = yield* installWorkflowLifecycle({ root }, connections);
+    return yield* body(authority);
+  });
+}
+
+/**
+ * One run begun the way production begins one, for as long as the body runs.
+ *
+ * A real lease and the real transition — there is no lease-free way to write a
+ * lifecycle row, in a test or anywhere else, which is the point of the slice
+ * this fixture belongs to. The lease is held for the callback and released with
+ * it, so nothing here hands back a database that outlives the authority that
+ * opened it.
+ */
+export function leasedRun<T>(
+  authority: WorkflowExecutionAuthority,
+  request: WorkflowBeginRequest,
+  body: (begun: WorkflowExecutionBegun, lease: ExecutorLease) => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const acquisition = yield* WorkflowLifecycle.operations.acquireExecutor(request.runId);
+    if (!acquisition.ok) {
+      throw acquisition.error;
+    }
+    if (acquisition.value.kind !== "acquired") {
+      throw new Error(`the run ${request.runId} is already owned by a live executor`);
+    }
+    const { lease } = acquisition.value;
+    const begun = yield* authority.begin(lease, request);
+    if (!begun.ok) {
+      throw begun.error;
+    }
+    return yield* body(begun.value, lease);
+  });
+}
+
+/** The creation a `start` supplies, for a fixture that does not care which. */
+export function creation(overrides: Partial<WorkflowRunCreation> = {}): WorkflowRunCreation {
+  return { definition: definition(), base: "main", props: { channel: "stable" }, ...overrides };
+}
+
+/** A run begun under a real lease, with the settlement that ends it. */
+export interface BegunRun {
+  readonly database: WorkflowRunDatabase;
+  readonly execution: DocumentExecutionRecord;
+  /** Settle the execution this run began, unless another is named. */
+  settle(completion: {
+    status: WorkflowRunStatus;
+    reason?: WorkflowStopReason;
+    executionId?: string;
+  }): Operation<Result<WorkflowRunRecord>>;
+}
+
+/**
+ * One begun run, for a suite whose subject is what storage retains.
+ *
+ * Publishing a status is a lifecycle transition now, so a test that needs a
+ * settled run acquires a lease and settles through the same authority
+ * production uses. What the test then asserts is still storage's business: the
+ * status that survived, the reason beside it, the execution row it left.
+ */
+export function withBegunRun<T>(
+  root: string,
+  body: (run: BegunRun) => Operation<T>,
+  runId = "release-1.4",
+): Operation<T> {
+  return withRunHost(root, function* (authority) {
+    return yield* leasedRun(
+      authority,
+      { runId, action: "start", creation: creation() },
+      function* (begun, lease) {
+        return yield* body({
+          database: begun.database,
+          execution: begun.execution,
+          settle(completion) {
+            const { executionId = begun.execution.executionId, status, reason } = completion;
+            return authority.settle(lease, {
+              executionId,
+              status,
+              ...(reason === undefined ? {} : { reason }),
+            });
+          },
+        });
+      },
+    );
+  });
 }

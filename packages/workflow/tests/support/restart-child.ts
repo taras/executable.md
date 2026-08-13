@@ -29,8 +29,8 @@ import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
 import { main } from "effection";
-import { WorkflowRunStorage, WorkflowStorageError } from "../../mod.ts";
-import { useWorkflowRunStorage } from "../../deno.ts";
+import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
+import { useWorkflowRunHost } from "../../deno.ts";
 
 const DEFINITION = {
   version: 1,
@@ -69,13 +69,24 @@ main(function* () {
   // still has to typecheck under the Node project like every other source.
   const [root, runId, marker, base = "main"] = process.argv.slice(2);
 
-  yield* useWorkflowRunStorage({ root });
+  // The whole host, because beginning a run is a lifecycle transition and the
+  // lease is what authorizes it — here exactly as in production.
+  const authority = yield* useWorkflowRunHost({ root });
 
-  const opened = yield* WorkflowRunStorage.operations.create({
+  const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+  if (!acquired.ok) {
+    throw acquired.error;
+  }
+  if (acquired.value.kind !== "acquired") {
+    console.log(JSON.stringify({ refused: "already-running" }));
+    return;
+  }
+  const { lease } = acquired.value;
+
+  const opened = yield* authority.begin(lease, {
     runId,
-    definition: DEFINITION,
-    base,
-    props: { channel: "stable" },
+    action: "start",
+    creation: { definition: DEFINITION, base, props: { channel: "stable" } },
   });
   if (!opened.ok) {
     if (opened.error instanceof WorkflowStorageError) {
@@ -84,20 +95,17 @@ main(function* () {
     }
     throw opened.error;
   }
-  const database = opened.value;
-
-  const started = yield* database.beginDocumentExecution();
-  if (!started.ok) {
-    throw started.error;
-  }
+  const { database, execution } = opened.value;
 
   const value = yield* durableRun(work(marker), { stream: database.journal });
 
-  yield* database.finishDocumentExecution({
-    executionId: started.value.executionId,
+  const settled = yield* authority.settle(lease, {
+    executionId: execution.executionId,
     status: "completed",
   });
-  yield* database.updateRunState({ status: "completed" });
+  if (!settled.ok) {
+    throw settled.error;
+  }
 
   const entries = yield* database.readJournalEntries();
   if (!entries.ok) {
@@ -108,7 +116,9 @@ main(function* () {
     JSON.stringify({
       value,
       base: database.record.base,
-      status: database.record.status,
+      // The record settlement returned, not the handle's snapshot from when the
+      // execution began — that one still says `running`.
+      status: settled.value.status,
       events: entries.value.map((entry) => ({
         eventId: entry.eventId,
         type: entry.event.type,

@@ -579,8 +579,9 @@ describe("Tier WJ — a transaction a caller holds", () => {
 
       const result = yield* database.transact(function* () {
         // Taking the connection again from inside the body would wait for a
-        // transaction this very scope is holding open.
-        return yield* database.beginDocumentExecution();
+        // transaction this very scope is holding open. Any operation that takes
+        // its own turn shows it; this one reads.
+        return yield* database.readDocumentExecutions();
       });
 
       if (!result.ok) {
@@ -992,7 +993,7 @@ describe("Tier WJ — two handles on one run", () => {
       const before = ticks;
 
       const waiting = yield* spawn(function* () {
-        const result = yield* second.beginDocumentExecution();
+        const result = yield* second.readDocumentExecutions();
         order.push(result.ok ? "second ran" : "second failed");
       });
 

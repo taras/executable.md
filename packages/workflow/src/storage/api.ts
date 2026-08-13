@@ -27,6 +27,15 @@
  * A handle is owned by the scope that asked for it. When that scope ends the
  * connection closes, and every later call on the handle fails rather than
  * reopening anything behind the caller's back.
+ *
+ * ## A handle is not authority
+ *
+ * Holding one lets a caller read the run, append to its journal and take part in
+ * its transactions. It does not let a caller move the run's lifecycle: beginning
+ * a document execution, finishing one and publishing a status are transitions of
+ * the Workflow Lifecycle Api, which requires the executor lease. Those used to
+ * be methods here, and a caller who had merely opened the database could
+ * therefore advance a run another process was running.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
@@ -35,13 +44,7 @@ import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-st
 import type { WorkflowDefinition } from "./definition.ts";
 import { WorkflowStorageError } from "./errors.ts";
 import type { JsonObject } from "./members.ts";
-import type {
-  DefinitionRetrieval,
-  DocumentExecutionCompletion,
-  DocumentExecutionRecord,
-  StoredRunState,
-  WorkflowRunRecord,
-} from "./record.ts";
+import type { DefinitionRetrieval, DocumentExecutionRecord, WorkflowRunRecord } from "./record.ts";
 
 /** What a caller must decide before a run can exist. */
 export interface CreateWorkflowRunRequest {
@@ -127,19 +130,8 @@ export interface WorkflowRunDatabase {
   /** Replace the retrieval metadata. Identity is unaffected. */
   replaceRetrievalMetadata(metadata: Json | undefined): Operation<Result<void>>;
 
-  /** Record that a document execution has begun: the initial start, or a resume. */
-  beginDocumentExecution(): Operation<Result<DocumentExecutionRecord>>;
-
-  /** Record how a document execution ended. */
-  finishDocumentExecution(
-    completion: DocumentExecutionCompletion,
-  ): Operation<Result<DocumentExecutionRecord>>;
-
   /** Every document execution, in the order they began. */
   readDocumentExecutions(): Operation<Result<DocumentExecutionRecord[]>>;
-
-  /** Publish the run's status and stop reason. */
-  updateRunState(state: StoredRunState): Operation<Result<WorkflowRunRecord>>;
 }
 
 export interface WorkflowRunStorageApi {

@@ -37,7 +37,14 @@ import {
 } from "../mod.ts";
 import { useWorkflowLifecycle } from "../deno.ts";
 import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
-import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./support/storage.ts";
+import {
+  creation,
+  leasedRun,
+  runPath,
+  tamper,
+  useStorageRoot,
+  withRunHost,
+} from "./support/storage.ts";
 
 const { history, inspect, list } = WorkflowLifecycle.operations;
 
@@ -48,41 +55,41 @@ const { history, inspect, list } = WorkflowLifecycle.operations;
  * apart by what they retain and not only by the ids SQLite happened to assign.
  */
 function* retainedRun(root: string, runId: string): Operation<void> {
-  yield* withStorage(root, function* () {
-    const database = yield* createRun({ runId });
-    const begun = yield* database.beginDocumentExecution();
-    if (!begun.ok) {
-      throw begun.error;
-    }
-    yield* database.journal.append(
-      sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
+  yield* withRunHost(root, function* (authority) {
+    yield* leasedRun(
+      authority,
+      { runId, action: "start", creation: creation() },
+      function* (begun, lease) {
+        yield* begun.database.journal.append(
+          sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
+        );
+        yield* begun.database.journal.append(unsourced("exec", `exec:echo ${runId}`));
+        yield* begun.database.journal.append(closed("root"));
+        const settled = yield* authority.settle(lease, {
+          executionId: begun.execution.executionId,
+          status: "completed",
+        });
+        if (!settled.ok) {
+          throw settled.error;
+        }
+      },
     );
-    yield* database.journal.append(unsourced("exec", `exec:echo ${runId}`));
-    yield* database.journal.append(closed("root"));
-    const finished = yield* database.finishDocumentExecution({
-      executionId: begun.value.executionId,
-      status: "completed",
-    });
-    if (!finished.ok) {
-      throw finished.error;
-    }
-    const published = yield* database.updateRunState({ status: "completed" });
-    if (!published.ok) {
-      throw published.error;
-    }
   });
 }
 
 /** A run interrupted mid-execution: two events, no root Close, still `running`. */
 function* partialRun(root: string, runId: string): Operation<void> {
-  yield* withStorage(root, function* () {
-    const database = yield* createRun({ runId });
-    const begun = yield* database.beginDocumentExecution();
-    if (!begun.ok) {
-      throw begun.error;
-    }
-    yield* database.journal.append(sourced("import_component", "Release", { line: 4, column: 2 }));
-    yield* database.journal.append(unsourced("exec", "exec:echo"));
+  yield* withRunHost(root, function* (authority) {
+    yield* leasedRun(
+      authority,
+      { runId, action: "start", creation: creation() },
+      function* (begun) {
+        yield* begun.database.journal.append(
+          sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
+        );
+        yield* begun.database.journal.append(unsourced("exec", `exec:echo ${runId}`));
+      },
+    );
   });
 }
 

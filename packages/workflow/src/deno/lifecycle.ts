@@ -43,9 +43,16 @@ import type {
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import {
   type ExecutorAcquisition,
+  type ExecutorLease,
   WorkflowLifecycle,
   type WorkflowLifecycleSnapshot,
 } from "../lifecycle/api.ts";
+import type {
+  PendingCancellation,
+  WorkflowBeginRequest,
+  WorkflowExecutionAuthority,
+  WorkflowExecutionBegun,
+} from "../lifecycle/execution.ts";
 import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history.ts";
 import {
   WorkflowRequestError,
@@ -55,8 +62,17 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
-import { createExecutorRegistry, type ExecutorRegistry, publishControl } from "./executor.ts";
+import {
+  clearRequest,
+  createExecutorRegistry,
+  type ExecutorHold,
+  type ExecutorRegistry,
+  publishControl,
+  readControl,
+  readRequest,
+} from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
+import { beginExecution, settleExecution } from "./transitions.ts";
 import { workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
@@ -108,13 +124,17 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
 export function* installWorkflowLifecycle(
   options: WorkflowLifecycleOptions,
   connections: WorkflowRunConnections,
-): Operation<void> {
+): Operation<WorkflowExecutionAuthority> {
   const root = authorizedRoot(options.root);
   const executors = createExecutorRegistry();
+  // What the previous owner left, as it stood when this one took the lock. An
+  // input snapshot: acting on it later has to prove it is still that exact
+  // request.
+  const pending = new WeakMap<ExecutorLease, PendingCancellation | undefined>();
   yield* WorkflowLifecycle.around(
     {
       *acquireExecutor([runId]) {
-        return yield* acquire(root, executors, runId);
+        return yield* acquire(root, executors, pending, runId);
       },
       *inspect([runId]) {
         return yield* inspectRun(root, runId);
@@ -128,6 +148,138 @@ export function* installWorkflowLifecycle(
     },
     { at: "min" },
   );
+
+  // Handed back rather than installed. Beginning an execution answers with an
+  // open database, and a contextual surface anything can reach is the wrong
+  // place for a capability that hands out transports.
+  return {
+    begin(lease, request) {
+      return beginRun(root, connections, executors, pending, lease, request);
+    },
+    *settle(lease, completion) {
+      // Authorized before a connection exists: the path comes from the hold the
+      // provider issued, never from what the lease says about itself.
+      const authorized = authorizeHold(executors, lease);
+      if (!authorized.ok) {
+        return authorized;
+      }
+      const hold = authorized.value;
+      return yield* settleExecution(
+        connections,
+        workflowRunPath(root, hold.runId),
+        hold,
+        () => executors.authorize(lease),
+        completion,
+      );
+    },
+  };
+}
+
+function* beginRun(
+  root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorRegistry,
+  pending: WeakMap<ExecutorLease, PendingCancellation | undefined>,
+  executorLease: ExecutorLease,
+  request: WorkflowBeginRequest,
+): Operation<Result<WorkflowExecutionBegun>> {
+  const checked = checkRunId(request.runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  // Authorized before a connection exists, so a fabricated lease cannot cause a
+  // database to be created or opened on its way to being refused. The path
+  // comes from the hold rather than from what the lease says about itself.
+  const authorized = authorizeHold(executors, executorLease, checked.value);
+  if (!authorized.ok) {
+    return authorized;
+  }
+  const hold = authorized.value;
+  const found = pending.get(executorLease);
+  const begun = yield* beginExecution(
+    connections,
+    workflowRunPath(root, hold.runId),
+    hold,
+    () => executors.authorize(executorLease, checked.value),
+    request,
+    found,
+  );
+  if (!begun.ok) {
+    return begun;
+  }
+
+  // The durable decision has committed either way, so the request that took
+  // part in it is spent — cleared only if it is still the exact one that did,
+  // because anything written since belongs to a decision nobody has made.
+  if (found !== undefined) {
+    yield* clearMatchingRequest(root, hold.runId, found);
+    pending.delete(executorLease);
+  }
+
+  if (begun.value.kind === "refused") {
+    // Recovery stands; this caller does not continue. No descriptor is
+    // published, because an owner that begins nothing is not one to address.
+    return Err(begun.value.reason);
+  }
+
+  yield* publishControl(root, hold);
+  return Ok(begun.value);
+}
+
+function* clearMatchingRequest(
+  root: string,
+  runId: string,
+  consumed: PendingCancellation,
+): Operation<void> {
+  const current = yield* readRequest(root, runId);
+  if (
+    current !== undefined &&
+    current.requestId === consumed.requestId &&
+    current.generation === consumed.generation
+  ) {
+    yield* clearRequest(root, runId);
+  }
+}
+
+/** The hold this lease stands for, as a refusal rather than a raise. */
+function authorizeHold(
+  executors: ExecutorRegistry,
+  lease: ExecutorLease,
+  runId?: string,
+): Result<ExecutorHold> {
+  try {
+    return Ok(executors.authorize(lease, runId));
+  } catch (error) {
+    if (error instanceof WorkflowStorageError) {
+      return Err(error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * What the previous owner left behind, and what of it survives.
+ *
+ * A descriptor without its lock is stale data; the request beside it is
+ * evidence only if it was addressed to that exact dead generation. Anything
+ * else — a request for a generation nobody recognizes, a request with no
+ * descriptor to match — is cleared, so it cannot reach the generation this
+ * acquisition is about to publish.
+ */
+function* reconcileControl(
+  root: string,
+  runId: string,
+): Operation<PendingCancellation | undefined> {
+  const request = yield* readRequest(root, runId);
+  if (request === undefined) {
+    return undefined;
+  }
+  const descriptor = yield* readControl(root, runId);
+  if (descriptor === undefined || descriptor.generation !== request.generation) {
+    yield* clearRequest(root, runId);
+    return undefined;
+  }
+  return { requestId: request.requestId, generation: request.generation };
 }
 
 /**
@@ -144,6 +296,7 @@ export function* installWorkflowLifecycle(
 function* acquire(
   root: string,
   executors: ExecutorRegistry,
+  pending: WeakMap<ExecutorLease, PendingCancellation | undefined>,
   runId: string,
 ): Operation<Result<ExecutorAcquisition>> {
   const checked = checkRunId(runId);
@@ -154,7 +307,12 @@ function* acquire(
   if (hold === undefined) {
     return Ok({ kind: "already-running" });
   }
-  yield* publishControl(root, hold);
+
+  // Gathered now, decided later. Publishing this owner's generation before the
+  // transition that decides whether a Close, that cancellation or an ordinary
+  // interruption won would leave the previous owner's request sitting beside a
+  // descriptor it was never addressed to.
+  pending.set(hold.lease, yield* reconcileControl(root, checked.value));
   return Ok({ kind: "acquired", lease: hold.lease });
 }
 

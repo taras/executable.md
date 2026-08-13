@@ -55,6 +55,15 @@ export interface ExecutorHold {
   readonly generation: string;
   readonly file: Deno.FsFile;
   open: boolean;
+  /**
+   * The execution this acquisition began, once it has begun one.
+   *
+   * An acquisition begins at most one. The architecture's premise — that an
+   * unfinished execution belongs to a *previous* lease and is therefore proven
+   * stale — holds only for the first begin under a hold; a second would find
+   * this owner's own live execution and reconcile it away.
+   */
+  execution?: string;
 }
 
 /** What the descriptor beside a run says about its live owner. */
@@ -82,8 +91,15 @@ export interface ControlRequest {
 export interface ExecutorRegistry {
   /** Take the lock for `runId`, or report that a live executor holds it. */
   acquire(root: string, runId: string): Operation<ExecutorHold | undefined>;
-  /** The hold this exact lease stands for, or a refusal naming why it is not one. */
-  authorize(lease: ExecutorLease, runId: string): ExecutorHold;
+  /**
+   * The hold this exact lease stands for, or a refusal naming why it is not one.
+   *
+   * `runId` is compared only when the caller named one of its own — a request
+   * says which run it means, and a lease that owns a different one must not
+   * answer for it. Asking the lease which run it owns and then comparing that
+   * against itself would check nothing.
+   */
+  authorize(lease: ExecutorLease, runId?: string): ExecutorHold;
   /** Whether any lease this installation issued is still open for `runId`. */
   holds(runId: string): boolean;
 }
@@ -92,7 +108,7 @@ export function createExecutorRegistry(): ExecutorRegistry {
   const issued = new WeakSet<ExecutorLease>();
   const holds = new Map<ExecutorLease, ExecutorHold>();
 
-  function authorize(lease: ExecutorLease, runId: string): ExecutorHold {
+  function authorize(lease: ExecutorLease, runId?: string): ExecutorHold {
     if (typeof lease !== "object" || lease === null || !issued.has(lease)) {
       throw new WorkflowRequestError(
         "the executor lease is foreign or fabricated: only the lease this provider issued for " +
@@ -106,7 +122,7 @@ export function createExecutorRegistry(): ExecutorRegistry {
           "have another owner.",
       );
     }
-    if (hold.runId !== runId) {
+    if (runId !== undefined && hold.runId !== runId) {
       throw new WorkflowRequestError(
         "the executor lease was acquired for a different workflow run.",
       );

@@ -57,7 +57,7 @@ import type { RootDocumentSource } from "@executablemd/core";
 import {
   retainedWorkflowInstallation,
   WORKFLOW_RUN_STATUSES,
-  WorkflowRunStorage,
+  WorkflowLifecycle,
 } from "@executablemd/workflow";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
@@ -65,6 +65,7 @@ import type {
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
+import type { WorkflowExecutionAuthority, WorkflowRunCreation } from "@executablemd/workflow/deno";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 
@@ -76,8 +77,16 @@ import type { EstablishedDefinition } from "./workflow-definition.ts";
  * the exit codes — is the same wherever a run lives.
  */
 export interface WorkflowHost {
-  /** Install this host's run storage for the current scope and its descendants. */
-  useStorage(): Operation<void>;
+  /**
+   * Install everything one run needs, and answer with the authority that moves
+   * its lifecycle.
+   *
+   * Storage and lifecycle over one connection registry, because they write to
+   * the same databases. The authority is a closure rather than something
+   * installed: beginning an execution answers with an open database, and a
+   * contextual surface anything can reach is the wrong place for that.
+   */
+  useRunHost(): Operation<WorkflowExecutionAuthority>;
   /**
    * Install this host's run lifecycle for the current scope and its descendants.
    *
@@ -310,35 +319,6 @@ function* failureReason(database: WorkflowRunDatabase): Operation<WorkflowStopRe
 }
 
 /**
- * Close an execution record this process did not start and cannot finish.
- *
- * A run left `running` by a host that disappeared has an execution record with
- * no end. Closing it as interrupted before a new one begins is what keeps the
- * records a history of executions rather than a history with a hole in it.
- * Concurrent ownership is #367's; nothing here claims a second executor is safe.
- */
-function* closeOrphanedExecutions(database: WorkflowRunDatabase): Operation<Result<void>> {
-  const executions = yield* database.readDocumentExecutions();
-  if (!executions.ok) {
-    return executions;
-  }
-  for (const execution of executions.value) {
-    if (execution.stoppedAt !== undefined) {
-      continue;
-    }
-    const finished = yield* database.finishDocumentExecution({
-      executionId: execution.executionId,
-      status: "interrupted",
-      reason: { kind: "host", code: HOST_ORPHANED_CODE },
-    });
-    if (!finished.ok) {
-      return finished;
-    }
-  }
-  return Ok(undefined);
-}
-
-/**
  * The grammar this command accepts, refusing what it does not.
  *
  * By action, because the actions do not share a grammar: only `start` names a
@@ -543,95 +523,6 @@ export interface WorkflowStart {
   readonly props: Record<string, Json>;
 }
 
-/** The statuses a resume may continue from, and what the rest mean. */
-function admitResume(status: WorkflowRunStatus): Result<void> {
-  switch (status) {
-    case "failed":
-    case "cancelled":
-      // Terminal, and terminal in a direction a resume cannot move. Replaying
-      // what a failed run recorded is what a compatible `start --id` is for;
-      // asking to *continue* one is asking for something that is over.
-      return Err(
-        new Error(
-          `workflow run ${status}: a run that ${status === "failed" ? "failed" : "was cancelled"} ` +
-            "is not resumed. The run is left exactly as it is.",
-        ),
-      );
-    // A completed run replays what it recorded, and attaches no Workspace to do
-    // it. `running` keeps its documented temporary treatment until #367 settles
-    // durable ownership.
-    case "completed":
-    case "interrupted":
-    case "suspended":
-    case "running":
-      return Ok(undefined);
-  }
-}
-
-/**
- * Open the run this request addresses, creating it when `start` describes a new
- * one.
- *
- * `create()` is also how a run is found: a request describing the stored run
- * answers with it, and one differing in any immutable field is refused with the
- * conflict diagnostics storage already has. Nothing here repairs, replaces or
- * initializes anything it did not create, and a lookup that finds nothing
- * creates nothing.
- */
-function* openRun(
-  request: WorkflowRequest,
-  start: WorkflowStart | undefined,
-): Operation<Result<{ database: WorkflowRunDatabase; source: string }>> {
-  if (request.action === "resume") {
-    const found = yield* WorkflowRunStorage.operations.lookup(request.target);
-    if (!found.ok) {
-      return found;
-    }
-    const database = found.value;
-    // Before the definition is fetched, before an orphaned execution is closed,
-    // and before anything is begun: a run that ended is not a run to continue,
-    // and finding that out after Git has been consulted and a record opened
-    // would be finding it out too late.
-    const admitted = admitResume(database.record.status);
-    if (!admitted.ok) {
-      return admitted;
-    }
-    const source = yield* loadRetainedDefinition(
-      database.record.definition,
-      database.retrieval?.metadata,
-    );
-    if (!source.ok) {
-      return source;
-    }
-    return Ok({ database, source: source.value });
-  }
-
-  if (start === undefined) {
-    return Err(new Error("xmd workflow start has no definition to run"));
-  }
-
-  const supported = supportedRootDocument(start.established.definition);
-  if (!supported.ok) {
-    return supported;
-  }
-
-  const created = yield* WorkflowRunStorage.operations.create({
-    runId: request.id ?? generatedRunId(),
-    definition: start.established.definition,
-    base: start.established.base,
-    props: start.props,
-  });
-  if (!created.ok) {
-    return created;
-  }
-
-  const replaced = yield* created.value.replaceRetrievalMetadata(start.established.retrieval);
-  if (!replaced.ok) {
-    return replaced;
-  }
-  return Ok({ database: created.value, source: start.established.source });
-}
-
 /**
  * Run one `start` or `resume` to completion, and answer with its exit status.
  *
@@ -647,34 +538,64 @@ export function runWorkflow(
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
 ): Operation<WorkflowOutcome> {
   return scoped(function* () {
-    yield* host.useStorage();
+    const authority = yield* host.useRunHost();
 
-    const opened = yield* openRun(request, start);
-    if (!opened.ok) {
-      report(opened.error.message);
+    // The run id first, because everything else needs to be done under its
+    // lease — and a generated one is this invocation's own run.
+    const runId = request.action === "resume" ? request.target : (request.id ?? generatedRunId());
+
+    const creation = yield* startCreation(request, start);
+    if (!creation.ok) {
+      report(creation.error.message);
       return { exitCode: 1 };
     }
 
-    const { database, source } = opened.value;
-    const { record } = database;
-    reportRun(record.runId);
-
-    const orphaned = yield* closeOrphanedExecutions(database);
-    if (!orphaned.ok) {
-      report(orphaned.error.message);
+    // Acquired before storage is created or opened, before a retained
+    // definition is fetched, before replay history is read, before a Workspace
+    // is attached and before the root is imported. Nothing below this line
+    // happens for a run somebody else is running.
+    const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+    if (!acquired.ok) {
+      report(acquired.error.message);
       return { exitCode: 1 };
     }
+    if (acquired.value.kind !== "acquired") {
+      report(
+        `workflow run ${runId} is already running: one executor owns a run, and this host ` +
+          "reports the owner rather than following it.",
+      );
+      return { exitCode: 1 };
+    }
+    const { lease } = acquired.value;
 
-    const begun = yield* database.beginDocumentExecution();
+    // One transaction: whatever the previous owner left is reconciled, this
+    // action is admitted against what that left behind, and the execution is
+    // recorded — or none of it is.
+    const begun = yield* authority.begin(lease, {
+      runId,
+      action: request.action,
+      ...(creation.value === undefined ? {} : { creation: creation.value }),
+    });
     if (!begun.ok) {
       report(begun.error.message);
       return { exitCode: 1 };
     }
-    const executionId = begun.value.executionId;
+
+    const { database, record, execution, replay } = begun.value;
+    reportRun(record.runId);
+
+    // Only now, and only because execution or replay was admitted.
+    const source = yield* documentSource(start, database);
+    if (!source.ok) {
+      report(source.error.message);
+      return { exitCode: 1 };
+    }
 
     // Interruption is the outcome nothing else publishes. Registered before the
     // execution starts, so a scope torn down by Ctrl-C settles the run rather
-    // than leaving a record with no end and a status of `running`.
+    // than leaving a record with no end and a status of `running`. The lease
+    // outlives this finalizer, so the settlement it performs still holds
+    // authority.
     //
     // The phase, rather than a boolean: "the document produced an outcome" and
     // "this invocation is durably settled" are different facts, and collapsing
@@ -685,8 +606,11 @@ export function runWorkflow(
       if (phase.state !== "running") {
         return;
       }
-      const reason: WorkflowStopReason = { kind: "host", code: HOST_INTERRUPTED_CODE };
-      const retained = yield* retain(database, executionId, "interrupted", reason);
+      const retained = yield* authority.settle(lease, {
+        executionId: execution.executionId,
+        status: "interrupted",
+        reason: { kind: "host", code: HOST_INTERRUPTED_CODE },
+      });
       if (!retained.ok) {
         // Never claim a status storage refused. What went wrong is reported,
         // and no `workflow status:` line is published.
@@ -696,9 +620,7 @@ export function runWorkflow(
         // begins, and that continuation is first-settlement-wins — so an
         // interrupted run exits 130 whether or not its last write landed. What
         // this run owes the caller is an accurate account, not a different exit
-        // code: the refusal is reported, and no status is claimed that storage
-        // did not accept. An ordinary settlement refusal, which happens while
-        // there is still an outcome to return, does exit 1.
+        // code.
         report(retained.error.message);
         return;
       }
@@ -706,14 +628,15 @@ export function runWorkflow(
     });
 
     const completed = yield* isCompleted(database.journal);
-    const execution: WorkflowExecution = {
-      root: retainedSource(record.definition.rootDocumentPath, source),
+    const documentExecution: WorkflowExecution = {
+      root: retainedSource(record.definition.rootDocumentPath, source.value),
       props: record.props,
       stream: database.journal,
-      // The run already exists: storage created it before anything executed,
-      // so this installation records exactly that value, allocates nothing and
-      // never consults Git. Service denial is installed beside it, through the
-      // same host-service slot `xmd run` fills with a real adapter.
+      // The run already exists: the begin transition created or found it before
+      // anything executed, so this installation records exactly that value,
+      // allocates nothing and never consults Git. Service denial is installed
+      // beside it, through the same host-service slot `xmd run` fills with a
+      // real adapter.
       installations: [
         retainedWorkflowInstallation({
           runId: record.runId,
@@ -724,22 +647,27 @@ export function runWorkflow(
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a
         // Workspace for it would open a transaction and capture a root for
-        // work that is not going to happen.
-        return completed ? operation : host.attach(database, operation);
+        // work that is not going to happen. A replayed terminal run keeps its
+        // outcome either way — the begin transition preserved it.
+        return completed || replay ? operation : host.attach(database, operation);
       },
     };
 
-    const result = yield* attempt(execution, execute);
+    const result = yield* attempt(documentExecution, execute);
     // The document is over, whatever storage does next — so teardown must not
     // relabel this run interrupted, even if what follows refuses.
     phase.state = "executed";
 
     const status: WorkflowRunStatus = result.ok ? "completed" : "failed";
     const reason = result.ok ? undefined : yield* failureReason(database);
-    const retained = yield* retain(database, executionId, status, reason);
+    const retained = yield* authority.settle(lease, {
+      executionId: execution.executionId,
+      status,
+      ...(reason === undefined ? {} : { reason }),
+    });
 
     // A document failure is still the failure worth reading, so it is reported
-    // whether or not the lifecycle writes landed.
+    // whether or not the lifecycle write landed.
     if (!result.ok) {
       report(result.error.message);
     }
@@ -756,43 +684,62 @@ export function runWorkflow(
 }
 
 /**
+ * What a `start` creates its run from, or nothing when a resume names one.
+ *
+ * Checked before the lease is taken, because a definition that cannot be a root
+ * document is this invocation's mistake rather than something to hold a run for.
+ */
+function* startCreation(
+  request: WorkflowRequest,
+  start: WorkflowStart | undefined,
+): Operation<Result<WorkflowRunCreation | undefined>> {
+  if (request.action === "resume") {
+    return Ok(undefined);
+  }
+  if (start === undefined) {
+    return Err(new Error("xmd workflow start has no definition to run"));
+  }
+  const supported = supportedRootDocument(start.established.definition);
+  if (!supported.ok) {
+    return supported;
+  }
+  return Ok({
+    definition: start.established.definition,
+    base: start.established.base,
+    props: start.props,
+    ...(start.established.retrieval === undefined
+      ? {}
+      : { retrieval: start.established.retrieval }),
+  });
+}
+
+/**
+ * The document this run executes.
+ *
+ * A `start` already established it from Git to read what the pinned document
+ * declares. A resume fetches what the run retained, and only once the run has
+ * been admitted — a run that ended is not one to fetch a definition for.
+ */
+function* documentSource(
+  start: WorkflowStart | undefined,
+  database: WorkflowRunDatabase,
+): Operation<Result<string>> {
+  if (start !== undefined) {
+    return Ok(start.established.source);
+  }
+  return yield* loadRetainedDefinition(database.record.definition, database.retrieval?.metadata);
+}
+
+/**
  * How far this invocation has durably got.
  *
  * `running` — the document may still be running, and a torn-down scope is an
  * interruption to retain. `executed` — the document produced an outcome, so
  * teardown has nothing left to say about it whatever storage does next.
- * `settled` — both lifecycle writes persisted and the status was published.
+ * `settled` — the settlement committed and the status was published.
  */
 interface LifecyclePhase {
   state: "running" | "executed" | "settled";
-}
-
-/**
- * Retain one outcome: the execution record first, then the run state.
- *
- * Ordered, and the first refusal is the answer. The run state describes a
- * document execution that ended, so publishing it after the record that says so
- * was refused would state a conclusion whose premise storage rejected.
- *
- * Only what the caller already decided crosses into storage — a status and a
- * filtered reason. A storage diagnostic is reported to the caller and never
- * written back into what the run retains.
- */
-function* retain(
-  database: WorkflowRunDatabase,
-  executionId: string,
-  status: WorkflowRunStatus,
-  reason: WorkflowStopReason | undefined,
-): Operation<Result<void>> {
-  const finished = yield* database.finishDocumentExecution({ executionId, status, reason });
-  if (!finished.ok) {
-    return finished;
-  }
-  const updated = yield* database.updateRunState({ status, reason });
-  if (!updated.ok) {
-    return updated;
-  }
-  return Ok(undefined);
 }
 
 /**
