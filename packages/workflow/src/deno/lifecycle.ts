@@ -31,7 +31,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { exists, readdir } from "@effectionx/fs";
 import { Err, Ok, type Operation, type Result } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
@@ -45,6 +45,7 @@ import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history
 import {
   WorkflowRequestError,
   WorkflowRunIdMismatchError,
+  WorkflowRunLocationMismatchError,
   WorkflowRunNotFoundError,
   WorkflowStorageError,
 } from "../storage/errors.ts";
@@ -101,7 +102,7 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
 }
 
 function* inspectRun(root: string, runId: string): Operation<Result<WorkflowLifecycleSnapshot>> {
-  return yield* atRun(root, runId, (database, path) => snapshot(database, path));
+  return yield* atRun(root, runId, snapshot);
 }
 
 function* runHistory(
@@ -128,13 +129,17 @@ function sourceOf(event: WorkflowHistoryEntry["event"]): Partial<WorkflowHistory
 }
 
 /**
- * Read one run through a read-only snapshot, checking that the file at the path
- * its id derives holds that run.
+ * Read one run this caller named, refusing storage that holds a different one.
+ *
+ * Two questions, and the second is asked for every candidate rather than only
+ * here: `withSnapshot` refuses a database whose retained id does not name its
+ * file at all, so what is left to ask is whether the run it holds is the run
+ * that was asked for.
  */
 function* atRun<T>(
   root: string,
   runId: string,
-  read: (database: DatabaseSync, path: string) => T,
+  read: (database: DatabaseSync, record: WorkflowRunRecord, path: string) => T,
 ): Operation<Result<T>> {
   const checked = checkRunId(runId);
   if (!checked.ok) {
@@ -147,12 +152,11 @@ function* atRun<T>(
   if (!(yield* exists(path))) {
     return Err(new WorkflowRunNotFoundError(checked.value));
   }
-  return withSnapshot(path, (database) => {
-    const record = readRunRow(database, path);
+  return withSnapshot(path, (database, record) => {
     if (record.runId !== checked.value) {
       throw new WorkflowRunIdMismatchError(checked.value, path);
     }
-    return read(database, path);
+    return read(database, record, path);
   });
 }
 
@@ -161,8 +165,10 @@ function* listRuns(root: string): Operation<Result<readonly WorkflowLifecycleSna
   for (const path of yield* candidatePaths(root)) {
     // One unreadable candidate ends the request. A list is a claim about every
     // run this root holds, and a shorter one silently answers a question the
-    // caller did not ask.
-    const read = withSnapshot(path, (database) => snapshot(database, path));
+    // caller did not ask. A candidate that is a perfectly good database of
+    // *another* run is one of those: `withSnapshot` refuses it because its
+    // retained id does not name the file it was found in.
+    const read = withSnapshot(path, (database, record) => snapshot(database, record, path));
     if (!read.ok) {
       return read;
     }
@@ -197,8 +203,18 @@ function* candidatePaths(root: string): Operation<string[]> {
 /**
  * One consistent reading of a run, on a connection SQLite will not let anything
  * write through, closed before the answer is returned.
+ *
+ * Recognition is structure and then identity: a file that is shaped like a
+ * version-1 workflow run still has to be the run its location names. Because a
+ * run's file name is the hash of its id, a healthy database copied or renamed
+ * to another candidate's name would otherwise be returned as a second, entirely
+ * genuine-looking run — so the check belongs here, where every read passes,
+ * rather than only where a caller supplied an id to compare against.
  */
-function withSnapshot<T>(path: string, read: (database: DatabaseSync) => T): Result<T> {
+function withSnapshot<T>(
+  path: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+): Result<T> {
   let database: DatabaseSync;
   try {
     database = new DatabaseSync(path, { readOnly: true });
@@ -211,7 +227,11 @@ function withSnapshot<T>(path: string, read: (database: DatabaseSync) => T): Res
     return Ok(
       readTransaction(database, () => {
         verifySchema(database, path, inertDofs(database));
-        return read(database);
+        const record = readRunRow(database, path);
+        if (basename(path) !== basename(workflowRunPath(dirname(path), record.runId))) {
+          throw new WorkflowRunLocationMismatchError(record.runId, path);
+        }
+        return read(database, record);
       }),
     );
   } catch (error) {
@@ -256,8 +276,11 @@ function inertDofs(database: DatabaseSync): CloudflareDatabase {
   return new CloudflareDatabase(storage);
 }
 
-function snapshot(database: DatabaseSync, path: string): WorkflowLifecycleSnapshot {
-  const record = readRunRow(database, path);
+function snapshot(
+  database: DatabaseSync,
+  record: WorkflowRunRecord,
+  path: string,
+): WorkflowLifecycleSnapshot {
   const retrievalRow = reading(database, SELECT_RETRIEVAL).get();
   const executions: DocumentExecutionRecord[] = reading(database, SELECT_EXECUTIONS)
     .all()

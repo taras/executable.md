@@ -78,6 +78,27 @@ export class WorkflowRunIdMismatchError extends WorkflowStorageError {
   }
 }
 
+/**
+ * A recognized database was found where another run's id would put it.
+ *
+ * The same disagreement between location and identity, discovered from the
+ * other side: nobody asked for this run, and the file it was found in is not
+ * the one its id names. Reported as its own sentence because "the run you asked
+ * for is not here" and "this run is not where it belongs" read as opposite
+ * claims about the same file.
+ */
+export class WorkflowRunLocationMismatchError extends WorkflowRunIdMismatchError {
+  override name = "WorkflowRunLocationMismatchError";
+
+  constructor(runId: string, path: string) {
+    super(runId, path);
+    this.message =
+      `The database at ${path} retains the workflow run ${JSON.stringify(runId)}, whose id ` +
+      "does not name this file. A run's file name is the hash of its id, so a database found " +
+      "anywhere else is a collision or a copy. It is left unchanged.";
+  }
+}
+
 /** The file is readable, and it is not a workflow-run database. */
 export class WorkflowDatabaseFormatError extends WorkflowStorageError {
   override name = "WorkflowDatabaseFormatError";
