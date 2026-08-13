@@ -50,7 +50,7 @@
 
 import { Err, Ok, type Operation, type Result } from "effection";
 import { globToRegExp } from "@effectionx/fs";
-import { getExpansion } from "@executablemd/core";
+import { getExpansion, sourceDescription } from "@executablemd/core";
 import {
   Files,
   FilesInvariantError,
@@ -261,7 +261,12 @@ function* describeFileEffect(
   detail: Record<string, Json>,
 ): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
-  return { type: WORKSPACE_FILE, name: `${operation}:${expansion.id}:${target}`, ...detail };
+  return {
+    type: WORKSPACE_FILE,
+    name: `${operation}:${expansion.id}:${target}`,
+    ...detail,
+    ...sourceDescription(expansion.position),
+  };
 }
 
 function* fileEffect<Phase extends string>(

@@ -66,6 +66,8 @@ export class TeardownError extends Error {
 interface StagedResult {
   location: string;
   result: TestResult;
+  /** Where the element was written, carried to the journal with the result. */
+  position?: Readonly<SourcePosition>;
 }
 
 /**
@@ -103,7 +105,7 @@ export function* flushStaged(): Operation<void> {
     if (!next) {
       break;
     }
-    yield* record(yield* persistTestResult(next.result));
+    yield* record(yield* persistTestResult(next.result, next.position));
   }
 }
 
@@ -115,13 +117,17 @@ export function* flushStaged(): Operation<void> {
  * test stages its own result, the previous test's invocation is long gone and
  * its outcome — including any teardown failure — is final.
  */
-export function* stageResult(location: string, result: TestResult): Operation<void> {
+export function* stageResult(
+  location: string,
+  result: TestResult,
+  position?: Readonly<SourcePosition>,
+): Operation<void> {
   yield* flushStaged();
   const queue = yield* stagingQueue();
   if (!queue) {
     return;
   }
-  queue.staged.push({ location, result });
+  queue.staged.push({ location, result, position });
 }
 
 /**
@@ -263,7 +269,8 @@ export function testBehavior(timeoutMs: number) {
     }
 
     const name = typeof props.name === "string" ? props.name : undefined;
-    const location = formatLocation(yield* getExpansion());
+    const expansion = yield* getExpansion();
+    const location = formatLocation(expansion);
     const parentEnv = yield* env;
     // The invocation's own scope, read before any nested invocation can shadow
     // it, and published as `testScope` so anything however deeply nested still
@@ -316,7 +323,7 @@ export function testBehavior(timeoutMs: number) {
     }
 
     const result = classify(name, location, bodyError, timedOut, timeoutMs);
-    yield* stageResult(location, result);
+    yield* stageResult(location, result, expansion.position);
 
     if (result.status === "fail") {
       // Containment: a completed test returns only text. A returned ErrorSegment

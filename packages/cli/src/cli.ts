@@ -7,6 +7,8 @@
  *   xmd targets <document.md>
  *   xmd workflow start <document.md> [options]
  *   xmd workflow resume <run-id>
+ *   xmd workflow status|history <run-id> [--json]
+ *   xmd workflow list [--status=<status>] [--json]
  *
  * A document reference is a path, optionally followed by `#` and one target
  * selector naming a section of the document (spec §5.4). `workflow start` takes
@@ -103,6 +105,7 @@ import {
   workflowConfig,
 } from "./workflow.ts";
 import type { HostWorkflowInstaller, WorkflowHost, WorkflowStart } from "./workflow.ts";
+import { runWorkflowManagement } from "./workflow-management.ts";
 import { establishDefinition } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 import { useWorkflowServiceDenial } from "@executablemd/workflow";
@@ -1282,13 +1285,14 @@ function* prepareWorkflowProps(
   const stray = findPropsFlag(args);
   if (config.action !== "start") {
     if (stray) {
+      const action = config.action ?? "resume";
       return {
         args,
         bindings: [],
         workflow,
         error:
-          `unrecognized option for xmd workflow ${config.action ?? "resume"}: ${stray} — a resume ` +
-          "runs the props its run retained",
+          `unrecognized option for xmd workflow ${action}: ${stray} — document properties ` +
+          "belong to the start that created the run, whose props it retained",
       };
     }
     return { args, bindings: [], workflow };
@@ -1718,12 +1722,18 @@ function* dispatch(
         yield* exit(1);
         break;
       }
-      const request = parseWorkflowRequest(config);
-      if (!request.ok) {
-        console.error(request.error.message);
+      const invocation = parseWorkflowRequest(config, evalFlags.rest);
+      if (!invocation.ok) {
+        console.error(invocation.error.message);
         yield* exit(1);
         break;
       }
+      if (invocation.value.kind === "manage") {
+        const managed = yield* runWorkflowManagement(invocation.value.request, workflowHost);
+        yield* exit(managed.exitCode);
+        break;
+      }
+      const request = invocation.value.request;
       const props = yield* resolveRunProps(propsPhase);
       if (props.error) {
         console.error(props.error);
@@ -1735,7 +1745,7 @@ function* dispatch(
           ? undefined
           : { established: propsPhase.established, props: props.value ?? {} };
       announceSecretDetection(config.secretDetection);
-      const outcome = yield* runWorkflow(request.value, start, workflowHost, (execution) =>
+      const outcome = yield* runWorkflow(request, start, workflowHost, (execution) =>
         execution.around(
           runScopedDocument(
             {
@@ -1745,10 +1755,10 @@ function* dispatch(
               // repository component fails to resolve rather than resolving
               // to content the definition does not describe.
               componentDir: [],
-              verbose: request.value.verbose,
+              verbose: request.verbose,
               journal: undefined,
-              raw: request.value.raw,
-              secretDetection: request.value.secretDetection,
+              raw: request.raw,
+              secretDetection: request.secretDetection,
               stream: execution.stream,
               // A workflow owns its journal, so its process results are part of
               // the run's retained history: a resumed procedure reads back what

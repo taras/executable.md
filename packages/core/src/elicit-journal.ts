@@ -31,7 +31,8 @@ import type { Operation } from "effection";
 
 import { canonicalFingerprint } from "./canonical.ts";
 import { parseJson } from "./json.ts";
-import type { Json, JsonObject } from "./types.ts";
+import { sourceDescription } from "./source-position.ts";
+import type { Json, JsonObject, SourcePosition } from "./types.ts";
 
 const ELICIT = "elicit";
 
@@ -45,6 +46,8 @@ export interface ElicitationIdentity {
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
+  /** Where the element was written, for history. Never read back as identity. */
+  position?: Readonly<SourcePosition>;
 }
 
 function recordName(location: string): string {
@@ -112,7 +115,12 @@ export function* persistElicitation(
   live: () => Operation<Json>,
 ): Workflow<Json> {
   const stored = yield createDurableOperation<DurableJson>(
-    { type: ELICIT, name: recordName(identity.location), input: identity.fingerprint },
+    {
+      type: ELICIT,
+      name: recordName(identity.location),
+      input: identity.fingerprint,
+      ...sourceDescription(identity.position),
+    },
     function* (): Operation<DurableJson> {
       return parseJson(yield* live());
     },

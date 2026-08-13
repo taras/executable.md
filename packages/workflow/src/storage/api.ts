@@ -74,15 +74,19 @@ export interface WorkflowRunTransaction {
 }
 
 /**
- * One retained event together with the id it keeps.
+ * One retained event together with the id it keeps and the root it was written
+ * against.
  *
  * `DurableStream` carries events and not their identities, and a stop reason
  * points at one. This is the reading that answers "which event", without
- * putting a second journal interface beside the one replay uses.
+ * putting a second journal interface beside the one replay uses. The Workspace
+ * root travels with the row because the association was made when the event was
+ * appended; history reads it rather than asking the Workspace what is current.
  */
 export interface JournalEntry {
   readonly eventId: string;
   readonly event: DurableEvent;
+  readonly workspaceRootId: string;
 }
 
 /** One workflow run's durable storage, open for the life of the calling scope. */

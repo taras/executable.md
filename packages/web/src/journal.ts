@@ -17,7 +17,8 @@
  * below says why.
  */
 
-import { canonicalize } from "@executablemd/core";
+import { canonicalize, sourceDescription } from "@executablemd/core";
+import type { SourcePosition } from "@executablemd/core";
 import {
   createDurableOperation,
   ReplayGuard,
@@ -37,6 +38,8 @@ export interface FormIdentity {
   /** `path:line:column` — the durable name. */
   location: string;
   fingerprint: string;
+  /** Where the element was written, for history. Never read back as identity. */
+  position?: Readonly<SourcePosition>;
 }
 
 function recordName(location: string): string {
@@ -122,7 +125,12 @@ export function* persistResponse(
   live: () => Operation<Json>,
 ): Workflow<Json> {
   const stored = yield createDurableOperation<DurableJson>(
-    { type: WEB_FORM, name: recordName(identity.location), input: identity.fingerprint },
+    {
+      type: WEB_FORM,
+      name: recordName(identity.location),
+      input: identity.fingerprint,
+      ...sourceDescription(identity.position),
+    },
     function* (): Operation<DurableJson> {
       return asDurable(yield* live());
     },

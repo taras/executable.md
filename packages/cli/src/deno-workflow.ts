@@ -18,7 +18,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Operation } from "effection";
 import { env as readEnv } from "@executablemd/runtime";
-import { useWorkflowRunStorage, withWorkflowWorkspace } from "@executablemd/workflow/deno";
+import {
+  useWorkflowLifecycle,
+  useWorkflowRunStorage,
+  withWorkflowWorkspace,
+} from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { WorkflowHost } from "./workflow.ts";
 
@@ -35,6 +39,9 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
   return {
     useStorage(): Operation<void> {
       return useWorkflowRunStorage({ root });
+    },
+    useLifecycle(): Operation<void> {
+      return useWorkflowLifecycle({ root });
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return withWorkflowWorkspace(database, operation);

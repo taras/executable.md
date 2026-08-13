@@ -32,11 +32,22 @@ import type {
   FunctionComponentDefinition,
   Modifier,
   Segment,
+  SourcePosition,
 } from "./types.ts";
 
 export interface ComponentApi {
-  /** `"__root__"` imports the root document. */
-  importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition>;
+  /**
+   * `"__root__"` imports the root document.
+   *
+   * `position` is where the element that asked was written. It reaches the
+   * journal beside the import's identity and takes no part in it: the durable
+   * record of an authored import says where the element came from, and a
+   * document scanned from a string carries none.
+   */
+  importComponent(
+    name: string,
+    position?: Readonly<SourcePosition>,
+  ): Operation<ComponentDefinition | FunctionComponentDefinition>;
   applyModifiers(modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult>;
   /**
    * Run one `exec as="name"` block (spec §3.6).
@@ -156,7 +167,10 @@ export interface ComponentApi {
 
 export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component", {
   // deno-lint-ignore require-yield
-  *importComponent(name: string): Operation<ComponentDefinition | FunctionComponentDefinition> {
+  *importComponent(
+    name: string,
+    _position?: Readonly<SourcePosition>,
+  ): Operation<ComponentDefinition | FunctionComponentDefinition> {
     throw new Error(
       `Component.importComponent("${name}") has no provider. Install one with ` +
         `Component.around({ importComponent }, { at: "min" }) before expansion.`,

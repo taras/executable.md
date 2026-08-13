@@ -73,9 +73,11 @@ export function* WebForm(props: Record<string, Json>): Operation<Json> {
   // operation, where nothing has been read, bound, printed, or recorded.
   const prepared = prepareForm(question);
 
+  const expansion = yield* getExpansion();
   const identity = {
-    location: formatLocation(yield* getExpansion()),
+    location: formatLocation(expansion),
     fingerprint: fingerprint(question),
+    position: expansion.position,
   };
 
   // Before the record is read, so a resumed document cannot bind an answer that

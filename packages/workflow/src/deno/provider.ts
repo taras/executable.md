@@ -146,7 +146,7 @@ export function* installWorkflowRunStorage(
   );
 }
 
-function authorizedRoot(root: string): string {
+export function authorizedRoot(root: string): string {
   if (typeof root !== "string" || root === "") {
     throw new WorkflowRequestError("a storage root is required.");
   }
@@ -369,7 +369,7 @@ const REQUEST_MEMBERS = ["runId", "definition", "base", "props"];
  * built without types, or one that read the id out of a file, can hand over
  * anything at all, and hashing that would fail somewhere far less legible.
  */
-function checkRunId(runId: unknown): Result<string> {
+export function checkRunId(runId: unknown): Result<string> {
   if (typeof runId !== "string" || runId === "") {
     return Err(
       new WorkflowRequestError(

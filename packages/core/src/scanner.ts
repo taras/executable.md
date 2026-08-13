@@ -238,6 +238,7 @@ export function scanSegments(
           modifiers: parsed.modifiers,
           executable: true,
           ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
+          position: positionAt(index, pos),
         } satisfies ExecutableCodeBlock);
       } else {
         // Non-executable code block: preserve as text
@@ -820,6 +821,7 @@ function parseChildren(
           modifiers: parsed.modifiers,
           executable: true,
           ...(parsed.binding === undefined ? {} : { binding: parsed.binding }),
+          position: positionAt(index, pos),
         } satisfies ExecutableCodeBlock);
       } else {
         pushText(children, fullFence);

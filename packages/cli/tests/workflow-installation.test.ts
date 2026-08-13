@@ -21,7 +21,7 @@ import { mkdtemp } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { useWorkflowRunStorage } from "@executablemd/workflow/deno";
+import { useWorkflowLifecycle, useWorkflowRunStorage } from "@executablemd/workflow/deno";
 import { Git, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import type { Json } from "@executablemd/core";
@@ -111,6 +111,9 @@ function recordingHost(root: string, attached: string[]): WorkflowHost {
     useStorage(): Operation<void> {
       return useWorkflowRunStorage({ root });
     },
+    useLifecycle(): Operation<void> {
+      return useWorkflowLifecycle({ root });
+    },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       attached.push(database.record.runId);
       return operation;
@@ -141,6 +144,7 @@ function refusingHost(
         },
       });
     },
+    useLifecycle: host.useLifecycle,
     attach: host.attach,
   };
 }

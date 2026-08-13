@@ -69,12 +69,14 @@ export function* Testing(): Operation<Json> {
 
   // Journal the outcome before the root Close so a full replay can restore it
   // without re-expanding this boundary.
+  const expansion = yield* getExpansion();
   const outcome = yield* persistBoundaryOutcome(
     {
       tests: local.length,
       failed: local.filter((result) => result.status === "fail").length,
     },
-    formatLocation(yield* getExpansion()),
+    formatLocation(expansion),
+    expansion.position,
   );
   yield* boundary(outcome);
 
