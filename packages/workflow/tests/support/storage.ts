@@ -24,6 +24,8 @@ import {
   WorkflowRunStorage,
 } from "../../mod.ts";
 import { workflowRunPath } from "../../deno.ts";
+import { useWorkflowRunConnections } from "../../src/deno/connections.ts";
+import { SavepointObservation } from "../../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../../src/deno/provider.ts";
 import type { PrivateWorkspaceOptions } from "../../src/deno/workspace/private.ts";
 
@@ -83,7 +85,10 @@ export function withStorage<T>(
   internal: PrivateWorkspaceOptions = {},
 ): Operation<T> {
   return scoped(function* () {
-    yield* installWorkflowRunStorage({ root }, internal);
+    // The observer travels with the registry: these suites watch real savepoint
+    // behavior, and a registry created without it reports to nobody.
+    const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+    yield* installWorkflowRunStorage({ root }, internal, connections);
     return yield* body();
   });
 }

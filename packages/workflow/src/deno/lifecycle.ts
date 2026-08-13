@@ -33,6 +33,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
 import { exists, readdir } from "@effectionx/fs";
+import { useWorkflowRunConnections, type WorkflowRunConnections } from "./connections.ts";
 import { Err, Ok, type Operation, type Result } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import type {
@@ -93,6 +94,21 @@ export interface WorkflowLifecycleOptions {
  * does not.
  */
 export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operation<void> {
+  yield* installWorkflowLifecycle(options, yield* useWorkflowRunConnections());
+}
+
+/**
+ * The same installation, over a registry the host already owns.
+ *
+ * Storage writes to the same databases, so a host running both hands each the
+ * one registry rather than letting either open a second authoritative
+ * connection. Inspection still stays off it entirely: a read-only snapshot has
+ * its own connection and never enters the pool execution serializes on.
+ */
+export function* installWorkflowLifecycle(
+  options: WorkflowLifecycleOptions,
+  connections: WorkflowRunConnections,
+): Operation<void> {
   const root = authorizedRoot(options.root);
   const executors = createExecutorRegistry();
   yield* WorkflowLifecycle.around(
