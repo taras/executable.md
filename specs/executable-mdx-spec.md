@@ -6467,6 +6467,51 @@ The matching constraint is the same either way; only which layer reports an
 absent binding differs. This is documented rather than normalized — the two
 paths agree on every question a document can ask about matching.
 
+### 6.17 Suspending a workflow for input
+
+A component or middleware that reaches a blocker under `xmd workflow` calls the
+provider-neutral operation exported by `@executablemd/workflow`:
+
+```ts
+interface WorkflowSuspensionRequest {
+  request: Json;
+  responseSchema: JsonObject;
+}
+
+suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
+```
+
+This is an API operation, not a v1 document element. `request` is the structured
+description of what is awaited and why. `responseSchema` is the complete JSON
+Schema a later input must satisfy. The caller supplies no run ID, event ID,
+suspension ID or provider handle.
+
+The workflow execution assigns an opaque suspension ID from the run and durable
+coroutine position. It publishes one ordinary `suspension_request` Yield whose
+description contains that ID, request and schema. The existing secret gate sees
+the complete event before persistence. A successful result says the request was
+retained; it does not say the wait has an answer.
+
+With no delivered input, the operation remains pending while the trusted host
+halts the document execution. It raises no document error and returns no value.
+Structured teardown releases every live child and attachment; the root records
+no Close, and the host retains `suspended` only after teardown. That partial
+journal is valid continuation input.
+
+On resume, prior effects and the suspension-request Yield replay. They execute
+nothing and append nothing. With no input, the same suspension ID releases the
+new executor again without duplicating the request. With a schema-validated
+input, the #300 delivery path publishes one separate durable answer
+before `suspendFor()` returns that value, so interruption cannot consume an
+answer the journal does not hold. Delivery, duplicate reconciliation and resume
+scheduling belong to #300.
+
+Suspension is distinct from `<Elicit>`. Elicitation's current provider remains
+a live interaction whose validated answer is the one durable effect. A workflow
+component may use suspension to ask the host to retain and release an
+unavailable input instead. The host chooses no answer and the document chooses
+no transport.
+
 
 ## 7. Entry point
 
@@ -7316,6 +7361,14 @@ for the Api, `createChannel` from Effection, `forEach` from
 The execution boundary journals the following operation descriptions through
 `@executablemd/durable-streams`. These are diagnostic journal-entry types, not a
 public replay contract.
+
+An authored durable operation may add a normalized source position under the
+stable namespaced `"executablemd.source-position"` field in its description
+before publication. It is non-identity metadata: only `type` and `name` match
+replay. The complete description crosses the journal's security filter.
+Workflow history parses the optional field as a `SourcePosition` and never
+reconstructs it from an expansion ID or current source. Root, Close and
+trusted-host events may have no authored source.
 
 | Operation | Effect type | Effect name | Notes |
 |-----------|------------|-------------|-------|
