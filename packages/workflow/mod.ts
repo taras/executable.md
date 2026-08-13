@@ -98,6 +98,7 @@ export {
   WorkflowRequestError,
   WorkflowRunConflictError,
   WorkflowRunIdMismatchError,
+  WorkflowRunLocationMismatchError,
   WorkflowRunNotFoundError,
   WorkflowSchemaVersionError,
   WorkflowStorageError,

@@ -13,7 +13,7 @@
  * run.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { copyFileSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -30,6 +30,8 @@ import {
   type WorkflowHistoryEntry,
   type WorkflowLifecycleSnapshot,
   WorkflowRecordMalformedError,
+  WorkflowRunIdMismatchError,
+  WorkflowRunLocationMismatchError,
   WorkflowRunNotFoundError,
   WorkflowRunStorage,
 } from "../mod.ts";
@@ -246,6 +248,36 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
     // Reported, and left exactly as it was found.
     expect(fileFingerprint(candidate)).toEqual(foreign);
+  });
+
+  it("WLI5b: a healthy database at another run's name is not a second run", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "release-1.4");
+    const original = runPath(root, "release-1.4");
+    // A perfectly good version-1 workflow database, recognized in every
+    // structural way, sitting where another run id would put it. Nothing about
+    // its contents says so — only its name does.
+    const copy = join(root, `${"a".repeat(64)}.sqlite`);
+    copyFileSync(original, copy);
+    const before = { original: fileFingerprint(original), copy: fileFingerprint(copy) };
+
+    yield* withLifecycle(root, function* () {
+      const listed = yield* list();
+      expect(listed.ok).toBe(false);
+      const error = listed.ok ? undefined : listed.error;
+      expect(error).toBeInstanceOf(WorkflowRunLocationMismatchError);
+      // The same condition storage reports when a lookup lands on another run.
+      expect(error).toBeInstanceOf(WorkflowRunIdMismatchError);
+      // Not as a healthy list with a duplicate in it.
+      expect(listed.ok ? listed.value : undefined).toBeUndefined();
+
+      // The run itself still reads at its own location.
+      const snapshot = yield* snapshotOf("release-1.4");
+      expect(snapshot.record.runId).toBe("release-1.4");
+    });
+
+    expect(fileFingerprint(original)).toEqual(before.original);
+    expect(fileFingerprint(copy)).toEqual(before.copy);
   });
 
   it("WLI6: history is every retained event with its exact id, root and source", function* () {
