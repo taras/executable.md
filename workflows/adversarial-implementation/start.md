@@ -41,6 +41,8 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
 
 ## Complete flow
 
+<Output>
+
 <Repository name="project" url={props.repository} base={props.base}>
   <Worktree name="implementation" branch={props.branch} as="worktree">
     <Glob
@@ -105,7 +107,6 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
         </If>
       </If>
     </If>
-    <Output>
       <If condition={handoffCheckpoint.proceed}>
         <If condition={planning.decision.proceed && planning.verdictPassed}>
           <If condition={authorization.proceed}>
@@ -183,9 +184,10 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
         {handoff}
         </Else>
       </If>
-    </Output>
   </Worktree>
 </Repository>
+
+</Output>
 
 ## The Workspace is composed, not implied
 
@@ -267,11 +269,19 @@ A checkpoint that found no material choice still produces an explicit
 `proceed: true` with its reason, so nothing advances because a decision was
 absent.
 
-`<Output>` reports which gate the run reached, telling a decline apart from a
-review that never passed. A rejected acceptance finishes as rejected — the flow
-does not fall into the accepted branch — and a document execution stopped
-earlier renders the artifact it stopped on rather than a value it never
-produced.
+The root's direct top-level `<Output>` reports which gate the run reached,
+telling a decline apart from a review that never passed. A rejected acceptance
+finishes as rejected — the flow does not fall into the accepted branch — and a
+document execution stopped earlier renders the artifact it stopped on rather than
+a value it never produced.
+
+That declaration wraps the whole flow, `<Repository>` and `<Worktree>` included,
+because `<Output>` is only ever a direct top-level child of the document that
+declares it — an invocation cannot introduce or redefine one for its caller.
+Wrapping the flow selects no more than the report: every element inside binds
+with `as`, and a binding keeps a private buffer, so a stage invocation
+contributes nothing to the document. The final-gate `<If>` tree is the only thing
+that renders.
 
 ## Waiting for the user is a suspension, not a stop
 
@@ -296,7 +306,8 @@ checkpoint, and the ownership, status, history, cancellation, and deletion
 around it, are #367 and unbuilt, so a question asked today is answered inside
 the document execution that asked it. Gating is expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
-execution: it still expands to `<Output>` and completes.
+execution: it still reaches the final-gate report inside the root's `<Output>`
+and completes.
 
 ## How props are read
 
@@ -316,10 +327,12 @@ dotted `{props.name}` traverses the validated props namespace.
 This document is a text root, and a text root is fail-capable. The `output` error
 mode is installed for its whole body — by every text root and by every
 `<Output>` region alike — so an uncaught, undecided failure anywhere above is
-this run's outcome, whether or not the `<Output>` at the end of the flow exists
-(#453, shipped). That `<Output>` selects which regions render and buffers the
-emission; it decides nothing about whether a failure counts. Printing and
-carrying on is asked for with `<PrintErrors>`, and this workflow writes none.
+this run's outcome, whether or not the document declares `<Output>` at all
+(#453, shipped). The root's direct top-level `<Output>` selects which regions
+render and buffers the emission; it decides nothing about whether a failure
+counts, and a root that declared none would settle a failure on identical terms.
+Printing and carrying on is asked for with `<PrintErrors>`, and this workflow
+writes none.
 
 Within that, how a component fails depends on which kind it is.
 
