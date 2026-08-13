@@ -439,6 +439,72 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     // No row appended, no byte moved, no mode changed.
     expect(fingerprint(path)).toEqual(before);
   });
+  it("WLI9: an id holding * or ? addresses exactly its own run", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "release-*");
+    yield* retainedRun(root, "release-?");
+    yield* retainedRun(root, "release-1");
+    const reached: string[] = [];
+
+    yield* scoped(function* () {
+      yield* WorkflowRunStorage.around({
+        *create() {
+          reached.push("storage.create");
+          throw new Error("inspection opened a writable database");
+        },
+        *lookup() {
+          reached.push("storage.lookup");
+          throw new Error("inspection opened a writable database");
+        },
+      });
+      yield* Git.around({
+        *revParse() {
+          reached.push("git.revParse");
+          throw new Error("inspection consulted Git");
+        },
+        *repositoryRoot() {
+          reached.push("git.repositoryRoot");
+          throw new Error("inspection consulted Git");
+        },
+        *objectFormat() {
+          reached.push("git.objectFormat");
+          throw new Error("inspection consulted Git");
+        },
+        *readObject() {
+          reached.push("git.readObject");
+          throw new Error("inspection consulted Git");
+        },
+      });
+      yield* useWorkflowLifecycle({ root });
+
+      // Every character is part of the id. The path a run lives at is the hash
+      // of the whole string, so these address one run each and no pattern is
+      // ever evaluated against the other two.
+      expect((yield* snapshotOf("release-*")).record.runId).toBe("release-*");
+      expect((yield* snapshotOf("release-?")).record.runId).toBe("release-?");
+      expect((yield* snapshotOf("release-1")).record.runId).toBe("release-1");
+      expect(yield* historyOf("release-*")).toHaveLength(3);
+
+      // An id that a pattern would have matched, and that nothing retains.
+      const absent = yield* inspect("release-2");
+      expect(absent.ok).toBe(false);
+      expect(absent.ok ? undefined : absent.error).toBeInstanceOf(WorkflowRunNotFoundError);
+
+      // All three are their own runs in the list, and none is a match for
+      // another.
+      const listed = yield* list();
+      if (!listed.ok) {
+        throw listed.error;
+      }
+      expect(listed.value.map((snapshot) => snapshot.record.runId).sort()).toEqual([
+        "release-*",
+        "release-1",
+        "release-?",
+      ]);
+    });
+
+    expect(reached).toEqual([]);
+  });
 });
 
 /** The rows a run's journal actually holds, read outside the provider. */
