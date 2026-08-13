@@ -87,10 +87,11 @@ frontier, releases the executor, and reports the run ID and stop reason;
 `xmd workflow resume` continues there once the answer is available. Neither the
 process nor the Agent sessions need to stay alive in between. `xmd workflow
 start` and `xmd workflow resume` are shipped (#366), and a resume continues from
-the retained frontier; what is not built is the boundary itself — a checkpoint
-that releases the executor, the ownership that decides who may continue a run,
-and the stop-reason inspection that reports why it stopped are #367.
-`<Stage>` is not the answer: it was
+the retained frontier; `xmd workflow status` reports a stopped run's retained
+status and stop reason without advancing it (#460). What is not built is the
+boundary itself — a checkpoint that releases the executor, and the
+single-executor ownership and atomic lifecycle transitions that decide who may
+continue a run, remain #367. `<Stage>` is not the answer: it was
 rejected as architecture, because the root document is the workflow and a durable
 run may continue through several document executions without inventing
 subdivisions between them (#298, closed).
@@ -444,14 +445,24 @@ implicit workspace:
 
 - `<Repository>` authorizes a Git locator, resolves an optional base once, pins
   that commit, and creates the named primary checkout inside the run's Workspace.
-  `<Worktree>` adds a named linked checkout on its own branch. Both install
-  contextual cwd while rendering their children and bind their Workspace-relative
-  path through `as` (#293). Names are stable component identity, not lookup keys
-  into hidden configuration: a locator and a base are ordinary root props or
-  expressions. Two repositories are two `<Repository>` elements, and no
-  transaction spans them.
-- `<Dir>` is lexical cwd and nothing else. Making a directory readable by an
-  Agent is `<Agent.AddDir>` (#302), a separate operation on purpose.
+  A self-closing `<Worktree … as>` adds a named linked checkout on its own branch,
+  creating or restoring it, and binds its Workspace-relative path (#293). Names
+  are stable component identity, not lookup keys into hidden configuration: a
+  locator and a base are ordinary root props or expressions. Two repositories are
+  two `<Repository>` elements, and no transaction spans them.
+- Binding a checkout path and running work under it are separate steps, and that
+  is settled rather than stylistic. A generic component invocation written with
+  `as=` is an ordinary private capture, and `<Repository>` and `<Worktree>`
+  receive no exception to it, so a lexical `<Worktree … as>…</Worktree>` cannot
+  both bind the path and render its children — it would capture them. A workflow
+  that needs both composes the self-closing form with a lexical
+  `<Dir path={…}>` inside the same `<Repository>`.
+- `<Dir>` is lexical cwd and nothing else: it establishes a bound path as cwd for
+  its children, renders them normally, and restores the enclosing cwd when it
+  closes. Making a directory readable by an Agent is `<Agent.AddDir>` (#302), a
+  separate operation on purpose, and cwd never implies it. `<Dir>` is unbuilt,
+  and #293 owns the boundary this composition consumes unless an earlier issue
+  supplies it first.
 - `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` operate on the
   contextual checkout as Workspace-local durable effects (#294). `<Git.Push>` is
   explicit and separate (#370), and `<PullRequest>` requires that pushed head
@@ -564,13 +575,25 @@ session, terminal status, text, and structured failure. `<Elicit>` journals its
 validated answer keyed by a fingerprint of the compiled schema and the rendered
 message, and refuses a recorded answer whose question does not match.
 
-`xmd workflow history` is how a person reads that back: stable public event IDs
-with each event's operation, source location, normalized evaluated arguments,
-result or normalized error, Workspace version, and forkability reason. It is
-read-only — it attaches no Workspace, Agent, or external provider and cannot
-advance a run — and it exposes no value the security policy has not already seen.
-That surface, with `status`, `list`, cancellation and deletion, is #367 and is
-unbuilt.
+`xmd workflow history <run-id> [--json]` is how a person reads that back: stable
+public event IDs with each event's operation, authored source position, result or
+normalized error, and Workspace root. It is shipped, with
+`xmd workflow status <run-id> [--json]` and
+`xmd workflow list [--status=<status>] [--json]`, as #367's first slice (#460).
+
+Each answers from an immutable lifecycle snapshot, and what it refuses to do is
+the contract: no execution handle and no executor lease, no replay and no
+advancement, no Workspace attachment and no root materialization, no document
+import, no Agent, process or external provider, and no reconciliation or append.
+History reads already-filtered retained protocol events, so it exposes no value
+the security policy has not already seen, and the authored source position it
+reports is descriptive evidence about an event rather than identity.
+
+The rest of the lifecycle is not built. Durable suspension and releasing the
+executor at a checkpoint, the single-executor ownership and atomic lifecycle
+transitions around them, and cancellation and deletion remain #367; versioned
+history checkpoints, compatible forks, `history --forkable`, and forkability
+reasons remain #368.
 
 **Still missing: who answered.** The journal records the validated decision, the
 question fingerprint, and the document execution it belongs to. It does not
@@ -896,8 +919,10 @@ shipped behavior. They are recorded because the answers constrain what remains.
 The exercise must resolve enough of these to implement one vertical slice:
 
 1. How does `<Worktree>` choose an idempotent identity, branch name, and cleanup
-   policy from the Repository base the run already pinned, and what does a
-   provider without native worktree semantics present instead (#293)?
+   policy from the Repository base the run already pinned; what does a provider
+   without native worktree semantics present instead; and how does the lexical
+   `<Dir>` boundary that consumes a bound checkout path replay without recreating
+   a completed checkout effect (#293)?
 2. What does a read-only Agent receive, and how is the ceiling proven for each
    provider before a Prompt runs (#302)?
 3. What is the public spelling and response schema of the constrained

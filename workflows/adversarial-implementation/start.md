@@ -44,7 +44,12 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
 <Output>
 
 <Repository name="project" url={props.repository} base={props.base}>
-  <Worktree name="implementation" branch={props.branch} as="worktree">
+  <Worktree
+    name="implementation"
+    branch={props.branch}
+    as="worktree"
+  />
+  <Dir path={worktree}>
     <Glob
       include={["AGENTS.md", "**/AGENTS.md"]}
       exclude={[".git/**", "**/node_modules/**"]}
@@ -184,7 +189,7 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
         {handoff}
         </Else>
       </If>
-  </Worktree>
+  </Dir>
 </Repository>
 
 </Output>
@@ -200,20 +205,37 @@ composition this document writes (#293).
 checkout. The name is stable component identity inside the Workspace, not a
 lookup key into hidden configuration — the locator and the base are ordinary
 validated root props, and a value like `"project"` resolves through no alias
-registry. `<Worktree name="implementation">` adds a linked checkout on its own
-branch, so discovery, planning, implementation, and review share one filesystem
-without disturbing the primary checkout. Both install contextual cwd while they
-render their children, and `as` binds the Workspace-relative path.
+registry. A self-closing `<Worktree name="implementation" … as="worktree" />`
+adds a linked checkout on its own branch — creating it, or restoring the
+retained one — so discovery, planning, implementation, and review share one
+filesystem without disturbing the primary checkout, and binds that checkout's
+Workspace-relative path.
+
+Binding the path and running the stages under it are two steps here, and that
+is the settled composition rather than an accident of style. A generic component
+invocation written with `as=` is an ordinary private capture: it binds its result
+and contributes nothing to the document at the call site. `<Repository>` and
+`<Worktree>` get no exception to that, so a lexical
+`<Worktree … as="worktree">…</Worktree>` could not mean "bind the path *and*
+emit these children" — it would capture the whole flow, and the root's `<Output>`
+would emit no report. A workflow that needs both composes the two existing forms
+instead: the self-closing `<Worktree>` binds the path and establishes no cwd for
+what follows it, and the lexical `<Dir path={worktree}>` beneath it establishes
+that bound path as cwd for the complete stage flow, renders its children
+normally, and restores the enclosing `<Repository>` cwd when it closes. `<Dir>`
+sits inside `<Repository>`, so the Repository context that `<Worktree>` and the
+later Git and forge composition need is present throughout both.
 
 Nothing here is implicit. A second repository is a second `<Repository>` with
 its own name, locator, and base, and no transaction spans the two (#293, and
 §7.6 of the workflow Workspace specification). The pinned commit is what keeps
 every stage on one source revision even if the base branch moves.
 
-`<Dir>` is lexical cwd and nothing else. Making a directory readable by an Agent
-is `<Agent.AddDir>`, written inside the `<Agent>` that reads it — which is why
-each stage that runs an Agent takes the `worktree` binding as a prop. The two
-are separate operations on purpose (#302).
+`<Dir>` is lexical cwd and nothing else. It registers nothing with an Agent:
+making a directory readable is `<Agent.AddDir>`, written inside the `<Agent>`
+that reads it, which is why each stage that runs an Agent still takes the
+`worktree` binding as a prop rather than inheriting access from cwd. The two are
+separate operations on purpose (#302).
 
 ## Agents inspect; XMD mutates
 
@@ -275,13 +297,15 @@ finishes as rejected — the flow does not fall into the accepted branch — and
 document execution stopped earlier renders the artifact it stopped on rather than
 a value it never produced.
 
-That declaration wraps the whole flow, `<Repository>` and `<Worktree>` included,
-because `<Output>` is only ever a direct top-level child of the document that
-declares it — an invocation cannot introduce or redefine one for its caller.
-Wrapping the flow selects no more than the report: every element inside binds
-with `as`, and a binding keeps a private buffer, so a stage invocation
-contributes nothing to the document. The final-gate `<If>` tree is the only thing
-that renders.
+That declaration wraps the whole flow — `<Repository>`, the self-closing
+`<Worktree>`, and the `<Dir>` the stages run in — because `<Output>` is only ever
+a direct top-level child of the document that declares it, and an invocation
+cannot introduce or redefine one for its caller. Wrapping the flow selects no
+more than the report: every stage invocation inside binds with `as`, and a
+binding keeps a private buffer, so it contributes nothing to the document.
+`<Dir>` is the one enclosing element that does render its children, which is how
+the final-gate `<If>` tree — the only thing here that renders at all — reaches
+this root's output.
 
 ## Waiting for the user is a suspension, not a stop
 
@@ -298,13 +322,16 @@ frontier.
 That is what the earlier drafts of this document were reaching for with a
 `<Stage>` boundary. The construct was rejected — the root document is the
 workflow — and the requirement it stood for now belongs to the retained
-lifecycle. Half of it is here: foreground `start` and `resume` are shipped
-(#366), and a resume restores completed durable effects from the journal,
+lifecycle, and most of that is now here. Foreground `start` and `resume` are
+shipped (#366), and a resume restores completed durable effects from the journal,
 rebuilds ephemeral attachments, and continues the partial remainder at the
-retained frontier. The other half is not: releasing the executor at a
-checkpoint, and the ownership, status, history, cancellation, and deletion
-around it, are #367 and unbuilt, so a question asked today is answered inside
-the document execution that asked it. Gating is expressed by nesting, which
+retained frontier. Reading a run back is shipped too: `xmd workflow status`,
+`list`, and `history` report immutable lifecycle snapshots without advancing
+anything (#460). What is still missing is the wait itself — releasing the
+executor at a checkpoint, and the single-executor ownership and atomic lifecycle
+transitions around it, remain #367 and unbuilt, as do cancellation and deletion.
+So a question asked today is answered inside the document execution that asked
+it. Gating is expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
 execution: it still reaches the final-gate report inside the root's `<Output>`
 and completes.
@@ -394,12 +421,13 @@ checkpoint in an `<Answers>` region instead of reaching a person.
 only once that registration is supplied or removed.
 
 **Not expressible.** Every component that composes the Workspace or performs a
-durable environmental effect. These nine names resolve to nothing today:
+durable environmental effect. These ten names resolve to nothing today:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
 | `<Repository>` | #293 | unbuilt |
 | `<Worktree>` | #293 | unbuilt |
+| `<Dir>` | #293 | unbuilt — the lexical cwd boundary this composition consumes, unless an earlier issue supplies it first |
 | `<Agent.AddDir>` and the read-only Agent ceiling | #302 | unbuilt |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
 | `<Git.Add>` | #294 | unbuilt |
@@ -430,9 +458,9 @@ Workspace mutation, its logical root, and its journal result publish in a single
 transaction ([#365](https://github.com/taras/executable.md/issues/365), shipped).
 
 Two things still keep *this* document from being started that way, and neither
-is durability. The run's Workspace holds no repository until `<Repository>` and
-`<Worktree>` exist (#293), so the `<Glob>` above would search an empty
-filesystem. And a run pins its definition to one committed Git object and passes
+is durability. The run's Workspace holds no repository until `<Repository>`,
+`<Worktree>`, and the `<Dir>` boundary that consumes the bound checkout path
+exist (#293), so the `<Glob>` above would search an empty filesystem. And a run pins its definition to one committed Git object and passes
 no repository component search path, so the stages beside it —
 `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, `Implementation` —
 resolve to nothing under `xmd workflow start` and `xmd workflow resume`. Under
@@ -456,7 +484,7 @@ still to pass architecture review; nothing here selects it.
 
 | Captured value         | Produced by                | Consumed by                                         |
 | ---------------------- | -------------------------- | --------------------------------------------------- |
-| `worktree`             | `Worktree` (Workspace-relative path) | every stage that registers a directory with an Agent |
+| `worktree`             | self-closing `Worktree` (Workspace-relative path) | `Dir`, which makes it cwd for the flow; and every stage that registers a directory with an Agent |
 | `instructionPaths`     | `Glob` (`string[]`)         | `InstructionFiles`                                  |
 | `instructions`         | `InstructionFiles` (text)  | every agent prompt                                  |
 | `handoff`              | `Discovery` (text)          | handoff `UserCheckpoint`, `Planning`                |
