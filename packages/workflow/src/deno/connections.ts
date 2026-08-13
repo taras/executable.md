@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
+import { createContext, ensure } from "effection";
+import type { Context } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   establishJournalProvenance,
@@ -25,6 +27,37 @@ import {
   type SavepointObserver,
   type SavepointTransaction,
 } from "./savepoints.ts";
+
+/**
+ * The connections this host owns, shared by everything installed beside them.
+ *
+ * One authoritative connection per database is a storage invariant, not a
+ * convenience: the DOFS layer caches against it and effect transactions run
+ * serially on it. Storage and lifecycle are two installations over the same
+ * files, so whichever installs first creates the registry and the other reaches
+ * the same one rather than opening a second writer.
+ *
+ * Not an authority boundary. What may advance a run is the executor lease; this
+ * only decides which connection the work happens on.
+ */
+const RunConnections: Context<WorkflowRunConnections> = createContext<WorkflowRunConnections>(
+  "executablemd.workflow.deno.connections",
+);
+
+export function* useRunConnections(
+  observeSavepoint: SavepointObserver = () => {},
+  hooks: WorkflowRunConnectionHooks = {},
+): Operation<WorkflowRunConnections> {
+  const existing = yield* RunConnections.get();
+  if (existing !== undefined) {
+    return existing;
+  }
+  const connections = createWorkflowRunConnections(observeSavepoint, hooks);
+  yield* ensure(() => {
+    connections.close();
+  });
+  return yield* RunConnections.set(connections);
+}
 
 export class ConnectionGeneration {
   #opaque = undefined;
