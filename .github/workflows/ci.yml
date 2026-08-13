@@ -92,11 +92,21 @@ jobs:
         with:
           deno-version: v2.9.5
 
-      - name: Install dependencies
-        run: deno task deps
+      # `README.md#Build` prepares the checkout before it compiles, and
+      # preparation owns both dependency layouts — so this job needs the Node
+      # and pnpm halves as well as Deno's.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
 
-      - name: Build the xmd binary
-        run: deno task build
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      # The README documents how a contributor prepares a checkout and builds
+      # the binary, and this is that document doing it. Everything below
+      # consumes the `dist/xmd` it produced, so a README whose Build target
+      # stopped working stops this job.
+      - name: Prepare and build through the README
+        run: deno task xmd run README.md#Build
 
       - name: Smoke test the compiled binary
         run: |
