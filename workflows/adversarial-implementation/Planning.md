@@ -289,16 +289,24 @@ returning something half-formed for a caller to branch on. `throwOnError` on eac
 `<Prompt>` is required for the same reason: a failed prompt without it records
 its failure and returns its text, raising nothing.
 
-**Outstanding gap: the terminal policy for exhaustion.** Reaching `max`
-completes the loop normally — exhaustion is not a failure and produces no
-diagnostic. The returned pair identifies it (`decision.proceed` true,
-`verdictPassed` false) and the caller's gate refuses it, so an exhausted loop
-cannot advance. That is the minimum needed to keep the workflow safe; it is not
-the policy. What the workflow *should* do when five rounds end without a passing
-verdict — return the failing plan, fail the stage, or return to the user — is an
-unresolved product decision recorded against
-[issue #290](https://github.com/taras/executable.md/issues/290), whose
-acceptance pins the behavior. This synchronization slice does not choose it.
+**Exhaustion asks for direction.** Reaching `max` completes the loop normally —
+exhaustion is not a failure and produces no diagnostic — and it is neither
+convergence nor ordinary successful completion
+([#290](https://github.com/taras/executable.md/issues/290), settled). The
+returned pair is what makes it a distinct outcome: `decision.proceed` true with
+`verdictPassed` false is exhaustion, and nothing else produces that pair. The
+caller's gate refuses it, so an exhausted loop starts no implementation and no
+later durable effect, and cannot be reported as convergence or success.
+
+What the caller does with it is ask the user. An exhausted planning loop returns
+to its caller for direction rather than terminating on its own account: five
+rounds of evidence did not converge, and only the user decides what happens
+next. Under a composed workflow that request becomes a durable suspension — the
+run records why it stopped and the material the user needs, releases its
+executor, and resumes only from explicit user direction, so neither exhaustion
+nor silence nor an unchanged verdict is ever read as approval. That lifecycle is
+#367's and is unbuilt; what this document owns is the boundary, and the boundary
+holds without it.
 
 Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
 is one durable operation, each `<Elicit>` answer is journaled against its
