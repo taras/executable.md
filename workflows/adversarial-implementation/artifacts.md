@@ -108,25 +108,40 @@ what makes an event selectable for a history fork later (#368).
 ## Reading the history
 
 `xmd workflow history <run-id>` exposes stable public event IDs with each
-event's operation, source location, normalized evaluated arguments, result or
-normalized error, Workspace version, and forkability reason:
+event's operation, authored source position, result or normalized error, and
+Workspace root:
 
 ```text
-EVENT  OPERATION     ARGUMENTS                        RESULT      WORKSPACE  FORKABLE
-E14    File          path="docs/notes.md"             completed   V7         yes
-E15    Agent.Prompt  prompt=<filtered>                <summary>   V7         no: provider has no checkpoint
-E16    Git.Add       paths=["docs/notes.md"]          completed   V8         yes
-E17    Git.Commit    message="Document the workflow"  6f21a9…     V9         yes
+EVENT  OPERATION     SOURCE              RESULT      WORKSPACE
+E14    File          start.md:31:5       completed   V7
+E15    Agent.Prompt  Discovery.md:23:7   <summary>   V7
+E16    Git.Add       Implementation.md:207:7  completed   V8
+E17    Git.Commit    Implementation.md:208:7  6f21a9…     V9
 ```
 
-Values come from the retained journal after its security filter, so history
-exposes nothing the policy has not already seen, and it never reconstructs a
-filtered value from the Workspace or the provider. `status`, `list`, and
-`history` are read-only: they attach no Workspace, Agent, or external provider,
-and cannot advance a run. That surface is
-[#367](https://github.com/taras/executable.md/issues/367) and is unbuilt.
+That surface is shipped ([#460](https://github.com/taras/executable.md/pull/460)
+delivering #367's first slice): `xmd workflow status <run-id> [--json]`,
+`xmd workflow list [--status=<status>] [--json]`, and
+`xmd workflow history <run-id> [--json]`.
 
-Part of what it will read is already journaled. `<Loop>` records every iteration
+What makes it safe to read a run someone else may be running is what it refuses
+to do. Each command answers from an immutable lifecycle snapshot: it takes no
+execution handle and no executor lease, performs no replay and advances nothing,
+attaches no Workspace and materializes no root, imports no document, contacts no
+Agent, process, or external provider, and reconciles and appends nothing. History
+reads already-filtered retained protocol events, so it exposes nothing the
+security policy has not already seen, and it never reconstructs a filtered value
+from the Workspace or the provider. The authored source position it prints is
+descriptive evidence about an event, never identity — nothing is located by
+reconstructing a position from an expansion ID, the current definition, or the
+Workspace.
+
+There is no forkability column and no forkability reason. Selecting an event to
+fork from is #368, along with versioned history checkpoints and
+`history --forkable`, and none of it is built.
+
+Part of what history reads is journaled by the constructs the workflow already
+writes. `<Loop>` records every iteration
 it enters and one terminal `break`, `exhausted`, or `error` outcome, and refuses
 a replay that disagrees with what this execution reached. Each `<Prompt>` is one
 durable operation carrying its identity, input, agent and session, terminal

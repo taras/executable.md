@@ -263,12 +263,13 @@ supplied material rather than a repository. `Implementation` has no such
 exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
 `<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
 
-Nine names in this workflow resolve to nothing today, and each is owed by one
+Ten names in this workflow resolve to nothing today, and each is owed by one
 issue:
 
 | Name | Owed by |
 | --- | --- |
 | `<Agent.AddDir>` | #302 |
+| `<Dir>` | #293 |
 | `<Expand>` | #369 |
 | `<Git.Add>` | #294 |
 | `<Git.Commit>` | #294 |
@@ -277,6 +278,21 @@ issue:
 | `<PullRequest>` | #295 |
 | `<Repository>` | #293 |
 | `<Worktree>` | #293 |
+
+`<Dir>` joined that list with the composition #293 settled. A generic component
+invocation written with `as=` is an ordinary private capture — it binds its
+result and contributes nothing at the call site — and `<Repository>` and
+`<Worktree>` receive no exception to it. So a lexical
+`<Worktree … as="worktree">…</Worktree>` cannot mean "bind the path *and* render
+these children"; it would capture the flow, and the root's `<Output>` would emit
+nothing. A workflow that needs both composes the two existing forms: a
+self-closing `<Worktree … as="worktree" />` creates or restores the retained
+checkout and binds its Workspace-relative path without establishing cwd for what
+follows, and a lexical `<Dir path={worktree}>` beneath it makes that bound path
+cwd for the stage flow, renders its children normally, and restores the enclosing
+`<Repository>` cwd on the way out. Both sit inside the lexical `<Repository>`, so
+its context is present throughout. `<Dir>` registers nothing with an Agent —
+`<Agent.AddDir>` remains the explicit authorization, and cwd never implies it.
 
 Everything else the workflow writes resolves: `<If>`, `<Else>`, `<Loop>`,
 `<Break>`, `<Each>`, `<Capture>`, `<Output>` and `<Return>` as structural syntax;
@@ -298,8 +314,9 @@ whose dependency order this workflow consumes in the same sequence.
 | open and look up one WorkflowRun database; append and replay the filtered journal | #291 | shipped |
 | commit a Workspace mutation, its logical root, and the journal result atomically | #365 | shipped |
 | foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | shipped |
-| `status`, `list`, `history`, suspension, cancellation, deletion, single-executor ownership | #367 | open |
-| versioned history checkpoints and compatible forks | #368 | open |
+| read-only `status`, `list` and `history` over immutable lifecycle snapshots | #367 slice 1, delivered by #460 | shipped |
+| durable suspension, releasing the executor at a checkpoint, single-executor ownership, atomic lifecycle transitions, cancellation, deletion | #367 | open |
+| versioned history checkpoints, compatible forks, `history --forkable` and forkability reasons | #368 | open |
 
 `xmd workflow start` is what makes this document a workflow rather than a script,
 and it exists: `xmd workflow start [--id] [--props-*] <definition>` creates the
@@ -335,7 +352,7 @@ component search path is introduced for workflow execution. The mechanism is
 
 | Capability | Issue | Status |
 | --- | --- | --- |
-| `<Repository>` and `<Worktree>` as named Workspace composition, with lexical cwd | #293 | open |
+| `<Repository>` and self-closing `<Worktree>` as named Workspace composition, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | open |
 | `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | open |
 | shared external forge-effect reconciliation | #297 | open |
 | explicit `<Git.Push>` | #370 | open |
