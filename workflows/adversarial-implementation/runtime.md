@@ -130,9 +130,15 @@ document starts a new run.
 Two of the three are here. `start` and `resume` are shipped (#366): an
 interrupted run stays resumable at the journal frontier, a failed or cancelled
 run is refused before anything is fetched, attached or appended, and a resume of
-a completed run replays it in full. Suspension is not: releasing the executor at
-a checkpoint, the ownership that decides who may continue a run, and `status`,
-`list`, `history`, `cancel`, and `delete` are #367 and unbuilt.
+a completed run replays it in full. Reading a run back is shipped too —
+`xmd workflow status`, `list`, and `history` report immutable lifecycle
+snapshots, taking no executor lease, advancing nothing, attaching no Workspace,
+and appending nothing (#367's first slice, delivered by #460).
+
+Suspension is not. Releasing the executor at a checkpoint, the single-executor
+ownership that decides who may continue a run, atomic lifecycle transitions, and
+`cancel` and `delete` remain #367 and unbuilt; forks and forkability remain
+#368.
 
 ## Cleanup follows the invocation
 
