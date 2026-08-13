@@ -280,6 +280,47 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     expect(fileFingerprint(copy)).toEqual(before.copy);
   });
 
+  it("WLI5c: a retained id whose stored bytes no reader sees fails the whole list", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "release-1.4");
+    // An id SQLite stores every byte of and every reader sees only the first
+    // seven characters of: `length()` says 7 where the blob says 14, and
+    // node:sqlite hands back the truncated string. Bound parameters truncate at
+    // the NUL too, so the bytes go in as a blob cast to text.
+    //
+    // What refuses this is the location check, not the run-id rule: the reader
+    // never sees a NUL, so what it compares is `release` against a file named
+    // for `release\u0000shadow`. Removing the retained run-id parity leaves
+    // this test passing, and removing the location check fails it — which is
+    // why the parity is a contract rather than something this proves.
+    const shadowed = `release\u0000shadow`;
+    const original = runPath(root, "release-1.4");
+    const candidate = runPath(root, shadowed);
+    copyFileSync(original, candidate);
+    tamper(candidate, (database) => {
+      database.exec(
+        `UPDATE workflow_run SET run_id = CAST(x'${hex(shadowed)}' AS TEXT) WHERE id = 1`,
+      );
+    });
+    const before = { original: fileFingerprint(original), candidate: fileFingerprint(candidate) };
+
+    yield* withLifecycle(root, function* () {
+      const listed = yield* list();
+      // The whole request, not the healthy subset beside it.
+      expect(listed.ok).toBe(false);
+      expect(listed.ok ? listed.value : undefined).toBeUndefined();
+      // What the file retains and what any reader can see disagree, so the id
+      // that names this file is not the id read back out of it.
+      expect(listed.ok ? undefined : listed.error).toBeInstanceOf(WorkflowRunIdMismatchError);
+
+      const snapshot = yield* snapshotOf("release-1.4");
+      expect(snapshot.record.runId).toBe("release-1.4");
+    });
+
+    expect(fileFingerprint(original)).toEqual(before.original);
+    expect(fileFingerprint(candidate)).toEqual(before.candidate);
+  });
+
   it("WLI6: history is every retained event with its exact id, root and source", function* () {
     const root = yield* useStorageRoot();
     yield* retainedRun(root, "release-1.4");
@@ -417,6 +458,13 @@ function storedEvents(
   } finally {
     database.close();
   }
+}
+
+/** A string's UTF-8 bytes as SQLite's blob literals spell them. */
+function hex(value: string): string {
+  return [...new TextEncoder().encode(value)]
+    .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+    .join("");
 }
 
 function fileFingerprint(path: string): string {

@@ -19,6 +19,7 @@ import { describe, type Fail, type JsonObject, parseJsonValue } from "../storage
 import {
   type DefinitionRetrieval,
   type DocumentExecutionRecord,
+  parseRunId,
   parseWorkflowRunStatus,
   parseWorkflowStopReason,
   type WorkflowRunRecord,
@@ -188,11 +189,23 @@ export function readDefinition(row: Row, table: string): WorkflowDefinition {
   return parsed.value;
 }
 
+/**
+ * The retained run id, held to the rule a caller's id is held to.
+ *
+ * Storage that retains an id no request could ever name is storage nothing can
+ * address, and reading it back as though it addressed something is how a run
+ * would appear in a list that no caller could then inspect. It is damage rather
+ * than a bad request, so it is reported as the column that does not parse.
+ */
+function runId(row: Row, table: string): string {
+  return parseRunId(row["run_id"], "$", failure(`${table}.run_id`));
+}
+
 /** The run the singleton row describes. */
 export function readRunRecord(row: Row): WorkflowRunRecord {
   const table = "workflow_run";
   const record: WorkflowRunRecord = {
-    runId: nonEmpty(row, "run_id", table),
+    runId: runId(row, table),
     definition: readDefinition(row, table),
     base: nonEmpty(row, "base", table),
     props: jsonObject(row, "props", table),

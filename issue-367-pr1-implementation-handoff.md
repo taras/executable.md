@@ -2,7 +2,9 @@
 
 ## Commit
 
-- Feedback commit: `4c6a591ba8200e4fd53b885df81e434692e0b2c0`
+- Feedback commit: `e1d4b3a46c78e03ab2c13763cd2c4fff32e7e7ac`
+- Previous feedback commit: `4c6a591ba8200e4fd53b885df81e434692e0b2c0` (Planner
+  returned REQUEST CHANGES against it)
 - Base: `a1de02645745f0a70a5e9c2c4159abaed6522ca3` (architecture amendment)
 - Branch: `agent/issue-367-inspection`
 - Worktree: `/private/tmp/xmd-367-pr1`
@@ -33,7 +35,9 @@ xmd workflow history <run-id> [--json]
   `"executablemd.source-position"`. `type` and `name` are unchanged, so replay
   matches exactly what it matched before.
 - One foreign, damaged, incompatible or unparseable candidate fails all of
-  `list` with its own condition and changes no candidate.
+  `list` with its own condition and changes no candidate. So does a healthy
+  database found where another run's id would put it: every read-only snapshot
+  checks that the retained run id names the file it was found in.
 - `cancel` and `delete` are recognized actions that report that no lifecycle
   provider answers them. Their behavior is PR 2's.
 
@@ -122,7 +126,7 @@ focused suites above were re-run after them.
 | A1 | WFI7, WFI8, WFC8, WFH1–3 |
 | A2 | WLI3, WLI8 (storage and Git spies, byte/row/mode fingerprint), WFI5, WFI10 |
 | A3 | WLI1, WLI4, WFI1, WFI2 |
-| A4 | WLI5, WFI6 |
+| A4 | WLI5, WLI5b, WFI6 |
 | A5 | WLI6, WFI3 |
 | A6 | JSP1–JSP4, WLI6, WLI7, WFI3 |
 | A15 | full Deno suite; WFC1–WFC12 unchanged |
@@ -145,8 +149,30 @@ A7–A14 belong to PR 2 and PR 3.
   illustrative `E14`/`V7` identifiers. It now shows the retained identifiers,
   shortened, because the shipped command prints those.
 
+## Review round 1
+
+Planner returned `REQUEST CHANGES` against `4c6a591`: `list()` accepted a valid
+workflow database stored under the wrong hashed filename, so a copied run came
+back as a healthy duplicate.
+
+Fixed in `e1d4b3a`. The identity-against-location check moved into
+`withSnapshot`, so it runs for every candidate rather than only where a caller
+supplied an id to compare against, and reports
+`WorkflowRunLocationMismatchError` — a subclass of `WorkflowRunIdMismatchError`,
+so the condition a caller matches on is unchanged while the sentence is true
+from this direction. `WLI5b` constructs the case; with the check removed it
+reports two runs, which is how the regression was shown to discriminate.
+
+Evidence after the fix:
+
+- PR 1 focused command: `ok | 3 passed (23 steps) | 0 failed (32s)`
+- `packages/workflow/tests/` plus `workflow-cli`, `workflow-installation`,
+  `workflow-host`, `workflow-crash`, `workflow-retention`:
+  `ok | 38 passed (285 steps) | 0 failed (1m6s)`
+- `deno task lint` exit 0, `deno task check` no errors.
+
 ## Next action
 
-Planner review of `4c6a591ba8200e4fd53b885df81e434692e0b2c0` against the frozen
+Planner review of `e1d4b3a46c78e03ab2c13763cd2c4fff32e7e7ac` against the frozen
 plan. PR 2 (executor authority, atomic lifecycle, cancellation, deletion) starts
 from this commit.

@@ -55,7 +55,7 @@ import {
   parseMembers,
   requireMemberNames,
 } from "../storage/members.ts";
-import { canonicalJson, type WorkflowRunRecord } from "../storage/record.ts";
+import { canonicalJson, parseRunId, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import {
   createWorkflowRunConnections,
@@ -365,27 +365,25 @@ const REQUEST_MEMBERS = ["runId", "definition", "base", "props"];
  * The run id a caller named, whichever operation they called.
  *
  * `create` and `lookup` address the same runs by the same rule, so they check
- * it in the same place. Nothing here assumes the argument is a string: a host
- * built without types, or one that read the id out of a file, can hand over
- * anything at all, and hashing that would fail somewhere far less legible.
+ * it in the same place — and it is the same rule a retained `run_id` is read
+ * back through, so an id no request could address cannot be stored and then
+ * answered for. Nothing here assumes the argument is a string: a host built
+ * without types, or one that read the id out of a file, can hand over anything
+ * at all, and hashing that would fail somewhere far less legible.
  */
 export function checkRunId(runId: unknown): Result<string> {
-  if (typeof runId !== "string" || runId === "") {
-    return Err(
-      new WorkflowRequestError(
-        `a run id is required, and an empty one names nothing (found ${describe(runId)}).`,
-      ),
-    );
+  try {
+    return Ok(parseRunId(runId, "$", runIdFailure));
+  } catch (error) {
+    if (error instanceof WorkflowRequestError) {
+      return Err(error);
+    }
+    throw error;
   }
-  if (runId.includes("\u0000")) {
-    return Err(
-      new WorkflowRequestError(
-        "a run id cannot contain a NUL: SQLite compares text up to one, so two ids that " +
-          "differ only past it would address the same run.",
-      ),
-    );
-  }
-  return Ok(runId);
+}
+
+function runIdFailure(reason: string): Error {
+  return new WorkflowRequestError(`${reason}.`);
 }
 
 /**
