@@ -324,9 +324,16 @@ describe("Tier WFC — xmd workflow start and resume", () => {
       expect(noAction.code).toBe(1);
       expect(noAction.stderr).toContain("start");
 
-      const unknown = yield* xmd(fixture, ["workflow", "cancel", "release-1"]).join();
+      const unknown = yield* xmd(fixture, ["workflow", "resurrect", "release-1"]).join();
       expect(unknown.code).toBe(1);
-      expect(unknown.stderr).toContain("cancel");
+      expect(unknown.stderr).toContain("resurrect");
+
+      // `cancel` is one of this command's actions, so what refuses it is the
+      // absence of an answering lifecycle provider rather than the grammar.
+      const control = yield* xmd(fixture, ["workflow", "cancel", "release-1"]).join();
+      expect(control.code).toBe(1);
+      expect(control.stderr).toContain("cancel()");
+      expect(control.stderr).not.toContain("unrecognized subcommand");
 
       const noTarget = yield* xmd(fixture, ["workflow", "start"]).join();
       expect(noTarget.code).toBe(1);

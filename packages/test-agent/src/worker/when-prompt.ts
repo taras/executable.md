@@ -19,9 +19,16 @@ import {
   parseTemplate,
   raise,
   registerComponents,
+  sourceDescription,
   tryContent,
 } from "@executablemd/core";
-import type { Expansion, ErrorSegment, ParsedTemplate, PropsSchema } from "@executablemd/core";
+import type {
+  Expansion,
+  ErrorSegment,
+  ParsedTemplate,
+  PropsSchema,
+  SourcePosition,
+} from "@executablemd/core";
 
 import type { TurnBridge } from "./bridge.ts";
 
@@ -89,11 +96,16 @@ function* awaitMatch(
 }
 
 function* persistStage(
-  identity: { name: string; input: string },
+  identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<StageRecord>,
 ): Workflow<StageRecord> {
   const stored = yield createDurableOperation<Json>(
-    { type: WHEN_PROMPT, name: identity.name, input: identity.input },
+    {
+      type: WHEN_PROMPT,
+      name: identity.name,
+      input: identity.input,
+      ...sourceDescription(identity.position),
+    },
     function* (): Operation<Json> {
       const record = yield* live();
       return { prompt: record.prompt, captures: record.captures };
@@ -148,7 +160,8 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
       return reported.message;
     }
 
-    const location = formatLocation(yield* getExpansion());
+    const expansion = yield* getExpansion();
+    const location = formatLocation(expansion);
     const ordinal = ordinals.get(location) ?? 0;
     ordinals.set(location, ordinal + 1);
 
@@ -158,11 +171,13 @@ export function* installWhenPromptComponent(bridge: TurnBridge): Operation<void>
     // a live matcher the signal completes the previous stage — it
     // follows all of that stage's output through one ordered channel,
     // so the collector never loses the final chunk.
-    const record = yield* persistStage({ name: `when:${location}#${ordinal}`, input: source }, () =>
-      scoped(function* () {
-        yield* bridge.events.send({ kind: "suspended", stage: source });
-        return yield* awaitMatch(bridge, parsed.value, currentEnv.values);
-      }),
+    const record = yield* persistStage(
+      { name: `when:${location}#${ordinal}`, input: source, position: expansion.position },
+      () =>
+        scoped(function* () {
+          yield* bridge.events.send({ kind: "suspended", stage: source });
+          return yield* awaitMatch(bridge, parsed.value, currentEnv.values);
+        }),
     );
 
     // Returned rather than bound here: `as` is the engine's, and a return binds

@@ -98,6 +98,7 @@ export { hasContent, useContent } from "./src/content-context.ts";
 export { ContentError } from "./src/errors.ts";
 export { getExpansion } from "./src/expansion.ts";
 export type { Expansion } from "./src/expansion.ts";
+export { SOURCE_POSITION_FIELD, sourceDescription } from "./src/source-position.ts";
 export { InvocationTeardownError, withInvocation } from "./src/invocation.ts";
 export type { Invocation } from "./src/invocation.ts";
 export { Sample } from "./src/sample-api.ts";

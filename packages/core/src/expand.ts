@@ -910,6 +910,7 @@ export function* expandSegments(
           blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
           componentName: parentMeta["componentName"] as string | undefined,
           routing: yield* declaredRouting(),
+          ...(segment.position === undefined ? {} : { position: segment.position }),
         };
 
         if (bindingName !== undefined) {
@@ -1834,7 +1835,11 @@ function* expandLoop(
   // Taken from the shared block counter, so every `<Loop>` an execution enters
   // — including each entry into a nested one — has a distinct identity that
   // lands the same way on replay.
-  const identity: LoopIdentity = { id: counter.next(), ...(name === undefined ? {} : { name }) };
+  const identity: LoopIdentity = {
+    id: counter.next(),
+    ...(name === undefined ? {} : { name }),
+    ...(segment.position === undefined ? {} : { position: segment.position }),
+  };
 
   const frame: LoopFrame = { broken: false };
   let started = 0;
@@ -2064,7 +2069,7 @@ function* expandComponent(
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
   try {
-    imported = yield* importComponent(name);
+    imported = yield* importComponent(name, position);
   } catch (error) {
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.

@@ -78,6 +78,11 @@ export interface ExecutableCodeBlock {
    * chain is composed and therefore before a process starts.
    */
   binding?: Result<string>;
+  /**
+   * Where the opening fence sits in the original file, frontmatter included.
+   * Absent for dynamically scanned strings (render(markdown)).
+   */
+  position?: SourcePosition;
 }
 
 export interface ExecOutputSegment {
@@ -135,6 +140,12 @@ export interface CodeBlockContext {
    * routine. The block context is what already crosses that boundary intact.
    */
   routing?: import("./foreground.ts").ForegroundRouting;
+  /**
+   * Where the block was written, carried for the journal rather than for
+   * execution. The durable record of an authored block says where it came from,
+   * and the block context is what already crosses into the durable routine.
+   */
+  position?: Readonly<SourcePosition>;
 }
 
 export interface CodeBlockResult {

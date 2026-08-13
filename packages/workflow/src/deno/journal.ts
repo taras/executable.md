@@ -24,15 +24,17 @@ import {
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
 import { describe } from "../storage/members.ts";
 
-/** One retained event and the opaque id it keeps for the life of the run. */
+/** One retained event, the opaque id it keeps, and the root it was written against. */
 export interface JournalEntry {
   readonly eventId: string;
   readonly event: DurableEvent;
+  readonly workspaceRootId: string;
 }
 
 const INSERT = `INSERT INTO journal_events (event_id, record, workspace_root_id)
   VALUES (?, ?, ?)`;
-const SELECT = "SELECT event_id, record FROM journal_events ORDER BY sequence ASC";
+const SELECT =
+  "SELECT event_id, record, workspace_root_id FROM journal_events ORDER BY sequence ASC";
 
 /**
  * Append one already-filtered event, and answer with the id it will keep.
@@ -69,6 +71,7 @@ export function readJournalEntries(database: DatabaseSync): JournalEntry[] {
   for (const row of database.prepare(SELECT).all()) {
     const eventId = row["event_id"];
     const record = row["record"];
+    const workspaceRootId = row["workspace_root_id"];
     if (typeof eventId !== "string" || eventId === "") {
       throw new WorkflowRecordMalformedError(
         "journal_events.event_id",
@@ -82,11 +85,18 @@ export function readJournalEntries(database: DatabaseSync): JournalEntry[] {
       );
     }
 
+    if (typeof workspaceRootId !== "string" || workspaceRootId === "") {
+      throw new WorkflowRecordMalformedError(
+        "journal_events.workspace_root_id",
+        `expected a non-empty root identity, found ${describe(workspaceRootId)}`,
+      );
+    }
+
     const parsed = parseDurableEvent(record);
     if (!parsed.ok) {
       throw new WorkflowRecordMalformedError("journal_events.record", parsed.error.message);
     }
-    entries.push(Object.freeze({ eventId, event: parsed.value }));
+    entries.push(Object.freeze({ eventId, event: parsed.value, workspaceRootId }));
   }
 
   return entries;

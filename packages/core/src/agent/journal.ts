@@ -18,6 +18,8 @@ import type { DurableStream, Json, Workflow } from "@executablemd/durable-stream
 import type { Operation } from "effection";
 import { AgentPromptError, parsePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
+import { sourceDescription } from "../source-position.ts";
+import type { SourcePosition } from "../types.ts";
 
 const AGENT_PROMPT = "agent_prompt";
 
@@ -41,11 +43,16 @@ export interface PromptRecord {
 }
 
 export function* persistPrompt(
-  identity: { name: string; input: string },
+  identity: { name: string; input: string; position?: Readonly<SourcePosition> },
   live: () => Operation<PromptRecord>,
 ): Workflow<PromptRecord> {
   const stored = yield createDurableOperation<Json>(
-    { type: AGENT_PROMPT, name: identity.name, input: identity.input },
+    {
+      type: AGENT_PROMPT,
+      name: identity.name,
+      input: identity.input,
+      ...sourceDescription(identity.position),
+    },
     function* (): Operation<Json> {
       return serializePromptRecord(yield* live());
     },

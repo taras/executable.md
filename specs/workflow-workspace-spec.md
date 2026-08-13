@@ -116,6 +116,9 @@ root props again:
 xmd workflow resume run_01J...
 ```
 
+An inspection names no document and reads no definition: `status`, `list` and
+`history` reach neither Git nor the working tree.
+
 `start` executes until completion, failure, suspension or interruption.
 `resume` continues an interrupted or ready suspended run under its retained
 definition and normalized props. A document path locates a definition; it never
@@ -347,12 +350,18 @@ same run lifecycle remotely.
 
 The lifecycle above is the whole design, including §3.7's rule that a status
 line is published only once its atomic lifecycle transition has persisted. What a
-caller can run today is `start` and `resume`:
+caller can run today is `start`, `resume` and the three inspections:
 
 ```sh
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
 xmd workflow resume <run-id>
+xmd workflow status <run-id> [--json]
+xmd workflow list [--status=<status>] [--json]
+xmd workflow history <run-id> [--json]
 ```
+
+`cancel` and `delete` are actions of the same grammar and refuse rather than
+answer, because no lifecycle provider implements them yet.
 
 Both stream the document's own output to standard output and report two stable
 lines on standard error — `workflow run: <run-id>` once the run has been created
@@ -400,9 +409,10 @@ Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
 absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
-Status, list, history, cancel, fork and delete are designed above and unbuilt.
-The executor lease, suspension and atomic lifecycle transitions are the #367
-contract that replaces the shipped opportunistic orphan closure.
+Status, list and history are built (§4). Cancel, fork and delete are designed
+above and unbuilt. The executor lease, suspension and atomic lifecycle
+transitions are the #367 contract that replaces the shipped opportunistic
+orphan closure.
 
 ## 4. Inspection commands
 
@@ -450,13 +460,17 @@ stable public event ID. `fork --at` later accepts eligible IDs under §11. Human
 history presents durable operations without repeating protocol event kinds:
 
 ```text
-EVENT  OPERATION     SOURCE                  RESULT      WORKSPACE
-E14    File          release.md:18:3         completed   V7
-E15    Agent.Prompt  release.md:21:3         <summary>   V7
-E16    Git.Add       release.md:24:3         completed   V8
+EVENT                                 OPERATION       SOURCE            RESULT     WORKSPACE
+0f2c…                                 workspace_file  release.md:18:3   completed  9a1b…
+1a7d…                                 agent_prompt    release.md:21:3   completed  9a1b…
+2b8e…                                 exec            release.md:24:3   completed  4c5d…
 
-Outcome: completed at E17, Workspace V8
+Outcome: completed at 3c9f…, Workspace 4c5d…
 ```
+
+The identifiers are the retained event and Workspace-root identities, shortened
+here for the page. A row with no authored source shows that it has none rather
+than a location the command derived.
 
 Each entry contains the exact retained event ID and protocol event, the
 Workspace root associated with that row, and an optional normalized authored
@@ -1119,7 +1133,8 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366; repository, process and attachment capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; #367's executor lease is defined and unbuilt |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
-| lifecycle status/list/history/cancel/delete and single-executor authority | defined for #367; unbuilt |
+| lifecycle status/list/history | built by #367 |
+| lifecycle cancel/delete and single-executor authority | defined for #367; unbuilt |
 | durable suspension request and executor release | defined for #367; unbuilt; input delivery belongs to #300 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |

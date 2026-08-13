@@ -47,6 +47,7 @@ import type {
   PropsSchema,
   ReturnsSchema,
   Segment,
+  SourcePosition,
 } from "./types.ts";
 import { isJsonObject, parseJson, parseJsonObject } from "./json.ts";
 import {
@@ -93,6 +94,7 @@ import {
   useSegmentCauses,
 } from "./errors.ts";
 import { Component, importComponent } from "./component-api.ts";
+import { sourceDescription } from "./source-position.ts";
 import { renderSegment } from "./render.ts";
 import { DocumentOutput } from "./api.ts";
 import {
@@ -212,9 +214,12 @@ function* durableImportComponent(
   root: RootDocumentSource | undefined,
   searchPaths: string[],
   registry: ComponentRegistry,
+  position: Readonly<SourcePosition> | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
   const selection = (yield createDurableOperation<DurableSelection>(
-    { type: "import_component", name },
+    // The root import is the run's own entry rather than an authored element,
+    // so it carries no source however it was reached.
+    { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
     function* (): Operation<DurableSelection> {
       if (name === "__root__" && root) {
         // Inside the durable operation, so the journal holds the root's identity
@@ -1131,6 +1136,7 @@ function* execTerminal(
           type: "exec",
           name: `exec:${context.content.slice(0, 40).replace(/\n/g, " ")}`,
           command: command as unknown as Json,
+          ...sourceDescription(context.position),
         },
         function* (): Operation<Json> {
           // Routing and retention are established before the child exists, so
@@ -1821,7 +1827,7 @@ function* executeDocument(
       // and the root eval scope.
       yield* Component.around(
         {
-          *importComponent([name], _next) {
+          *importComponent([name, position], _next) {
             // Read per import, in the invoking scope, so a component registered
             // by a nested scope is visible to what that scope expands.
             const registered = yield* Component.operations.registry;
@@ -1830,6 +1836,7 @@ function* executeDocument(
               name === "__root__" ? root : undefined,
               componentDirs,
               registered,
+              position,
             );
           },
           *applyModifiers([modifiers, context], _next) {

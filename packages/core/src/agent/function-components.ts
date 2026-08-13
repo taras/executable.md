@@ -209,12 +209,14 @@ export function* Prompt(props: Record<string, Json>): Operation<Json> {
   const throwOnError =
     props.throwOnError === true || (yield* AgentInternal.operations.promptFailurePolicy());
 
-  const location = formatLocation(yield* getExpansion());
+  const expansion = yield* getExpansion();
+  const location = formatLocation(expansion);
   const ordinal = yield* AgentInternal.operations.promptOrdinal(location);
   const sequence = yield* AgentInternal.operations.nextPromptSequence();
 
-  const record = yield* persistPrompt({ name: `prompt:${location}#${ordinal}`, input: text }, () =>
-    runPrompt(text, options, sequence, throwOnError),
+  const record = yield* persistPrompt(
+    { name: `prompt:${location}#${ordinal}`, input: text, position: expansion.position },
+    () => runPrompt(text, options, sequence, throwOnError),
   );
 
   const failure = promptFailureFromRecord(record);
