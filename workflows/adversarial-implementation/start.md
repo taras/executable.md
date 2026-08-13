@@ -313,7 +313,15 @@ dotted `{props.name}` traverses the validated props namespace.
 
 ## Error modes in a stage
 
-How a component fails depends on which kind it is.
+This document is a text root, and a text root is fail-capable. The `output` error
+mode is installed for its whole body — by every text root and by every
+`<Output>` region alike — so an uncaught, undecided failure anywhere above is
+this run's outcome, whether or not the `<Output>` at the end of the flow exists
+(#453, shipped). That `<Output>` selects which regions render and buffers the
+emission; it decides nothing about whether a failure counts. Printing and
+carrying on is asked for with `<PrintErrors>`, and this workflow writes none.
+
+Within that, how a component fails depends on which kind it is.
 
 A **text component** — `InstructionFiles` and `Discovery` — is split by its
 `<Output>` boundary:
@@ -325,14 +333,18 @@ A **text component** — `InstructionFiles` and `Discovery` — is split by its
   error there fails the document execution too, though a `<PrintErrors>` region
   may print it instead. Either way the region keeps what it had already rendered
   — that partial text reaches the output stream, and nothing after the failure
-  does. Printing an `output` decision is the contract; the engine does not do it
-  yet (#327).
+  does. Printing a decision a callee's `<Output>` region already made is the
+  contract; the engine does not do it yet (#327), and nothing here needs it.
 
-"Undecided" is the operative word. `InstructionFiles` puts its `<File>` reads in
-its `<Output>` region, and `<File>` prints its own failures, so an unreadable
-instruction file is already decided as a printed error and the region's mode
-never sees it. Execution continues; what stops the caller is that `as` refuses a
-body holding a printed error, so `instructions` stays unbound.
+"Undecided" is the operative word, and `InstructionFiles` is where it shows.
+Its `<File>` reads sit in its `<Output>` region, and `<File>` prints its own read
+failures, so an unreadable instruction file is already decided as a
+component-owned printed error and that region's mode never sees it. The stage
+still cannot hand its caller a usable result: `as` refuses a body holding a
+printed error, so `InstructionFiles ... as="instructions"` binds nothing and the
+refusal is raised here, in this root's own body. Being fail-capable, this root
+settles it — `Discovery` never starts, nothing after it starts, and the run ends
+nonzero with whatever was already rendered preserved.
 
 A **value component** — `UserCheckpoint`, `Planning`, `Implementation` — has no
 such split. Declaring `returns` means it renders nothing, so `<Output>` inside

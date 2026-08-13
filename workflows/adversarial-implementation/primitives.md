@@ -95,12 +95,23 @@ structure and read where an error is raised:
 
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
-| `print` | is printed into the document; execution continues | the root; `<PrintErrors>`; `printErrors(fn)` |
-| `output` | fails the document execution; `<PrintErrors>` can print instead | every `<Output>` region |
+| `print` | is printed into the document; execution continues | `<PrintErrors>`; `printErrors(fn)` |
+| `output` | fails the document execution; `<PrintErrors>` can print instead | every text root; every `<Output>` region |
 | `throw` | fails the document execution, and no printing boundary replaces it | documentation; value roots |
 
+**Printing is asked for, and a root asks for nothing.** A text root is
+fail-capable: it installs `output` for its whole body, so an uncaught, undecided
+failure is the document execution's own outcome whether or not the root declares
+`<Output>` (#453, shipped). `<Output>` selects which regions render and buffers a root that
+declares one; it decides nothing about whether a failure counts, and a root that
+declares none settles a failure on exactly the same terms. Continuing past one is
+requested explicitly, with `<PrintErrors>`. `printErrors(fn)` still speaks only
+for the component that declared it.
+
 A failing region keeps what it had already rendered: that text reaches the
-output stream, and nothing after the failure does.
+output stream, and nothing after the failure does. The failure is retained and a
+replay reports the same determined failure without re-executing anything, and
+`xmd run` exits nonzero.
 
 Content a caller projects is read from the same table, at the row for the region
 the *element* is written in. A component's `printErrors(fn)` declaration speaks
@@ -109,8 +120,8 @@ a projected failure the component does not recover from passes outward wherever
 the caller's region does not print, and what the projection rendered first goes
 to the caller's region — once, never twice, because a component that recovers or
 returns owns that text and hands over none of it (#446). Asking a component for a
-directory, a parsed value, or a written file therefore never reopens a path an
-`<Output>` region closed.
+directory, a parsed value, or a written file therefore never reopens a path the
+caller's region closed — an `<Output>` region or the root itself.
 
 A **text component**'s body is split by its `<Output>` boundary: the region
 inside runs under `output`, everything outside is documentation and runs under
@@ -124,12 +135,14 @@ document handle a failure instead of ending on it; both are defined and unbuilt.
 
 **Missing: printing an `output` decision.** The `output` row above is the
 settled contract, and the engine does not meet it yet — an outer
-`<PrintErrors>` around a region that failed under `output` ends the document
-execution instead of printing it ([issue
+`<PrintErrors>` does not print a failure a callee's `<Output>` region already
+decided, and ends the document execution instead ([issue
 #327](https://github.com/taras/executable.md/issues/327)). That is a limitation
-of the printing boundary, distinct from which region owns a projected failure,
-and it remains open. Nothing in this workflow writes `<PrintErrors>`, so no stage
-depends on it today; a stage that wanted to survive a failed region would.
+of the printing boundary alone. It is distinct from which region owns a
+projected failure, and distinct from root settlement, which decides an *uncaught*
+failure and is built. It remains open. Nothing in this workflow writes
+`<PrintErrors>`, so no stage depends on it today; a stage that wanted to survive
+a failed region would.
 
 ## What the workflow already writes
 
