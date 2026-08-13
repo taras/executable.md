@@ -112,6 +112,33 @@ export interface StoredRunState {
 }
 
 /**
+ * The run id a value names.
+ *
+ * One rule, because a run id is one thing wherever it turns up. A caller's
+ * argument and a retained `run_id` column are checked against exactly this, so
+ * an id no request could ever address cannot be retained and then read back as
+ * though it addressed something. What differs is only how each side reports a
+ * refusal, which is what `fail` decides: a caller asked for something
+ * impossible, and storage holds something that does not parse.
+ */
+export function parseRunId(value: unknown, path: string, fail: Fail): string {
+  if (typeof value !== "string" || value === "") {
+    throw fail(
+      `a run id is required, and an empty one names nothing (found ${describe(value)})`,
+      path,
+    );
+  }
+  if (value.includes("\u0000")) {
+    throw fail(
+      "a run id cannot contain a NUL: a retained id is compared as text up to one, so two " +
+        "ids that differ only past it would address the same run",
+      path,
+    );
+  }
+  return value;
+}
+
+/**
  * The stable spelling of a JSON value.
  *
  * Two values differing only in key order are one value, and comparing their
