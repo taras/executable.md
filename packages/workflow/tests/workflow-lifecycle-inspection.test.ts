@@ -41,7 +41,12 @@ import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./suppo
 
 const { history, inspect, list } = WorkflowLifecycle.operations;
 
-/** A run with a settled record, one execution and three retained events. */
+/**
+ * A run with a settled record, one execution and three retained events.
+ *
+ * The events name the run they belong to, so two runs of this fixture are told
+ * apart by what they retain and not only by the ids SQLite happened to assign.
+ */
 function* retainedRun(root: string, runId: string): Operation<void> {
   yield* withStorage(root, function* () {
     const database = yield* createRun({ runId });
@@ -49,8 +54,10 @@ function* retainedRun(root: string, runId: string): Operation<void> {
     if (!begun.ok) {
       throw begun.error;
     }
-    yield* database.journal.append(sourced("import_component", "Release", { line: 4, column: 2 }));
-    yield* database.journal.append(unsourced("exec", "exec:echo"));
+    yield* database.journal.append(
+      sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
+    );
+    yield* database.journal.append(unsourced("exec", `exec:echo ${runId}`));
     yield* database.journal.append(closed("root"));
     const finished = yield* database.finishDocumentExecution({
       executionId: begun.value.executionId,
@@ -483,7 +490,32 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
       expect((yield* snapshotOf("release-*")).record.runId).toBe("release-*");
       expect((yield* snapshotOf("release-?")).record.runId).toBe("release-?");
       expect((yield* snapshotOf("release-1")).record.runId).toBe("release-1");
-      expect(yield* historyOf("release-*")).toHaveLength(3);
+      // History has to be attributable to the exact run, not merely the right
+      // shape: three runs of one fixture have three histories that look alike.
+      // The rows are read straight out of `release-*`'s own file, outside the
+      // provider, and compared whole.
+      const own = storedEvents(runPath(root, "release-*"));
+      const wildcard = yield* historyOf("release-*");
+      expect(wildcard.map((entry) => entry.eventId)).toEqual(own.map((row) => row.eventId));
+      expect(wildcard.map((entry) => entry.event)).toEqual(own.map((row) => row.event));
+      expect(wildcard.map((entry) => entry.workspaceRootId)).toEqual(
+        own.map((row) => row.workspaceRootId),
+      );
+
+      // And it is not either neighbour's history. The event ids are assigned
+      // per row and the events name their own run, so both tell these apart;
+      // the Workspace roots do not, because three runs that never mutated a
+      // Workspace share the one empty root, which is why they are compared
+      // against the independent read rather than across runs.
+      for (const neighbour of ["release-?", "release-1"]) {
+        const other = storedEvents(runPath(root, neighbour));
+        expect(own.map((row) => row.eventId)).not.toEqual(other.map((row) => row.eventId));
+        expect(own.map((row) => row.event)).not.toEqual(other.map((row) => row.event));
+        // Each neighbour reads back as itself on the same terms.
+        const read = yield* historyOf(neighbour);
+        expect(read.map((entry) => entry.eventId)).toEqual(other.map((row) => row.eventId));
+        expect(read.map((entry) => entry.event)).toEqual(other.map((row) => row.event));
+      }
 
       // An id that a pattern would have matched, and that nothing retains.
       const absent = yield* inspect("release-2");
