@@ -1,7 +1,5 @@
 # executable.md
 
-<Output />
-
 **executable.md** treats markdown documents as executable workflows. A document can expand markdown components, execute annotated code blocks, and evaluate in-process [Effection](https://frontside.com/effection) operations while staying a valid, readable markdown file in any viewer.
 
 The command-line tool is called **`xmd`** (eXecutable MarkDown).
@@ -347,7 +345,7 @@ deno task xmd run README.md#Development/Verification/Complete # setup, then the 
 Preparing a checkout is common to all of them, so it lives here rather than in
 each one, and runs before whichever heading you selected:
 
-```bash silent exec
+```bash exec
 deno task setup
 ```
 
@@ -377,9 +375,11 @@ restarted by invoking the target again, subject to each low-level command's own
 idempotence.
 
 A command that exits nonzero ends the document there: the blocks after it and
-the sections beside it do not run, and `xmd run` exits nonzero. A run that
-succeeds prints nothing, because these blocks are `silent` — the exit status is
-the result.
+the sections beside it do not run, and `xmd run` exits nonzero. Until then each
+command's output reaches you as it is produced, exactly as it would if you had
+typed the command yourself — you watch a build or a test run, you do not wait
+for a transcript of one. Nothing is kept: without `--journal` the run records a
+command's exit status and never accumulates its output.
 
 `xmd run` is how these sections are meant to be entered. `xmd test README.md`
 also executes this document — that command runs a document while looking for
@@ -411,7 +411,7 @@ changing a dependency.
 Compiles the standalone `xmd` binary into `dist/`, after building the browser
 bundle it embeds:
 
-```bash silent exec
+```bash exec
 deno task build
 ```
 
@@ -425,27 +425,21 @@ The short loop: lint and format, typecheck, the JSR publishability dry run, and
 the tests this branch and worktree affect. Each command is its own block, so the
 first one to fail is where the document stops.
 
-```bash silent exec
+```bash exec
 deno task lint
 ```
 
-```bash silent exec
+```bash exec
 deno task check
 ```
 
-```bash silent exec
+```bash exec
 deno task check:jsr
 ```
 
-```bash silent exec
-deno task test --changed=origin/main >/dev/null
+```bash exec
+deno task test --changed=origin/main
 ```
-
-The redirection is the block's, not the task's: a test report is long and this
-repository's fixtures deliberately resemble credentials, so the report is
-discarded rather than journaled and scanned. The exit status, stderr and failure
-diagnostics are untouched, and `deno task test --changed=origin/main` on its own
-still prints the complete report.
 
 `deno task verify:focused` is the shorthand that enters this target:
 
@@ -458,7 +452,7 @@ deno task verify:focused
 The whole applicable battery at once, which also fails if any of it leaves a
 tracked file changed:
 
-```bash silent timeout=30m exec
+```bash timeout=30m exec
 deno task verify
 ```
 

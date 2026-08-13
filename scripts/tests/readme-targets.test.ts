@@ -34,20 +34,27 @@ const REPO = fileURLToPath(new URL("../../", import.meta.url));
 /** The leaf tasks the README composes. The shim answers for exactly these. */
 const LEAF_TASKS = ["setup", "build", "lint", "check", "check:jsr", "test", "verify"];
 
-/**
- * The changed-test leaf as the shim sees it. The README redirects the report
- * away, and the shell consumes that redirection, so what reaches `deno` — and
- * the log — is the task and its flag alone.
- */
+/** The changed-test leaf, as the shim sees it on the command line. */
 const CHANGED_TESTS = "test --changed=origin/main";
+
+/**
+ * What the shim prints on stdout for each leaf it answers.
+ *
+ * A real task writes to the terminal while it runs, and that is the thing these
+ * blocks exist to let a contributor watch. The marker stands in for it, so a
+ * case can ask where that output went and how often.
+ */
+function marker(task: string): string {
+  return `xmd-ran:${task}`;
+}
 
 /**
  * A credential-shaped canary the shim prints when it answers the changed-test
  * leaf, assembled from fragments so no complete token-shaped literal is
  * committed. The real suite prints strings like it — fixtures for the secret
- * scanner — and journaling one fails a run, which is why the README discards
- * that report. If the redirection goes, this reaches the exec result and the
- * run is refused.
+ * scanner — and a *journaled* one fails a run. Without `--journal` a run keeps a
+ * command's exit status alone and never accumulates its output, so there is
+ * nothing for the gate to scan and the report needs no redirection (#441/#442).
  */
 const CANARY_PREFIX = ["gh", "p", "_"].join("");
 const CANARY_BODY = `${"abcdefghijklmnopqrstuvwxyz"}${"0123456789"}`;
@@ -62,6 +69,8 @@ const SHIM = [
   `  ${LEAF_TASKS.join("|")})`,
   "    shift",
   '    printf "%s\\n" "$*" >> "$XMD_TASK_LOG"',
+  "    # What a real task writes while it runs.",
+  '    printf "%s%s\\n" "$XMD_MARKER_PREFIX" "$*"',
   '    if [ "$*" = "$XMD_FAIL_TASK" ]; then',
   "      exit 1",
   "    fi",
@@ -120,6 +129,7 @@ function* invoke(args: string[], options: { fail?: string } = {}): Operation<Inv
           XMD_TASK_LOG: log,
           XMD_REAL_DENO: Deno.execPath(),
           XMD_FAIL_TASK: options.fail ?? "",
+          XMD_MARKER_PREFIX: marker(""),
           XMD_CANARY_TASK: CHANGED_TESTS,
           XMD_CANARY_PREFIX: CANARY_PREFIX,
           XMD_CANARY_BODY: CANARY_BODY,
@@ -172,8 +182,8 @@ describe("Tier RM — README dogfood", () => {
     expect(lines).toContain("README.md#Implementation%20feedback");
     expect(lines).toContain("README.md#Dependency%20layout");
 
-    // The root `<Output />` declares a policy, not a region: every other
-    // heading in the document is still addressable beside it.
+    // Making one section executable addresses nothing else differently: every
+    // other heading in the document is still an ordinary prose target.
     expect(lines).toContain("README.md#Install");
     expect(lines).toContain("README.md#Status");
     // Discovery runs nothing.
@@ -281,27 +291,48 @@ describe("Tier RM — README dogfood", () => {
   });
 
   /**
-   * The changed-test report is discarded by the README's own redirection, not
-   * by turning the scanner off. The canary the shim prints for that leaf is
-   * what a real report carries — a fixture shaped like a credential — and a
-   * journaled one is refused, so a run that succeeds proves the report never
-   * reached the exec result.
+   * The report is not redirected, and the scanner is not turned off. The canary
+   * the shim prints for that leaf is what a real report carries — a fixture
+   * shaped like a credential — and it reaches the reader unaltered while the
+   * run keeps none of it. A gate scans what a run retains, and this one retains
+   * nothing, so there is nothing to refuse (#441/#442).
    */
-  it("RM12: the entry point succeeds with secret detection still enabled", function* () {
+  it("RM12: the entry point streams a credential-shaped report and keeps none of it", function* () {
     const run = yield* invoke(["verify:focused"]);
 
     expect(run.code).toBe(0);
     expect(run.tasks).toEqual([SETUP, ...FOCUSED]);
+    // The contributor saw the report.
+    expect(run.stdout).toContain(`${CANARY_PREFIX}${CANARY_BODY}`);
+    // And nothing scanned or refused it.
     expect(run.stderr).not.toContain("secret detection rejected");
     // No substitution of --no-secret-detection: the CLI announces that opt-out.
     expect(run.stderr).not.toContain("secret detection is disabled");
   });
 
-  it("RM10: a target that succeeds renders nothing and says so with its status", function* () {
+  /**
+   * The point of running a build or a test suite is watching it, so what a
+   * command writes has to reach the reader — once. A block that forwarded a
+   * chunk live and then rendered the same text into the document at completion
+   * would show every line twice, which is the defect this counts.
+   */
+  it("RM10: each command's output reaches the reader live, exactly once", function* () {
     const run = yield* invoke(["xmd", "run", "README.md#Development/Build", "--raw"]);
     expect(run.code).toBe(0);
-    // `silent` blocks under a root that declares `<Output />`: the exit status
-    // is the result, and no section text is emitted around them.
-    expect(run.stdout).toBe("");
+
+    expect(occurrences(run.stdout, marker(SETUP))).toBe(1);
+    expect(occurrences(run.stdout, marker(BUILD))).toBe(1);
+    // In the order the document runs them: the ancestor's preparation, then the
+    // leaf's own command.
+    expect(run.stdout.indexOf(marker(SETUP))).toBeLessThan(run.stdout.indexOf(marker(BUILD)));
+    // Beside the section's own prose, which is what `--raw` renders.
+    expect(run.stdout).toContain("Compiles the standalone");
+    // And nothing from a sibling the target did not select.
+    expect(run.stdout).not.toContain(marker(VERIFY));
   });
 });
+
+/** How many times `needle` occurs in `text`. */
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
