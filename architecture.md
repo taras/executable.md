@@ -42,6 +42,9 @@ Existing documents and code get aligned to this section retroactively.
 | raise | where an error no middleware converted is decided: printed or failed, per the error mode; observed exactly once, where raised |
 | blocker | execution needs input (auth, a human answer); not a failure |
 | suspension | a durable wait: a crash restarts into the same wait |
+| suspension ID | an opaque stable identifier derived by the trusted workflow execution for one logical suspension request; replay preserves it and only equality and input correlation are public |
+| executor lease | the exact scope-owned capability proving that one trusted host currently owns authority to advance or settle one workflow run |
+| executor generation | the fresh ephemeral identity of one executor-lease acquisition, used only to address control requests to that owner and never as run identity or retained history |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
 | document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads |
 | Files provider | the installed implementation of `API.Files` for a document execution: the host provider under `xmd run`, a transaction-bound provider under a workflow run. There is no default, and no provider falls back to another |
@@ -407,11 +410,326 @@ module imports no SQLite, no DOFS and no runtime detection: it asks a host
 adapter to open storage and to attach a run's Workspace, and the entrypoints
 decide which adapter exists.
 
-Durable ownership and concurrent-executor enforcement belong to #367. Until it
-lands, a run left `running` because its host disappeared is treated as an
-orphaned interrupted execution by the next resume, which closes that unfinished
-execution record as `interrupted` before beginning its own. Nothing here claims
-concurrent resume is safe.
+The start/resume slice predates executor ownership. Issue #367 replaces its
+opportunistic orphan closure with the lifecycle authority below; no supported
+host may advance a retained run without that authority once the slice lands.
+
+## Workflow lifecycle authority
+
+Storage serialization decides who uses one connection next. It does not decide
+who may advance a workflow run. Live execution and lifecycle mutation require
+one executor lease, acquired before stale recovery, a document-execution begin,
+Workspace attachment, journal replay, root import or authored work.
+
+The provider-neutral lifecycle API routes acquisition and management requests
+to a host. Routing through a contextual Api selects a provider and grants no
+authority. The acquired lease is an opaque exact object registered by that
+provider for one run and one acquisition. The provider checks the same object,
+its open scope, its run, its generation and the expected retained lifecycle
+state inside every mutating transaction. A run ID, database handle, structural
+look-alike, same-named context value or retained token authorizes nothing.
+Releasing or tearing down the lease invalidates it before another acquisition
+can mutate the run.
+
+The shared surface names outcomes and retained data, not a transport:
+
+```ts
+interface ExecutorLease {
+  readonly runId: string;
+}
+
+type ExecutorAcquisition =
+  | { readonly kind: "acquired"; readonly lease: ExecutorLease }
+  | { readonly kind: "already-running" };
+
+interface WorkflowLifecycleSnapshot {
+  readonly record: WorkflowRunRecord;
+  readonly retrieval?: DefinitionRetrieval;
+  readonly executions: readonly DocumentExecutionRecord[];
+  readonly journalFrontier?: {
+    readonly eventId: string;
+    readonly workspaceRootId: string;
+  };
+  readonly currentWorkspaceRootId: string;
+}
+
+interface WorkflowDeletion {
+  readonly removed: readonly (
+    | "run-storage"
+    | "provider-sessions"
+    | "lifecycle-control"
+  )[];
+}
+
+interface WorkflowLifecycleApi {
+  acquireExecutor(runId: string): Operation<Result<ExecutorAcquisition>>;
+  inspect(runId: string): Operation<Result<WorkflowLifecycleSnapshot>>;
+  list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
+  history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
+  cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
+  delete(runId: string): Operation<Result<WorkflowDeletion>>;
+}
+```
+
+The lease's public fields describe it and never validate it. Lifecycle
+transitions accept the exact lease separately from their data through an
+adapter-private provider operation, just as Workspace transaction authority is
+validated behind its provider-neutral selection. Inspection, cancellation and
+deletion return immutable parsed values and no database, stream, transaction or
+connection capability. `WorkflowDeletion` lists categories actually removed;
+it contains no claim about external effects.
+
+Acquisition has three observable outcomes: acquired, already owned by a live
+executor, or a storage/authorization failure. The initial local CLI reports an
+active owner rather than following it. Once acquired, lifecycle changes are
+compare-and-set transitions against the retained state and unfinished
+document-execution record read in the same transaction. Beginning an execution,
+finishing its record and publishing the run state are therefore lifecycle
+transitions, not independent writes another command can observe between.
+For a new `start`, the begin transition initializes pristine storage with the
+immutable run, retrieval metadata, empty Workspace, first execution record and
+`running` state in one transaction. For a resumable existing run, it validates
+the requested lifecycle action and inserts one execution record while
+publishing `running`. A replay of an already completed or failed root instead
+inserts its execution record while preserving that terminal run state: the
+replay observes an outcome that already won and does not make the run mutable
+again. The settlement transition finishes the record while publishing its
+terminal or resumable status. Begin and settlement are separate transactions
+enclosing the document execution, and each is atomic within itself.
+
+An unfinished document-execution record found after acquisition belonged to the
+previous lease and is proven stale. If the run says `running`, the new owner
+first reconciles retained root history. A root Close restores its canonical
+terminal state and makes every pending cancellation request stale. Without one,
+a cancellation request addressed to the stale generation settles the exact
+execution and run as `cancelled`; without either, recovery closes the execution
+and publishes `interrupted` before beginning another. If the run already
+carries a terminal state preserved during replay, stale recovery closes only
+that replay's execution as `interrupted` and leaves the authoritative run state
+unchanged. It never guesses staleness from a PID, timestamp, timeout or status
+row.
+
+An execution settlement has one owner and one winner. Canonical completion,
+failure, suspension and an admitted cancellation compete at an
+execution-owned settlement boundary. A retained root Close proves canonical
+completion or failure won before cancellation. If the owner accepts
+cancellation first, halting prevents a later Close and only `cancelled` may
+settle. The sidecar request alone is not admission evidence and cannot replace a
+Close after a host death. Durability and Files
+infrastructure failures retain their existing precedence. The winning
+transition waits for the document execution's complete child and resource
+teardown, then atomically finishes its document-execution record and publishes
+the run state. Only after that transaction commits may the host report the
+status and release the executor lease. If settlement storage refuses, no
+unretained status is reported and lease teardown leaves the run recoverable by
+the next proven owner.
+
+Teardown is part of settlement evidence, not work performed after the outcome.
+If teardown raises, the host does not claim `suspended` or `cancelled`: the
+execution settles `failed` with a filtered journal reason when one identifies
+the failure and a categorical host reason otherwise. The cancellation requester
+receives failure. Durability and Files infrastructure failures still cross by
+identity and win by kind; if their lifecycle transition cannot persist, no
+terminal status is claimed. Every finalizer is attempted before any such result
+is observable.
+
+Retained lifecycle state gates every later acquisition before canonical
+execution. A `failed` run carrying its root Close replays that recorded failure
+for compatible `start --id`. A host-settlement failure with no root Close
+reports the retained `failed` state and its categorical or filtered reason
+without entering replay. A `cancelled` run reports its retained state without
+entering replay under either command. None can be advanced under the same run
+ID.
+
+The lease remains in the trusted host's outer lifecycle scope; it is never
+installed as a document provider. A completed replay may hold that lease while
+recording its document-execution envelope, while the run remains `completed`
+and cancellation remains refused. Canonical core returns the
+retained result before preparation or root expansion. It attaches no Workspace,
+Files, Service, Agent, process or external provider and performs no live durable
+effect.
+
+### Local executor ownership
+
+The Deno lifecycle adapter acquires a non-blocking exclusive advisory lock on a
+deterministic sidecar beside the run database. The open file and its lock belong
+to the lease scope. The operating system releases the lock when that process
+dies, which is the stale-owner proof the next acquisition uses. The sidecar
+path, empty file and executor generation are host arrangement: none takes part
+in run identity, the database schema, the journal or history.
+
+The adapter creates a fresh cryptographically random executor generation after
+each successful lock acquisition and publishes its control descriptor
+atomically. That descriptor is usable only to address the current owner. It is
+cleared before the lease releases. A retained descriptor without its lock is
+stale data, never proof that the former owner is alive.
+
+The lock file may remain empty after run deletion. Unlinking a locked sidecar
+would let another process create and lock a different file at the same path
+while the deleting lease still exists. An empty lock file is not retained run
+state and is not reported as history or provider-session data.
+
+### Read-only lifecycle inspection
+
+Inspection has its own provider-neutral immutable snapshot surface. It returns
+run metadata, ordered history and current root identity rather than a writable
+`WorkflowRunDatabase` or an executor lease. `status`, `list` and `history` use
+only that surface. They never invoke canonical execution, read through replay,
+attach a Workspace, materialize a root, import a document, contact an Agent,
+process or external provider, or append.
+
+Discovery remains arithmetic over the one run-storage root; there is no list
+registry. Each run contributes one database candidate. Exact lifecycle-sidecar
+names occupy a distinct provider-owned namespace and are not candidates. The
+Deno provider opens database candidates read-only and applies the same strict
+schema, retained-content and live/current recognition as execution.
+One absent, foreign, incompatible, damaged or unparseable candidate fails the
+whole list request with its distinct condition. Healthy rows are not returned
+as though they were a complete list, and every candidate remains unchanged.
+
+Every public history entry is one retained protocol row:
+
+```ts
+interface WorkflowHistoryEntry {
+  readonly eventId: string;
+  readonly event: DurableEvent;
+  readonly workspaceRootId: string;
+  readonly source?: Readonly<SourcePosition>;
+}
+```
+
+History includes Yield and Close rows, trusted preparations and root events, in
+append order. The Workspace root is read from that row's existing
+`workspace_root_id`. An authored durable operation carries its normalized
+optional source in the stable namespaced
+`EffectDescription["executablemd.source-position"]` field before the complete
+event crosses the existing secret gate. History parses that field into
+`source`; a Close or trusted-host event may have none. Source is non-identity
+event data and never a location reconstructed from an expansion ID, current
+definition or Workspace. A present field that does not parse is an unreadable
+history entry, never silently treated as absent, and no value it held is quoted.
+
+The JSON projection is lossless: it returns every entry above with the complete
+already-filtered protocol event. Human history presents each Yield as a durable
+operation rather than repeating the protocol word `yield`. It renders the root
+Close as the run's canonical outcome footer instead of an otherwise empty
+operation row. When structured execution produces child Closes, it associates
+their terminal results with those child coroutines so their ordering remains
+visible. A suspended, interrupted or cancelled run with no root Close instead
+states that no canonical document outcome was recorded. Presentation never
+removes an event from the JSON contract or synthesizes a journal event.
+
+### Cancellation control
+
+Cancellation does not transfer execution authority to its requester. A
+management host addresses one request to the executor generation published by
+the live lease and waits for a durable outcome. The owner validates that exact
+generation, admits the request at its settlement boundary, halts the live
+document execution, waits for all child and resource teardown, atomically
+finishes the document execution and publishes `cancelled`, then releases its
+lease. The request succeeds only after that durable state is observable.
+
+The local Deno transport is an atomic sidecar request carrying a fresh request
+identity and the target executor generation. The live owner supervises that
+control path in its lease scope. A requester that exits leaves the request for
+the owner to finish. If the owner exits first, the requester or a later
+lifecycle caller must acquire the released lock before acting: a request for
+that proven-stale generation settles the unfinished execution as `cancelled`
+only when retained history has no root Close. A Close wins and the request is
+refused as stale. Acquisition reconciles or rejects every older request before
+a fresh executor generation is published, so a late request can never cancel a
+later executor.
+
+Cancellation follows one status matrix:
+
+- `running`: address the exact owner and wait for retained `cancelled`;
+- `suspended` or `interrupted`: acquire lifecycle authority and publish
+  `cancelled` without starting a document execution;
+- `cancelled`: idempotent success;
+- `completed` or `failed`: refuse because their terminal outcome already won;
+  and
+- absent, foreign, incompatible or damaged storage: report that condition and
+  change nothing.
+
+Deletion also acquires lifecycle authority. A live owner is refused; a stale
+`running` record is proven stale before the exact run's database and
+provider-owned retained records are removed. Every control descriptor and
+request is cleared before release so none can address a later run that reuses
+the public ID; only the empty lock file may remain. Every non-live status may
+be deleted. The explicit run ID is the confirmation boundary, so the command
+has no interactive prompt and no wildcard. An absent run is reported rather
+than treated as an idempotent deletion. Deletion never claims to undo an
+external effect.
+
+## Durable suspension
+
+Suspension is an authoritative document-execution outcome, separate from
+completion, failure, interruption and cancellation. `@executablemd/workflow`
+exposes a provider-neutral operation with this contract:
+
+```ts
+interface WorkflowSuspensionRequest {
+  readonly request: Json;
+  readonly responseSchema: JsonObject;
+}
+
+function suspendFor(request: WorkflowSuspensionRequest): Operation<Json>;
+```
+
+The request says what is awaited and the schema says what value can resume it.
+The caller supplies neither a suspension ID nor lifecycle authority. The
+trusted execution derives one suspension ID from the run and durable coroutine
+position, so a component or middleware reaches the same logical wait across
+replay and a different logical wait cannot receive its input.
+
+The operation first publishes an ordinary durable `suspension_request` Yield.
+Its description contains the suspension ID, request and response schema. Its
+successful Result means only that the request publication committed; it does
+not claim that the wait or answer completed. The complete event crosses the
+existing secret gate and receives the current Workspace-root association in the
+same way as every other nonmutating event. The run's stop reason references
+that already-filtered event by ID, so request text is never duplicated into
+lifecycle state. No third protocol event and no pending-request table is added.
+
+After live publication or replay of that Yield, the operation invokes an
+execution-owned suspension controller. Context may select the workflow
+provider, but the controller accepts only the exact private capability for the
+current execution and suspension ID. With no delivered input, it reports the
+request to the lease owner and remains pending while the owner initiates an
+orderly halt. The operation throws no ordinary error and produces no value; the
+halt leaves the root without a Close. The owner observes the authenticated
+suspension notice as its separate settlement candidate, waits for complete
+scope teardown, then atomically finishes the document-execution record and
+publishes `suspended` before releasing the lease.
+
+A root without Close is valid partial history. On resume, earlier durable
+effects and the request-publication Yield restore without executing or
+appending. Ephemeral structure is rebuilt only as the definition reaches it;
+provider attachments stay lazy, and a provider is never contacted for a
+replayed effect. At the same suspension ID, absent input reports the same
+notice, halts again and adds no second request event. The new document-execution
+record may settle `suspended`; the request remains singular.
+
+Issue #300 owns input delivery and scheduling. Its boundary is the suspension
+ID and retained response schema. A host may offer one value for that exact ID
+only after validating it against the retained schema. On a resumed execution,
+the suspension controller returns that validated value, and `suspendFor()`
+publishes a separate ordinary durable answer Yield before returning it to the
+caller. Delivery remains pending until answer publication commits, so a crash
+cannot consume input without retaining the answer; duplicates, mismatched IDs
+and late delivery are refused. None of that transport or scheduling behavior is
+part of #367.
+
+This contract folds issue #322's suspension effect into #367. Issue #322 no
+longer supplies a separate implementation prerequisite; its typed correlated
+answer delivery remains with #300.
+
+Issue #367 changes no durable schema shape. Executor and cancellation control
+live in provider-owned sidecars, suspension uses existing filtered journal and
+run-state records, and history reads the existing event-to-root association.
+Complete schema version 1 therefore remains one exact shape. Any later durable
+input-delivery record for #300 requires its own schema-version decision and
+strict recognition amendment.
 
 ## Workflow Workspace
 
@@ -1736,15 +2054,16 @@ Status is measured against main.
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
-| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; status, list, history, cancel, fork and delete are unbuilt |
+| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; #367 defines the required executor lease, unbuilt |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack; repository, process and attachment capabilities unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| workflow inspection and history fork | reads status/history without advancing a run and creates a new run from a checkpoint | defined in `specs/workflow-workspace-spec.md`, unbuilt |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces one executor, cancels through the exact owner and deletes retained state under lifecycle authority | defined for #367 in this architecture and `specs/workflow-workspace-spec.md`, unbuilt |
+| history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
-| suspension effect | suspend durably | defined, unbuilt |
+| `suspendFor()` | publishes one filtered suspension request, releases the executor as `suspended`, and re-enters the same wait without duplicating it | defined for #367, unbuilt; typed answer delivery and scheduling belong to #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 
