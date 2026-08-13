@@ -58,9 +58,9 @@ import {
 import { canonicalJson, parseRunId, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import {
+  createWorkflowRunConnections,
   type RunConnection,
   type RunTransaction,
-  useRunConnections,
   type WorkflowRunConnections,
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
@@ -125,10 +125,10 @@ export function* installWorkflowRunStorage(
   internal: PrivateWorkspaceOptions,
 ): Operation<void> {
   const root = authorizedRoot(options.root);
-  // Shared rather than created here: the lifecycle installation writes to the
-  // same databases, and two authoritative connections to one file is exactly
-  // what the connection registry exists to prevent.
-  const connections = yield* useRunConnections(yield* SavepointObservation.get());
+  const connections = createWorkflowRunConnections(yield* SavepointObservation.get());
+  yield* ensure(() => {
+    connections.close();
+  });
   yield* useJournalRouting(connections);
   yield* usePrivateWorkspace(connections, internal);
   yield* useWorkspaceEffects(connections);
