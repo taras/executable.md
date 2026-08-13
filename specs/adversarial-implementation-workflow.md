@@ -344,7 +344,14 @@ boundary as data or it does not cross at all.
 ### A stage fails rather than returning a half-record
 
 The two component kinds fail differently, and neither can hand a caller a
-half-record.
+half-record. Whatever they hand back, the workflow root is where an uncaught
+failure is settled, and a text root settles it: the fail-capable `output` mode is
+installed for the root's whole body, by every text root and by every `<Output>`
+region alike, so an undecided failure no printing boundary handled ends the
+document execution whether or not the root declares `<Output>` (#453, shipped).
+`<Output>` selects which regions render and buffers a root that declares one; it
+decides nothing about whether a failure counts. Printing and continuing is asked
+for with `<PrintErrors>`, and this workflow writes none.
 
 A **text component** is split by its `<Output>` boundary: the region inside runs
 under the `output` error mode, everything outside is documentation and runs
@@ -355,16 +362,21 @@ differently as a result.
 result. A failed prompt is raised there — `throwOnError` is what raises it — and
 `throw` ends the document execution.
 
-`InstructionFiles` is the other way round: its `<Each>` and `<File>` reads *are*
-its `<Output>` region. `<File>` prints its own failures rather than propagating
-them, so an unreadable instruction file becomes a printed error and the region's
-`output` mode never decides anything. Execution continues, and what stops the
-caller from proceeding on nothing is the binding rule: `as` refuses a body
-holding a printed error, so `instructions` stays unbound and the error surfaces
-at the invocation rather than inside the text a prompt would quote.
+`InstructionFiles` takes a longer route to the same end. Its `<Each>` and
+`<File>` reads *are* its `<Output>` region, and `<File>` prints its own read
+failures rather than propagating them, so an unreadable instruction file starts
+as a component-owned printed error that the region's `output` mode never has to
+decide. What the stage then hands back is a body holding that printed error — and
+the binding rule refuses it. `InstructionFiles as="instructions"` binds nothing,
+and the refusal is raised at the invocation, in the workflow root's own body.
 
-That difference is worth knowing before relying on either: a missing instruction
-file is visible and non-fatal, while a failed discovery prompt is fatal.
+A text root is fail-capable, so that is where it ends. The refusal is the run's
+outcome: `Discovery` never starts, no later stage starts, `xmd run` exits
+nonzero, and a replay reports the same determined failure (#453, shipped). What
+the root had already rendered still reaches the output stream. So the two stages
+differ in where the failure is decided, not in whether it is fatal — an
+unreadable instruction file ends this workflow exactly as a failed discovery
+prompt does.
 
 A **value component** declares `returns`, so it renders nothing and cannot
 contain `<Output>` at all — that would be a structural error. Its entire body
@@ -397,9 +409,12 @@ survive a failed region asks for that at the scope it means, with
 `<PrintErrors>`.
 
 Printing an `output` decision is settled contract that the engine has not built
-yet: an outer `<PrintErrors>` around a region that failed under `output` ends the
-document execution instead of printing it (#327). That limitation is distinct
-from the ownership rule above and remains open. No stage depends on it today.
+yet: an outer `<PrintErrors>` does not print a failure a callee's `<Output>`
+region already decided, and ends the document execution instead (#327). That
+limitation belongs to the printing boundary alone. It is distinct from the
+ownership rule above, and distinct from root settlement, which decides an
+*uncaught* failure and is built. It remains open, and no stage depends on it
+today.
 
 `throwOnError` on a `<Prompt>` is required for the same reason: without it a
 failed prompt records its failure and returns its text, raising nothing for the
