@@ -28,8 +28,11 @@ describe("assertion components", () => {
         return yield* next(error);
       },
     });
+    // Written in a region that prints: rendering the diagnostic once is half of
+    // what this pins, and reading it needs the document to render it.
     const run = yield* runDoc({
-      "README.md": "<AssertEquals actual={1} expected={1} bogus={2} />\n",
+      "README.md":
+        "<PrintErrors>\n<AssertEquals actual={1} expected={1} bogus={2} />\n</PrintErrors>\n",
     });
     expect(observed).toHaveLength(1);
     // Engine wording now: an undeclared prop is rejected by the schema, since a

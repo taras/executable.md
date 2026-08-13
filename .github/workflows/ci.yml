@@ -145,9 +145,14 @@ jobs:
           # So does an ordinary relative filesystem read.
           ./dist/xmd -e '<File path="smoke-test/Badge.md" />' --raw | grep -q 'verified'
 
-          # A stray <Else> is a positioned diagnostic the root collects, so this
-          # renders it and exits 0. The identity is what is being checked.
-          ./dist/xmd -e '<Else>orphan</Else>' --raw | grep -q '(<eval>:1:1)'
+          # A stray <Else> is a positioned diagnostic nothing recovers, so the
+          # run reports it and exits 1. The identity is what is being checked.
+          stray="${RUNNER_TEMP:-/tmp}/stray.err"
+          if ./dist/xmd -e '<Else>orphan</Else>' --raw 2>"$stray"; then
+            echo "expected a stray <Else> to end the run" >&2
+            exit 1
+          fi
+          grep -q '(<eval>:1:1)' "$stray"
 
           # Nothing is written to run a document that was never a file.
           before=$(ls -A)

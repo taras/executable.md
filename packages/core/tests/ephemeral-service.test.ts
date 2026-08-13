@@ -337,10 +337,14 @@ done
 handshake-compatible-server
 \`\`\`
 
+<PrintErrors>
+
 \`\`\`js eval
 const partial = "must-not-commit";
 const server = "must-not-execute";
 \`\`\`
+
+</PrintErrors>
 
 \`\`\`bash exec
 echo after-collision
@@ -380,10 +384,14 @@ echo after-collision
 handshake-compatible-server
 \`\`\`
 
+<PrintErrors>
+
 \`\`\`js eval
 const partial = "must-not-commit";
 const server = "must-not-execute";
 \`\`\`
+
+</PrintErrors>
 
 \`\`\`bash exec
 echo after-collision

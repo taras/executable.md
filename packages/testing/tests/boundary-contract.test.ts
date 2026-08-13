@@ -22,7 +22,10 @@ describe("Tier TC — the <Testing> boundary", () => {
   // written and the boundary still reports. Projecting the body through
   // `content()` instead would abort the boundary and lose both.
   it("TC1: an error beside a test renders inline, and the boundary still reports", function* () {
+    // The region prints, which is what makes "renders inline and the boundary
+    // still reports" a thing the document asked for.
     const doc = [
+      "<PrintErrors>",
       "<Testing>",
       "",
       "<Missing />",
@@ -30,6 +33,7 @@ describe("Tier TC — the <Testing> boundary", () => {
       '<Test name="t"><Assert expr={true} /></Test>',
       "",
       "</Testing>",
+      "</PrintErrors>",
       "",
     ].join("\n");
 

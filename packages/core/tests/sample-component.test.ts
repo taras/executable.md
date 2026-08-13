@@ -255,17 +255,18 @@ describe("Tier SC — Sample component", () => {
       });
 
       const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+      const execution = yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      });
+      const result = yield* execution;
 
-      // Should contain error about missing Sample Api provider
-      expect(output).toContain("ERROR");
-      expect(output).toContain("Sample Api requires provider middleware");
+      // Nothing recovers a missing provider, so it is the run's own outcome.
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.error.message).toContain(
+        "Sample Api requires provider middleware",
+      );
     } finally {
       cleanup(tmpDir);
     }

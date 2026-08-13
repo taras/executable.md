@@ -893,9 +893,21 @@ layers).
 
 | Mode | An undecided error… | Installed by |
 | --- | --- | --- |
-| `print` | is printed; the document execution continues | the root; `<PrintErrors>`; `printErrors(fn)` |
-| `output` | fails the document execution; `<PrintErrors>` can print instead | every `<Output>` region |
+| `print` | is printed; the document execution continues | `<PrintErrors>`; `printErrors(fn)` |
+| `output` | fails the document execution; `<PrintErrors>` can print instead | every text root; every `<Output>` region |
 | `throw` | fails the document execution, even inside `<PrintErrors>` | documentation; value roots |
+
+Printing is asked for. A text root installs `output` for its whole body, so an
+uncaught, undecided failure is the run's own outcome whether or not the document
+declares `<Output>`. `print` is the low-level default the context carries
+outside root execution — where direct expansion and component-level harnesses
+read it — and inside a run it is what a printing boundary establishes for its
+region.
+
+The mode's name is not an authority. `<Output>` selects which regions render,
+and it selects nothing at a root that declares none; root settlement decides
+what an uncaught failure means. That the two share one internal mode says they
+settle a failure the same way, not that `<Output>` owns the decision.
 
 Projections carry the caller's error mode; they never set their own.
 
@@ -915,6 +927,18 @@ that component does, never what a caller wrote inside it. Content a caller
 projects keeps the mode of the region it is written in (rule 3), and a failure
 of it the component does not recover from passes outward wherever that region
 does not print.
+
+**Describing a failure is not owning it.** A component that could not use its
+caller's content may still have something worth saying about what it therefore
+did not do — a file that was not written. Saying it does not move the decision:
+the region that decided the failure still settles it, and the component's
+sentence travels as an account of that decision rather than in place of it.
+Only a decision the region has not made is the component's to make, which is
+why content that merely *printed* its errors leaves the component free to
+refuse on its own terms. The distinction is carried explicitly by the failure a
+component throws, never inferred from what a cause graph happens to contain: a
+component that recovers and then fails on its own terms owns that failure,
+however much of the content's wreckage is still reachable beneath it.
 
 ### 5. Raise decides by value
 
@@ -1223,13 +1247,16 @@ are covered by that rule like any other printing boundary: their own cleanup and
 their own report still happen, and neither writes, replaces, or continues.
 
 `<PrintErrors>` *recovers*: a region that says the failures inside it are
-printed and the document continues. A root that prints errors by default has not
-asked for anything, and does not get to call a failed run a success.
+printed and the document continues. It is the only thing that says it. A root
+asks for nothing, so a root gets the failure.
 
 One other construct *contains* a failure instead, which is a different thing.
 An invocation of `<Test>` keeps its checked failures to itself: the failure
 becomes that test's failed result, the run's own record stays clear, the tests
 after it still run, and the testing completion policy is what fails the run.
+Keeping them is the whole of it — a contained failure is not re-raised into the
+region the element was written in, because handing it outward is exactly what
+the containment exists to prevent.
 
 Canonical core owns that construct. `<Test>` is one of core's registered
 defaults, and containment is granted while core expands that definition and at
@@ -1683,7 +1710,9 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
+| root failure settlement | a text root installs the fail-capable `output` mode for its whole body, so an uncaught, undecided failure is the document execution's own outcome, whether or not the root declares `<Output>` | built on the #453 stack |
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
+| `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
 | `xmd targets` | prints one document's catalog as full document references, by inspection alone | built on the #412 stack |

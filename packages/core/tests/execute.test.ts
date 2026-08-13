@@ -19,6 +19,7 @@ import { scoped } from "effection";
 import { Stdio } from "@effectionx/process";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { asText } from "./helpers.ts";
 
 /**
@@ -199,24 +200,18 @@ describe("Tier B — durable import", () => {
     expect(secondResult).toContain("# Parsed");
   });
 
-  // B9: import missing component — error propagated
-  it("B9: import missing component — error in output", function* () {
+  // B9: import missing component — uncaught at the root, so it fails the run
+  it("B9: import missing component — the run fails and reports it", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({ "README.md": "<Missing />\n" });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    expect(result).toContain("ERROR");
     expect(
-      result.includes("Cannot resolve component") || result.includes("Failed to import"),
+      message.includes("Cannot resolve component") || message.includes("Failed to import"),
     ).toBeTruthy();
   });
 
@@ -600,25 +595,19 @@ describe("Tier D — code execution and modifiers", () => {
     expect(secondMessage).not.toContain("secret");
   });
 
-  // D15: unknown modifier in chain → error
-  it("D15: unknown modifier → error in output", function* () {
+  // D15: unknown modifier in chain → error, uncaught, so the run fails
+  it("D15: unknown modifier → the run fails and reports it", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": ["```bash frobnicate exec", "echo test", "```"].join("\n"),
     });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    expect(result).toContain("ERROR");
-    expect(result.includes("Unknown modifier") || result.includes("frobnicate")).toBeTruthy();
+    expect(message.includes("Unknown modifier") || message.includes("frobnicate")).toBeTruthy();
   });
 
   // D16: no terminal modifier → error
@@ -840,8 +829,8 @@ describe("execute", () => {
     expect(result).toContain("Hello, Alice!");
   });
 
-  // E7: Undeclared prop in full document
-  it("E7: undeclared prop produces error in output", function* () {
+  // E7: Undeclared prop in full document — uncaught, so the run fails
+  it("E7: undeclared prop fails the run and reports it", function* () {
     const stream = new InMemoryStream();
     yield* useStubFs({
       "README.md": '<Badge size="lg" />\n',
@@ -849,18 +838,11 @@ describe("execute", () => {
     });
     yield* useStubExec();
 
-    const result = asText(
-      yield* collect(
-        yield* execute({
-          path: "README.md",
-          stream,
-        }),
-      ),
-    );
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    // Should contain error about undeclared prop
-    expect(result).toContain("ERROR");
-    expect(result.includes("Unknown prop") || result.includes("Prop validation")).toBeTruthy();
+    expect(message.includes("Unknown prop") || message.includes("Prop validation")).toBeTruthy();
   });
 
   // E8: Silent exec in full document
@@ -1233,6 +1215,8 @@ describe("execute", () => {
 describe("Component Api dispatch — journal shape", () => {
   it("import, exec, and eval journal entries keep their identities", function* () {
     const stream = new InMemoryStream();
+    // The eval block is here for its journal entry, so it has to compile.
+    yield* useTempFileCompiler();
     yield* useStubFs({
       "README.md": "<Note />\n\n```bash exec\necho hi\n```\n\n```js eval\nconst x = 1;\n```\n",
       "components/Note.md": "note!\n",
@@ -1369,9 +1353,13 @@ describe("component-declared output — document workflow", () => {
     });
     yield* useFailingExec(1, "should not run");
 
-    const result = yield* collect(yield* execute({ path: "README.md", stream }));
+    // The preflight aggregate is raised like any other undecided error, so an
+    // invalid root reports it and settles failed.
+    const message = yield* failure(function* () {
+      return yield* collect(yield* execute({ path: "README.md", stream }));
+    });
 
-    expect(result).toContain("must be a direct top-level");
+    expect(message).toContain("must be a direct top-level");
 
     const events = stream.snapshot();
     const execEvents = events.flatMap((e) =>

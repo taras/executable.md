@@ -65,7 +65,7 @@ import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
 import { content } from "../component-api.ts";
 import { hasContent } from "../content-context.ts";
-import { ContentError } from "../errors.ts";
+import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
@@ -127,14 +127,23 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
  * whatever it already held.
  *
  * The original messages come along, because `<File>` renders nothing: this
- * printed error is the only place the reader would learn what actually went wrong.
+ * sentence is the only place the reader would learn what actually went wrong.
  * Anything else thrown is not a content failure and passes through untouched.
  *
- * The content failure itself stays in this failure's cause chain. What is
- * reported is this component's own printed error — the write is what the document
- * asked for, and that it did not happen is the fact a reader needs — while the
- * failure it was translated from, and the error segments it carries, remain
- * reachable underneath for a host inspecting what ended the execution.
+ * **Saying what was not written is not the same as owning the failure.** Which
+ * of the two this is depends on what the caller's region already did with the
+ * error, and the content failure says so:
+ *
+ * - It carries a **decided** failure when the region the content is written in
+ *   settled it as one. That decision is the caller's, so the sentence travels
+ *   as an account of it (`ProjectedContentError`), passes outward through this
+ *   component's own printing declaration, and is settled where the element was
+ *   written — at a plain root, by ending the run (§6.8.1, §6.9).
+ * - It carries none when the content merely *printed* its errors. The caller's
+ *   region already settled those as data, and refusing to write a document
+ *   holding a printed error is this component's own decision — an ordinary
+ *   `FileAccessError`, printed by this component's declaration, with the
+ *   content failure and its segments reachable underneath.
  */
 function* rendered(requested: string): Operation<string> {
   try {
@@ -144,10 +153,16 @@ function* rendered(requested: string): Operation<string> {
       throw error;
     }
     const failures = error.errors.map((segment) => segment.message);
-    throw new FileAccessError(
-      `did not write "${requested}": its content failed to expand. ${failures.join(" ")}`,
-      { cause: error },
-    );
+    const sentence = `did not write "${requested}": its content failed to expand. ${failures.join(
+      " ",
+    )}`;
+    // One read of the caught error, not a search of its causes: `content()`
+    // puts the region's decision here when there was one.
+    const decided = error.cause;
+    if (decided instanceof DocumentationError) {
+      throw new ProjectedContentError(sentence, decided);
+    }
+    throw new FileAccessError(sentence, { cause: error });
   }
 }
 

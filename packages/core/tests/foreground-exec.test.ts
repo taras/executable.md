@@ -105,6 +105,18 @@ function* runDocument(
   return { output, stream };
 }
 
+/**
+ * The same source in a region that prints.
+ *
+ * These cases read what a refusal left behind — the diagnostic, and the
+ * reference below the block still standing unresolved because nothing was
+ * bound. Reading that needs the document to keep rendering past the failure,
+ * which is what an authored `<PrintErrors>` region is for.
+ */
+function printing(source: string): string {
+  return `<PrintErrors>\n\n${source}\n\n</PrintErrors>\n`;
+}
+
 /** The value a recorded exec effect settled with. */
 function execOutcome(stream: InMemoryStream): Record<string, unknown> | undefined {
   for (const event of stream.snapshot()) {
@@ -943,7 +955,7 @@ describe("Tier FG — bound command results", () => {
             throw new Error("no such executable");
           },
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 
@@ -965,7 +977,9 @@ describe("Tier FG — bound command results", () => {
       "",
     ].join("\n");
 
-    const run = yield* watching(() => runDocument(source, { retainProcessOutput: false }));
+    const run = yield* watching(() =>
+      runDocument(printing(source), { retainProcessOutput: false }),
+    );
 
     // A timeout wins as a failure, so the command has no settled status to
     // bind: the reference below it stands unresolved.
@@ -990,7 +1004,7 @@ describe("Tier FG — bound command results", () => {
       const run = yield* watching(function* () {
         return yield* scoped(function* () {
           yield* counting(starts);
-          return yield* runDocument(source, { retainProcessOutput: false });
+          return yield* runDocument(printing(source), { retainProcessOutput: false });
         });
       });
 
@@ -1018,14 +1032,16 @@ describe("Tier FG — bound command results", () => {
       return yield* scoped(function* () {
         yield* counting(starts);
         return yield* runDocument(
-          [
-            '```bash timeout=30s exec as="probe"',
-            "echo ran",
-            "```",
-            "",
-            "[{probe.exitCode}]",
-            "",
-          ].join("\n"),
+          printing(
+            [
+              '```bash timeout=30s exec as="probe"',
+              "echo ran",
+              "```",
+              "",
+              "[{probe.exitCode}]",
+              "",
+            ].join("\n"),
+          ),
           { retainProcessOutput: false, modifiers: { timeout: custom } },
         );
       });
@@ -1092,7 +1108,9 @@ describe("Tier FG — bound command results", () => {
       return yield* scoped(function* () {
         yield* counting(starts);
         return yield* runDocument(
-          ['```bash exec as="probe"', "echo ran", "```", "", "[{probe.exitCode}]", ""].join("\n"),
+          printing(
+            ['```bash exec as="probe"', "echo ran", "```", "", "[{probe.exitCode}]", ""].join("\n"),
+          ),
           { retainProcessOutput: false, modifiers: { exec: custom } },
         );
       });
@@ -1135,7 +1153,7 @@ describe("Tier FG — bound command results", () => {
             return yield* next(modifiers, { ...request });
           },
         });
-        return yield* runDocument(rewritten, { retainProcessOutput: false });
+        return yield* runDocument(printing(rewritten), { retainProcessOutput: false });
       });
     });
 
@@ -1154,7 +1172,7 @@ describe("Tier FG — bound command results", () => {
             return yield* next(modifiers, request);
           },
         });
-        return yield* runDocument(rewritten, { retainProcessOutput: false });
+        return yield* runDocument(printing(rewritten), { retainProcessOutput: false });
       });
     });
 
@@ -1183,7 +1201,7 @@ describe("Tier FG — bound command results", () => {
           // deno-lint-ignore require-yield
           *applyBoundModifiers(_args, _next) {},
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 
@@ -1207,7 +1225,7 @@ describe("Tier FG — bound command results", () => {
             } as unknown as void;
           },
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 
@@ -1316,7 +1334,7 @@ describe("Tier FG — bound command results", () => {
             return yield* next(modifiers.slice(1), request);
           },
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 
@@ -1340,7 +1358,7 @@ describe("Tier FG — bound command results", () => {
             return yield* next(modifiers, request);
           },
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 
@@ -1501,7 +1519,7 @@ describe("Tier FG — bound command results", () => {
             throw new Error("middleware said so");
           },
         });
-        return yield* runDocument(source, { retainProcessOutput: false });
+        return yield* runDocument(printing(source), { retainProcessOutput: false });
       });
     });
 

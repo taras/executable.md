@@ -365,9 +365,13 @@ describe("Tier TX — targeted execution", () => {
       "",
     ].join("\n");
     const seen: Probes = { names: [], ids: [] };
-    const text = yield* run(inlineSource(body, { target: "Kept" }), new InMemoryStream(), seen);
+    const error = yield* failure(
+      inlineSource(body, { target: "Kept" }),
+      new InMemoryStream(),
+      seen,
+    );
     expect(seen.names).toEqual([]);
-    expect(text).toContain("<Return> requires");
+    expect(error instanceof Error ? error.message : String(error)).toContain("<Return> requires");
   });
 
   /**

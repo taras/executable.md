@@ -7,7 +7,7 @@ import { forEach } from "@effectionx/stream-helpers";
 import { execute } from "../src/execute.ts";
 import { beforeAll } from "@executablemd/test-support/bdd";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
-import type { Operation } from "effection";
+import type { Operation, Result } from "effection";
 import { Stdio } from "@effectionx/process";
 
 function* runDocument(
@@ -35,7 +35,7 @@ interface OperationResult {
   output: string;
   /** What the document's foreground commands displayed. */
   displayed: string;
-  result: { ok: boolean };
+  result: Result<Json>;
 }
 
 const ROOT_PROPS = [
@@ -338,10 +338,12 @@ describe("props binding", () => {
       ].join("\n"),
     });
 
-    expect(result.ok).toBe(true);
+    // Rejected before the body, and nothing recovers it, so it ends the run.
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("Invalid");
+    expect(displayed).not.toContain("INVALID_BODY_EFFECT");
     expect(output).not.toContain("INVALID_BODY_EFFECT");
     expect(output).not.toContain("body=");
-    expect(output).toContain("Invalid");
   });
 
   it("uses one shadowed props binding for text, eval, and exec, then restores it", function* () {

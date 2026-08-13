@@ -13,6 +13,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
+import { completion, failureMessage } from "./helpers.ts";
 
 describe("Tier T4 — eval factory and journal integration", () => {
   beforeAll(() => useTempFileCompiler());
@@ -92,8 +93,9 @@ describe("Tier T4 — eval factory and journal integration", () => {
     expect(output2).toBe(output1);
   });
 
-  // T35: Error in block — propagated, error in output
-  it("T35: error in eval block → error in output", function* () {
+  // T35: Error in block — nothing recovers it, so it is the run's outcome, and
+  // the record is what a replay reports it as.
+  it("T35: error in eval block → the run fails, and replays failed", function* () {
     const stream = new InMemoryStream();
     const files = {
       "test.md": '```js eval\nthrow new Error("eval failure");\n```\n',
@@ -101,15 +103,13 @@ describe("Tier T4 — eval factory and journal integration", () => {
     yield* useStubFs(files);
     yield* useEchoExec();
 
-    const output = yield* collect(
-      yield* execute({
-        path: "test.md",
-        stream,
-      }),
-    );
+    const first = yield* completion({ path: "test.md", stream });
+    expect(first.ok).toBe(false);
+    expect(failureMessage(first)).toContain("eval failure");
 
-    expect(output).toContain("ERROR");
-    expect(output).toContain("eval failure");
+    const replayed = yield* completion({ path: "test.md", stream });
+    expect(replayed.ok).toBe(false);
+    expect(failureMessage(replayed)).toContain("eval failure");
   });
 
   // T36: Serializable binding — present in journal result

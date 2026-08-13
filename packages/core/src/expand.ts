@@ -51,6 +51,7 @@ import {
   ErrorMode,
   fatalCause,
   filesFatalFailure,
+  projectedContentFailure,
   SegmentCauses,
   useSegmentCauses,
 } from "./errors.ts";
@@ -2785,6 +2786,33 @@ function* expandFunctionComponent(
       // invocation, so what is handled here accounts for the body and its
       // teardown together.
 
+      // A component's account of a failure that is not its own. Asked first,
+      // because the decision it carries is this failure's *subject* rather than
+      // a fatal error discovered beneath it — the same reason a
+      // `ContentExpansionFailure` holding one is not fatal here either. Nothing
+      // fatal can be the subject: a durability or Files failure is rethrown
+      // wherever a segment would otherwise be raised, so it never becomes the
+      // decision a region settled.
+      const projected = projectedContentFailure(error);
+      if (projected !== undefined) {
+        // A `throw` decision is final and no boundary may print what left the
+        // region, so the decision travels alone (see the same rule below).
+        if (!decidedByOutput(projected)) {
+          throw projected;
+        }
+        return [
+          yield* handleFailure({
+            name,
+            ...(expansion.position === undefined ? {} : { position: expansion.position }),
+            error: asFailure(error),
+            // The sentence is this component's; the failure is the caller's.
+            // A declaration the component made about itself passes it outward
+            // (§6.8.1), so the region the content was written in settles it.
+            origin: "content",
+          }),
+        ];
+      }
+
       // Not the document's failure to render: a journal that no longer describes
       // this run, or an error mode that has already decided the document fails.
       const fatal = fatalCause(error);
@@ -2851,20 +2879,25 @@ function* expandFunctionComponent(
   // for the component's own work and not for the content a caller projected
   // through it — which keeps the mode of the region it is written in and
   // reports a failure past this boundary.
-  // What this invocation returns is accepted only if the frame it ran in did
-  // not suffer a checked command failure. A component may catch the
-  // `ContentError` its projected content raised and return replacement text;
-  // that decides what the component reports, not whether a command that exited
-  // nonzero left the run — or the test — intact (#441).
+  // What this invocation returns is accepted only if the run's own record came
+  // through it clear. A component may catch the `ContentError` its projected
+  // content raised and return replacement text; that decides what the component
+  // reports, not whether a command that exited nonzero left the run intact
+  // (#441).
+  //
+  // The run's record, not this frame's: a contained invocation keeps its checked
+  // failures, which is what makes them that test's failed result rather than the
+  // region's. Re-raising one here would hand the enclosing region a failure the
+  // containment exists to keep from it (§3.6).
   function* accepted(): Operation<Segment[]> {
-    const before = checkedFailures?.failure;
+    const before = inherited?.failure;
     const produced = yield* printsErrors(definition.fn)
       ? scoped(function* () {
           yield* usePrintErrors("component");
           return yield* invoke();
         })
       : invoke();
-    const suffered = checkedFailures?.failure;
+    const suffered = inherited?.failure;
     if (suffered !== undefined && suffered !== before) {
       return [yield* raise(suffered)];
     }

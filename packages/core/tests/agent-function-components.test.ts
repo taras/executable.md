@@ -179,13 +179,15 @@ describe("Tier AF — the engine owns props", () => {
 
   it("AF3: an expression resolving to the wrong type is a schema printed error, and nothing runs", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output, result } = yield* runDoc(
+    const { result } = yield* runDoc(
       ["```js eval", "const who = 42;", "```", "", "<Prompt text={who} />", ""].join("\n"),
       { trace },
     );
 
-    expect(result.ok).toBe(true);
-    expect(output).toContain("Prop validation failed for <Prompt />");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain(
+      "Prop validation failed for <Prompt />",
+    );
     // Validation is the engine's, and it runs before the component does.
     expect(trace.prompts).toEqual([]);
     expect(trace.agentLookups).toEqual([]);
@@ -193,11 +195,15 @@ describe("Tier AF — the engine owns props", () => {
 
   it("AF4: an unknown prop is rejected before the component performs anything", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output } = yield* runDoc('<AgentProvider name="stub" nope="x">body</AgentProvider>\n', {
-      trace,
-    });
+    const { output, result } = yield* runDoc(
+      '<AgentProvider name="stub" nope="x">body</AgentProvider>\n',
+      { trace },
+    );
 
-    expect(output).toContain("Prop validation failed for <AgentProvider />");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain(
+      "Prop validation failed for <AgentProvider />",
+    );
     expect(output).not.toContain("body");
     expect(trace.prompts).toEqual([]);
   });
@@ -214,9 +220,10 @@ describe("Tier AF — the engine owns `as`", () => {
 
   it("AF6: an invalid `as` prevents every component effect", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output } = yield* runDoc('<Prompt text="hi" as="not an identifier" />\n', { trace });
+    const { result } = yield* runDoc('<Prompt text="hi" as="not an identifier" />\n', { trace });
 
-    expect(output).toContain('Prop "as" on <Prompt />');
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain('Prop "as" on <Prompt />');
     expect(trace.prompts).toEqual([]);
     expect(trace.agentLookups).toEqual([]);
   });
@@ -225,9 +232,10 @@ describe("Tier AF — the engine owns `as`", () => {
 describe("Tier AF — a prompt does nothing before its content renders", () => {
   it("AF7: a failing wrapper performs no lookup, no prompt and no journal entry", function* () {
     const trace: Trace = { prompts: [], agentLookups: [], timeouts: [] };
-    const { output } = yield* runDoc("<Prompt>\n<Missing />\n</Prompt>\n", { trace });
+    const { result } = yield* runDoc("<Prompt>\n<Missing />\n</Prompt>\n", { trace });
 
-    expect(output).toContain("Failed to import component Missing");
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain("Failed to import component Missing");
     expect(trace.prompts).toEqual([]);
     expect(trace.agentLookups).toEqual([]);
   });

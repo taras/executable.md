@@ -72,6 +72,18 @@ function* runExecution(options: {
   return { value: result.value, output, commands };
 }
 
+/**
+ * What one run said about itself: the diagnostic it reported, or its rendered
+ * text.
+ *
+ * An uncaught diagnostic at a text root is the run's own outcome rather than a
+ * comment in the body, so a case about what a rejection says reads it here. A
+ * successful run's text is unchanged.
+ */
+function said(run: Run): string {
+  return run.error ?? asText(run.value ?? "");
+}
+
 function run(files: Record<string, string>, stream?: DurableStream): Operation<Run> {
   return scoped(function* () {
     const commands: string[] = [];
@@ -177,7 +189,7 @@ describe("Tier RV — component return values", () => {
           "Verdict.md": valueComponent(declaration, expression),
         });
         expect(result.error).toBeUndefined();
-        expect(asText(result.value ?? "")).toContain(`captured: ${JSON.stringify(expected)}`);
+        expect(said(result)).toContain(`captured: ${JSON.stringify(expected)}`);
       });
     }
 
@@ -186,7 +198,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": 'before\n\n<Verdict as="verdict" />\n\nafter\n',
         "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
       });
-      expect(asText(result.value ?? "")).not.toContain("passed");
+      expect(said(result)).not.toContain("passed");
     });
 
     it("drives caller control flow from the captured value", function* () {
@@ -208,8 +220,8 @@ describe("Tier RV — component return values", () => {
         ].join("\n"),
         "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
       });
-      expect(asText(result.value ?? "")).toContain("REVIEW PASSED");
-      expect(asText(result.value ?? "")).not.toContain("REVIEW FAILED");
+      expect(said(result)).toContain("REVIEW PASSED");
+      expect(said(result)).not.toContain("REVIEW FAILED");
     });
   });
 
@@ -222,7 +234,7 @@ describe("Tier RV — component return values", () => {
           "({ passed: true })",
         ),
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain("Return validation failed for <Verdict />");
       expect(output).toContain("summary");
     });
@@ -235,7 +247,7 @@ describe("Tier RV — component return values", () => {
           "({ passed: true, extra: 1 })",
         ),
       });
-      expect(asText(result.value ?? "")).toContain("Return validation failed for <Verdict />");
+      expect(said(result)).toContain("Return validation failed for <Verdict />");
     });
 
     it("accepts a full schema with an optional property", function* () {
@@ -254,7 +266,7 @@ describe("Tier RV — component return values", () => {
           "({ passed: true })",
         ),
       });
-      expect(asText(result.value ?? "")).toContain('captured: {"passed":true}');
+      expect(said(result)).toContain('captured: {"passed":true}');
     });
 
     it("rejects a non-object returns declaration", function* () {
@@ -262,7 +274,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": CAPTURING_ROOT,
         "Verdict.md": "---\nreturns: text\n---\n\nbody\n",
       });
-      expect(asText(result.value ?? "")).toContain('"returns" must declare a JSON Schema object');
+      expect(said(result)).toContain('"returns" must declare a JSON Schema object');
     });
 
     it("rejects a boolean returns declaration during inspection", function* () {
@@ -279,7 +291,7 @@ describe("Tier RV — component return values", () => {
     it("rejects an invalid return schema in execution and inspection alike", function* () {
       const source = "---\nreturns:\n  type: nonsense\n---\n\n<Return value={1} />\n";
       const result = yield* run({ "doc.md": CAPTURING_ROOT, "Verdict.md": source });
-      expect(asText(result.value ?? "")).toContain("invalid return schema");
+      expect(said(result)).toContain("invalid return schema");
 
       yield* useStubFs({ "Verdict.md": source });
       let message = "";
@@ -316,10 +328,14 @@ describe("Tier RV — component return values", () => {
             "",
           ].join("\n"),
         });
-        const output = asText(result.value ?? "");
+        const output = said(result);
         expect(output).toContain("Return validation failed for <Verdict />");
         expect(output).toContain("is not JSON");
-        expect(output).toContain("captured: {shown}");
+        // Refused at the invocation, so nothing after it ran: the eval block
+        // that would have read the binding never started, and the run ends
+        // here rather than carrying an unbound name forward.
+        expect(result.error).toBeDefined();
+        expect(result.output).not.toContain("captured:");
       });
     }
 
@@ -347,7 +363,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain('"severity":"low"');
       expect(output).not.toContain("produced stays");
     });
@@ -359,7 +375,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": '<Note as="note" />\n\ncaptured: {note}\n',
         "Note.md": "NOTE BODY\n",
       });
-      expect(asText(result.value ?? "")).toContain("captured: NOTE BODY");
+      expect(said(result)).toContain("captured: NOTE BODY");
     });
 
     it("treats an explicit string schema as value mode", function* () {
@@ -367,7 +383,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": CAPTURING_ROOT,
         "Verdict.md": valueComponent("returns:\n  type: string", '"shipped"'),
       });
-      expect(asText(result.value ?? "")).toContain('captured: "shipped"');
+      expect(said(result)).toContain('captured: "shipped"');
     });
 
     it("keeps <Output> selection working for a text component", function* () {
@@ -375,7 +391,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": "<Note />\n",
         "Note.md": "DOCUMENTATION\n\n<Output>\n\nSELECTED\n\n</Output>\n",
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain("SELECTED");
       expect(output).not.toContain("DOCUMENTATION");
     });
@@ -387,7 +403,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": "<Note />\n",
         "Note.md": `${BODY_EFFECT}\n\n<Return value={1} />\n`,
       });
-      expect(asText(result.value ?? "")).toContain("<Return> requires a document or component");
+      expect(said(result)).toContain("<Return> requires a document or component");
       expect(result.commands).toEqual([]);
     });
 
@@ -396,7 +412,7 @@ describe("Tier RV — component return values", () => {
         "doc.md": '<Verdict as="v" />\n',
         "Verdict.md": `---\nreturns:\n  type: string\n---\n\n${BODY_EFFECT}\n`,
       });
-      expect(asText(result.value ?? "")).toContain("no direct top-level <Return>");
+      expect(said(result)).toContain("no direct top-level <Return>");
       expect(result.commands).toEqual([]);
     });
 
@@ -417,7 +433,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain("duplicate declaration");
+      expect(said(result)).toContain("duplicate declaration");
       expect(result.commands).toEqual([]);
     });
 
@@ -438,7 +454,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain("not a direct top-level child");
+      expect(said(result)).toContain("not a direct top-level child");
       expect(result.commands).toEqual([]);
     });
 
@@ -461,7 +477,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain("<Output> and `returns` are exclusive");
+      expect(said(result)).toContain("<Output> and `returns` are exclusive");
       expect(result.commands).toEqual([]);
     });
 
@@ -480,7 +496,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain('accepts only a "value" prop');
       expect(output).toContain('requires a "value" prop');
       expect(output).toContain("takes no children");
@@ -502,7 +518,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain("must be invoked with `as`");
+      expect(said(result)).toContain("must be invoked with `as`");
       expect(result.commands).toEqual([]);
     });
   });
@@ -514,7 +530,7 @@ describe("Tier RV — component return values", () => {
         "Wrapper.md": "<Content />\n",
         "Return.md": "A COMPONENT NAMED RETURN\n",
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain("<Return> requires a document or component");
       expect(output).not.toContain("A COMPONENT NAMED RETURN");
     });
@@ -532,7 +548,7 @@ describe("Tier RV — component return values", () => {
         ].join("\n"),
         "Return.md": "A COMPONENT NAMED RETURN\n",
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain("<Return> is reserved");
       expect(output).not.toContain("A COMPONENT NAMED RETURN");
     });
@@ -564,7 +580,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain('captured: "early"');
+      expect(said(result)).toContain('captured: "early"');
       expect(result.commands).toEqual(["echo AFTER_RETURN"]);
     });
 
@@ -598,12 +614,12 @@ describe("Tier RV — component return values", () => {
 
     it("validates and captures a declared return value", function* () {
       const result = yield* runFixture({ "doc.md": CAPTURING_ROOT, "Verdict.ts": valueFunction });
-      expect(asText(result.value ?? "")).toContain('captured: {"passed":true}');
+      expect(said(result)).toContain('captured: {"passed":true}');
     });
 
     it("refuses a value function component invoked without as", function* () {
       const result = yield* runFixture({ "doc.md": "<Verdict />\n", "Verdict.ts": valueFunction });
-      expect(asText(result.value ?? "")).toContain("must be invoked with `as`");
+      expect(said(result)).toContain("must be invoked with `as`");
     });
 
     it("reports a value that fails its schema", function* () {
@@ -617,7 +633,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      expect(asText(result.value ?? "")).toContain("Return validation failed for <Verdict />");
+      expect(said(result)).toContain("Return validation failed for <Verdict />");
     });
 
     // A return binds by reference, so a non-string is a perfectly ordinary
@@ -630,7 +646,7 @@ describe("Tier RV — component return values", () => {
           "\n",
         ),
       });
-      const rendered = asText(result.value ?? "");
+      const rendered = said(result);
       expect(rendered).not.toContain("non-string");
       expect(rendered).not.toContain("passed");
       expect(rendered).toContain("before");
@@ -654,7 +670,7 @@ describe("Tier RV — component return values", () => {
         ].join("\n"),
         "Verdict.md": valueComponent("returns:\n  passed: { type: boolean }", "({ passed: true })"),
       });
-      expect(asText(result.value ?? "")).toContain("REPORT PASSED");
+      expect(said(result)).toContain("REPORT PASSED");
     });
 
     it("does not leak the value into the component's own environment", function* () {
@@ -672,7 +688,7 @@ describe("Tier RV — component return values", () => {
           "",
         ].join("\n"),
       });
-      const output = asText(result.value ?? "");
+      const output = said(result);
       expect(output).toContain('captured: "one"');
       expect(output).not.toContain("self:");
     });
@@ -765,7 +781,7 @@ describe("Tier RV — component return values", () => {
 
     it("keeps a text root's completion and rendering unchanged", function* () {
       const result = yield* run({ "doc.md": "# Title\n" });
-      expect(asText(result.value ?? "")).toContain("# Title");
+      expect(said(result)).toContain("# Title");
       expect(result.output).toContain("# Title");
     });
   });

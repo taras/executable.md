@@ -114,7 +114,9 @@ describe("WebForm: nothing happens before the question is ready", () => {
 
     const run = yield* runWebFormDoc(source, { answer: { decision: "approve" } });
 
-    expect(run.output).toContain("the body failed");
+    // Nothing recovers the body's failure, so the run reports it.
+    expect(run.completion.ok).toBe(false);
+    expect(run.completion.ok ? "" : run.completion.error.message).toContain("the body failed");
     expect(run.effects.served).toBe(0);
     expect(run.effects.opened).toEqual([]);
     expect(run.effects.responded).toEqual([]);

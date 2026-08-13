@@ -101,6 +101,7 @@ describe("Tier TB — a boundary that never finished", () => {
   it("TB3: a body that only printed is complete, and does report", function* () {
     const stream = new InMemoryStream();
     const doc = [
+      "<PrintErrors>",
       "<Testing>",
       "",
       "<Missing />",
@@ -108,11 +109,12 @@ describe("Tier TB — a boundary that never finished", () => {
       '<Test name="t"><Assert expr={true} /></Test>',
       "",
       "</Testing>",
+      "</PrintErrors>",
       "",
     ].join("\n");
 
-    // No interceptor: the error settles under the printing error mode, so the
-    // projection finishes and the boundary is a real count.
+    // No interceptor, and a region that prints: the error settles as a printed
+    // error, so the projection finishes and the boundary is a real count.
     const run = yield* runDoc({ "README.md": doc }, { stream });
 
     expect(run.boundaries).toEqual([{ tests: 1, failed: 0 }]);

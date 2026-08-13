@@ -116,7 +116,11 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
       { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },
       { session: false },
     );
-    expect(run.output).toContain("valid only in an active testing session");
+    // Nothing recovers the configuration error, so it is the run's outcome.
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain(
+      "valid only in an active testing session",
+    );
   });
 
   it("TV12: a configuration diagnostic is observed once and rendered once", function* () {
@@ -127,8 +131,10 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         return yield* next(error);
       },
     });
+    // Written in a region that prints: what this pins is that the diagnostic
+    // is observed once and rendered once, which needs it rendered.
     const run = yield* runDoc(
-      { "doc.md": "<TestAgent>\nbody\n</TestAgent>\n" },
+      { "doc.md": "<PrintErrors>\n<TestAgent>\nbody\n</TestAgent>\n</PrintErrors>\n" },
       { session: false },
     );
     expect(observed).toHaveLength(1);
@@ -490,13 +496,17 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
   it("TV14: a scenario diagnostic renders inline beside a healthy one", function* () {
     const run = yield* runDoc({
       "agents/hi.md": HI,
+      // The region prints, which is what lets the rest of the body run after
+      // the scenario's own diagnostic.
       "doc.md": [
+        "<PrintErrors>",
         "<TestAgent>",
         '<TestAgent.Scenario src="" />',
         '<TestAgent.Scenario src="./agents/hi.md" />',
         "BODY TEXT",
         '<Test name="still runs"><Prompt text="hi" /></Test>',
         "</TestAgent>",
+        "</PrintErrors>",
         "",
       ].join("\n"),
     });
