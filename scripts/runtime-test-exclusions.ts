@@ -169,6 +169,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
+    path: "packages/workflow/tests/workflow-lifecycle-inspection.test.ts",
+    reason:
+      "opens the Deno lifecycle adapter's read-only node:sqlite snapshots and reads run databases directly to compare them; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/workflow-inspection.test.ts",
+    reason:
+      "drives `xmd workflow status`, `list` and `history` against a real node:sqlite run store, which only the Deno entrypoints open; under Node and Bun the command refuses, and workflow-host.test.ts asserts that refusal on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/cli/tests/workflow-installation.test.ts",
     reason:
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

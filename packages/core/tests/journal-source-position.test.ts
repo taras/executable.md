@@ -16,7 +16,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "@executablemd/test-support/bdd";
+import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, until } from "effection";
 import type { Operation } from "effection";
@@ -30,6 +30,7 @@ import {
   registerComponents,
   SOURCE_POSITION_FIELD,
 } from "../mod.ts";
+import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 
 const LINES = [
   "# Release",
@@ -41,7 +42,7 @@ const LINES = [
   "```",
   "",
   "```js eval",
-  "export const answer = 41 + 1;",
+  "const answer = 41 + 1;",
   "```",
   "",
 ];
@@ -95,6 +96,10 @@ function sourceOf(events: DurableEvent[], type: string, name?: string): unknown 
 }
 
 describe("Tier JSP — authored source in the journal", () => {
+  // The document holds an eval block, and a root that cannot compile one now
+  // settles that failure rather than printing it.
+  beforeAll(() => useTempFileCompiler());
+
   it("JSP1: component imports, commands and eval blocks retain where they were written", function* () {
     const path = yield* useDocument();
     const stream = new InMemoryStream();
