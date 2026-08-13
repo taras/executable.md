@@ -71,12 +71,31 @@ const SHIM = [
   "",
 ].join("\n");
 
+/**
+ * Answers for `npm` and records every invocation.
+ *
+ * `#Bootstrap` is the one target that can reach a public registry, so the cases
+ * below need to see whether it did. The version it reports is below the floor
+ * the document requires, so a run that does reach npm refuses at the first
+ * question and asks the registry nothing.
+ */
+const NPM_SHIM = [
+  "#!/usr/bin/env bash",
+  'printf "%s\\n" "$*" >> "$XMD_NPM_LOG"',
+  'if [ "$1" = "--version" ]; then echo "11.0.0"; exit 0; fi',
+  'if [ "$1" = "whoami" ]; then echo "shim-user"; exit 0; fi',
+  "exit 1",
+  "",
+].join("\n");
+
 interface Invocation {
   code: number;
   stdout: string;
   stderr: string;
   /** Every leaf task the run asked for, in order, as written on the command line. */
   tasks: string[];
+  /** Every `npm` invocation the run made, in order. */
+  npmCalls: string[];
 }
 
 /**
@@ -101,8 +120,14 @@ function* invoke(args: string[], options: { fail?: string } = {}): Operation<Inv
     // @effectionx/fs has no chmod, and a shim that is not executable is not one.
     yield* until(chmod(shim, 0o755));
 
+    const npmShim = path.join(bin, "npm");
+    yield* writeTextFile(npmShim, NPM_SHIM);
+    yield* until(chmod(npmShim, 0o755));
+
     const log = path.join(base, "tasks.log");
     yield* writeTextFile(log, "");
+    const npmLog = path.join(base, "npm.log");
+    yield* writeTextFile(npmLog, "");
 
     const result = yield* timebox(120_000, () =>
       exec(Deno.execPath(), {
@@ -112,6 +137,7 @@ function* invoke(args: string[], options: { fail?: string } = {}): Operation<Inv
           ...Deno.env.toObject(),
           PATH: `${bin}${path.delimiter}${Deno.env.get("PATH") ?? ""}`,
           XMD_TASK_LOG: log,
+          XMD_NPM_LOG: npmLog,
           XMD_REAL_DENO: Deno.execPath(),
           XMD_FAIL_TASK: options.fail ?? "",
           XMD_MARKER_PREFIX: marker(""),
@@ -123,11 +149,13 @@ function* invoke(args: string[], options: { fail?: string } = {}): Operation<Inv
     }
 
     const recorded = yield* readTextFile(log);
+    const npmRecorded = yield* readTextFile(npmLog);
     return {
       code: result.value.code ?? 1,
       stdout: result.value.stdout,
       stderr: result.value.stderr,
       tasks: recorded.split("\n").filter((line) => line.length > 0),
+      npmCalls: npmRecorded.split("\n").filter((line) => line.length > 0),
     };
   });
 }
@@ -144,6 +172,7 @@ const TARGETS = [
   "README.md#Test",
   "README.md#Test/Focused",
   "README.md#Test/Complete",
+  "README.md#Bootstrap",
 ];
 
 describe("Tier RM — README dogfood", () => {
@@ -246,6 +275,37 @@ describe("Tier RM — README dogfood", () => {
     expect(run.stdout).toContain("Compile the standalone");
     // And nothing from a sibling the target did not select.
     expect(run.stdout).not.toContain(marker(VERIFY));
+  });
+
+  it("RM11: Bootstrap names no package by default, and reaches no registry", function* () {
+    const run = yield* invoke(["xmd", "run", "README.md#Bootstrap", "--raw"]);
+
+    // The whole point of the default: every other target composes into
+    // `xmd run README.md`, and this one publishes to a public registry. Naming
+    // nothing has to mean doing nothing, not doing it to an unnamed package.
+    expect(run.code).toBe(0);
+    expect(run.npmCalls).toEqual([]);
+    expect(run.stdout).toContain("No package was named");
+  });
+
+  it("RM12: Bootstrap runs the reservation for the package it is given", function* () {
+    const run = yield* invoke([
+      "xmd",
+      "run",
+      "README.md#Bootstrap",
+      "--props-package",
+      "packages/workflow",
+      "--raw",
+    ]);
+
+    // The control for RM11: the guard is what keeps npm out, not an absent
+    // wiring. Naming a package reaches npm, and the shim's version is below the
+    // floor, so it refuses there — before it asks the registry anything.
+    expect(run.npmCalls).toContain("--version");
+    expect(run.code).toBe(1);
+    // The refusal is the run's own failure, so it is reported once as a
+    // diagnostic rather than rendered into the document.
+    expect(run.stderr).toContain("npm trust needs npm 11.15 or newer");
   });
 });
 

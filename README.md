@@ -1,3 +1,11 @@
+---
+props:
+  package:
+    type: string
+    pattern: "^packages/[a-z0-9][a-z0-9._-]*$"
+    description: Workspace package to reserve on npm, e.g. packages/workflow
+---
+
 # executable.md
 
 This is the development guide for the executable.md repository. It covers
@@ -55,6 +63,7 @@ README.md#Build
 README.md#Test
 README.md#Test/Focused
 README.md#Test/Complete
+README.md#Bootstrap
 ```
 
 Preparation is common to all of them, so the block above is the document's own
@@ -183,3 +192,27 @@ Success provides delivery verification: the whole battery passed, and the
 worktree it ran in is unchanged — `verify` compares tracked files afterwards and
 fails if any command moved one, so a green result is also evidence that the
 battery left the repository exactly as it found it.
+
+## Bootstrap
+
+Adding a package to `packages/*` needs one manual step before CI can release it.
+A tagged release publishes to npm with OIDC, and OIDC can only publish a package
+that already exists — so the name is reserved by hand, once, per package.
+
+```bash
+npm login
+deno task xmd run README.md#Bootstrap --props-package packages/<name>
+```
+
+<If condition={props.package !== undefined}><BootstrapNpmPackage package={props.package} /></If>
+
+<If condition={props.package === undefined}>
+
+No package was named, so nothing was reserved. Name one with `--props-package`
+to run the reservation; it explains each step as it takes it, previews the
+placeholder before publishing anything, and refuses rather than touch a package
+that already carries versions.
+[`specs/release-process-spec.md`](specs/release-process-spec.md) §6 carries the
+whole procedure, including the JSR half.
+
+</If>
