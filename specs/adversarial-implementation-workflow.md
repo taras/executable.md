@@ -60,9 +60,14 @@ approval *and* a passing review — so a stage cannot approve its own advancemen
 A stage returns those two sources and nothing derived from them: a precomputed
 flag would be a second copy of the same answer that no schema could hold to
 agreement with its sources. The same pair distinguishes a decline from a review
-that reached its bound still failing, and neither advances; what the workflow
-should ultimately do with an exhausted loop is an unresolved product decision
-under #290, and refusing to advance is not an answer to it.
+that reached its bound still failing, and neither advances. That pair is also
+what makes exhaustion a distinct outcome without a separate label, which is what
+#290 settled: an exhausted loop is neither convergence nor ordinary successful
+completion, it starts no implementation and no later durable effect, and it asks
+the user for direction rather than answering on the stage's own account. A
+composed workflow turns that request into a durable suspension (#367, unbuilt),
+and resume never reads exhaustion, silence, or an unchanged verdict as
+approval.
 
 `proceed: true` authorizes the exact transition and effects the checkpoint
 assessed, and nothing more. The rule binds the material as much as the decision:
@@ -941,10 +946,6 @@ The exercise must resolve enough of these to implement one vertical slice:
    producing a host path at all (#227)?
 7. Which durable signals may schedule a resumption, and how is one arbitrated
    against an iteration's own completion and direct user input (#300)?
-8. What does a planning loop that reaches `max` without a passing verdict do —
-   return the failing plan, fail the stage, or return to the user (#290)? An
-   exhausted loop is not a failure and produces no diagnostic, so the answer is
-   the document's policy to state, and it is not stated yet.
 9. What records who answered an elicitation? The journal retains the validated
    decision and its question fingerprint but no actor identity, so a decision is
    attributable to a run and an expansion but not to a person. No issue owns it.

@@ -531,8 +531,10 @@ stage is reached at all only because `start.md` gated it on
 
 After the loop, `decision.proceed` true with `verdictPassed` false is what
 exhaustion looks like: the user kept approving and the verdict never passed. The
-caller's gate rejects that pair, so an exhausted review cannot reach acceptance.
-What the workflow should ultimately do about it stays unresolved under #290.
+caller's gate rejects that pair, so an exhausted review cannot reach acceptance
+and starts no later durable effect. As in `Planning`, exhaustion is a request
+for user direction rather than a terminal answer of the stage's own (#290,
+settled); a composed workflow suspends there for it (#367, unbuilt).
 
 ## Approval precedes durable effects
 
