@@ -169,6 +169,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
+    path: "packages/workflow/tests/workflow-lifecycle-authority.test.ts",
+    reason:
+      "takes a real advisory lock through Deno.FsFile.tryLockSync and races it against a second Deno process; the lock primitive and the run store it guards are both Deno's",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/workflow/tests/workflow-lifecycle-inspection.test.ts",
     reason:
       "opens the Deno lifecycle adapter's read-only node:sqlite snapshots and reads run databases directly to compare them; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",

@@ -40,7 +40,11 @@ import type {
   SQLCursorLike,
   SQLStorageLike,
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
-import { WorkflowLifecycle, type WorkflowLifecycleSnapshot } from "../lifecycle/api.ts";
+import {
+  type ExecutorAcquisition,
+  WorkflowLifecycle,
+  type WorkflowLifecycleSnapshot,
+} from "../lifecycle/api.ts";
 import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history.ts";
 import {
   WorkflowRequestError,
@@ -50,6 +54,7 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
+import { createExecutorRegistry, type ExecutorRegistry, publishControl } from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
 import { workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
@@ -79,14 +84,22 @@ export interface WorkflowLifecycleOptions {
  * default position runs outermost, so an outer scope's provider would answer
  * ahead of one installed nearer the work.
  *
- * This slice installs the read-only operations. Acquisition, cancellation and
- * deletion are not installed, so they answer with the Api's fail-closed default
- * rather than with a host that appears to hold authority it does not.
+ * The executor registry belongs to this installation's closure rather than to
+ * module scope, so the leases it issued last exactly as long as the scope that
+ * installed the provider and nothing accumulates between runs.
+ *
+ * Cancellation and deletion are not installed yet, so they answer with the Api's
+ * fail-closed default rather than with a host that appears to hold authority it
+ * does not.
  */
 export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operation<void> {
   const root = authorizedRoot(options.root);
+  const executors = createExecutorRegistry();
   yield* WorkflowLifecycle.around(
     {
+      *acquireExecutor([runId]) {
+        return yield* acquire(root, executors, runId);
+      },
       *inspect([runId]) {
         return yield* inspectRun(root, runId);
       },
@@ -99,6 +112,34 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
     },
     { at: "min" },
   );
+}
+
+/**
+ * Take ownership of one run, or report that a live executor holds it.
+ *
+ * The lock is taken before anything reads or writes the run, and the lease it
+ * produces belongs to the scope that asked — so an acquisition made inside a
+ * `scoped()` block releases when that block ends, whatever happened inside it.
+ *
+ * The fresh generation is published only after the lock is held, and only after
+ * whatever the previous owner left has been reconciled: a request addressed to a
+ * generation that is over cannot be allowed to reach this one.
+ */
+function* acquire(
+  root: string,
+  executors: ExecutorRegistry,
+  runId: string,
+): Operation<Result<ExecutorAcquisition>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  const hold = yield* executors.acquire(root, checked.value);
+  if (hold === undefined) {
+    return Ok({ kind: "already-running" });
+  }
+  yield* publishControl(root, hold);
+  return Ok({ kind: "acquired", lease: hold.lease });
 }
 
 function* inspectRun(root: string, runId: string): Operation<Result<WorkflowLifecycleSnapshot>> {
