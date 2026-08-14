@@ -30,12 +30,12 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as url from "node:url";
-import { execute, installAgentComponents, Agent } from "@executablemd/core";
+import { execute, installAgentComponents, isJsonObject, Agent } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
   AgentProviderOptions,
-  Json,
+  JsonObject,
   PromptOptions,
   Session,
 } from "@executablemd/core";
@@ -72,12 +72,13 @@ interface Call {
   readonly content: string;
 }
 
+/** `PromptOptions.session` is `string | Session`; the union narrows on its own. */
 function sessionName(options: PromptOptions | undefined): string {
   const session = options?.session;
-  if (typeof session === "object" && session !== null && "sessionKey" in session) {
-    return String((session as Session).sessionKey);
+  if (session === undefined) {
+    return "<none>";
   }
-  return typeof session === "string" ? session : "<none>";
+  return typeof session === "string" ? session : session.sessionKey;
 }
 
 /**
@@ -199,7 +200,7 @@ returns:
 }} />
 `;
 
-function* runPlanning(): Operation<{ value: Json; calls: Call[] }> {
+function* runPlanning(): Operation<{ value: JsonObject; calls: Call[] }> {
   const calls: Call[] = [];
   const dir = path.join(os.tmpdir(), `xmd-290-${randomUUID()}`);
   yield* ensureDir(dir);
@@ -224,35 +225,32 @@ function* runPlanning(): Operation<{ value: Json; calls: Call[] }> {
     if (!result.ok) {
       throw result.error;
     }
+    if (!isJsonObject(result.value)) {
+      throw new Error(`the root returned ${JSON.stringify(result.value)}, not an object`);
+    }
     return { value: result.value, calls };
   });
 }
 
 describe("#290 criterion 6 — an exhausted planning loop", () => {
   it("runs five failing iterations and returns the exhausted pair without authorizing anything", function* () {
-    const { value, calls } = yield* runPlanning();
-    const returned = value as Record<string, Json>;
+    const { value: returned, calls } = yield* runPlanning();
 
     // Exactly twenty calls: no sixth iteration, and the sentinel never ran.
     expect(calls).toHaveLength(MAX_ITERATIONS * 4);
     expect(calls.filter((call) => call.turn === "sentinel")).toHaveLength(0);
 
-    // Five of each turn, in the order the document writes them.
+    // Every turn, in order, with the session it was routed to. Comparing the
+    // whole twenty-entry sequence is what catches a single mis-routed round:
+    // collapsing to one entry per kind would let any round but the last be
+    // wrong and still match.
     const expected = Array.from({ length: MAX_ITERATIONS }).flatMap(() => [
-      "plan",
-      "verdict",
-      "assessment",
-      "revision",
+      "plan:implementor",
+      "verdict:planner",
+      "assessment:user-checkpoint",
+      "revision:implementor",
     ]);
-    expect(calls.map((call) => call.turn)).toEqual(expected);
-
-    // Each turn reaches the session the document routes it to, and the
-    // revision goes back to the implementor's own conversation.
-    const sessions = new Map(calls.map((call) => [call.turn, call.session]));
-    expect(sessions.get("plan")).toBe("implementor");
-    expect(sessions.get("revision")).toBe("implementor");
-    expect(sessions.get("verdict")).toBe("planner");
-    expect(sessions.get("assessment")).toBe("user-checkpoint");
+    expect(calls.map((call) => `${call.turn}:${call.session}`)).toEqual(expected);
 
     // The outcome is uniquely exhausted. Convergence would be true/true and a
     // decline would be false; nothing else produces this pair.
