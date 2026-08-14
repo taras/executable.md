@@ -249,29 +249,16 @@ no decision was found.
 </Test>
 
 
-## Not proven here: the five-round exhaustion run
+## Exhaustion runs where twenty agent turns fit
 
-One of #290's criteria is not met by this document, and the gap is recorded
-where a reader looks for the coverage rather than in a commit message.
+The seventh criterion — five failing iterations returning the exhausted outcome
+— is proven in `scripts/tests/adversarial-planning-workflow.test.ts`. It costs
+twenty agent turns in one `Planning` invocation, which does not fit a test's
+fixed twenty-second timeout when each turn is an ACP round trip. That test runs
+the same component from this directory, on this search path, with a synchronous
+stub root Agent provider instead of the transport, and finishes in well under a
+second.
 
-`Planning` declares `<Loop name="planning" max={5}>`. Exercising all five valid
-failing iterations costs twenty agent turns in one invocation — five plan
-prompts, five verdict prompts, five checkpoint assessments, and the five
-revision prompts a failing iteration sends. Every test above, taken together,
-also costs twenty turns, and they take about thirty-one seconds of wall clock
-across seven separate timeboxes. A test has a fixed twenty-second timeout with
-no prop that raises it (`specs/testing-spec.md` §"Each test has a fixed
-20-second timeout"; core's `<Test>` accepts `name` and nothing else). So the
-whole document's agent traffic would have to fit inside one test's budget, and
-it does not.
-
-The scenarios for that run are written and correct — `agents/exhaustion-*.md`
-declare the ten implementor turns, five verdict turns and five assessment turns
-the loop would consume. What is missing is a way to run them under the timebox.
-
-Lowering `max` to fit would prove a different document than the one the workflow
-ships, so it is not done here. The distinct exhausted outcome itself — the
-`(decision.proceed true, verdictPassed false)` pair, the gate that refuses it,
-and the awaiting-direction branch that reports it inside `<Dir>` and the root
-`<Output>` — is settled contract described in `Planning.md` and `start.md`, and
-the branch placement is proven structurally by the composition probe.
+Where `start.md` puts `<Implementation>` behind that gate, and reports
+exhaustion as awaiting direction inside `<Dir>` and the root `<Output>`, stays
+the composition probe's evidence.

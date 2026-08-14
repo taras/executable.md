@@ -410,7 +410,7 @@ replay expands the same fragment without asking the Agent again.
 | --- | --- | --- |
 | namespaced document props | #305 | shipped |
 | synchronize this living target with settled contracts | #292 | this change |
-| prove the shipped planning-document logic | #290 | open |
+| prove the shipped planning-document logic | #290 | this change — the proof lands here; #290 closes on delivery |
 | compose the supervised workflow, and make its stage components reachable under `start` and `resume` | #301 | open |
 | resume from explicit durable signals | #300 | open |
 | default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
