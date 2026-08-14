@@ -169,6 +169,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
+    path: "packages/workflow/tests/workflow-lifecycle-control.test.ts",
+    reason:
+      "cancels and deletes real node:sqlite run databases through the Deno lifecycle adapter and its advisory lock; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/workflow-lifecycle-control.test.ts",
+    reason:
+      "drives `xmd workflow cancel` and `delete` against a real node:sqlite run store, which only the Deno entrypoints open; under Node and Bun the command refuses, and workflow-host.test.ts asserts that refusal on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/workflow/tests/workflow-lifecycle-authority.test.ts",
     reason:
       "takes a real advisory lock through Deno.FsFile.tryLockSync and races it against a second Deno process; the lock primitive and the run store it guards are both Deno's",

@@ -30,21 +30,6 @@ export interface WorkflowRunCreation {
   readonly retrieval?: Json;
 }
 
-/**
- * A cancellation the provider found waiting, as it stood before the transition.
- *
- * Never part of a caller's request. It is evidence the provider gathered about
- * an executor that is gone, and a caller that could supply it could ask for a
- * cancellation nobody wrote. It carries both identities because acting on it
- * later — acknowledging it, clearing it — must prove it is still *this*
- * request: one that arrived after the snapshot belongs to a decision nobody has
- * made yet, and clearing it would drop a caller's request on the floor.
- */
-export interface PendingCancellation {
-  readonly requestId: string;
-  readonly generation: string;
-}
-
 /** One caller's request to begin a document execution under its lease. */
 export interface WorkflowBeginRequest {
   readonly runId: string;

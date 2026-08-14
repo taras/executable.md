@@ -29,11 +29,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { Err, Ok, type Operation, type Result, scoped } from "effection";
 import { exists } from "@effectionx/fs";
-import type {
-  PendingCancellation,
-  WorkflowBeginRequest,
-  WorkflowExecutionBegun,
-} from "../lifecycle/execution.ts";
+import type { WorkflowBeginRequest, WorkflowExecutionBegun } from "../lifecycle/execution.ts";
 import { conflictingFields } from "../storage/compatibility.ts";
 import { definitionToJson } from "../storage/definition.ts";
 import {
@@ -103,7 +99,6 @@ export function* beginExecution(
   hold: ExecutorHold,
   authorize: () => ExecutorHold,
   request: WorkflowBeginRequest,
-  pending: PendingCancellation | undefined,
 ): Operation<Result<BeginOutcome>> {
   // Asked before a connection exists, because opening one creates the file.
   // A resume that found nothing would otherwise leave an empty database behind
@@ -125,7 +120,7 @@ export function* beginExecution(
   const outcome = yield* scoped(function* (): Operation<Result<BegunRows | Refused>> {
     yield* connection.lock.hold();
     return inLifecycleTransaction(connection, path, () =>
-      beginOnce(connection, path, sameHold(authorize, hold), request, pending),
+      beginOnce(connection, path, sameHold(authorize, hold), request),
     );
   });
   if (!outcome.ok) {
@@ -192,7 +187,6 @@ function recover(
   path: string,
   hold: ExecutorHold,
   request: WorkflowBeginRequest,
-  pending: PendingCancellation | undefined,
 ): Recovery {
   const { database } = connection;
   if (isUninitialized(database, path)) {
@@ -218,7 +212,7 @@ function recover(
 
   // Whatever the previous owner left is proven stale: this caller holds the
   // lock, and this acquisition has begun nothing of its own.
-  return reconcile(database, path, stored, pending);
+  return reconcile(database, path, stored);
 }
 
 function beginOnce(
@@ -226,7 +220,6 @@ function beginOnce(
   path: string,
   hold: ExecutorHold,
   request: WorkflowBeginRequest,
-  pending: PendingCancellation | undefined,
 ): BegunRows | Refused {
   // An acquisition begins one execution. A second would find this owner's own
   // live execution and, seeing it unfinished, reconcile it as a dead executor's
@@ -237,7 +230,7 @@ function beginOnce(
     );
   }
 
-  const recovery = recover(connection, path, hold, request, pending);
+  const recovery = recover(connection, path, hold, request);
 
   // A file can exist and hold nothing — created by an interrupted attempt, or
   // left empty by something else. Existence is not a run, so a resume that
@@ -445,18 +438,13 @@ interface Reconciled {
  * addressed to the exact generation that died settles the execution it was
  * addressed to; failing both, the execution was interrupted.
  */
-function reconcile(
-  database: DatabaseSync,
-  path: string,
-  stored: WorkflowRunRecord,
-  pending: PendingCancellation | undefined,
-): Recovery {
+function reconcile(database: DatabaseSync, path: string, stored: WorkflowRunRecord): Recovery {
   const unfinished = reading(database, SELECT_UNFINISHED).all().map(readDocumentExecution);
   if (unfinished.length === 0) {
     return { status: stored.status };
   }
 
-  const closing = closingOutcome(database, stored, pending);
+  const closing = closingOutcome(database, stored);
 
   let last: DocumentExecutionRecord | undefined;
   for (const execution of unfinished) {
@@ -484,18 +472,11 @@ interface Closing {
 /**
  * What the previous owner's execution became, on the evidence the run holds.
  *
- * The order is the architecture's, and each step rules out the next. A retained
- * root Close proves the canonical outcome won before anything could interrupt
- * or cancel it, so it is restored and any request left behind is stale. Failing
- * that, a cancellation addressed to the exact generation that died settles the
- * execution it was addressed to — a request for any other generation belongs to
- * an executor this one is not. Failing both, the execution was interrupted.
+ * A retained root Close proves the canonical outcome won before anything could
+ * interrupt it, so it is restored. Failing that, the execution was interrupted:
+ * the owner went away without recording an outcome, and that is what happened.
  */
-function closingOutcome(
-  database: DatabaseSync,
-  stored: WorkflowRunRecord,
-  pending: PendingCancellation | undefined,
-): Closing {
+function closingOutcome(database: DatabaseSync, stored: WorkflowRunRecord): Closing {
   // A replay whose terminal state was preserved closes only its own execution,
   // and the authoritative outcome stays exactly as it was.
   if (terminal(stored.status)) {
@@ -505,14 +486,6 @@ function closingOutcome(
   const canonical = rootOutcome(database);
   if (canonical !== undefined) {
     return { status: canonical.status, reason: canonical.reason, publishes: true };
-  }
-
-  if (pending !== undefined) {
-    return {
-      status: "cancelled",
-      reason: { kind: "host", code: "executor-cancelled" },
-      publishes: true,
-    };
   }
 
   return { status: "interrupted", reason: interrupted, publishes: true };
@@ -684,4 +657,94 @@ function refusal<T>(error: unknown, path: string): Result<T> {
     return Err(translated);
   }
   throw translated;
+}
+
+/**
+ * Make one run terminal, under a lease and without starting anything.
+ *
+ * There is no live execution to halt here: acquiring the lock is what proved
+ * that. What is left is retained state, and the rules are the architecture's —
+ * a root Close means the canonical outcome already won and cancellation is
+ * refused; an unfinished execution left by an owner that went away is finished
+ * as cancelled; a run with nothing running becomes cancelled directly; a run
+ * already cancelled says so again; and a completed or failed run is not
+ * something to cancel.
+ */
+export function* cancelRun(
+  connections: WorkflowRunConnections,
+  path: string,
+  hold: ExecutorHold,
+  authorize: () => ExecutorHold,
+): Operation<Result<WorkflowRunRecord>> {
+  if (!(yield* exists(path))) {
+    return Err(new WorkflowRunNotFoundError(hold.runId));
+  }
+  const connection = connections.at(path);
+
+  const outcome = yield* scoped(function* (): Operation<Result<WorkflowRunRecord | Refused>> {
+    yield* connection.lock.hold();
+    return inLifecycleTransaction(connection, path, () => {
+      sameHold(authorize, hold);
+      const { database } = connection;
+      verifySchema(database, path, connection.dofs);
+      const stored = readRunRow(database, path);
+      if (stored.runId !== hold.runId) {
+        throw new WorkflowRunIdMismatchError(hold.runId, path);
+      }
+
+      if (stored.status === "cancelled") {
+        // Already what the caller asked for. Saying so twice is the same answer.
+        return stored;
+      }
+      if (terminal(stored.status)) {
+        throw new WorkflowRequestError(
+          `workflow run ${stored.status}: a run whose outcome already won is not cancelled. ` +
+            "The run is left exactly as it is.",
+        );
+      }
+
+      const canonical = rootOutcome(database);
+      if (canonical !== undefined) {
+        // The document finished before its owner disappeared. Restoring what it
+        // recorded is not cancelling it.
+        for (const execution of unfinishedExecutions(database)) {
+          finish(database, path, {
+            executionId: execution.executionId,
+            status: canonical.status,
+            reason: canonical.reason,
+          });
+        }
+        publish(database, path, canonical.status, canonical.reason);
+        // Committed, and refused: what the root recorded is now what the run
+        // says, and telling the caller it was not cancelled must not undo that.
+        return {
+          kind: "refused" as const,
+          reason: new WorkflowRequestError(
+            `workflow run ${canonical.status}: its root recorded an outcome before the executor ` +
+              "went away, and that outcome is what the run retains.",
+          ),
+        };
+      }
+
+      const reason = { kind: "host", code: "cancelled" } as const;
+      for (const execution of unfinishedExecutions(database)) {
+        finish(database, path, {
+          executionId: execution.executionId,
+          status: "cancelled",
+          reason,
+        });
+      }
+      publish(database, path, "cancelled", reason);
+      return readRunRow(database, path);
+    });
+  });
+
+  if (!outcome.ok) {
+    return outcome;
+  }
+  return "kind" in outcome.value ? Err(outcome.value.reason) : Ok(outcome.value);
+}
+
+function unfinishedExecutions(database: DatabaseSync): DocumentExecutionRecord[] {
+  return reading(database, SELECT_UNFINISHED).all().map(readDocumentExecution);
 }

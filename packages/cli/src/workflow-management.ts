@@ -25,7 +25,7 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { WorkflowLifecycle, WorkflowLifecycleProviderError } from "@executablemd/workflow";
+import { WorkflowLifecycle } from "@executablemd/workflow";
 import type {
   WorkflowHistoryEntry,
   WorkflowLifecycleSnapshot,
@@ -76,26 +76,25 @@ export function runWorkflowManagement(
         write(request.json ? json(entries.value) : renderHistory(entries.value));
         return { exitCode: 0 };
       }
-      case "cancel":
-      case "delete": {
-        // An operation this host installs no handler for is a refusal to
-        // report, not a crash: the Api's fail-closed default says exactly which
-        // operation has no provider, and that sentence is the answer.
-        try {
-          const answered =
-            request.action === "cancel"
-              ? yield* WorkflowLifecycle.operations.cancel(request.runId)
-              : yield* WorkflowLifecycle.operations.delete(request.runId);
-          if (!answered.ok) {
-            return refuse(answered.error);
-          }
-        } catch (error) {
-          if (error instanceof WorkflowLifecycleProviderError) {
-            return refuse(error);
-          }
-          throw error;
+      case "cancel": {
+        const cancelled = yield* WorkflowLifecycle.operations.cancel(request.runId);
+        if (!cancelled.ok) {
+          return refuse(cancelled.error);
         }
-        write(`workflow ${request.action}: ${request.runId}`);
+        // The command reports its own request, not the run's outcome: asking
+        // for a cancellation and getting one is success, however terminal the
+        // status it left behind.
+        write(`workflow cancel: ${cancelled.value.runId} (${cancelled.value.status})`);
+        return { exitCode: 0 };
+      }
+      case "delete": {
+        const deleted = yield* WorkflowLifecycle.operations.delete(request.runId);
+        if (!deleted.ok) {
+          return refuse(deleted.error);
+        }
+        // Only what actually went. Nothing here claims to have undone an
+        // effect the run had on anything outside itself.
+        write(`workflow delete: ${request.runId} (${deleted.value.removed.join(", ")})`);
         return { exitCode: 0 };
       }
     }

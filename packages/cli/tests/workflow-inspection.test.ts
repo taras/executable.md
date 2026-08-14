@@ -309,10 +309,11 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       expect(verbose.stderr).toContain("--verbose");
 
       // `*` is a character in an id, not syntax: the grammar hands it on, and
-      // what refuses this is the operation having no answering provider yet.
+      // what refuses this is the run it addressed — there is no run called
+      // `release-*`, and no pattern was ever evaluated.
       const wildcard = yield* xmd(fixture, ["workflow", "delete", "release-*"]).join();
       expect(wildcard.code).toBe(1);
-      expect(wildcard.stderr).toContain("delete()");
+      expect(wildcard.stderr).toContain("release-*");
 
       const missing = yield* xmd(fixture, ["workflow", "status"]).join();
       expect(missing.code).toBe(1);

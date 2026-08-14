@@ -35,8 +35,7 @@ export type {
   WorkflowRunCreation,
 } from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
-export { hashRunId, workflowRunPath, workflowRunSidecars } from "./src/deno/path.ts";
-export type { WorkflowRunSidecars } from "./src/deno/path.ts";
+export { hashRunId, workflowRunLock, workflowRunPath } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";

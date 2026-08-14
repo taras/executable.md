@@ -126,7 +126,8 @@ export interface WorkflowRunConnections {
     transaction: WorkflowRunTransaction,
   ): WorkflowRunTransactionToken;
   validateToken(database: WorkflowRunDatabase, token: WorkflowRunTransactionToken): RunTransaction;
-  close(): void;
+  /** Close and forget one run's connection, so its file can be removed. */
+  close(path?: string): void;
 }
 
 class SqliteStorage implements SQLStorageLike {
@@ -464,7 +465,16 @@ export function createWorkflowRunConnections(
       return transaction;
     },
 
-    close(): void {
+    close(path?: string): void {
+      if (path !== undefined) {
+        const canonical = resolve(path);
+        const entry = entries.get(canonical);
+        if (entry !== undefined) {
+          entry.close();
+          entries.delete(canonical);
+        }
+        return;
+      }
       if (!open) {
         return;
       }

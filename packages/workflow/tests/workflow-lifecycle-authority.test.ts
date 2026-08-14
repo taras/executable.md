@@ -17,12 +17,12 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exec } from "@effectionx/process";
-import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import { exists, writeTextFile } from "@effectionx/fs";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { ExecutorAcquisition, ExecutorLease } from "../mod.ts";
-import { useWorkflowLifecycle, workflowRunSidecars } from "../deno.ts";
+import { useWorkflowLifecycle, workflowRunLock } from "../deno.ts";
 import { creation, leasedRun, runPath, useStorageRoot, withRunHost } from "./support/storage.ts";
 
 const { acquireExecutor } = WorkflowLifecycle.operations;
@@ -77,47 +77,6 @@ describe("Tier WLA — executor authority", () => {
     });
   });
 
-  it("WLA2: the descriptor appears only once a transition has committed", function* () {
-    const root = yield* useStorageRoot();
-    const sidecars = workflowRunSidecars(root, "release-1.4");
-
-    yield* withRunHost(root, function* (authority) {
-      let published = "";
-      yield* scoped(function* () {
-        const acquisition = yield* acquired("release-1.4");
-        const lease = leaseOf(acquisition);
-
-        // Holding the lock is not yet being addressable. Publishing here would
-        // put this owner's generation beside a request written for the one
-        // before it, ahead of any decision about which outcome won.
-        expect(yield* exists(sidecars.descriptor)).toBe(false);
-
-        const begun = yield* authority.begin(lease, {
-          runId: "release-1.4",
-          action: "start",
-          creation: creation(),
-        });
-        if (!begun.ok) {
-          throw begun.error;
-        }
-
-        published = yield* readTextFile(sidecars.descriptor);
-        const descriptor = JSON.parse(published);
-        expect(descriptor.runId).toBe("release-1.4");
-        expect(typeof descriptor.generation).toBe("string");
-      });
-
-      // A descriptor outliving its lock would be read as a live owner.
-      expect(yield* exists(sidecars.descriptor)).toBe(false);
-
-      // The next acquisition is a different executor, and says so.
-      yield* leasedRun(authority, { runId: "release-1.4", action: "resume" }, function* () {
-        const next = JSON.parse(yield* readTextFile(sidecars.descriptor));
-        expect(next.generation).not.toBe(JSON.parse(published).generation);
-      });
-    });
-  });
-
   it("WLA5: an absent run refuses a resume and leaves no candidate behind", function* () {
     const root = yield* useStorageRoot();
 
@@ -164,66 +123,6 @@ describe("Tier WLA — executor authority", () => {
     // opens and commits on an empty file, and refusing any later than this
     // would mean opening it. What matters is that nothing was initialized.
     expect(tables(pristine)).toEqual([]);
-  });
-
-  it("WLA6: a stale cancellation settles the run, and the refusal keeps it", function* () {
-    const root = yield* useStorageRoot();
-    const sidecars = workflowRunSidecars(root, "release-1.4");
-
-    // What a killed owner leaves: a `running` run with an unfinished execution,
-    // its descriptor still on disk, a cancellation addressed to that exact
-    // generation — and no lock, because the kernel released it.
-    let descriptor = "";
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(
-        authority,
-        { runId: "release-1.4", action: "start", creation: creation() },
-        function* () {
-          descriptor = yield* readTextFile(sidecars.descriptor);
-        },
-      );
-    });
-    // Put back what an orderly release cleared and a death would not have.
-    yield* writeTextFile(sidecars.descriptor, descriptor);
-    const generation = JSON.parse(descriptor).generation;
-    yield* writeTextFile(
-      sidecars.request,
-      `${JSON.stringify({
-        runId: "release-1.4",
-        generation,
-        requestId: "request-1",
-        kind: "cancel",
-      })}\n`,
-    );
-
-    yield* withRunHost(root, function* (authority) {
-      const acquisition = yield* acquired("release-1.4");
-      const begun = yield* authority.begin(leaseOf(acquisition), {
-        runId: "release-1.4",
-        action: "resume",
-      });
-      // The resume is refused, because the run it found is cancelled.
-      expect(begun.ok).toBe(false);
-    });
-
-    // The spent request is gone — it took part in a decision — and no
-    // descriptor was published, because an owner that began nothing is not one
-    // anybody should be able to address.
-    expect(yield* exists(sidecars.request)).toBe(false);
-    expect(yield* exists(sidecars.descriptor)).toBe(false);
-
-    // And it stays cancelled. The recovery committed with the refusal, so the
-    // refusal did not roll it back into a run that still looks live.
-    yield* withLifecycle(root, function* () {
-      const snapshot = yield* WorkflowLifecycle.operations.inspect("release-1.4");
-      if (!snapshot.ok) {
-        throw snapshot.error;
-      }
-      expect(snapshot.value.record.status).toBe("cancelled");
-      expect(
-        snapshot.value.executions.every((execution) => execution.stoppedAt !== undefined),
-      ).toBe(true);
-    });
   });
 
   it("WLA7: one acquisition begins one execution", function* () {

@@ -32,9 +32,9 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
-import { exists, readdir } from "@effectionx/fs";
+import { exists, readdir, rm } from "@effectionx/fs";
 import { useWorkflowRunConnections, type WorkflowRunConnections } from "./connections.ts";
-import { Err, Ok, type Operation, type Result } from "effection";
+import { Err, Ok, type Operation, type Result, scoped } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import type {
   DurableObjectStorageLike,
@@ -44,11 +44,11 @@ import type {
 import {
   type ExecutorAcquisition,
   type ExecutorLease,
+  type WorkflowDeletion,
   WorkflowLifecycle,
   type WorkflowLifecycleSnapshot,
 } from "../lifecycle/api.ts";
 import type {
-  PendingCancellation,
   WorkflowBeginRequest,
   WorkflowExecutionAuthority,
   WorkflowExecutionBegun,
@@ -62,17 +62,9 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
-import {
-  clearRequest,
-  createExecutorRegistry,
-  type ExecutorHold,
-  type ExecutorRegistry,
-  publishControl,
-  readControl,
-  readRequest,
-} from "./executor.ts";
+import { createExecutorRegistry, type ExecutorHold, type ExecutorRegistry } from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
-import { beginExecution, settleExecution } from "./transitions.ts";
+import { beginExecution, cancelRun, settleExecution } from "./transitions.ts";
 import { workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
@@ -127,14 +119,16 @@ export function* installWorkflowLifecycle(
 ): Operation<WorkflowExecutionAuthority> {
   const root = authorizedRoot(options.root);
   const executors = createExecutorRegistry();
-  // What the previous owner left, as it stood when this one took the lock. An
-  // input snapshot: acting on it later has to prove it is still that exact
-  // request.
-  const pending = new WeakMap<ExecutorLease, PendingCancellation | undefined>();
   yield* WorkflowLifecycle.around(
     {
       *acquireExecutor([runId]) {
-        return yield* acquire(root, executors, pending, runId);
+        return yield* acquire(root, executors, runId);
+      },
+      *cancel([runId]) {
+        return yield* cancel(root, connections, executors, runId);
+      },
+      *delete([runId]) {
+        return yield* remove(root, connections, executors, runId);
       },
       *inspect([runId]) {
         return yield* inspectRun(root, runId);
@@ -154,7 +148,7 @@ export function* installWorkflowLifecycle(
   // place for a capability that hands out transports.
   return {
     begin(lease, request) {
-      return beginRun(root, connections, executors, pending, lease, request);
+      return beginRun(root, connections, executors, lease, request);
     },
     *settle(lease, completion) {
       // Authorized before a connection exists: the path comes from the hold the
@@ -179,7 +173,6 @@ function* beginRun(
   root: string,
   connections: WorkflowRunConnections,
   executors: ExecutorRegistry,
-  pending: WeakMap<ExecutorLease, PendingCancellation | undefined>,
   executorLease: ExecutorLease,
   request: WorkflowBeginRequest,
 ): Operation<Result<WorkflowExecutionBegun>> {
@@ -195,50 +188,72 @@ function* beginRun(
     return authorized;
   }
   const hold = authorized.value;
-  const found = pending.get(executorLease);
   const begun = yield* beginExecution(
     connections,
     workflowRunPath(root, hold.runId),
     hold,
     () => executors.authorize(executorLease, checked.value),
     request,
-    found,
   );
   if (!begun.ok) {
     return begun;
   }
-
-  // The durable decision has committed either way, so the request that took
-  // part in it is spent — cleared only if it is still the exact one that did,
-  // because anything written since belongs to a decision nobody has made.
-  if (found !== undefined) {
-    yield* clearMatchingRequest(root, hold.runId, found);
-    pending.delete(executorLease);
-  }
-
   if (begun.value.kind === "refused") {
-    // Recovery stands; this caller does not continue. No descriptor is
-    // published, because an owner that begins nothing is not one to address.
     return Err(begun.value.reason);
   }
-
-  yield* publishControl(root, hold);
   return Ok(begun.value);
 }
 
-function* clearMatchingRequest(
+/**
+ * Remove one run's retained storage, under a lease.
+ *
+ * The lock decides whether there is anything to refuse: a live executor holds
+ * it, and a run somebody is running is not one to delete. Everything else may
+ * be, including a `running` record whose owner is gone — the released lock is
+ * what proves it.
+ *
+ * What goes is the run's database. The lock file stays, empty: unlinking a file
+ * this lease still holds would let the next caller create and lock a different
+ * file at the same path while this one still exists. An empty lock is host
+ * arrangement rather than retained run state, so it is not a category anybody
+ * is told about.
+ */
+function* remove(
   root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorRegistry,
   runId: string,
-  consumed: PendingCancellation,
-): Operation<void> {
-  const current = yield* readRequest(root, runId);
-  if (
-    current !== undefined &&
-    current.requestId === consumed.requestId &&
-    current.generation === consumed.generation
-  ) {
-    yield* clearRequest(root, runId);
+): Operation<Result<WorkflowDeletion>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
   }
+  return yield* scoped(function* (): Operation<Result<WorkflowDeletion>> {
+    const hold = yield* executors.acquire(root, checked.value);
+    if (hold === undefined) {
+      return Err(
+        new WorkflowRequestError(
+          `workflow run ${checked.value} is running: a run a live executor owns is not deleted. ` +
+            "Interrupt the foreground process that owns it first.",
+        ),
+      );
+    }
+
+    const path = workflowRunPath(root, hold.runId);
+    // Recognized before anything is removed: deleting a file because its name
+    // matches would remove whatever happened to be there, and an absent run is
+    // reported rather than treated as an idempotent success.
+    const recognized = yield* inspectRun(root, checked.value);
+    if (!recognized.ok) {
+      return recognized;
+    }
+
+    // Closed first: the connection this host holds on the file has to go before
+    // the file does, or the next caller opens the one that was removed.
+    connections.close(path);
+    yield* rm(path);
+    return Ok({ removed: ["run-storage"] });
+  });
 }
 
 /** The hold this lease stands for, as a refusal rather than a raise. */
@@ -258,28 +273,38 @@ function authorizeHold(
 }
 
 /**
- * What the previous owner left behind, and what of it survives.
+ * Make one run terminal, when nothing is running it.
  *
- * A descriptor without its lock is stale data; the request beside it is
- * evidence only if it was addressed to that exact dead generation. Anything
- * else — a request for a generation nobody recognizes, a request with no
- * descriptor to match — is cleared, so it cannot reach the generation this
- * acquisition is about to publish.
+ * The lock is the whole test for whether anything is: a live executor holds it,
+ * and this host does not reach into another process's document execution. A
+ * caller who wants a running workflow to stop interrupts the foreground process
+ * that owns it, which publishes `interrupted` and leaves the run resumable.
  */
-function* reconcileControl(
+function* cancel(
   root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorRegistry,
   runId: string,
-): Operation<PendingCancellation | undefined> {
-  const request = yield* readRequest(root, runId);
-  if (request === undefined) {
-    return undefined;
+): Operation<Result<WorkflowRunRecord>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
   }
-  const descriptor = yield* readControl(root, runId);
-  if (descriptor === undefined || descriptor.generation !== request.generation) {
-    yield* clearRequest(root, runId);
-    return undefined;
-  }
-  return { requestId: request.requestId, generation: request.generation };
+  return yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
+    const hold = yield* executors.acquire(root, checked.value);
+    if (hold === undefined) {
+      return Err(
+        new WorkflowRequestError(
+          `workflow run ${checked.value} is running: cancellation does not reach into a live ` +
+            "document execution. Interrupt the foreground process that owns it — Ctrl-C tears " +
+            "its scope down in order, publishes interrupted and leaves the run resumable.",
+        ),
+      );
+    }
+    return yield* cancelRun(connections, workflowRunPath(root, hold.runId), hold, () =>
+      executors.authorize(hold.lease, checked.value),
+    );
+  });
 }
 
 /**
@@ -296,7 +321,6 @@ function* reconcileControl(
 function* acquire(
   root: string,
   executors: ExecutorRegistry,
-  pending: WeakMap<ExecutorLease, PendingCancellation | undefined>,
   runId: string,
 ): Operation<Result<ExecutorAcquisition>> {
   const checked = checkRunId(runId);
@@ -307,12 +331,6 @@ function* acquire(
   if (hold === undefined) {
     return Ok({ kind: "already-running" });
   }
-
-  // Gathered now, decided later. Publishing this owner's generation before the
-  // transition that decides whether a Close, that cancellation or an ordinary
-  // interruption won would leave the previous owner's request sitting beside a
-  // descriptor it was never addressed to.
-  pending.set(hold.lease, yield* reconcileControl(root, checked.value));
   return Ok({ kind: "acquired", lease: hold.lease });
 }
 

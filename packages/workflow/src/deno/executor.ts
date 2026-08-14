@@ -25,22 +25,20 @@
  * like a lease authorizes nothing, and neither does a run id, a path or a
  * retained descriptor.
  *
- * ## Generations address an owner, and only that owner
+ * ## Nothing addresses a live owner
  *
- * Each acquisition publishes a fresh random generation. A cancellation request
- * names the generation it was written for, so a request left behind by a dead
- * owner cannot reach the next one — it is reconciled or cleared before the new
- * generation is published, never carried across.
+ * There is no control channel here, and no way to ask a running executor to
+ * stop. The foreground process that owns a run's Effection scope owns the only
+ * supported way to halt it, which is interruption. Cancellation is for runs
+ * with no owner, and it takes this same lock before it changes anything.
  */
 
-import { randomUUID } from "node:crypto";
 import { ensure, type Operation, resource } from "effection";
-import { ensureDir, exists, readTextFile, rm } from "@effectionx/fs";
+import { ensureDir } from "@effectionx/fs";
 import { dirname } from "node:path";
 import type { ExecutorLease } from "../lifecycle/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
-import { workflowRunSidecars } from "./path.ts";
-import { writeAtomically } from "./atomic.ts";
+import { workflowRunLock } from "./path.ts";
 
 /**
  * One acquisition's authority, as this host keeps it.
@@ -51,8 +49,6 @@ import { writeAtomically } from "./atomic.ts";
 export interface ExecutorHold {
   readonly lease: ExecutorLease;
   readonly runId: string;
-  /** Fresh per acquisition, published only after the lock was taken. */
-  readonly generation: string;
   readonly file: Deno.FsFile;
   open: boolean;
   /**
@@ -64,20 +60,6 @@ export interface ExecutorHold {
    * this owner's own live execution and reconcile it away.
    */
   execution?: string;
-}
-
-/** What the descriptor beside a run says about its live owner. */
-export interface ControlDescriptor {
-  readonly runId: string;
-  readonly generation: string;
-}
-
-/** One request addressed to one exact executor generation. */
-export interface ControlRequest {
-  readonly runId: string;
-  readonly generation: string;
-  readonly requestId: string;
-  readonly kind: "cancel";
 }
 
 /**
@@ -133,13 +115,13 @@ export function createExecutorRegistry(): ExecutorRegistry {
   return {
     acquire(root: string, runId: string): Operation<ExecutorHold | undefined> {
       return resource<ExecutorHold | undefined>(function* (provide) {
-        const sidecars = workflowRunSidecars(root, runId);
-        yield* ensureDir(dirname(sidecars.lock));
+        const lock = workflowRunLock(root, runId);
+        yield* ensureDir(dirname(lock));
 
         // Created if absent and never unlinked while a lease may hold it:
         // unlinking a locked file lets the next caller create and lock a
         // different file at the same path while this lease still exists.
-        const file = Deno.openSync(sidecars.lock, { read: true, write: true, create: true });
+        const file = Deno.openSync(lock, { read: true, write: true, create: true });
         let locked = false;
         try {
           locked = file.tryLockSync(true);
@@ -156,7 +138,6 @@ export function createExecutorRegistry(): ExecutorRegistry {
         const hold: ExecutorHold = {
           lease: Object.freeze({ runId }),
           runId,
-          generation: randomUUID(),
           file,
           open: true,
         };
@@ -166,12 +147,9 @@ export function createExecutorRegistry(): ExecutorRegistry {
         // Registered before the descriptor is published, so a failure between
         // here and the caller's first transition still releases the lock and
         // leaves no descriptor claiming a live owner.
-        yield* ensure(function* () {
+        yield* ensure(() => {
           hold.open = false;
           holds.delete(hold.lease);
-          // Cleared before the lock goes: a descriptor outliving its lock is
-          // stale data, and the window where both look valid is this one.
-          yield* clearControl(sidecars.descriptor);
           try {
             file.unlockSync();
           } finally {
@@ -194,117 +172,4 @@ export function createExecutorRegistry(): ExecutorRegistry {
       return false;
     },
   };
-}
-
-/** Publish who owns this run now. Replaces whatever the last owner left. */
-export function* publishControl(root: string, hold: ExecutorHold): Operation<void> {
-  const sidecars = workflowRunSidecars(root, hold.runId);
-  const descriptor: ControlDescriptor = { runId: hold.runId, generation: hold.generation };
-  yield* writeAtomically(sidecars.descriptor, `${JSON.stringify(descriptor)}\n`);
-}
-
-function* clearControl(path: string): Operation<void> {
-  if (yield* exists(path)) {
-    yield* rm(path);
-  }
-}
-
-/** The descriptor a run currently publishes, or nothing when none is published. */
-export function* readControl(
-  root: string,
-  runId: string,
-): Operation<ControlDescriptor | undefined> {
-  const sidecars = workflowRunSidecars(root, runId);
-  if (!(yield* exists(sidecars.descriptor))) {
-    return undefined;
-  }
-  return parseDescriptor(yield* readTextFile(sidecars.descriptor), runId);
-}
-
-/** Address one request to the generation named by `descriptor`. */
-export function* writeRequest(
-  root: string,
-  descriptor: ControlDescriptor,
-): Operation<ControlRequest> {
-  const sidecars = workflowRunSidecars(root, descriptor.runId);
-  const request: ControlRequest = {
-    runId: descriptor.runId,
-    generation: descriptor.generation,
-    requestId: randomUUID(),
-    kind: "cancel",
-  };
-  yield* writeAtomically(sidecars.request, `${JSON.stringify(request)}\n`);
-  return request;
-}
-
-/** The request a run currently holds, or nothing when it holds none. */
-export function* readRequest(root: string, runId: string): Operation<ControlRequest | undefined> {
-  const sidecars = workflowRunSidecars(root, runId);
-  if (!(yield* exists(sidecars.request))) {
-    return undefined;
-  }
-  return parseRequest(yield* readTextFile(sidecars.request), runId);
-}
-
-/** Take the request away, whether it was answered or found stale. */
-export function* clearRequest(root: string, runId: string): Operation<void> {
-  const sidecars = workflowRunSidecars(root, runId);
-  if (yield* exists(sidecars.request)) {
-    yield* rm(sidecars.request);
-  }
-}
-
-/** Remove every control sidecar. The lock file stays, empty. */
-export function* clearControlState(root: string, runId: string): Operation<void> {
-  const sidecars = workflowRunSidecars(root, runId);
-  yield* clearControl(sidecars.descriptor);
-  yield* clearRequest(root, runId);
-}
-
-/**
- * A sidecar is host arrangement, and anything can write to it.
- *
- * Unparseable content is treated as no descriptor rather than as a descriptor
- * with unknown fields: a control file that does not describe this run cannot
- * address anything, and refusing to read it would leave a run permanently
- * unownable because of a file that is not run state at all.
- */
-function parseDescriptor(text: string, runId: string): ControlDescriptor | undefined {
-  const parsed = parseObject(text);
-  if (parsed === undefined) {
-    return undefined;
-  }
-  const generation = parsed["generation"];
-  if (parsed["runId"] !== runId || typeof generation !== "string" || generation === "") {
-    return undefined;
-  }
-  return Object.freeze({ runId, generation });
-}
-
-function parseRequest(text: string, runId: string): ControlRequest | undefined {
-  const parsed = parseObject(text);
-  if (parsed === undefined) {
-    return undefined;
-  }
-  const generation = parsed["generation"];
-  const requestId = parsed["requestId"];
-  if (parsed["runId"] !== runId || parsed["kind"] !== "cancel") {
-    return undefined;
-  }
-  if (typeof generation !== "string" || generation === "" || typeof requestId !== "string") {
-    return undefined;
-  }
-  return Object.freeze({ runId, generation, requestId, kind: "cancel" });
-}
-
-function parseObject(text: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(text);
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return undefined;
-    }
-    return Object.fromEntries(Object.entries(value));
-  } catch {
-    return undefined;
-  }
 }

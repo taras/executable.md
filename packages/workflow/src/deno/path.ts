@@ -26,28 +26,13 @@ export function workflowRunPath(root: string, runId: string): string {
 }
 
 /**
- * The sidecars one run's executor arranges beside its database.
+ * The advisory lock one run's executor holds.
  *
- * Suffixes rather than a subdirectory, so every path a run occupies is derived
+ * A suffix rather than a subdirectory, so every path a run occupies is derived
  * from one hash and inspection's candidate pattern — `<hash>.sqlite` exactly —
- * excludes all three by construction. None of them is retained run state: they
- * are how one host arranges ownership, and a different host may arrange it
- * differently without changing what the run is.
+ * excludes it by construction. It is not retained run state: it is how one host
+ * arranges ownership, and it may remain, empty, after the run is deleted.
  */
-export interface WorkflowRunSidecars {
-  /** The advisory lock. Empty, and never unlinked while a lease may hold it. */
-  readonly lock: string;
-  /** Who owns the run right now, and under which generation. */
-  readonly descriptor: string;
-  /** One pending request addressed to that exact generation. */
-  readonly request: string;
-}
-
-export function workflowRunSidecars(root: string, runId: string): WorkflowRunSidecars {
-  const hash = hashRunId(runId);
-  return Object.freeze({
-    lock: join(root, `${hash}.lock`),
-    descriptor: join(root, `${hash}.control`),
-    request: join(root, `${hash}.request`),
-  });
+export function workflowRunLock(root: string, runId: string): string {
+  return join(root, `${hashRunId(runId)}.lock`);
 }
