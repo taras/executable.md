@@ -186,13 +186,13 @@ Workspace, Files, Service, Agent, process or external provider.
 An unfinished execution left after its host dies is not stale because time
 passed or a PID disappeared. A new owner proves staleness by acquiring the
 host's released lease. For a `running` run it atomically closes the exact
-execution and publishes `interrupted` before beginning another only when
-retained history has no root Close and no cancellation request addressed to
-the stale executor generation. A Close restores its canonical terminal state;
-without a Close, that exact pending request instead publishes `cancelled`. For a
-replay whose terminal run status was preserved, recovery closes the execution as
-`interrupted` while leaving the completed or failed run state unchanged. An old
-owner or retained lease cannot publish a later status.
+execution and publishes `interrupted` before beginning another when retained
+history has no root Close. A Close restores its canonical terminal state. A
+`cancel` command that acquires the released lease instead publishes `cancelled`
+without beginning another execution, also only when no root Close already won.
+For a replay whose terminal run status was preserved, recovery closes the
+execution as `interrupted` while leaving the completed or failed run state
+unchanged. An old owner or retained lease cannot publish a later status.
 
 The host validates namespace authority. There is no separate public
 idempotency-key concept; every run-oriented command uses the public run ID.
@@ -271,32 +271,32 @@ executor and leaves the run `interrupted` and resumable.
 xmd workflow cancel release-42
 ```
 
-Explicit cancellation asks an active executor to stop and makes the run
-terminal. It retains the journal and Workspace for inspection, training and an
-eligible history fork. It does not undo completed local or external effects.
+Explicit cancellation makes a run without a live owner terminal. It retains the
+journal and Workspace for inspection, training and an eligible history fork. It
+does not undo completed local or external effects.
 
 Cancellation follows the retained status:
 
-- `running` addresses the exact live executor generation and waits for that
-  owner to halt the execution, finish teardown and retain `cancelled`;
+- `running` with a live executor refuses without mutation and tells the caller
+  to interrupt the foreground process;
+- stale `running` acquires lifecycle authority and becomes `cancelled` when no
+  retained root Close already proves completion or failure;
 - `suspended` and `interrupted` acquire lifecycle authority and become
   `cancelled` without starting an execution;
 - `cancelled` succeeds idempotently; and
 - `completed` and `failed` refuse because their terminal outcome already won.
 
-If the owner exits before acknowledging a running cancellation, its released
-lease proves staleness and lets the requester settle that unfinished execution
-as `cancelled` only when retained history has no root Close. A Close means the
-canonical terminal outcome already won and makes the request stale. A pending
-request is addressed to one executor generation and cannot cancel a later one.
-Exiting the cancelling process does not withdraw a request the owner already
-received.
+The released advisory lock is the only stale-owner proof. The cancellation
+transition validates the acquired private lease, finishes an unfinished stale
+execution when one exists, and publishes `cancelled` atomically. No live scope
+is halted, watched or polled by another process, and there is no request or
+acknowledgement to outlive either process. A lifecycle storage refusal leaves
+the retained state unchanged and reports no uncommitted terminal status.
 
-Every finalizer is attempted before the outcome is observable. A teardown
-failure publishes neither `cancelled` nor `suspended`; it settles the run as
-`failed` when that lifecycle transition commits, and cancellation reports
-failure. Durability and Files infrastructure failures keep their identity and
-precedence. If lifecycle storage also refuses, no terminal status is claimed.
+Ctrl-C remains foreground interruption: the owner attempts every finalizer,
+publishes `interrupted` and releases the lease. A teardown failure follows the
+ordinary foreground settlement rules; it is never converted into explicit
+cancellation.
 
 ### 3.7 Exit status
 
@@ -440,8 +440,8 @@ effect, or append. Human output is the default; `--json` returns the same data
 structurally.
 
 `list` discovers the run-storage root directly; no registry can disagree with
-it. Each run contributes one database candidate. Exact lifecycle sidecars use
-a distinct provider-owned namespace and are not candidates. Every database
+it. Each run contributes one database candidate. Exact advisory-lock sidecars
+use a distinct provider-owned namespace and are not candidates. Every database
 candidate receives strict read-only recognition. A
 foreign, incompatible, damaged or unparseable candidate fails the request and
 is reported distinctly. The command does not return the healthy subset as
@@ -555,9 +555,9 @@ policy has not already seen.
 
 A suspension request is one such filtered journal event. Its opaque suspension
 ID, request and response schema live in the event description; no pending-input
-table or executor identity is added to the run record. Executor generations and
-cancellation requests live only in provider-owned control sidecars. Complete
-schema version 1 therefore remains one exact shape for #367.
+table or executor identity is added to the run record. Executor ownership uses
+only the provider-owned advisory-lock sidecar. Complete schema version 1
+therefore remains one exact shape for #367.
 
 Document-execution records are not attempts. An attempt is one execution of a
 retried operation or region and belongs to the journal.
@@ -1039,12 +1039,11 @@ Delete targets one authorized run ID, accepts no wildcard and prompts for no
 additional confirmation. It first acquires lifecycle authority. A live owner is
 refused; every status without one may be deleted, including a stale `running`
 record after the released lease proves staleness. The command removes the local
-database, run-owned retained provider-session records and lifecycle control
-descriptors and requests, and reports those categories. An empty advisory-lock
-sidecar may remain because it is host arrangement rather than retained run
-state. An absent run is an error rather than idempotent success. A host pruning
-operation may select
-explicit statuses and ages. Documents cannot delete workflow runs.
+database and run-owned retained provider-session records, and reports those
+categories. An empty advisory-lock sidecar may remain because it is host
+arrangement rather than retained run state. An absent run is an error rather
+than idempotent success. A host pruning operation may select explicit statuses
+and ages. Documents cannot delete workflow runs.
 
 Deletion does not undo pushes, pull requests or other remote effects. Forks and
 retained runs keep the Workspace roots they reference; garbage collection may
@@ -1071,11 +1070,10 @@ lifecycle contracts; documents do not choose that topology.
 
 The local lifecycle adapter owns a non-blocking exclusive advisory lock on one
 deterministic sidecar per run. The open file belongs to the executor scope and
-the operating system releases it when the process exits. After acquisition the
-owner publishes a fresh random executor generation in an atomic control
-descriptor. Cancellation requests address that exact generation. The lock,
-generation, descriptor and request files are ephemeral host arrangement: they
-are neither SQLite schema nor run identity, journal or history.
+the operating system releases it when the process exits. The exact in-process
+lease object is the private mutation capability. The lock file is ephemeral host
+arrangement: it is neither SQLite schema nor run identity, journal or history.
+No owner descriptor or cancellation-request file exists.
 
 Lifecycle settlement uses one compare-and-set SQLite transaction to finish the
 document-execution record and publish the run status under the exact open lease.
