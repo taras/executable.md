@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exec } from "@effectionx/process";
+import process from "node:process";
 import { exists, writeTextFile } from "@effectionx/fs";
 import { scoped } from "effection";
 import type { Operation } from "effection";
@@ -384,7 +385,7 @@ function* raise(operation: Operation<unknown>): Operation<unknown> {
 
 /** What one separate process makes of this run's lock, right now. */
 function* holder(root: string, runId: string): Operation<string> {
-  const result = yield* exec(Deno.execPath(), {
+  const result = yield* exec(process.execPath, {
     arguments: ["run", "-A", HOLDER, root, runId],
   }).join();
   if (result.code !== 0) {

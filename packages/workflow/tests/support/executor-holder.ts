@@ -7,11 +7,14 @@
  */
 
 import { main } from "effection";
+import process from "node:process";
 import { WorkflowLifecycle } from "../../mod.ts";
 import { useWorkflowLifecycle } from "../../deno.ts";
 
 await main(function* () {
-  const [root, runId] = Deno.args;
+  // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
+  // still has to typecheck under the Node project like every other source.
+  const [root, runId] = process.argv.slice(2);
   if (root === undefined || runId === undefined) {
     throw new Error("usage: executor-holder.ts <root> <run-id>");
   }

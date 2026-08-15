@@ -40,6 +40,36 @@ import { WorkflowRequestError } from "../storage/errors.ts";
 import { workflowRunLock } from "./path.ts";
 
 /**
+ * The open lock file this host holds, as much of it as this module uses.
+ *
+ * Named here rather than referred to as `Deno.FsFile` because this file
+ * typechecks under the Node project like every other source, and that project
+ * has no `Deno` namespace to name. Every other Deno-only capability in this
+ * adapter arrives through a cross-runtime package; advisory locking is the one
+ * with no such wrapper, so the shape it needs is stated and reached through the
+ * global — a Deno-only adapter naming exactly the Deno it depends on.
+ */
+interface LockFile {
+  tryLockSync(exclusive: boolean): boolean;
+  unlockSync(): void;
+  close(): void;
+}
+
+interface LockingRuntime {
+  openSync(path: string, options: { read: boolean; write: boolean; create: boolean }): LockFile;
+}
+
+function locking(): LockingRuntime {
+  const runtime = (globalThis as { Deno?: LockingRuntime }).Deno;
+  if (runtime === undefined) {
+    throw new WorkflowRequestError(
+      "this host takes a run's executor lock through the Deno runtime, and no Deno runtime is present.",
+    );
+  }
+  return runtime;
+}
+
+/**
  * One acquisition's authority, as this host keeps it.
  *
  * The public `ExecutorLease` is one field wide and describes the lease; this is
@@ -48,7 +78,7 @@ import { workflowRunLock } from "./path.ts";
 export interface ExecutorHold {
   readonly lease: ExecutorLease;
   readonly runId: string;
-  readonly file: Deno.FsFile;
+  readonly file: LockFile;
   open: boolean;
   /**
    * The execution this acquisition began, once it has begun one.
@@ -120,7 +150,7 @@ export function createExecutorRegistry(): ExecutorRegistry {
         // Created if absent and never unlinked while a lease may hold it:
         // unlinking a locked file lets the next caller create and lock a
         // different file at the same path while this lease still exists.
-        const file = Deno.openSync(lock, { read: true, write: true, create: true });
+        const file = locking().openSync(lock, { read: true, write: true, create: true });
         let locked = false;
         try {
           locked = file.tryLockSync(true);
