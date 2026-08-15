@@ -558,7 +558,9 @@ function* startedRun(root: string): Operation<Started> {
   yield* git(repository, ["config", "user.name", "WFI"]);
   yield* writeTextFile(join(repository, "workflow.md"), "recorded\n");
   yield* git(repository, ["add", "workflow.md"]);
-  yield* git(repository, ["commit", "--quiet", "-m", "definition"]);
+  // The fixture is not the developer's repository: whatever signing their own
+  // configuration asks for is not this commit's business.
+  yield* git(repository, ["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "definition"]);
   const contents = "recorded\n";
   const objectId = (yield* git(repository, ["rev-parse", "HEAD:workflow.md"])).trim();
   const objectFormat = (yield* git(repository, ["rev-parse", "--show-object-format"])).trim();

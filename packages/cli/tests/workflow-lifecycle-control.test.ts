@@ -52,7 +52,16 @@ function useFixture<T>(body: (fixture: Fixture) => Operation<T>): Operation<T> {
     yield* git(fixture.repository, ["config", "user.email", "tier-wfc2@example.test"]);
     yield* git(fixture.repository, ["config", "user.name", "Tier WFC2"]);
     yield* git(fixture.repository, ["add", "-A"]);
-    yield* git(fixture.repository, ["commit", "-q", "-m", "definition"]);
+    // The fixture is not the developer's repository: whatever signing their own
+    // configuration asks for is not this commit's business.
+    yield* git(fixture.repository, [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "definition",
+    ]);
 
     return yield* body(fixture);
   });

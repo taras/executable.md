@@ -1545,7 +1545,15 @@ describe("Tier WJ — surviving a process", () => {
 
     expect(created).toHaveLength(1);
     expect(refused).toHaveLength(1);
-    expect(refused[0].refused).toBe("WorkflowRunConflictError");
+
+    // Two mechanisms refuse a second creator, and which one speaks depends on
+    // how far the winner has got — not on anything either process decides.
+    // Reaching the run while the winner still holds it is refused by the lock,
+    // before any storage is opened; reaching it after the winner has released
+    // is refused by the run that is now there. Both are one winner, so the test
+    // names both rather than pinning the timing that chooses between them.
+    expect(["already-running", "WorkflowRunConflictError"]).toContain(refused[0].refused);
+
     // The winner's base is whichever one got there first, and it is the only
     // base the run has.
     expect(["main", "develop"]).toContain(created[0].base);
