@@ -23,7 +23,14 @@ import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { ExecutorAcquisition, ExecutorLease } from "../mod.ts";
 import { useWorkflowLifecycle, workflowRunLock } from "../deno.ts";
-import { creation, leasedRun, runPath, useStorageRoot, withRunHost } from "./support/storage.ts";
+import {
+  creation,
+  leasedRun,
+  runPath,
+  tamper,
+  useStorageRoot,
+  withRunHost,
+} from "./support/storage.ts";
 
 const { acquireExecutor } = WorkflowLifecycle.operations;
 
@@ -259,6 +266,58 @@ describe("Tier WLA — executor authority", () => {
     });
   });
 
+  it("WLA10: a transaction that fails after writing half of itself shows neither", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+
+    yield* withRunHost(root, function* (authority) {
+      // Settlement finishes the execution record and then publishes the run
+      // state. The trigger fires from inside SQLite between those two writes —
+      // the only moment a half-settled run could become visible.
+      yield* leasedRun(
+        authority,
+        { runId: "release-1.4", action: "start", creation: creation() },
+        function* (begun, lease) {
+          tamper(path, (database) => {
+            database.exec(`
+              CREATE TRIGGER refuse_publish BEFORE UPDATE OF status ON workflow_run
+              BEGIN
+                SELECT raise(ABORT, 'the run state refuses this write');
+              END
+            `);
+          });
+          const before = fingerprint(path);
+
+          // An unclassified SQLite failure is a defect rather than an expected
+          // outcome, so it is raised rather than returned. What matters here is
+          // what it left behind.
+          const raised = yield* raise(
+            authority.settle(lease, {
+              executionId: begun.execution.executionId,
+              status: "completed",
+            }),
+          );
+          expect(raised).toBeDefined();
+
+          // The execution is not finished and the status did not move.
+          expect(fingerprint(path)).toEqual(before);
+        },
+      );
+    });
+
+    // Begin writes in the same order: it recovers the execution that owner left
+    // unfinished, publishes, and inserts its own. The same trigger catches it
+    // after the first of those writes.
+    const before = fingerprint(path);
+    yield* withRunHost(root, function* (authority) {
+      const lease = leaseOf(yield* acquired("release-1.4"));
+      // However it reports — a refusal or a raise — what matters is that it
+      // added no execution and moved no status.
+      yield* raise(authority.begin(lease, { runId: "release-1.4", action: "resume" }));
+    });
+    expect(fingerprint(path)).toEqual(before);
+  });
+
   it("WLA4: a second process is refused, and the lock outlives nothing", function* () {
     const root = yield* useStorageRoot();
     yield* startedRun(root, "release-1.4");
@@ -310,6 +369,16 @@ function tables(path: string): string[] {
       .map((row) => String(row["name"]));
   } finally {
     database.close();
+  }
+}
+
+/** Whatever an operation raised, or nothing when it returned. */
+function* raise(operation: Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation;
+    return undefined;
+  } catch (error) {
+    return error;
   }
 }
 

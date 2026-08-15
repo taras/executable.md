@@ -189,6 +189,64 @@ describe("Tier WLC — cancellation and deletion", () => {
     });
     // Restored to what its root recorded, rather than cancelled.
     expect(yield* status(root, "closed-1")).toBe("completed");
+
+    // The same rule when what the root recorded was a failure: a Close that
+    // says the document failed is still an outcome that won.
+    yield* withRunHost(root, function* (authority) {
+      yield* leasedRun(
+        authority,
+        { runId: "failed-close-1", action: "start", creation: creation() },
+        function* (begun) {
+          yield* begun.database.journal.append({
+            type: "close",
+            coroutineId: "root",
+            result: { status: "err", error: { message: "filtered" } },
+          });
+        },
+      );
+    });
+
+    yield* withLifecycle(root, function* () {
+      const refused = yield* cancel("failed-close-1");
+      expect(refused.ok).toBe(false);
+    });
+    expect(yield* status(root, "failed-close-1")).toBe("failed");
+  });
+
+  it("WLC5: every state without a live owner may be deleted", function* () {
+    const root = yield* useStorageRoot();
+    const states = [
+      "suspended",
+      "interrupted",
+      "cancelled",
+      "completed",
+      "failed",
+      "unfinished",
+    ] as const;
+
+    for (const state of states) {
+      const runId = `delete-${state}`;
+      // `cancelled` is reached the only way it can be: by cancelling one.
+      yield* runEndedAs(root, runId, state === "cancelled" ? "interrupted" : state);
+      if (state === "cancelled") {
+        yield* cancelled(root, runId);
+      }
+
+      yield* withLifecycle(root, function* () {
+        const removed = yield* WorkflowLifecycle.operations.delete(runId);
+        if (!removed.ok) {
+          throw removed.error;
+        }
+        // Exactly the categories that went, and `run-storage` is the only one
+        // this host retains.
+        expect(removed.value.removed).toEqual(["run-storage"]);
+      });
+      expect(yield* exists(workflowRunPath(root, runId))).toBe(false);
+    }
+
+    // Including a `running` record whose owner is gone: the released lock is
+    // what proves it stale, and nothing else is consulted.
+    expect(yield* exists(workflowRunPath(root, "delete-unfinished"))).toBe(false);
   });
 
   it("WLC4: deletion removes the exact run, and only when nothing owns it", function* () {

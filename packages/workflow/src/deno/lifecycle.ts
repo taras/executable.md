@@ -97,9 +97,6 @@ export interface WorkflowLifecycleOptions {
  * module scope, so the leases it issued last exactly as long as the scope that
  * installed the provider and nothing accumulates between runs.
  *
- * Cancellation and deletion are not installed yet, so they answer with the Api's
- * fail-closed default rather than with a host that appears to hold authority it
- * does not.
  */
 export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operation<void> {
   yield* installWorkflowLifecycle(options, yield* useWorkflowRunConnections());
@@ -313,10 +310,6 @@ function* cancel(
  * The lock is taken before anything reads or writes the run, and the lease it
  * produces belongs to the scope that asked — so an acquisition made inside a
  * `scoped()` block releases when that block ends, whatever happened inside it.
- *
- * The fresh generation is published only after the lock is held, and only after
- * whatever the previous owner left has been reconciled: a request addressed to a
- * generation that is over cannot be allowed to reach this one.
  */
 function* acquire(
   root: string,

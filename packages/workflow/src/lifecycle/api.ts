@@ -82,7 +82,7 @@ export interface WorkflowLifecycleSnapshot {
  * by removing the record of it, and nothing here says otherwise.
  */
 export interface WorkflowDeletion {
-  readonly removed: readonly ("run-storage" | "provider-sessions" | "lifecycle-control")[];
+  readonly removed: readonly ("run-storage" | "provider-sessions")[];
 }
 
 export interface WorkflowLifecycleApi {

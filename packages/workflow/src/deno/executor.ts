@@ -20,10 +20,9 @@
  * ## The lease is the authority; its shape is not
  *
  * What a transition checks is *this exact object*, registered here when the lock
- * was taken: its identity, that its scope is still open, that it belongs to this
- * run, and that its generation is the one currently published. A value shaped
- * like a lease authorizes nothing, and neither does a run id, a path or a
- * retained descriptor.
+ * was taken: its identity, that its scope is still open, and that it belongs to
+ * this run. A value shaped like a lease authorizes nothing, and neither does a
+ * run id or a path.
  *
  * ## Nothing addresses a live owner
  *
@@ -144,9 +143,8 @@ export function createExecutorRegistry(): ExecutorRegistry {
         issued.add(hold.lease);
         holds.set(hold.lease, hold);
 
-        // Registered before the descriptor is published, so a failure between
-        // here and the caller's first transition still releases the lock and
-        // leaves no descriptor claiming a live owner.
+        // Registered as soon as the lock is held, so a failure between here and
+        // the caller's first transition still releases it.
         yield* ensure(() => {
           hold.open = false;
           holds.delete(hold.lease);
