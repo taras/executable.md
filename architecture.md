@@ -229,8 +229,9 @@ that filtered it.
 
 WorkflowRun schema version 1 is complete in place. It contains the run records,
 filtered journal, pinned Cloudflare DOFS version-5 structure, immutable
-Workspace-root tables, current-root state, and a non-null Workspace-root
-association on every journal event. A fresh run starts with one
+Workspace-root tables, current-root state, a non-null Workspace-root
+association on every journal event, and the Repository and Worktree creation
+records #293 added to it. A fresh run starts with one
 content-addressed root manifest describing only the root directory, empty
 retained manifest and blob reference sets, and the corresponding root-only DOFS
 frontier.
@@ -735,6 +736,26 @@ and run-state records, and history reads the existing event-to-root association.
 Complete schema version 1 therefore remains one exact shape. Any later durable
 input-delivery record for #300 requires its own schema-version decision and
 strict recognition amendment.
+
+Issue #293 amended that exact shape in place rather than introducing a second
+version. This pre-release carries no persistence compatibility obligation, so
+Repository and Worktree creation records joined version 1 and every database an
+earlier development build produced is refused as an incomplete pre-release.
+There is no version 2, no migration, no legacy reader and no upgrade path, and
+strict recognition compares the amended declaration exactly.
+
+A Repository record holds a Workspace-local name, the admitted credential-free
+locator and its fingerprint, the requested base or its absence, the commit
+pinned once at creation, the initial primary branch, the object format and a
+stable Workspace-relative checkout path. A Worktree record holds its
+Repository's name, its own name, the requested branch, the requested base or
+its absence, the creation commit and its checkout path. Both are immutable
+creation identity. Current HEAD, refs, index, checkout and linked-worktree
+administration live in the versioned Workspace filesystem, so one selected
+Workspace root recovers the Git state belonging to that frontier without any
+unversioned "current commit" column to disagree with it. The locator is stored
+beside the record rather than inside it: compatibility needs the bytes, while
+the journal and the document receive only the fingerprint.
 
 ## Workflow Workspace
 
