@@ -43,7 +43,10 @@ Existing documents and code get aligned to this section retroactively.
 | blocker | execution needs input (auth, a human answer); not a failure |
 | suspension | a durable wait: a crash restarts into the same wait |
 | suspension ID | an opaque stable identifier derived by the trusted workflow execution for one logical suspension request; replay preserves it and only equality and input correlation are public |
-| executor lease | the exact scope-owned capability proving that one trusted host currently owns authority to advance or settle one workflow run |
+| workflow executor | the live host invocation that advances or settles one workflow run |
+| executor lock | the scope-owned, non-blocking exclusive host lock that permits at most one workflow executor for a run |
+| executor authority | the exact in-process capability held behind an acquired executor lock and required by every lifecycle mutation |
+| stale execution | an unfinished retained document execution found after acquiring the executor lock proves its previous workflow executor is gone |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
 | document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads |
 | Files provider | the installed implementation of `API.Files` for a document execution: the host provider under `xmd run`, a transaction-bound provider under a workflow run. There is no default, and no provider falls back to another |
@@ -409,26 +412,32 @@ module imports no SQLite, no DOFS and no runtime detection: it asks a host
 adapter to open storage and to attach a run's Workspace, and the entrypoints
 decide which adapter exists.
 
-The start/resume slice predated executor ownership. Issue #367 replaced its
-opportunistic orphan closure with the lifecycle authority below, and no
-supported host advances a retained run without that authority.
+The start/resume slice predated single-executor enforcement. Issue #367
+replaced its opportunistic orphan closure with the lifecycle authority below,
+and no supported host advances a retained run without that authority.
 
 ## Workflow lifecycle authority
 
 Storage serialization decides who uses one connection next. It does not decide
-who may advance a workflow run. Live execution and lifecycle mutation require
-one executor lease, acquired before stale recovery, a document-execution begin,
-Workspace attachment, journal replay, root import or authored work.
+who may advance a workflow run. A workflow executor must acquire one executor
+lock before stale recovery, a document-execution begin, Workspace attachment,
+journal replay, root import or authored work.
 
 The provider-neutral lifecycle API routes acquisition and management requests
 to a host. Routing through a contextual Api selects a provider and grants no
-authority. The acquired lease is an opaque exact object registered by that
-provider for one run and one acquisition. The provider checks the same object,
-its open scope, its run and the expected retained lifecycle state inside every
-mutating transaction. A run ID, database handle, structural look-alike,
-same-named context value or retained token authorizes nothing. Releasing or
-tearing down the lease invalidates it before another acquisition can mutate the
-run.
+authority. Acquisition gives the workflow executor an opaque exact object
+registered by that provider for one run and one acquisition. This is executor
+authority: the provider checks the same object, its open scope, its run and the
+expected retained lifecycle state inside every mutating transaction. A run ID,
+database handle, structural look-alike, same-named context value or retained
+token authorizes nothing. Releasing or tearing down the executor lock
+invalidates its authority before another acquisition can mutate the run.
+
+The executor lock is not a time lease. It has no duration, expiry, renewal,
+heartbeat, watcher, generation record or liveness poll. The operating system
+releases the local lock when the workflow executor exits. The source
+identifier `ExecutorLease` names the opaque executor-authority object retained
+by the current API; it does not add lease semantics to this contract.
 
 The shared surface names outcomes and retained data, not a transport:
 
@@ -466,21 +475,22 @@ interface WorkflowLifecycleApi {
 }
 ```
 
-The lease's public fields describe it and never validate it. Lifecycle
-transitions accept the exact lease separately from their data through an
-adapter-private provider operation, just as Workspace transaction authority is
-validated behind its provider-neutral selection. Inspection, cancellation and
-deletion return immutable parsed values and no database, stream, transaction or
-connection capability. `WorkflowDeletion` lists categories actually removed;
-it contains no claim about external effects.
+The executor authority's public fields describe it and never validate it.
+Lifecycle transitions accept the exact object separately from their data
+through an adapter-private provider operation, just as Workspace transaction
+authority is validated behind its provider-neutral selection. Inspection,
+cancellation and deletion return immutable parsed values and no database,
+stream, transaction or connection capability. `WorkflowDeletion` lists
+categories actually removed; it contains no claim about external effects.
 
-Acquisition has three observable outcomes: acquired, already owned by a live
-executor, or a storage/authorization failure. The initial local CLI reports an
-active owner rather than following it. Once acquired, lifecycle changes are
-compare-and-set transitions against the retained state and unfinished
-document-execution record read in the same transaction. Beginning an execution,
-finishing its record and publishing the run state are therefore lifecycle
-transitions, not independent writes another command can observe between.
+Acquisition has three observable outcomes: acquired, already held by a live
+workflow executor, or a storage/authorization failure. The initial local CLI
+reports the active workflow executor rather than following it. Once acquired,
+lifecycle changes are compare-and-set transitions against the retained state
+and unfinished document-execution record read in the same transaction.
+Beginning an execution, finishing its record and publishing the run state are
+therefore lifecycle transitions, not independent writes another command can
+observe between.
 For a new `start`, the begin transition initializes pristine storage with the
 immutable run, retrieval metadata, empty Workspace, first execution record and
 `running` state in one transaction. For a resumable existing run, it validates
@@ -493,30 +503,33 @@ terminal or resumable status. Begin and settlement are separate transactions
 enclosing the document execution, and each is atomic within itself.
 
 An unfinished document-execution record found after acquisition belonged to the
-previous lease and is proven stale. If the run says `running`, the new owner
-first reconciles retained root history. A root Close restores its canonical
-terminal state. Without one, execution recovery closes the execution and
-publishes `interrupted` before beginning another. A cancellation command that
-acquired the released lease instead finishes that exact stale execution and
+previous workflow executor and is proven stale. If the run says `running`, the
+new workflow executor first reconciles retained root history. A root Close
+restores its canonical terminal state. Without one, execution recovery closes
+the execution and publishes `interrupted` before beginning another. A
+cancellation command that
+acquired the executor lock instead finishes that exact stale execution and
 publishes `cancelled` without beginning another. If the run already carries a
 terminal state preserved during replay, stale recovery closes only that
 replay's execution as `interrupted` and leaves the authoritative run state
 unchanged. It never guesses staleness from a PID, timestamp, timeout or status
 row.
 
-An execution settlement has one owner and one winner. Canonical completion,
-failure, suspension and foreground interruption meet at the execution-owned
-settlement boundary. A retained root Close proves canonical completion or
+An execution settlement has one workflow executor and one winner. Canonical
+completion, failure, suspension and foreground interruption meet at the
+execution-owned settlement boundary. A retained root Close proves canonical completion or
 failure won before interruption or later lifecycle management. A cancellation
-command never enters this competition: while the executor lease is live it can
-only refuse, and after that lease is released there is no live document scope
-left for another process to halt. Durability and Files infrastructure failures
-retain their existing precedence. The winning execution transition waits for
+command never enters this competition: while another workflow executor holds
+the lock it can only refuse, and after that lock is released there is no live
+document scope left for another process to halt. Durability and Files
+infrastructure failures retain their existing precedence. The winning execution
+transition waits for
 the document execution's complete child and resource teardown, then atomically
 finishes its document-execution record and publishes the run state. Only after
 that transaction commits may the host report the status and release the
-executor lease. If settlement storage refuses, no unretained status is reported
-and lease teardown leaves the run recoverable by the next proven owner.
+executor lock. If settlement storage refuses, no unretained status is reported
+and lock teardown leaves the run recoverable by the next proven workflow
+executor.
 
 Teardown is part of settlement evidence, not work performed after the outcome.
 If teardown raises, the host does not claim `suspended`: the
@@ -534,35 +547,37 @@ without entering replay. A `cancelled` run reports its retained state without
 entering replay under either command. None can be advanced under the same run
 ID.
 
-The lease remains in the trusted host's outer lifecycle scope; it is never
-installed as a document provider. A completed replay may hold that lease while
-recording its document-execution envelope, while the run remains `completed`
-and cancellation remains refused. Canonical core returns the
+The executor lock and authority remain in the trusted host's outer lifecycle
+scope; neither is installed as a document provider. A completed replay may hold
+the lock while recording its document-execution envelope, while the run remains
+`completed` and cancellation remains refused. Canonical core returns the
 retained result before preparation or root expansion. It attaches no Workspace,
 Files, Service, Agent, process or external provider and performs no live durable
 effect.
 
-### Local executor ownership
+### Local executor lock
 
 The Deno lifecycle adapter acquires a non-blocking exclusive advisory lock on a
 deterministic sidecar beside the run database. The open file and its lock belong
-to the lease scope. The operating system releases the lock when that process
-dies, which is the stale-owner proof the next acquisition uses. The sidecar
-path and empty file are host arrangement: neither takes part in run identity,
-the database schema, the journal or history. The exact in-process lease object
-registered by the adapter is the private capability validated by every
-mutation; no descriptor publishes it and no second process can address it.
+to the workflow executor's scope. The operating system releases the lock when
+that process dies, which is the stale-execution proof the next acquisition
+uses. The sidecar path and empty file are host arrangement: neither takes part
+in run identity, the database schema, the journal or history. The exact in-process executor
+authority registered by the adapter is the private capability validated by
+every mutation; no descriptor publishes it and no second process can address
+it.
 
 The lock file may remain empty after run deletion. Unlinking a locked sidecar
 would let another process create and lock a different file at the same path
-while the deleting lease still exists. An empty lock file is not retained run
-state and is not reported as history or provider-session data.
+while the deleting workflow executor still holds its lock. An empty lock file
+is not retained run state and is not reported as history or provider-session
+data.
 
 ### Read-only lifecycle inspection
 
 Inspection has its own provider-neutral immutable snapshot surface. It returns
 run metadata, ordered history and current root identity rather than a writable
-`WorkflowRunDatabase` or an executor lease. `status`, `list` and `history` use
+`WorkflowRunDatabase` or executor authority. `status`, `list` and `history` use
 only that surface. They never invoke canonical execution, read through replay,
 attach a Workspace, materialize a root, import a document, contact an Agent,
 process or external provider, or append.
@@ -613,16 +628,18 @@ removes an event from the JSON contract or synthesizes a journal event.
 Cancellation never reaches into a live document execution. The initial local
 workflow runs in the foreground, so the process that owns its Effection scope
 also owns the only supported way to halt it: foreground interruption. When the
-advisory lock reports a live executor, `workflow cancel <run-id>` refuses
-without mutation and tells the caller to interrupt that foreground process.
+advisory lock reports a live workflow executor,
+`workflow cancel <run-id>` refuses without mutation and tells the caller to
+interrupt that foreground process.
 Ctrl-C performs orderly scope teardown, publishes `interrupted` and leaves the
 run resumable; it is not explicit cancellation.
 
-Without a live owner, the management host acquires the executor lease before
-any cancellation mutation. The exact lease is validated inside the transaction
-that publishes `cancelled`. A stale `running` execution is first checked for a
-retained root Close: a Close restores its canonical completed or failed outcome
-and cancellation refuses; without one, the transition finishes that exact
+Without a live workflow executor, the management host acquires the executor
+lock before any cancellation mutation. Its exact executor authority is
+validated inside the transaction that publishes `cancelled`. A stale `running`
+execution is first checked for a retained root Close: a Close restores its
+canonical completed or failed outcome and cancellation refuses; without one,
+the transition finishes that exact
 unfinished execution as `cancelled`. A suspended or interrupted run has no live
 execution to halt and becomes `cancelled` directly. Success is returned only
 after the lifecycle transition commits. There is no watcher, poller, control
@@ -631,11 +648,11 @@ cross-process cancellation channel in this slice.
 
 Cancellation follows one status matrix:
 
-- `running` with a live owner: refuse without mutation and direct the caller to
-  interrupt the foreground process;
-- stale `running` with no root Close: acquire lifecycle authority, finish the
+- `running` with a live workflow executor: refuse without mutation and direct
+  the caller to interrupt the foreground process;
+- stale `running` with no root Close: acquire the executor lock, finish the
   unfinished execution and publish `cancelled`;
-- `suspended` or `interrupted`: acquire lifecycle authority and publish
+- `suspended` or `interrupted`: acquire the executor lock and publish
   `cancelled` without starting a document execution;
 - `cancelled`: idempotent success;
 - `completed` or `failed`: refuse because their terminal outcome already won;
@@ -643,8 +660,8 @@ Cancellation follows one status matrix:
 - absent, foreign, incompatible or damaged storage: report that condition and
   change nothing.
 
-Deletion also acquires lifecycle authority. A live owner is refused; a stale
-`running` record is proven stale before the exact run's database and
+Deletion also acquires the executor lock. A live workflow executor is refused;
+a stale `running` record is proven stale before the exact run's database and
 provider-owned retained records are removed. Only the empty lock file may
 remain. Every non-live status may be deleted. The explicit run ID is the
 confirmation boundary, so the command has no interactive prompt and no
@@ -685,12 +702,13 @@ After live publication or replay of that Yield, the operation invokes an
 execution-owned suspension controller. Context may select the workflow
 provider, but the controller accepts only the exact private capability for the
 current execution and suspension ID. With no delivered input, it reports the
-request to the lease owner and remains pending while the owner initiates an
+request to the workflow executor and remains pending while that executor
+initiates an
 orderly halt. The operation throws no ordinary error and produces no value; the
-halt leaves the root without a Close. The owner observes the authenticated
+halt leaves the root without a Close. The executor observes the authenticated
 suspension notice as its separate settlement candidate, waits for complete
 scope teardown, then atomically finishes the document-execution record and
-publishes `suspended` before releasing the lease.
+publishes `suspended` before releasing the executor lock.
 
 A root without Close is valid partial history. On resume, earlier durable
 effects and the request-publication Yield restore without executing or
@@ -714,7 +732,7 @@ This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
 answer delivery remains with #300.
 
-Issue #367 changes no durable schema shape. Executor ownership uses only the
+Issue #367 changes no durable schema shape. Single-executor enforcement uses only the
 provider-owned advisory-lock sidecar, suspension uses existing filtered journal
 and run-state records, and history reads the existing event-to-root association.
 Complete schema version 1 therefore remains one exact shape. Any later durable
@@ -2044,17 +2062,17 @@ Status is measured against main.
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
-| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; both acquire #367's executor lease before any lifecycle transition |
+| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; both acquire #367's executor lock before any lifecycle transition |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack; repository, process and attachment capabilities unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces one executor, refuses live cancellation, cancels non-live runs under lifecycle authority and deletes retained state | built on the #367 stack |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
-| `suspendFor()` | publishes one filtered suspension request, releases the executor as `suspended`, and re-enters the same wait without duplicating it | defined for #367, unbuilt; typed answer delivery and scheduling belong to #300 |
+| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | defined for #367, unbuilt; typed answer delivery and scheduling belong to #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 
