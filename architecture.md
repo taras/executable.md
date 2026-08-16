@@ -2081,8 +2081,9 @@ Status is measured against main.
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
 | `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; both acquire #367's executor lock before any lifecycle transition |
-| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack; repository, process and attachment capabilities unbuilt (#218) |
-| Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
+| implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; process capabilities unbuilt (#218) |
+| `<Repository>` / `<Worktree>` / `<Dir>` composition | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes | built on the #293 stack, Deno provider only |
+| transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) | publish local Git mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt (#294) |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |

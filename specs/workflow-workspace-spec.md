@@ -415,10 +415,11 @@ retained failure, and that does not make the run eligible for `resume`.
 - `resume` takes exactly one run id and nothing else. A document path, a
   generated property argument and the aggregate property forms are each refused
   rather than ignored.
-- The document filesystem (§10.1) is the capability a run has. Repository,
-  Worktree, Git, Agent, Worker Shell and native services are not: an inherited
-  `API.Service` provider is refused rather than delegated to, and
-  `temporaryDirectory` is refused rather than answered with a host directory.
+- The document filesystem (§10.1) and Repository/Worktree/Dir composition (§6)
+  are the capabilities a run has. Git operations, Agent, Worker Shell and native
+  services are not: an inherited `API.Service` provider is refused rather than
+  delegated to, and `temporaryDirectory` is refused rather than answered with a
+  host directory.
 - A function-component root is not supported in this subset and fails before the
   run executes.
 - The command exists on every runtime and the capability on one: the Deno
@@ -429,10 +430,11 @@ Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
 absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
-Status, list and history are built (§4), and so are cancel and delete. The
-executor lock and the atomic lifecycle transitions built on it are #367's, and
-they replace the opportunistic orphan closure that preceded them: liveness is
-now an advisory lock the operating system releases when a host dies, rather
+Status, list and history are built (§4), and so are cancel and delete.
+Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
+The executor lock and the atomic lifecycle transitions built on it are #367's,
+and they replace the opportunistic orphan closure that preceded them: liveness
+is now an advisory lock the operating system releases when a host dies, rather
 than something inferred from a status column. Durable suspension is designed
 above and unbuilt, and so is fork.
 
@@ -598,6 +600,30 @@ run whose history it has just replaced.
 
 ## 6. Repository and Worktree
 
+`<Repository>`, `<Worktree>` and `<Dir>` are ordinary registered defaults that
+the workflow host installs for a live or partial execution, alongside the
+document filesystem. A repository-local component with one of those names is
+chosen ahead of them. A completed root replay installs neither them nor the
+provider behind them.
+
+**These components describe known refusals; document-authored regions decide
+whether to print and continue.** A refusal one of them recognizes — a locator
+that cannot be used, a base that names no commit, a branch another checkout
+holds, a name reused for a different configuration, a Worktree with no enclosing
+Repository, an invalid `<Dir>` — is reported with a fixed, sanitized diagnostic
+and then fails the operation it is part of, so later siblings do not execute. An
+authored `<PrintErrors>` region prints that refusal once and continues under the
+region's ordinary policy. None of these components declares that recovery on an
+author's behalf: doing so would decide it for every failure the invocation owns,
+including invalid props, a provider that is not installed, and an answer that
+does not parse, none of which is something a document asked for.
+
+Two things stay outside that rule, in opposite directions. A stale-state failure
+(§9) is a durability failure and is fatal through every printing boundary,
+authored or not. A failure of the content a caller projected belongs to the
+region that text is written in, exactly as it would through any other
+component.
+
 ### 6.1 Repository
 
 `<Repository>` owns an authorized Git locator, shared object storage, remote
@@ -635,6 +661,26 @@ Repository installs it as contextual cwd while expanding children. A
 self-closing Repository with `as` creates or restores it and binds its stable
 Workspace-relative path.
 
+When `base` resolves only to a tag or a bare commit rather than a branch, the
+checkout is created on a deterministic provider-owned branch and that branch is
+what the record names. HEAD is never left detached, because a detached checkout
+gives a later Switch, Commit or Push no branch to mean anything against.
+
+A locator is admitted before it is used, and admission is an allowlist: an
+`https`, `http`, `ssh`, `git` or `file` URL carrying no userinfo, Git's
+`user@host:path` form, or an absolute local path. A locator carrying a
+credential is refused rather than rewritten, because rewriting it would retain a
+run nobody asked for. What is retained beside the record is the admitted locator
+itself; what travels through the journal, a binding or a diagnostic is its
+fingerprint.
+
+Reusing a Repository name is compatible only when the admitted locator and the
+requested base both agree; an incompatible reuse is refused and repoints
+nothing. Refusals are reported with a fixed vocabulary — the locator could not
+be used, the base names no commit, the remote has no default branch, the name is
+already this run's for a different configuration — and never carry a Git message
+or a host path.
+
 ### 6.2 Additional Worktrees
 
 `<Worktree>` creates an additional linked checkout inside an enclosing lexical
@@ -668,7 +714,26 @@ already checked out by another checkout fails instead of moving it or silently
 using detached HEAD.
 
 Worktree has no repository locator, placement, force or detached-head controls.
-Its lexical and self-closing path behavior matches Repository.
+Its lexical and self-closing path behavior matches Repository. A branch the
+remote published counts as existing, so naming one checks it out rather than
+recreating it at another commit.
+
+The pairing that both binds a path and renders descendants is a self-closing
+Worktree captured with `as`, followed by a lexical `<Dir>` inside the enclosing
+Repository:
+
+```md
+<Repository name="project" url={props.repository} base={props.base}>
+  <Worktree name="implementation" branch={props.branch} as="worktree" />
+  <Dir path={worktree}>
+    <!-- stages and final report -->
+  </Dir>
+</Repository>
+```
+
+A lexical Worktree written with `as` keeps ordinary generic capture semantics:
+its rendered descendants are captured and suppressed, and it does not bind the
+checkout path while also rendering them.
 
 ### 6.3 Directory context
 
@@ -918,6 +983,7 @@ durable observations and mutations restore.
 | Agent provider/session | attach lazily before the first live Agent operation |
 | Agent.AddDir | re-register in document order |
 | Repository base/default resolution | restore pinned result |
+| Repository/Worktree creation | restore the retained creation record, then reattach and verify the retained Git state without recloning |
 | File read | restore historical content |
 | File write/delete | restore completion without mutating again |
 | Glob | restore historical path set |
@@ -929,6 +995,22 @@ durable observations and mutations restore.
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
 earlier effect completed.
+
+Reattaching a Repository or Worktree is ephemeral and happens on every partial
+execution: it rebuilds the live checkout from the Workspace root the journal
+selected and verifies that what is there is the checkout the record names.
+Readable is not enough — a valid checkout of an unrelated repository is
+perfectly readable — so the creation identity the record claims is read back out
+of the checkout itself: the locator it was cloned from, the algorithm it names
+objects with, and the presence of the commit it was created at. A Worktree
+additionally proves that its checkout is a worktree of the retained Repository
+it belongs to, rather than a repository of its own standing in its place.
+
+What attachment deliberately does not require is that HEAD or the current branch
+equal creation state. Those move, transactionally, when a Git effect moves them;
+creation identity does not. Missing, damaged or conflicting retained state is a fatal
+stale-input condition: children and later siblings do not begin, `<PrintErrors>`
+cannot print it, and nothing is recloned or repaired.
 
 A completed root result returns without expanding the document or attaching
 Workspace, Agent or external providers.
@@ -1139,6 +1221,48 @@ recorded effects instead of performing them, and the adapter-private
 materializer reconstructs an older event's root from that root's retained DOFS
 manifests and blobs.
 
+Native Git runs against directories, and the authoritative Workspace is a
+database, so the Deno provider exports a checkout into a disposable host
+materialization, runs Git there and imports the result back inside the same
+effect transaction. **Native Git operates only on that export**, and what enforces that is a
+distinction between two kinds of retained entry.
+
+*Content* is what a commit records. A symbolic link among a checkout's tracked
+files is content whatever it points at: it is retained and restored verbatim,
+nothing resolves it, and a target outside the Workspace makes it no less a
+faithful copy of what Git produced.
+
+*Git's control plane* is the small set of entries that decide which repository
+native Git is operating on — a checkout's `.git`, the `.git/worktrees`
+administration, each slot within it, and the `gitdir` pointers a linked worktree
+is made of. The operating system resolves these before Git reports anything
+about them, so indirection here is not data: a `.git` linked to a compatible
+external repository answers every identity question in §9 correctly while every
+command runs outside the export, and a relative or traversal-shaped pointer
+reaches an administration directory outside it with no link at all. Reading
+`.git/worktrees` to discover pointers is itself a write, because localization
+writes back to what it found.
+
+The control plane is therefore validated rather than trusted. A checkout root
+and a `.git` must be real directories, a linked worktree's `.git` a real regular
+file, each administration slot and pointer a real entry of its own kind, and
+every retained pointer value must name one place beneath the Workspace root —
+relative, empty, dot-segmented and traversal-shaped values are refused rather
+than resolved. The pointers of an exported pair must name each other. All of it
+is decided before any administration path is rewritten and before any Git
+command runs, because both are what would otherwise trust it, and any violation
+is fatal stale retained state: nothing is repaired, recloned or adopted. Bytes, modes and symbolic-link targets carry both ways. The
+absolute paths Git writes into a linked worktree's administration are reduced to
+Workspace paths before capture and reconstructed only inside a live
+materialization, so nothing retained is specific to the machine that created it.
+Deleting a materialization costs time and nothing else. Git runs with a built
+environment rather than an inherited one — no user configuration, no credential
+helper, no terminal prompt, and a fixed workflow identity — so a clone does not
+vary with whoever ran the host. The narrower retention invariant is about paths:
+a provider-generated disposable materialization path is never retained, and
+never accepted as a control path. Content is retained as Git produced it,
+including absolute symbolic-link targets a commit happens to record.
+
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
 delegated without changing the document language.
@@ -1150,9 +1274,10 @@ delegated without changing the document language.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366; repository, process and attachment capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
-| Repository, Worktree and transactional Git components | defined here; unbuilt |
+| `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | defined here; unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |

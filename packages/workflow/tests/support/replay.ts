@@ -16,7 +16,7 @@ import { type Operation, until } from "effection";
 import { mkdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { RepositoryStaleStateError } from "../../src/composition/errors.ts";
-import { WORKSPACE_REPOSITORY } from "../../src/deno/composition/provider.ts";
+import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "../../src/deno/composition/provider.ts";
 import { runPath, tamper } from "./storage.ts";
 import { compositionEvents } from "./composition.ts";
 import type { WorkflowRunDatabase } from "../../src/storage/api.ts";
@@ -25,17 +25,18 @@ export const REMOTE = {
   commits: [{ message: "first", entries: [{ path: "which.txt", content: "first\n" }] }],
 } as const;
 
-const NEWLINE = "\n";
-
 export function source(locator: string, extra = ""): string {
   return [
     `<Repository name="project" url="${locator}">`,
+    `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+    "<Dir path={worktree}>",
     `<File path="which.txt" as="which" />`,
     "",
     "inside: {which}",
+    "</Dir>",
     extra,
     "</Repository>",
-  ].join(NEWLINE);
+  ].join("\n");
 }
 
 /**
@@ -89,7 +90,7 @@ export function committedCompositionEvents(path: string): number {
         continue;
       }
       const type = Reflect.get(description, "type");
-      if (type === WORKSPACE_REPOSITORY) {
+      if (type === WORKSPACE_REPOSITORY || type === WORKSPACE_WORKTREE) {
         total += 1;
       }
     }

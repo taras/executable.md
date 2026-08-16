@@ -667,6 +667,18 @@ describe("Tier DLC — Workspace coordination selection", () => {
         "packages/durable-streams/live-coordinator.ts",
         "packages/durable-streams/types.ts",
         "packages/workflow/mod.ts",
+        // Repository/Worktree composition is provider-neutral on the same
+        // terms: the components a document writes name no subprocess, no host
+        // filesystem and no runtime, and only the Deno adapter beneath them
+        // does.
+        "packages/workflow/src/composition/api.ts",
+        "packages/workflow/src/composition/components/Dir.ts",
+        "packages/workflow/src/composition/components/Repository.ts",
+        "packages/workflow/src/composition/components/Worktree.ts",
+        "packages/workflow/src/composition/context.ts",
+        "packages/workflow/src/composition/errors.ts",
+        "packages/workflow/src/composition/installation.ts",
+        "packages/workflow/src/composition/records.ts",
         "packages/workflow/src/storage/api.ts",
         "packages/workflow/src/workspace/api.ts",
         "packages/workflow/src/workspace/effect.ts",

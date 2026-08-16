@@ -1,7 +1,7 @@
 /**
  * The provider-neutral Repository/Worktree composition Api.
  *
- * Repository components ask this Api for work; the installed
+ * Repository and Worktree components ask this Api for work; the installed
  * provider decides how to do it. This package names no subprocess, no host
  * filesystem and no runtime: a workflow host with the authority to touch a Git
  * checkout — the Deno host, for now — installs a concrete provider inside its
@@ -23,7 +23,12 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import { RepositoryCompositionProviderError } from "./errors.ts";
-import type { RepositoryCreationRequest, RepositoryRecord } from "./records.ts";
+import type {
+  RepositoryCreationRequest,
+  RepositoryRecord,
+  WorktreeCreationRequest,
+  WorktreeRecord,
+} from "./records.ts";
 
 export interface RepositoryCompositionApi {
   /**
@@ -42,6 +47,12 @@ export interface RepositoryCompositionApi {
    * Ephemeral: it appends nothing and is performed on every execution.
    */
   attachRepository(record: RepositoryRecord): Operation<void>;
+
+  /** Create or restore the named Worktree's creation identity, as one durable effect. */
+  createWorktree(request: WorktreeCreationRequest): Operation<WorktreeRecord>;
+
+  /** Rebuild and verify a settled Worktree's live facade. */
+  attachWorktree(record: WorktreeRecord): Operation<void>;
 }
 
 export const RepositoryComposition: Api<RepositoryCompositionApi> =
@@ -53,5 +64,13 @@ export const RepositoryComposition: Api<RepositoryCompositionApi> =
     // deno-lint-ignore require-yield
     *attachRepository(_record: RepositoryRecord): Operation<void> {
       throw new RepositoryCompositionProviderError("<Repository>");
+    },
+    // deno-lint-ignore require-yield
+    *createWorktree(_request: WorktreeCreationRequest): Operation<WorktreeRecord> {
+      throw new RepositoryCompositionProviderError("<Worktree>");
+    },
+    // deno-lint-ignore require-yield
+    *attachWorktree(_record: WorktreeRecord): Operation<void> {
+      throw new RepositoryCompositionProviderError("<Worktree>");
     },
   });

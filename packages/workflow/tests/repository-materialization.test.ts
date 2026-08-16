@@ -39,6 +39,7 @@ import {
   removeWorkspacePath,
   replaceWorkspaceTree,
   retainedRepositories,
+  retainedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -140,6 +141,36 @@ describe("workflow Repository materialization containment", () => {
       expect(yield* retainedRepositories(database)).toEqual([before]);
       expect(committedRoot(runPath(root, "release-1.4"))).toBe(frontier);
       expect(committedCompositionEvents(runPath(root, "release-1.4"))).toBe(events);
+    });
+  });
+
+  it("refuses a Worktree checkout root that is a link to an external clone", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const external = yield* useExternalClone(remote.locator);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const document = [
+        `<Repository name="project" url="${remote.locator}">`,
+        `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+        "child marker",
+        "</Repository>",
+      ].join("\n");
+
+      yield* runDocument(database, document);
+      const [before] = yield* retainedWorktrees(database, "project");
+      yield* linkWorkspacePath(database, external, before?.checkoutPath ?? "");
+      dropRootClose(runPath(root, "release-1.4"));
+
+      const counting = countingHost();
+      const rendered = yield* raised(runDocument(database, document, countingOptions(counting)));
+
+      const failure = causedBy(rendered, isStale);
+      expect(failure?.message).toContain("is not a directory");
+      expect(String(rendered)).not.toContain("child marker");
+      expect(subcommands(counting.counters)).not.toContain("clone");
+      expect(yield* retainedWorktrees(database, "project")).toEqual([before]);
     });
   });
 

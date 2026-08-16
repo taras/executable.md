@@ -40,6 +40,7 @@ import {
   removeWorkspacePath,
   replaceWorkspaceTree,
   retainedRepositories,
+  retainedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -72,8 +73,9 @@ describe("workflow Repository replay", () => {
       yield* runDocument(database, source(remote.locator));
 
       const before = (yield* compositionEvents(database)).length;
-      expect(before).toBe(1);
+      expect(before).toBe(2);
       const [repository] = yield* retainedRepositories(database);
+      const [worktree] = yield* retainedWorktrees(database, "project");
 
       dropRootClose(runPath(root, "release-1.4"));
       // Nothing outside the run's database survives: no remote to clone from,
@@ -93,10 +95,15 @@ describe("workflow Repository replay", () => {
       expect((yield* compositionEvents(database)).length).toBe(before);
 
       // Attachment still happened, and it is what rebuilt the facade.
-      expect(counting.counters.attachments).toEqual(["repository:project"]);
+      expect(counting.counters.attachments).toEqual([
+        "repository:project",
+        "worktree:implementation",
+      ]);
 
       const [repositoryAgain] = yield* retainedRepositories(database);
+      const [worktreeAgain] = yield* retainedWorktrees(database, "project");
       expect(repositoryAgain?.record).toEqual(repository?.record);
+      expect(worktreeAgain).toEqual(worktree);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
     });
   });

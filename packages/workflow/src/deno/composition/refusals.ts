@@ -72,6 +72,16 @@ export function repositoryRefusal(name: string, reason: string): RepositoryCompo
   );
 }
 
+export function worktreeRefusal(name: string, reason: string): WorktreeCompositionError {
+  const word = WORKTREE_REASONS.get(reason) ?? "unusable-repository";
+  return new WorktreeCompositionError(
+    name,
+    word,
+    `<Worktree name=${JSON.stringify(name)}> could not be prepared: ` +
+      `${WORKTREE_SENTENCES.get(word)}`,
+  );
+}
+
 /**
  * A refusal, in the only form the journal can carry it.
  *
@@ -92,23 +102,30 @@ export function repositoryRefusal(name: string, reason: string): RepositoryCompo
 export class CompositionRefusal extends JournaledEffectFailure {
   override name: string;
 
-  constructor(reason: string, sentence: string) {
+  constructor(kind: "repository" | "worktree", reason: string, sentence: string) {
     super(sentence);
-    this.name = `${REFUSAL_NAME}:${reason}`;
+    this.name = `${REFUSAL_NAMES[kind]}:${reason}`;
   }
 }
 
-const REFUSAL_NAME = "RepositoryCompositionRefusal";
+const REFUSAL_NAMES = {
+  repository: "RepositoryCompositionRefusal",
+  worktree: "WorktreeCompositionRefusal",
+} as const;
 
 /** The vocabulary word this restored failure refuses under, if it is a refusal. */
-export function refusalReason(error: unknown): string | undefined {
+export function refusalReason(error: unknown, kind: "repository" | "worktree"): string | undefined {
   if (!(error instanceof Error)) {
     return undefined;
   }
-  const prefix = `${REFUSAL_NAME}:`;
+  const prefix = `${REFUSAL_NAMES[kind]}:`;
   return error.name.startsWith(prefix) ? error.name.slice(prefix.length) : undefined;
 }
 
 export function repositoryRefused(name: string, reason: string): never {
-  throw new CompositionRefusal(reason, repositoryRefusal(name, reason).message);
+  throw new CompositionRefusal("repository", reason, repositoryRefusal(name, reason).message);
+}
+
+export function worktreeRefused(name: string, reason: string): never {
+  throw new CompositionRefusal("worktree", reason, worktreeRefusal(name, reason).message);
 }
