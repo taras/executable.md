@@ -409,9 +409,9 @@ module imports no SQLite, no DOFS and no runtime detection: it asks a host
 adapter to open storage and to attach a run's Workspace, and the entrypoints
 decide which adapter exists.
 
-The start/resume slice predates executor ownership. Issue #367 replaces its
-opportunistic orphan closure with the lifecycle authority below; no supported
-host may advance a retained run without that authority once the slice lands.
+The start/resume slice predated executor ownership. Issue #367 replaced its
+opportunistic orphan closure with the lifecycle authority below, and no
+supported host advances a retained run without that authority.
 
 ## Workflow lifecycle authority
 
@@ -2044,10 +2044,10 @@ Status is measured against main.
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |
 | `ephemeral eval` | reconstructs live middleware and bindings without a journal entry | built on main |
 | `useWorkflowServiceDenial()` | provides a non-delegating workflow service denial provider, installed inside every start and resume execution scope | built on the #366 stack |
-| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; #367 defines the required executor lease, unbuilt |
+| `xmd workflow start` / `xmd workflow resume` | starts or resumes a workflow run from the CLI, under the Deno entrypoints only | built on the #366 stack; both acquire #367's executor lease before any lifecycle transition |
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack; repository, process and attachment capabilities unbuilt (#218) |
 | Repository / Worktree / transactional Git effects | compose named checkouts and publish local mutations with their journal result | defined in `specs/workflow-workspace-spec.md`, unbuilt |
-| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces one executor, refuses live cancellation, cancels non-live runs under lifecycle authority and deletes retained state | immutable inspection built on the #367 stack; executor lease, cancellation and deletion defined here and in `specs/workflow-workspace-spec.md`, unbuilt |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces one executor, refuses live cancellation, cancels non-live runs under lifecycle authority and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
 | read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |

@@ -350,7 +350,8 @@ same run lifecycle remotely.
 
 The lifecycle above is the whole design, including §3.7's rule that a status
 line is published only once its atomic lifecycle transition has persisted. What a
-caller can run today is `start`, `resume` and the three inspections:
+caller can run today is `start` and `resume`, the three inspections, and the two
+control actions:
 
 ```sh
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
@@ -358,14 +359,20 @@ xmd workflow resume <run-id>
 xmd workflow status <run-id> [--json]
 xmd workflow list [--status=<status>] [--json]
 xmd workflow history <run-id> [--json]
+xmd workflow cancel <run-id>
+xmd workflow delete <run-id>
 ```
 
-`cancel` and `delete` are actions of the same grammar and refuse rather than
-answer, because no lifecycle provider implements them yet.
+`cancel` and `delete` take the executor lease before they change anything, which
+is what makes them safe to offer at all: a run somebody is running has an owner
+holding that lease, and both refuse it rather than reaching past it (§3.6). Each
+reports one line on standard output — `workflow cancel: <run-id> (<status>)` and
+`workflow delete: <run-id> (<removed>)`.
 
-Both stream the document's own output to standard output and report two stable
-lines on standard error — `workflow run: <run-id>` once the run has been created
-or found, and `workflow status: <status>` once the execution settles.
+`start` and `resume` stream the document's own output to standard output and
+report two stable lines on standard error — `workflow run: <run-id>` once the run
+has been created or found, and `workflow status: <status>` once the execution
+settles.
 
 A status line is published only after the transaction that finishes the
 document-execution record and publishes the run state has committed. What a
@@ -409,10 +416,12 @@ Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
 absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
-Status, list and history are built (§4). Cancel, fork and delete are designed
-above and unbuilt. The executor lease, suspension and atomic lifecycle
-transitions are the #367 contract that replaces the shipped opportunistic
-orphan closure.
+Status, list and history are built (§4), and so are cancel and delete. The
+executor lease and the atomic lifecycle transitions built on it are #367's, and
+they replace the opportunistic orphan closure that preceded them: liveness is now
+an advisory lock the operating system releases when a host dies, rather than
+something inferred from a status column. Durable suspension is designed above and
+unbuilt, and so is fork.
 
 ## 4. Inspection commands
 
@@ -1129,11 +1138,11 @@ delegated without changing the document language.
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
 | provider-backed retained Workspace | document filesystem built by #366; repository, process and attachment capabilities unbuilt (#218) |
-| `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; #367's executor lease is defined and unbuilt |
+| `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lease |
 | Repository, Worktree and transactional Git components | defined here; unbuilt |
 | lifecycle status/list/history | built by #367 |
-| lifecycle cancel/delete and single-executor authority | defined for #367; unbuilt |
-| durable suspension request and executor release | defined for #367; unbuilt; input delivery belongs to #300 |
+| lifecycle cancel/delete and single-executor authority | built by #367 |
+| durable suspension request and executor release | defined for #367; unbuilt; typed input delivery belongs to #300 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |
