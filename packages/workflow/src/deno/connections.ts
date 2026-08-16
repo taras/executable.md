@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
+import { ensure, resource } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   establishJournalProvenance,
@@ -25,6 +26,35 @@ import {
   type SavepointObserver,
   type SavepointTransaction,
 } from "./savepoints.ts";
+
+/**
+ * The connections one host owns, for as long as it owns them.
+ *
+ * One authoritative connection per database is a storage invariant rather than a
+ * convenience: the DOFS layer caches against it, and Workspace effect
+ * transactions run serially on it. Storage and lifecycle write to the same
+ * databases, so the host creates this once and hands the same registry to both
+ * rather than letting either open a second writer.
+ *
+ * Passed explicitly. It carries operations, so it is not context data, and
+ * "whichever installs first creates it" would have made one installer's
+ * savepoint observation and hooks depend on installation order.
+ *
+ * It is coordination and nothing more: what may advance a run is the executor
+ * lease, which every mutating transaction validates for itself.
+ */
+export function useWorkflowRunConnections(
+  observeSavepoint: SavepointObserver = () => {},
+  hooks: WorkflowRunConnectionHooks = {},
+): Operation<WorkflowRunConnections> {
+  return resource<WorkflowRunConnections>(function* (provide) {
+    const connections = createWorkflowRunConnections(observeSavepoint, hooks);
+    yield* ensure(() => {
+      connections.close();
+    });
+    yield* provide(connections);
+  });
+}
 
 export class ConnectionGeneration {
   #opaque = undefined;
@@ -96,7 +126,8 @@ export interface WorkflowRunConnections {
     transaction: WorkflowRunTransaction,
   ): WorkflowRunTransactionToken;
   validateToken(database: WorkflowRunDatabase, token: WorkflowRunTransactionToken): RunTransaction;
-  close(): void;
+  /** Close and forget one run's connection, so its file can be removed. */
+  close(path?: string): void;
 }
 
 class SqliteStorage implements SQLStorageLike {
@@ -434,7 +465,16 @@ export function createWorkflowRunConnections(
       return transaction;
     },
 
-    close(): void {
+    close(path?: string): void {
+      if (path !== undefined) {
+        const canonical = resolve(path);
+        const entry = entries.get(canonical);
+        if (entry !== undefined) {
+          entry.close();
+          entries.delete(canonical);
+        }
+        return;
+      }
       if (!open) {
         return;
       }

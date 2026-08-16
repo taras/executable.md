@@ -93,7 +93,16 @@ function useFixture<T>(
     yield* git(fixture.repository, ["config", "user.email", "tier-wfc@example.test"]);
     yield* git(fixture.repository, ["config", "user.name", "Tier WFC"]);
     yield* git(fixture.repository, ["add", "-A"]);
-    yield* git(fixture.repository, ["commit", "-q", "-m", "definition"]);
+    // The fixture is not the developer's repository: whatever signing their own
+    // configuration asks for is not this commit's business.
+    yield* git(fixture.repository, [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "definition",
+    ]);
 
     return yield* body(fixture);
   });
@@ -319,10 +328,10 @@ describe("Tier WFC — xmd workflow start and resume", () => {
       expect(unknown.stderr).toContain("resurrect");
 
       // `cancel` is one of this command's actions, so what refuses it is the
-      // absence of an answering lifecycle provider rather than the grammar.
+      // run it addressed rather than the grammar.
       const control = yield* xmd(fixture, ["workflow", "cancel", "release-1"]).join();
       expect(control.code).toBe(1);
-      expect(control.stderr).toContain("cancel()");
+      expect(control.stderr).toContain("release-1");
       expect(control.stderr).not.toContain("unrecognized subcommand");
 
       const noTarget = yield* xmd(fixture, ["workflow", "start"]).join();

@@ -14,16 +14,31 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ensure, type Operation, resource, scoped } from "effection";
+import { ensure, type Operation, resource, type Result, scoped } from "effection";
 import { rm } from "@effectionx/fs";
 import {
   type CreateWorkflowRunRequest,
+  type ExecutorLock,
   type GitWorkflowDefinitionV1,
   parseWorkflowDefinition,
+  type DocumentExecutionRecord,
+  WorkflowLifecycle,
   type WorkflowRunDatabase,
+  type WorkflowRunRecord,
+  type WorkflowRunStatus,
   WorkflowRunStorage,
+  type WorkflowStopReason,
 } from "../../mod.ts";
+import type {
+  WorkflowBeginRequest,
+  WorkflowExecutionTransitions,
+  WorkflowExecutionBegun,
+  WorkflowRunCreation,
+} from "../../deno.ts";
+import { installWorkflowLifecycle } from "../../src/deno/lifecycle.ts";
 import { workflowRunPath } from "../../deno.ts";
+import { useWorkflowRunConnections } from "../../src/deno/connections.ts";
+import { SavepointObservation } from "../../src/deno/savepoints.ts";
 import { installWorkflowRunStorage } from "../../src/deno/provider.ts";
 import type { PrivateWorkspaceOptions } from "../../src/deno/workspace/private.ts";
 
@@ -83,7 +98,10 @@ export function withStorage<T>(
   internal: PrivateWorkspaceOptions = {},
 ): Operation<T> {
   return scoped(function* () {
-    yield* installWorkflowRunStorage({ root }, internal);
+    // The observer travels with the registry: these suites watch real savepoint
+    // behavior, and a registry created without it reports to nobody.
+    const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+    yield* installWorkflowRunStorage({ root }, internal, connections);
     return yield* body();
   });
 }
@@ -195,4 +213,108 @@ export function relaxRunConstraints(database: DatabaseSync): void {
     INSERT INTO workflow_run SELECT * FROM workflow_run_relaxed;
     DROP TABLE workflow_run_relaxed;
   `);
+}
+
+/**
+ * Everything a Deno host installs, over one registry.
+ *
+ * Storage and lifecycle share the registry here for the same reason the real
+ * host does: they write to the same databases. The transitions the host would
+ * keep to itself are handed to the body, because a test standing in for the
+ * host is the host.
+ */
+export function withRunHost<T>(
+  root: string,
+  body: (transitions: WorkflowExecutionTransitions) => Operation<T>,
+  internal: PrivateWorkspaceOptions = {},
+): Operation<T> {
+  return scoped(function* () {
+    const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+    yield* installWorkflowRunStorage({ root }, internal, connections);
+    const transitions = yield* installWorkflowLifecycle({ root }, connections);
+    return yield* body(transitions);
+  });
+}
+
+/**
+ * One run begun the way production begins one, for as long as the body runs.
+ *
+ * A real executor lock and the real transition — there is no lock-free way
+ * to write a lifecycle row, in a test or anywhere else, which is the point of
+ * the slice this fixture belongs to. The lock is held for the callback and
+ * released with it, so nothing here hands back a database that outlives the
+ * lock that opened it.
+ */
+export function withExecutorRun<T>(
+  transitions: WorkflowExecutionTransitions,
+  request: WorkflowBeginRequest,
+  body: (begun: WorkflowExecutionBegun, executorLock: ExecutorLock) => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const acquisition = yield* WorkflowLifecycle.operations.acquireExecutor(request.runId);
+    if (!acquisition.ok) {
+      throw acquisition.error;
+    }
+    if (acquisition.value.kind !== "acquired") {
+      throw new Error(`the run ${request.runId} already has a live workflow executor`);
+    }
+    const { lock: executorLock } = acquisition.value;
+    const begun = yield* transitions.begin(executorLock, request);
+    if (!begun.ok) {
+      throw begun.error;
+    }
+    return yield* body(begun.value, executorLock);
+  });
+}
+
+/** The creation a `start` supplies, for a fixture that does not care which. */
+export function creation(overrides: Partial<WorkflowRunCreation> = {}): WorkflowRunCreation {
+  return { definition: definition(), base: "main", props: { channel: "stable" }, ...overrides };
+}
+
+/** A run begun under a real executor lock, with the settlement that ends it. */
+export interface BegunRun {
+  readonly database: WorkflowRunDatabase;
+  readonly execution: DocumentExecutionRecord;
+  /** Settle the execution this run began, unless another is named. */
+  settle(completion: {
+    status: WorkflowRunStatus;
+    reason?: WorkflowStopReason;
+    executionId?: string;
+  }): Operation<Result<WorkflowRunRecord>>;
+}
+
+/**
+ * One begun run, for a suite whose subject is what storage retains.
+ *
+ * Publishing a status is a lifecycle transition now, so a test that needs a
+ * settled run acquires the executor lock and settles through the same
+ * transitions production uses. What the test then asserts is still storage's business: the
+ * status that survived, the reason beside it, the execution row it left.
+ */
+export function withBegunRun<T>(
+  root: string,
+  body: (run: BegunRun) => Operation<T>,
+  runId = "release-1.4",
+): Operation<T> {
+  return withRunHost(root, function* (transitions) {
+    return yield* withExecutorRun(
+      transitions,
+      { runId, action: "start", creation: creation() },
+      function* (begun, executorLock) {
+        return yield* body({
+          database: begun.database,
+          execution: begun.execution,
+          settle(completion) {
+            const { executionId = begun.execution.executionId, status, reason } = completion;
+            return transitions.settle(executorLock, {
+              executionId,
+              status,
+              ...(reason === undefined ? {} : { reason }),
+            });
+          },
+        });
+      },
+    );
+  });
 }

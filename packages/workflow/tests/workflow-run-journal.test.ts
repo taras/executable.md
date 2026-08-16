@@ -579,8 +579,9 @@ describe("Tier WJ — a transaction a caller holds", () => {
 
       const result = yield* database.transact(function* () {
         // Taking the connection again from inside the body would wait for a
-        // transaction this very scope is holding open.
-        return yield* database.beginDocumentExecution();
+        // transaction this very scope is holding open. Any operation that takes
+        // its own turn shows it; this one reads.
+        return yield* database.readDocumentExecutions();
       });
 
       if (!result.ok) {
@@ -992,7 +993,7 @@ describe("Tier WJ — two handles on one run", () => {
       const before = ticks;
 
       const waiting = yield* spawn(function* () {
-        const result = yield* second.beginDocumentExecution();
+        const result = yield* second.readDocumentExecutions();
         order.push(result.ok ? "second ran" : "second failed");
       });
 
@@ -1544,7 +1545,15 @@ describe("Tier WJ — surviving a process", () => {
 
     expect(created).toHaveLength(1);
     expect(refused).toHaveLength(1);
-    expect(refused[0].refused).toBe("WorkflowRunConflictError");
+
+    // Two mechanisms refuse a second creator, and which one speaks depends on
+    // how far the winner has got — not on anything either process decides.
+    // Reaching the run while the winner still holds it is refused by the lock,
+    // before any storage is opened; reaching it after the winner has released
+    // is refused by the run that is now there. Both are one winner, so the test
+    // names both rather than pinning the timing that chooses between them.
+    expect(["already-running", "WorkflowRunConflictError"]).toContain(refused[0].refused);
+
     // The winner's base is whichever one got there first, and it is the only
     // base the run has.
     expect(["main", "develop"]).toContain(created[0].base);

@@ -58,12 +58,13 @@ import {
 import { canonicalJson, parseRunId, type WorkflowRunRecord } from "../storage/record.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import {
-  createWorkflowRunConnections,
   type RunConnection,
   type RunTransaction,
+  useWorkflowRunConnections,
   type WorkflowRunConnections,
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
+import { INSERT_RUN } from "./transitions.ts";
 import { useJournalRouting } from "./journal-route.ts";
 import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
@@ -71,10 +72,6 @@ import { SavepointObservation } from "./savepoints.ts";
 import { usePrivateWorkspace } from "./workspace/private.ts";
 import type { PrivateWorkspaceOptions } from "./workspace/private.ts";
 import { useWorkspaceEffects } from "./workspace/effect.ts";
-
-const INSERT_RUN = `INSERT INTO workflow_run
-  (id, run_id, definition, base, props, status, created_at, updated_at)
-  VALUES (1, ?, ?, ?, ?, 'running', ?, ?)`;
 
 export interface WorkflowRunStorageOptions {
   /**
@@ -108,8 +105,9 @@ export const WorkflowRunRecognition = createContext<WorkflowRunRecognitionProbe>
  * long as the scope that installed the provider and nothing accumulates
  * between runs.
  */
-export function useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
-  return installWorkflowRunStorage(options, {});
+export function* useWorkflowRunStorage(options: WorkflowRunStorageOptions): Operation<void> {
+  const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+  yield* installWorkflowRunStorage(options, {}, connections);
 }
 
 /**
@@ -123,12 +121,9 @@ export function useWorkflowRunStorage(options: WorkflowRunStorageOptions): Opera
 export function* installWorkflowRunStorage(
   options: WorkflowRunStorageOptions,
   internal: PrivateWorkspaceOptions,
+  connections: WorkflowRunConnections,
 ): Operation<void> {
   const root = authorizedRoot(options.root);
-  const connections = createWorkflowRunConnections(yield* SavepointObservation.get());
-  yield* ensure(() => {
-    connections.close();
-  });
   yield* useJournalRouting(connections);
   yield* usePrivateWorkspace(connections, internal);
   yield* useWorkspaceEffects(connections);

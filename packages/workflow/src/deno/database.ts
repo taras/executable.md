@@ -30,7 +30,6 @@
  * provider owns the authoritative physical connection for its own scope.
  */
 
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
@@ -38,7 +37,6 @@ import type { JournalEntry, WorkflowRunDatabase, WorkflowRunTransaction } from "
 import {
   WorkflowDatabaseClosedError,
   WorkflowDatabaseCorruptError,
-  WorkflowDocumentExecutionError,
   WorkflowRequestError,
   WorkflowTransactionError,
 } from "../storage/errors.ts";
@@ -46,11 +44,7 @@ import { parseJsonValue } from "../storage/members.ts";
 import {
   canonicalJson,
   type DefinitionRetrieval,
-  type DocumentExecutionCompletion,
   type DocumentExecutionRecord,
-  parseDocumentExecutionCompletion,
-  parseStoredRunState,
-  type StoredRunState,
   type WorkflowRunRecord,
 } from "../storage/record.ts";
 import { insertJournalEvent, readJournalEntries } from "./journal.ts";
@@ -67,15 +61,11 @@ import {
   holdsTransactionOn,
   useTransactionSavepoints,
 } from "./transaction.ts";
-import { readDocumentExecution, readRetrieval, readRunRecord, stopReasonColumns } from "./rows.ts";
+import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
 import { reading } from "./reading.ts";
-import { isSqliteForeignKeyConstraint, translateSqliteError } from "./schema.ts";
+import { translateSqliteError } from "./schema.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
-const UPDATE_RUN_STATE = `UPDATE workflow_run
-  SET status = ?, stop_reason_kind = ?, stop_reason_code = ?, stop_reason_event_id = ?,
-      updated_at = ?
-  WHERE id = 1`;
 const SELECT_RETRIEVAL = "SELECT * FROM definition_retrieval WHERE id = 1";
 const UPSERT_RETRIEVAL = `INSERT INTO definition_retrieval (id, metadata, revision, updated_at)
   VALUES (1, ?, ?, ?)
@@ -83,12 +73,6 @@ const UPSERT_RETRIEVAL = `INSERT INTO definition_retrieval (id, metadata, revisi
   SET metadata = excluded.metadata, revision = excluded.revision,
       updated_at = excluded.updated_at`;
 const DELETE_RETRIEVAL = "DELETE FROM definition_retrieval WHERE id = 1";
-const INSERT_EXECUTION = "INSERT INTO document_executions (execution_id, started_at) VALUES (?, ?)";
-const FINISH_EXECUTION = `UPDATE document_executions
-  SET stopped_at = ?, stop_status = ?, stop_reason_kind = ?, stop_reason_code = ?,
-      stop_reason_event_id = ?
-  WHERE execution_id = ? AND stopped_at IS NULL`;
-const SELECT_EXECUTION = "SELECT * FROM document_executions WHERE execution_id = ?";
 const SELECT_EXECUTIONS = "SELECT * FROM document_executions ORDER BY sequence ASC";
 
 /** What opening needs from whoever found the file and checked its schema. */
@@ -338,78 +322,10 @@ function createHandle(connection: OpenConnection): Handle {
       return Ok();
     },
 
-    *beginDocumentExecution(): Operation<Result<DocumentExecutionRecord>> {
-      const executionId = randomUUID();
-      const startedAt = now();
-      return yield* write(() => {
-        database.prepare(INSERT_EXECUTION).run(executionId, startedAt);
-        return readExecution(database, executionId);
-      });
-    },
-
-    *finishDocumentExecution(
-      offered: DocumentExecutionCompletion,
-    ): Operation<Result<DocumentExecutionRecord>> {
-      const checked = parseDocumentExecutionCompletion(offered);
-      if (!checked.ok) {
-        return checked;
-      }
-      const completion = checked.value;
-      const columns = stopReasonColumns(completion.reason);
-      const stoppedAt = now();
-
-      return yield* write(() => {
-        const changed = runStopReasonStatement(
-          () =>
-            database
-              .prepare(FINISH_EXECUTION)
-              .run(
-                stoppedAt,
-                completion.status,
-                columns.kind,
-                columns.code,
-                columns.eventId,
-                completion.executionId,
-              ),
-          path,
-        );
-        if (changed.changes === 0) {
-          throw new WorkflowDocumentExecutionError(completion.executionId);
-        }
-        return readExecution(database, completion.executionId);
-      });
-    },
-
     *readDocumentExecutions(): Operation<Result<DocumentExecutionRecord[]>> {
       return yield* read(() =>
         reading(database, SELECT_EXECUTIONS).all().map(readDocumentExecution),
       );
-    },
-
-    *updateRunState(offered: StoredRunState): Operation<Result<WorkflowRunRecord>> {
-      const checked = parseStoredRunState(offered);
-      if (!checked.ok) {
-        return checked;
-      }
-      const state = checked.value;
-      const columns = stopReasonColumns(state.reason);
-      const updatedAt = now();
-
-      const written = yield* write(() => {
-        runStopReasonStatement(
-          () =>
-            database
-              .prepare(UPDATE_RUN_STATE)
-              .run(state.status, columns.kind, columns.code, columns.eventId, updatedAt),
-          path,
-        );
-        return readRunRow(database, path);
-      });
-      if (!written.ok) {
-        return written;
-      }
-      record = written.value;
-      return Ok(record);
     },
   };
 
@@ -503,20 +419,6 @@ function inTransaction<T>(
   }
 }
 
-function runStopReasonStatement<T>(body: () => T, path: string): T {
-  try {
-    return body();
-  } catch (error) {
-    if (isSqliteForeignKeyConstraint(error)) {
-      throw new WorkflowRequestError(
-        "the stop reason names a journal event this run does not hold. A journal reason " +
-          "points at an event that has already been appended and filtered.",
-      );
-    }
-    throw translateSqliteError(error, path);
-  }
-}
-
 /**
  * Roll back without reporting a failure of its own.
  *
@@ -556,14 +458,6 @@ export function readRunRow(database: DatabaseSync, path: string): WorkflowRunRec
 function readRetrievalRow(database: DatabaseSync): DefinitionRetrieval | undefined {
   const row = reading(database, SELECT_RETRIEVAL).get();
   return row === undefined ? undefined : readRetrieval(row);
-}
-
-function readExecution(database: DatabaseSync, executionId: string): DocumentExecutionRecord {
-  const row = reading(database, SELECT_EXECUTION).get(executionId);
-  if (row === undefined) {
-    throw new WorkflowDocumentExecutionError(executionId);
-  }
-  return readDocumentExecution(row);
 }
 
 function now(): string {

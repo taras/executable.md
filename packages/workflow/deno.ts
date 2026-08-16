@@ -27,8 +27,15 @@
 export { useWorkflowRunStorage } from "./src/deno/provider.ts";
 export type { WorkflowRunStorageOptions } from "./src/deno/provider.ts";
 export { useWorkflowLifecycle } from "./src/deno/lifecycle.ts";
+export { useWorkflowRunHost } from "./src/deno/run-host.ts";
+export type {
+  WorkflowBeginRequest,
+  WorkflowExecutionTransitions,
+  WorkflowExecutionBegun,
+  WorkflowRunCreation,
+} from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
-export { hashRunId, workflowRunPath } from "./src/deno/path.ts";
+export { hashRunId, workflowRunLock, workflowRunPath } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";

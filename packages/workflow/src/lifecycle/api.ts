@@ -3,17 +3,17 @@
  * about one.
  *
  * Storage serialization decides who uses a connection next. It does not decide
- * who may advance a workflow run. That is this contract: one executor lease per
+ * who may advance a workflow run. That is this contract: one executor lock per
  * run, and an inspection surface that holds no authority at all.
  *
  * ## Routing selects a host; it grants nothing
  *
  * Reaching a provider through a contextual Api says which host answers. The
- * authority is the lease the provider hands back: an opaque object it registered
- * for one run and one acquisition, which it checks by identity — together with
- * its open scope, its run and its generation — inside every mutating
- * transaction. A run id, a database handle, a structural look-alike or a
- * retained token authorizes nothing.
+ * authority is the opaque object the provider hands back after taking the
+ * executor lock. It registered that object for one run and one acquisition and
+ * checks it by identity — together with its open scope and run — inside every
+ * mutating transaction. A run id, a database handle, a structural look-alike or
+ * a retained token authorizes nothing.
  *
  * ## Inspection returns values
  *
@@ -41,19 +41,19 @@ import type {
 import type { WorkflowHistoryEntry } from "./history.ts";
 
 /**
- * One acquisition's authority over one run.
+ * One acquired executor lock for one run.
  *
- * The public field describes the lease and never validates it: the provider
- * that created this exact object is the only thing that can tell it apart from
- * a value shaped like it.
+ * The public field describes the acquisition and never validates it: the
+ * provider that created this exact object is the only thing that can tell it
+ * apart from a value shaped like it.
  */
-export interface ExecutorLease {
+export interface ExecutorLock {
   readonly runId: string;
 }
 
-/** Acquired, or already owned by a live executor. */
+/** Acquired, or already held by a live workflow executor. */
 export type ExecutorAcquisition =
-  | { readonly kind: "acquired"; readonly lease: ExecutorLease }
+  | { readonly kind: "acquired"; readonly lock: ExecutorLock }
   | { readonly kind: "already-running" };
 
 /**
@@ -82,11 +82,11 @@ export interface WorkflowLifecycleSnapshot {
  * by removing the record of it, and nothing here says otherwise.
  */
 export interface WorkflowDeletion {
-  readonly removed: readonly ("run-storage" | "provider-sessions" | "lifecycle-control")[];
+  readonly removed: readonly ("run-storage" | "provider-sessions")[];
 }
 
 export interface WorkflowLifecycleApi {
-  /** Take exact ownership of a run, or report that a live executor holds it. */
+  /** Take the executor lock, or report that a live workflow executor holds it. */
   acquireExecutor(runId: string): Operation<Result<ExecutorAcquisition>>;
   /** One run's immutable lifecycle snapshot. */
   inspect(runId: string): Operation<Result<WorkflowLifecycleSnapshot>>;

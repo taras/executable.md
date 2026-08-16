@@ -32,15 +32,27 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
-import { exists, readdir } from "@effectionx/fs";
-import { Err, Ok, type Operation, type Result } from "effection";
+import { exists, readdir, rm } from "@effectionx/fs";
+import { useWorkflowRunConnections, type WorkflowRunConnections } from "./connections.ts";
+import { Err, Ok, type Operation, type Result, scoped } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import type {
   DurableObjectStorageLike,
   SQLCursorLike,
   SQLStorageLike,
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
-import { WorkflowLifecycle, type WorkflowLifecycleSnapshot } from "../lifecycle/api.ts";
+import {
+  type ExecutorAcquisition,
+  type ExecutorLock,
+  type WorkflowDeletion,
+  WorkflowLifecycle,
+  type WorkflowLifecycleSnapshot,
+} from "../lifecycle/api.ts";
+import type {
+  WorkflowBeginRequest,
+  WorkflowExecutionTransitions,
+  WorkflowExecutionBegun,
+} from "../lifecycle/execution.ts";
 import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history.ts";
 import {
   WorkflowRequestError,
@@ -50,7 +62,13 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
+import {
+  createExecutorLockRegistry,
+  type ExecutorLockHold,
+  type ExecutorLockRegistry,
+} from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
+import { beginExecution, cancelRun, settleExecution } from "./transitions.ts";
 import { workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
@@ -79,14 +97,40 @@ export interface WorkflowLifecycleOptions {
  * default position runs outermost, so an outer scope's provider would answer
  * ahead of one installed nearer the work.
  *
- * This slice installs the read-only operations. Acquisition, cancellation and
- * deletion are not installed, so they answer with the Api's fail-closed default
- * rather than with a host that appears to hold authority it does not.
+ * The executor registry belongs to this installation's closure rather than to
+ * module scope, so the locks it issued last exactly as long as the scope that
+ * installed the provider and nothing accumulates between runs.
+ *
  */
 export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operation<void> {
+  yield* installWorkflowLifecycle(options, yield* useWorkflowRunConnections());
+}
+
+/**
+ * The same installation, over a registry the host already owns.
+ *
+ * Storage writes to the same databases, so a host running both hands each the
+ * one registry rather than letting either open a second authoritative
+ * connection. Inspection still stays off it entirely: a read-only snapshot has
+ * its own connection and never enters the pool execution serializes on.
+ */
+export function* installWorkflowLifecycle(
+  options: WorkflowLifecycleOptions,
+  connections: WorkflowRunConnections,
+): Operation<WorkflowExecutionTransitions> {
   const root = authorizedRoot(options.root);
+  const executors = createExecutorLockRegistry();
   yield* WorkflowLifecycle.around(
     {
+      *acquireExecutor([runId]) {
+        return yield* acquire(root, executors, runId);
+      },
+      *cancel([runId]) {
+        return yield* cancel(root, connections, executors, runId);
+      },
+      *delete([runId]) {
+        return yield* remove(root, connections, executors, runId);
+      },
       *inspect([runId]) {
         return yield* inspectRun(root, runId);
       },
@@ -99,6 +143,193 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
     },
     { at: "min" },
   );
+
+  // Handed back rather than installed. Beginning an execution answers with an
+  // open database, and a contextual surface anything can reach is the wrong
+  // place for a capability that hands out transports.
+  return {
+    begin(executorLock, request) {
+      return beginRun(root, connections, executors, executorLock, request);
+    },
+    *settle(executorLock, completion) {
+      // Authorized before a connection exists: the path comes from the hold the
+      // provider issued, never from what the lock says about itself.
+      const authorized = authorizeHold(executors, executorLock);
+      if (!authorized.ok) {
+        return authorized;
+      }
+      const hold = authorized.value;
+      return yield* settleExecution(
+        connections,
+        workflowRunPath(root, hold.runId),
+        hold,
+        () => executors.authorize(executorLock),
+        completion,
+      );
+    },
+  };
+}
+
+function* beginRun(
+  root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorLockRegistry,
+  executorLock: ExecutorLock,
+  request: WorkflowBeginRequest,
+): Operation<Result<WorkflowExecutionBegun>> {
+  const checked = checkRunId(request.runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  // Authorized before a connection exists, so a fabricated lock cannot cause a
+  // database to be created or opened on its way to being refused. The path
+  // comes from the hold rather than from what the lock says about itself.
+  const authorized = authorizeHold(executors, executorLock, checked.value);
+  if (!authorized.ok) {
+    return authorized;
+  }
+  const hold = authorized.value;
+  const begun = yield* beginExecution(
+    connections,
+    workflowRunPath(root, hold.runId),
+    hold,
+    () => executors.authorize(executorLock, checked.value),
+    request,
+  );
+  if (!begun.ok) {
+    return begun;
+  }
+  if (begun.value.kind === "refused") {
+    return Err(begun.value.reason);
+  }
+  return Ok(begun.value);
+}
+
+/**
+ * Remove one run's retained storage under its executor lock.
+ *
+ * The lock decides whether there is anything to refuse: a live workflow executor holds
+ * it, and a run somebody is running is not one to delete. Everything else may
+ * be, including a `running` record whose workflow executor is gone — acquiring
+ * the released lock is what proves it.
+ *
+ * What goes is the run's database. The lock file stays, empty: unlinking a file
+ * this workflow executor still holds would let the next caller create and lock
+ * a different file at the same path. An empty lock is host
+ * arrangement rather than retained run state, so it is not a category anybody
+ * is told about.
+ */
+function* remove(
+  root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorLockRegistry,
+  runId: string,
+): Operation<Result<WorkflowDeletion>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  return yield* scoped(function* (): Operation<Result<WorkflowDeletion>> {
+    const hold = yield* executors.acquire(root, checked.value);
+    if (hold === undefined) {
+      return Err(
+        new WorkflowRequestError(
+          `workflow run ${checked.value} is running: a run with a live workflow executor is not ` +
+            "deleted. Interrupt that foreground process first.",
+        ),
+      );
+    }
+
+    const path = workflowRunPath(root, hold.runId);
+    // Recognized before anything is removed: deleting a file because its name
+    // matches would remove whatever happened to be there, and an absent run is
+    // reported rather than treated as an idempotent success.
+    const recognized = yield* inspectRun(root, checked.value);
+    if (!recognized.ok) {
+      return recognized;
+    }
+
+    // Closed first: the connection this host holds on the file has to go before
+    // the file does, or the next caller opens the one that was removed.
+    connections.close(path);
+    yield* rm(path);
+    return Ok({ removed: ["run-storage"] });
+  });
+}
+
+/** The hold this executor lock stands for, as a refusal rather than a raise. */
+function authorizeHold(
+  executors: ExecutorLockRegistry,
+  lock: ExecutorLock,
+  runId?: string,
+): Result<ExecutorLockHold> {
+  try {
+    return Ok(executors.authorize(lock, runId));
+  } catch (error) {
+    if (error instanceof WorkflowStorageError) {
+      return Err(error);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Make one run terminal, when nothing is running it.
+ *
+ * The lock is the whole test for whether anything is: a live workflow executor holds it,
+ * and this host does not reach into another process's document execution. A
+ * caller who wants a running workflow to stop interrupts the foreground process
+ * running it, which publishes `interrupted` and leaves the run resumable.
+ */
+function* cancel(
+  root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorLockRegistry,
+  runId: string,
+): Operation<Result<WorkflowRunRecord>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  return yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
+    const hold = yield* executors.acquire(root, checked.value);
+    if (hold === undefined) {
+      return Err(
+        new WorkflowRequestError(
+          `workflow run ${checked.value} is running: cancellation does not reach into a live ` +
+            "document execution. Interrupt that foreground process — Ctrl-C tears " +
+            "its scope down in order, publishes interrupted and leaves the run resumable.",
+        ),
+      );
+    }
+    return yield* cancelRun(connections, workflowRunPath(root, hold.runId), hold, () =>
+      executors.authorize(hold.lock, checked.value),
+    );
+  });
+}
+
+/**
+ * Take the executor lock for one run, or report that a live workflow executor holds it.
+ *
+ * The lock is taken before anything reads or writes the run, and the executor
+ * lock it produces belongs to the scope that asked. An acquisition made
+ * inside a `scoped()` block releases when that block ends, whatever happened
+ * inside it.
+ */
+function* acquire(
+  root: string,
+  executors: ExecutorLockRegistry,
+  runId: string,
+): Operation<Result<ExecutorAcquisition>> {
+  const checked = checkRunId(runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  const hold = yield* executors.acquire(root, checked.value);
+  if (hold === undefined) {
+    return Ok({ kind: "already-running" });
+  }
+  return Ok({ kind: "acquired", lock: hold.lock });
 }
 
 function* inspectRun(root: string, runId: string): Operation<Result<WorkflowLifecycleSnapshot>> {

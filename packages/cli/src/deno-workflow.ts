@@ -20,9 +20,10 @@ import type { Operation } from "effection";
 import { env as readEnv } from "@executablemd/runtime";
 import {
   useWorkflowLifecycle,
-  useWorkflowRunStorage,
+  useWorkflowRunHost,
   withWorkflowWorkspace,
 } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { WorkflowHost } from "./workflow.ts";
 
@@ -37,8 +38,8 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
   return {
-    useStorage(): Operation<void> {
-      return useWorkflowRunStorage({ root });
+    useRunHost(): Operation<WorkflowExecutionTransitions> {
+      return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });

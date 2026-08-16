@@ -24,3 +24,15 @@ export function hashRunId(runId: string): string {
 export function workflowRunPath(root: string, runId: string): string {
   return join(root, `${hashRunId(runId)}.sqlite`);
 }
+
+/**
+ * The advisory lock one run's executor holds.
+ *
+ * A suffix rather than a subdirectory, so every path a run occupies is derived
+ * from one hash and inspection's candidate pattern — `<hash>.sqlite` exactly —
+ * excludes it by construction. It is not retained run state: it is how one host
+ * arranges ownership, and it may remain, empty, after the run is deleted.
+ */
+export function workflowRunLock(root: string, runId: string): string {
+  return join(root, `${hashRunId(runId)}.lock`);
+}

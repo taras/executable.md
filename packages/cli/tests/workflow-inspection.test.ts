@@ -78,7 +78,16 @@ function useFixture<T>(
     yield* git(fixture.repository, ["config", "user.email", "tier-wfi@example.test"]);
     yield* git(fixture.repository, ["config", "user.name", "Tier WFI"]);
     yield* git(fixture.repository, ["add", "-A"]);
-    yield* git(fixture.repository, ["commit", "-q", "-m", "definition"]);
+    // The fixture is not the developer's repository: whatever signing their own
+    // configuration asks for is not this commit's business.
+    yield* git(fixture.repository, [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-q",
+      "-m",
+      "definition",
+    ]);
 
     return yield* body(fixture);
   });
@@ -309,10 +318,11 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       expect(verbose.stderr).toContain("--verbose");
 
       // `*` is a character in an id, not syntax: the grammar hands it on, and
-      // what refuses this is the operation having no answering provider yet.
+      // what refuses this is the run it addressed — there is no run called
+      // `release-*`, and no pattern was ever evaluated.
       const wildcard = yield* xmd(fixture, ["workflow", "delete", "release-*"]).join();
       expect(wildcard.code).toBe(1);
-      expect(wildcard.stderr).toContain("delete()");
+      expect(wildcard.stderr).toContain("release-*");
 
       const missing = yield* xmd(fixture, ["workflow", "status"]).join();
       expect(missing.code).toBe(1);

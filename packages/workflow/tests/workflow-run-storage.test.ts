@@ -59,6 +59,7 @@ import {
   SHA1,
   tamper,
   useStorageRoot,
+  withBegunRun,
   withStorage,
 } from "./support/storage.ts";
 
@@ -554,22 +555,27 @@ describe("Tier WS — what a run retains", () => {
   it("WS10: every one of the six statuses survives, with its stop reason", function* () {
     const root = yield* useStorageRoot();
 
-    const stored = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const seen: { status: WorkflowRunStatus; reason: WorkflowStopReason | undefined }[] = [];
-
-      for (const status of WORKFLOW_RUN_STATUSES) {
-        const updated = yield* database.updateRunState({
-          status,
-          reason: { kind: "host", code: `stopped-${status}` },
-        });
-        if (!updated.ok) {
-          throw updated.error;
-        }
-        seen.push({ status: updated.value.status, reason: updated.value.stopReason });
-      }
-      return seen;
-    });
+    const seen: { status: WorkflowRunStatus; reason: WorkflowStopReason | undefined }[] = [];
+    for (const status of WORKFLOW_RUN_STATUSES) {
+      // A status is published by settling an execution, and one acquisition
+      // settles one — so each status is a run of its own rather than six
+      // rewrites of one row.
+      yield* withBegunRun(
+        root,
+        function* (run) {
+          const updated = yield* run.settle({
+            status,
+            reason: { kind: "host", code: `stopped-${status}` },
+          });
+          if (!updated.ok) {
+            throw updated.error;
+          }
+          seen.push({ status: updated.value.status, reason: updated.value.stopReason });
+        },
+        `release-${status}`,
+      );
+    }
+    const stored = seen;
 
     expect(stored.map((entry) => entry.status)).toEqual([...WORKFLOW_RUN_STATUSES]);
     for (const entry of stored) {
@@ -580,8 +586,8 @@ describe("Tier WS — what a run retains", () => {
   it("WS11: a stop reason may point at a filtered journal event instead", function* () {
     const root = yield* useStorageRoot();
 
-    const record = yield* withStorage(root, function* () {
-      const database = yield* createRun();
+    const record = yield* withBegunRun(root, function* (run) {
+      const database = run.database;
 
       // The event has to be there. A reason naming one that is not is a
       // reason referring to nothing, which is why the reference is enforced.
@@ -596,7 +602,7 @@ describe("Tier WS — what a run retains", () => {
         throw entries.error;
       }
 
-      const updated = yield* database.updateRunState({
+      const updated = yield* run.settle({
         status: "failed",
         reason: { kind: "journal", eventId: entries.value[0].eventId },
       });
@@ -612,9 +618,8 @@ describe("Tier WS — what a run retains", () => {
   it("WS11b: a stop reason naming an event this run does not hold is refused", function* () {
     const root = yield* useStorageRoot();
 
-    const result = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      return yield* database.updateRunState({
+    const result = yield* withBegunRun(root, function* (run) {
+      return yield* run.settle({
         status: "failed",
         reason: { kind: "journal", eventId: "an-event-that-was-never-appended" },
       });
@@ -627,19 +632,12 @@ describe("Tier WS — what a run retains", () => {
   it("WS11c: an execution stop reason naming a missing event is refused", function* () {
     const root = yield* useStorageRoot();
 
-    const seen = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
-      }
-
-      const result = yield* database.finishDocumentExecution({
-        executionId: started.value.executionId,
+    const seen = yield* withBegunRun(root, function* (run) {
+      const result = yield* run.settle({
         status: "failed",
         reason: { kind: "journal", eventId: "an-event-that-was-never-appended" },
       });
-      const executions = yield* database.readDocumentExecutions();
+      const executions = yield* run.database.readDocumentExecutions();
       if (!executions.ok) {
         throw executions.error;
       }
@@ -655,80 +653,14 @@ describe("Tier WS — what a run retains", () => {
   it("WS12: a stop reason is parsed on the way in, not only type-checked", function* () {
     const root = yield* useStorageRoot();
 
-    const result = yield* withStorage(root, function* () {
-      const database = yield* createRun();
+    const result = yield* withBegunRun(root, function* (run) {
       // Type-legal and empty: a code that names nothing is refused here rather
       // than becoming a row whose reason says nothing.
-      return yield* database.updateRunState({
-        status: "failed",
-        reason: { kind: "host", code: "" },
-      });
+      return yield* run.settle({ status: "failed", reason: { kind: "host", code: "" } });
     });
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
-  });
-
-  it("WS13: the initial start and every resume get a record of their own", function* () {
-    const root = yield* useStorageRoot();
-
-    const executions = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-
-      const first = yield* database.beginDocumentExecution();
-      if (!first.ok) {
-        throw first.error;
-      }
-      const finished = yield* database.finishDocumentExecution({
-        executionId: first.value.executionId,
-        status: "interrupted",
-        reason: { kind: "host", code: "executor-lost" },
-      });
-      if (!finished.ok) {
-        throw finished.error;
-      }
-
-      const second = yield* database.beginDocumentExecution();
-      if (!second.ok) {
-        throw second.error;
-      }
-
-      const all = yield* database.readDocumentExecutions();
-      if (!all.ok) {
-        throw all.error;
-      }
-      return all.value;
-    });
-
-    expect(executions).toHaveLength(2);
-    expect(executions[0].stopStatus).toBe("interrupted");
-    expect(executions[0].stopReason).toEqual({ kind: "host", code: "executor-lost" });
-    expect(executions[0].stoppedAt).toBeDefined();
-    expect(executions[1].stoppedAt).toBeUndefined();
-    expect(executions[1].executionId).not.toBe(executions[0].executionId);
-  });
-
-  it("WS14: an execution is finished once, by whoever began it", function* () {
-    const root = yield* useStorageRoot();
-
-    const results = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
-      }
-      const completion = { executionId: started.value.executionId, status: "completed" } as const;
-
-      return [
-        yield* database.finishDocumentExecution(completion),
-        yield* database.finishDocumentExecution(completion),
-        yield* database.finishDocumentExecution({ executionId: "never-began", status: "failed" }),
-      ];
-    });
-
-    expect(results[0].ok).toBe(true);
-    expect(results[1].ok).toBe(false);
-    expect(results[2].ok).toBe(false);
   });
 
   it("WS15: retrieval metadata is replaceable and is not identity", function* () {
@@ -832,25 +764,16 @@ describe("Tier WS — surviving the process", () => {
   it("WS16: a second scope restores identity, state, retrieval and executions", function* () {
     const root = yield* useStorageRoot();
 
-    const written = yield* withStorage(root, function* () {
-      const database = yield* createRun({ props: { channel: "stable", tags: ["a"] } });
-      yield* database.replaceRetrievalMetadata({ checkout: "/tmp/a" });
-
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
+    const written = yield* withBegunRun(root, function* (run) {
+      yield* run.database.replaceRetrievalMetadata({ checkout: "/tmp/a" });
+      const settled = yield* run.settle({
+        status: "suspended",
+        reason: { kind: "host", code: "awaiting-input" },
+      });
+      if (!settled.ok) {
+        throw settled.error;
       }
-      yield* database.finishDocumentExecution({
-        executionId: started.value.executionId,
-        status: "suspended",
-        reason: { kind: "host", code: "awaiting-input" },
-      });
-      yield* database.updateRunState({
-        status: "suspended",
-        reason: { kind: "host", code: "awaiting-input" },
-      });
-
-      return { record: database.record, executionId: started.value.executionId };
+      return { record: settled.value, executionId: run.execution.executionId };
     });
 
     const restored = yield* withStorage(root, function* () {
@@ -880,13 +803,8 @@ describe("Tier WS — surviving the process", () => {
   it("WS17: an unfinished document execution is still unfinished afterwards", function* () {
     const root = yield* useStorageRoot();
 
-    const executionId = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
-      }
-      return started.value.executionId;
+    const executionId = yield* withBegunRun(root, function* (run) {
+      return run.execution.executionId;
     });
 
     const restored = yield* withStorage(root, function* () {
@@ -915,7 +833,7 @@ describe("Tier WS — surviving the process", () => {
       escaped.push(yield* createRun());
     });
 
-    const result = yield* escaped[0].updateRunState({ status: "completed" });
+    const result = yield* escaped[0].readDocumentExecutions();
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseClosedError);
@@ -931,13 +849,12 @@ describe("Tier WS — surviving the process", () => {
       });
 
       const current = yield* createRun();
-      const closed = yield* escaped[0].updateRunState({ status: "completed" });
-      const updated = yield* current.updateRunState({ status: "completed" });
+      const closed = yield* escaped[0].readDocumentExecutions();
+      const read = yield* current.readDocumentExecutions();
 
       expect(closed.ok).toBe(false);
       expect(!closed.ok && closed.error).toBeInstanceOf(WorkflowDatabaseClosedError);
-      expect(updated.ok).toBe(true);
-      expect(updated.ok && updated.value.status).toBe("completed");
+      expect(read.ok).toBe(true);
     });
   });
 });
@@ -1284,27 +1201,28 @@ describe("Tier WS — refusing what is not this run's database", () => {
   it("WS24b: a stored stop time and an oversized revision are refused too", function* () {
     const root = yield* useStorageRoot();
 
-    const stopped = yield* withStorage(root, function* () {
-      const database = yield* createRun({ runId: "bad-stop-time" });
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
-      }
-      yield* database.finishDocumentExecution({
-        executionId: started.value.executionId,
-        status: "completed",
-      });
+    const stopped = yield* withBegunRun(
+      root,
+      function* (run) {
+        const settled = yield* run.settle({ status: "completed" });
+        if (!settled.ok) {
+          throw settled.error;
+        }
 
-      tamper(runPath(root, "bad-stop-time"), (raw) => {
-        raw.prepare("UPDATE document_executions SET stopped_at = 'whenever'").run();
-      });
+        // Deliberately impossible retained state: no supported transition
+        // writes a stop time that is not a time, so the row is edited directly.
+        tamper(runPath(root, "bad-stop-time"), (raw) => {
+          raw.prepare("UPDATE document_executions SET stopped_at = 'whenever'").run();
+        });
 
-      const found = yield* lookup("bad-stop-time");
-      if (!found.ok) {
-        throw found.error;
-      }
-      return yield* found.value.readDocumentExecutions();
-    });
+        const found = yield* lookup("bad-stop-time");
+        if (!found.ok) {
+          throw found.error;
+        }
+        return yield* found.value.readDocumentExecutions();
+      },
+      "bad-stop-time",
+    );
 
     expect(stopped.ok).toBe(false);
     expect(!stopped.ok && stopped.error).toBeInstanceOf(WorkflowRecordMalformedError);
@@ -1343,13 +1261,9 @@ describe("Tier WS — refusing what is not this run's database", () => {
     // own. Read plainly, `node:sqlite` throws a RangeError that quotes the
     // number; every statement therefore reads integers as bigint, so the value
     // reaches a parser rather than an error message.
-    const executions = yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const started = yield* database.beginDocumentExecution();
-      if (!started.ok) {
-        throw started.error;
-      }
-
+    const executions = yield* withBegunRun(root, function* () {
+      // A sequence SQLite can hold and JavaScript cannot: no transition writes
+      // one, so it is set directly.
       tamper(runPath(root, "release-1.4"), (raw) => {
         raw.prepare("UPDATE document_executions SET sequence = 9223372036854775807").run();
       });
