@@ -59,11 +59,34 @@ interface LockingRuntime {
   openSync(path: string, options: { read: boolean; write: boolean; create: boolean }): LockFile;
 }
 
+/**
+ * Whether the global this host found is one that opens files.
+ *
+ * Asked rather than assumed. Describing the global's type at the point of use
+ * would be this module telling its own typechecker what is out there — a claim
+ * the compiler accepts and nothing verifies, which is exactly backwards for a
+ * value that arrives from outside every module in this project. So the one
+ * property this adapter depends on is checked, and the answer is what narrows.
+ *
+ * It cannot check further than one call deep: what `openSync` returns is only
+ * knowable by calling it. That is the honest boundary of a runtime reached
+ * through a global, and it is why the interface above is kept to the three
+ * methods this module actually uses.
+ */
+function opensFiles(candidate: unknown): candidate is LockingRuntime {
+  return (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    typeof Reflect.get(candidate, "openSync") === "function"
+  );
+}
+
 function locking(): LockingRuntime {
-  const runtime = (globalThis as { Deno?: LockingRuntime }).Deno;
-  if (runtime === undefined) {
+  const runtime: unknown = Reflect.get(globalThis, "Deno");
+  if (!opensFiles(runtime)) {
     throw new WorkflowRequestError(
-      "this host takes a run's executor lock through the Deno runtime, and no Deno runtime is present.",
+      "this host takes a run's executor lock through the Deno runtime, and no Deno runtime that " +
+        "opens files is present.",
     );
   }
   return runtime;
