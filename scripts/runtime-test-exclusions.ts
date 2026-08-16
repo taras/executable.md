@@ -145,6 +145,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "packages/workflow/tests/materialization.test.ts",
+    reason:
+      "exports and imports real host directories against the Deno DOFS Workspace adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/293",
+  },
+  {
     path: "packages/workflow/tests/workspace-files.test.ts",
     reason:
       "drives <File> and <Glob> against a real node:sqlite WorkflowRun database through the Deno DOFS Workspace adapter; node:sqlite remains behind --experimental-sqlite on Node 22",

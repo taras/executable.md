@@ -1,0 +1,123 @@
+/**
+ * The refusal vocabulary Repository/Worktree composition speaks.
+ *
+ * A composition failure travels back with a fixed word rather than a raw Git
+ * message or a host path. Native Git is one provider; another might refuse the
+ * same authored input for the same reason and describe it differently, and a
+ * document must not see through to which one is installed. Nothing here quotes
+ * a locator or a stderr line: what arrives from a subprocess selects a word
+ * from a closed set and is then discarded.
+ *
+ * Two kinds of failure live here and they are not interchangeable. An ordinary
+ * refusal is something the document asked for and did not get — a locator that
+ * cannot be admitted, a base that resolves to nothing, a branch already checked
+ * out somewhere else. Describing it is this package's job; deciding what the
+ * document does about it is not. It fails the operation it is part of like any
+ * other Effection work, and an authored `<PrintErrors>` region is what says
+ * otherwise — for everything inside that region rather than for these
+ * components alone.
+ *
+ * A stale-state failure is the retained authoritative state disagreeing with
+ * what attachment found. That is not something the document did, and not
+ * something an authored region may decide either.
+ */
+
+import { StaleInputError } from "@executablemd/durable-streams";
+import { WorkflowStorageError } from "../storage/errors.ts";
+
+/** A word from the fixed vocabulary a Repository refusal is reported under. */
+export type RepositoryFailureReason =
+  | "invalid-locator"
+  | "unresolved-base"
+  | "missing-remote-default"
+  | "incompatible-reuse"
+  | "unusable-repository";
+
+/** A word from the fixed vocabulary a Worktree refusal is reported under. */
+export type WorktreeFailureReason =
+  | "no-repository-context"
+  | "unresolved-base"
+  | "branch-checked-out-elsewhere"
+  | "incompatible-reuse"
+  | "unusable-repository";
+
+/** A Repository the document asked for and did not get. */
+export class RepositoryCompositionError extends Error {
+  override name = "RepositoryCompositionError";
+
+  readonly repositoryName: string;
+  readonly reason: RepositoryFailureReason;
+
+  constructor(repositoryName: string, reason: RepositoryFailureReason, sentence: string) {
+    super(sentence);
+    this.repositoryName = repositoryName;
+    this.reason = reason;
+  }
+}
+
+/** A Worktree the document asked for and did not get. */
+export class WorktreeCompositionError extends Error {
+  override name = "WorktreeCompositionError";
+
+  readonly worktreeName: string;
+  readonly reason: WorktreeFailureReason;
+
+  constructor(worktreeName: string, reason: WorktreeFailureReason, sentence: string) {
+    super(sentence);
+    this.worktreeName = worktreeName;
+    this.reason = reason;
+  }
+}
+
+/**
+ * Retained authoritative state disagrees with what attachment found.
+ *
+ * A `StaleInputError`, which is what makes it fatal rather than printable: the
+ * journal says this run has a checkout on a commit, and the Workspace root the
+ * journal selected does not hold one. Children and later siblings must not
+ * begin, because every one of them would run against state the run's own
+ * history does not describe — and an enclosing `<PrintErrors>` must not be able
+ * to downgrade that to a comment.
+ *
+ * Nothing here repairs anything. Recloning would replace authoritative retained
+ * state with whatever the current remote happens to hold, which is a different
+ * run wearing this run's identity.
+ */
+export class RepositoryStaleStateError extends StaleInputError {
+  override name = "RepositoryStaleStateError";
+
+  readonly subject: string;
+
+  constructor(subject: string, reason: string) {
+    super(
+      `the retained Git state for ${subject} is not what this run recorded: ${reason}. ` +
+        "The run is left exactly as it was found; nothing is recloned or repaired, and no " +
+        "later work runs against state this run's history does not describe.",
+    );
+    this.subject = subject;
+  }
+}
+
+/** No Repository composition provider is installed in this scope. */
+export class RepositoryCompositionProviderError extends WorkflowStorageError {
+  override name = "RepositoryCompositionProviderError";
+
+  constructor(operation: string) {
+    super(
+      `no Repository composition provider is installed, so ${operation} cannot answer. A ` +
+        "workflow host installs one for a live or partial execution.",
+    );
+  }
+}
+
+/** The provider answered with something that is not a record. */
+export class RepositoryCompositionProtocolError extends WorkflowStorageError {
+  override name = "RepositoryCompositionProtocolError";
+
+  constructor(operation: string) {
+    super(
+      `the Repository composition provider answered ${operation} with a value that is not a ` +
+        "creation record.",
+    );
+  }
+}
