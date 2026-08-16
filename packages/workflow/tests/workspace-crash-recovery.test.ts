@@ -22,7 +22,7 @@
  */
 
 import { readTextFile } from "@effectionx/fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";

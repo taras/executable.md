@@ -13,7 +13,7 @@ import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
-import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import * as path from "node:path";
 

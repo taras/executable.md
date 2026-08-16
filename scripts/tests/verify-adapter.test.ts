@@ -1,8 +1,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, until, withResolvers } from "effection";
+import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation, Task } from "effection";
-import { exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { exists, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { chmod, readFile, symlink } from "node:fs/promises";

@@ -1,11 +1,10 @@
 import { readdir, readTextFile, stat } from "@effectionx/fs";
-import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation, until } from "effection";
+import { type Operation } from "effection";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
