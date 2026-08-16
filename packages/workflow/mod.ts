@@ -41,6 +41,34 @@ export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } fr
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
+export { RepositoryComposition } from "./src/composition/api.ts";
+export type { RepositoryCompositionApi } from "./src/composition/api.ts";
+export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
+export type { RepositoryContextApi } from "./src/composition/context.ts";
+export {
+  RepositoryCompositionError,
+  RepositoryCompositionProtocolError,
+  RepositoryCompositionProviderError,
+  RepositoryStaleStateError,
+  WorktreeCompositionError,
+} from "./src/composition/errors.ts";
+export type { RepositoryFailureReason, WorktreeFailureReason } from "./src/composition/errors.ts";
+export {
+  parseRepositoryRecord,
+  parseWorktreeRecord,
+  repositoryRecordJson,
+  sameRepositoryRecord,
+  sameWorktreeRecord,
+  worktreeRecordJson,
+} from "./src/composition/records.ts";
+export type {
+  RepositoryCreationRequest,
+  RepositoryRecord,
+  WorktreeCreationRequest,
+  WorktreeRecord,
+} from "./src/composition/records.ts";
+export { useCompositionComponents } from "./src/composition/installation.ts";
+
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
 export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";
 export { createDurableWorkspaceOperation } from "./src/workspace/effect.ts";

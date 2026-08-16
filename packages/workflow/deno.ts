@@ -38,5 +38,13 @@ export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
 export { hashRunId, workflowRunLock, workflowRunPath } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
+export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/host.ts";
+export { WORKSPACE_REPOSITORY } from "./src/deno/composition/provider.ts";
+export type {
+  CompositionObserver,
+  CompositionProviderOptions,
+} from "./src/deno/composition/provider.ts";
+export { denoRepositoryHost } from "./src/deno/composition/host.ts";
+export type { GitInvocation, GitOutcome, RepositoryHost } from "./src/deno/composition/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
 export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";
