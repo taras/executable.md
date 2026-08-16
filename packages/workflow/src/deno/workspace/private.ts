@@ -4,6 +4,7 @@ import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../../storage/
 import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { WorkflowRunConnections, WorkflowRunTransactionToken } from "../connections.ts";
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
+import { createWorkspaceMetadata, type WorkspaceMetadata } from "./repositories.ts";
 import { type StoredWorkspaceRoot } from "./manifest.ts";
 import {
   captureWorkspaceRoot,
@@ -16,6 +17,15 @@ import { restoreWorkspaceRoot, type RestoreWorkspaceRootOptions } from "./restor
 
 export interface PrivateWorkspaceTransaction {
   readonly filesystem: DenoWorkspaceFilesystem;
+  /**
+   * Retained Repository and Worktree identity, inside this same transaction.
+   *
+   * Beside the filesystem rather than behind a second boundary, because a
+   * checkout's bytes and the row that names it are one fact. Retaining either
+   * without the other would leave a run whose history describes a Repository it
+   * does not have, or holds one it never recorded.
+   */
+  readonly metadata: WorkspaceMetadata;
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
@@ -113,6 +123,8 @@ export function usePrivateWorkspace(
         };
         const workspace: PrivateWorkspaceTransaction = {
           filesystem: decorate(createDenoWorkspaceFilesystem(connection, authorize)),
+
+          metadata: createWorkspaceMetadata(connection.database, authorize),
 
           // deno-lint-ignore require-yield
           *currentRoot(): Operation<string> {

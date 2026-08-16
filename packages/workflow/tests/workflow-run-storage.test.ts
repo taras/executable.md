@@ -45,6 +45,7 @@ import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
 import { createWorkflowRunConnections } from "../src/deno/connections.ts";
 import { WorkflowRunRecognition } from "../src/deno/provider.ts";
 import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
+import { readRepositories } from "../src/deno/workspace/repositories.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
   EMPTY_WORKSPACE_ROOT_ID,
@@ -1482,5 +1483,152 @@ describe("Tier WS — a run of one section", () => {
       expect(result.error).toBeInstanceOf(WorkflowRunConflictError);
       expect(result.error.message).toContain("definition");
     }
+  });
+});
+
+/**
+ * The #293 amendment: Repository and Worktree metadata is part of version 1.
+ *
+ * There is no version 2, no migration and no second reader. A database a
+ * pre-amendment development build produced is an incomplete pre-release, which
+ * is the same answer the very first pre-release shape already gets — and the
+ * point of these tests is that it is the *only* answer, because the alternative
+ * is a build that reads half a schema and calls the run continued.
+ */
+describe("Tier WS — version 1 amended in place", () => {
+  /**
+   * The shape that was complete before Repository and Worktree metadata joined
+   * it, derived from the current declaration rather than copied out of it.
+   *
+   * Derived, so this stays the pre-amendment shape as version 1 goes on being
+   * amended: a hand-written copy would drift into being some third shape and
+   * would then prove nothing about the one builds actually produced.
+   */
+  function initializePreAmendmentVersionOne(database: DatabaseSync): void {
+    database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
+    for (const object of EXPECTED_SCHEMA) {
+      if (AMENDED_TABLES.includes(object.name)) {
+        continue;
+      }
+      database.exec(`${object.sql};`);
+    }
+    database.exec("PRAGMA user_version = 1;");
+  }
+
+  const AMENDED_TABLES = ["workspace_repositories", "workspace_worktrees"];
+
+  it("WS23a: version 1 declares the Repository and Worktree tables", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const declared = EXPECTED_SCHEMA.filter((object) => AMENDED_TABLES.includes(object.name));
+    expect(declared.map((object) => object.name)).toEqual(AMENDED_TABLES);
+
+    const database = new DatabaseSync(runPath(root, "release-1.4"));
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
+      expect(database.prepare("SELECT * FROM workspace_repositories").all()).toEqual([]);
+      expect(database.prepare("SELECT * FROM workspace_worktrees").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("WS23b: the pre-amendment complete shape is refused unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    tamper(path, initializePreAmendmentVersionOne);
+    const before = yield* until(readFile(path));
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(yield* until(readFile(path))).toEqual(before);
+  });
+
+  it("WS23c: a Worktree row naming no Repository is damage, not partial state", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const path = runPath(root, "release-1.4");
+    // With enforcement turned off, which is how an editor outside XMD would
+    // leave a row pointing at nothing.
+    tamper(path, (database) => {
+      database.exec("PRAGMA foreign_keys = OFF");
+      database
+        .prepare(
+          `INSERT INTO workspace_worktrees
+             (repository_name, name, requested_branch, requested_base, creation_commit, checkout_path)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run("absent", "implementation", "feature/new", null, "0".repeat(40), "/worktrees/x");
+    });
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
+  });
+
+  it("WS23d: a malformed retained row is reported rather than repaired", function* () {
+    const database = new DatabaseSync(":memory:");
+    try {
+      // The constraints version 1 declares refuse these values outright, so the
+      // only way one reaches a parser is a table somebody rebuilt without them
+      // — which is exactly the state an outside editor leaves behind.
+      database.exec(`
+        CREATE TABLE workspace_repositories (
+          name TEXT, locator TEXT, locator_fingerprint TEXT, requested_base TEXT,
+          creation_commit TEXT, primary_branch TEXT, object_format TEXT, checkout_path TEXT
+        );
+      `);
+      const insert = database.prepare(
+        `INSERT INTO workspace_repositories VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run("project", "/remote.git", "f".repeat(64), null, "abc", "main", "md5", "/r/p");
+      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+
+      database.exec("DELETE FROM workspace_repositories");
+      insert.run("project", "/remote.git", "not-a-digest", null, "abc", "main", "sha1", "/r/p");
+      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+
+      database.exec("DELETE FROM workspace_repositories");
+      insert.run("project", "/remote.git", "f".repeat(64), null, "abc", "main", "sha1", "relative");
+      expect(() => readRepositories(database)).toThrow(WorkflowRecordMalformedError);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("WS23e: there is no version 2 to migrate to", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const path = runPath(root, "release-1.4");
+    tamper(path, (database) => {
+      database.exec("PRAGMA user_version = 2");
+    });
+    const before = yield* until(readFile(path));
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowSchemaVersionError);
+    // Described and left exactly as found: nothing upgraded it, and nothing
+    // downgraded it either.
+    expect(yield* until(readFile(path))).toEqual(before);
   });
 });

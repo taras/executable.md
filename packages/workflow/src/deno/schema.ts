@@ -369,6 +369,43 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
 ) STRICT`,
     },
   ],
+  [
+    "workspace_repositories",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_repositories (
+  name TEXT PRIMARY KEY CHECK (length(name) > 0),
+  locator TEXT NOT NULL CHECK (length(locator) > 0),
+  locator_fingerprint TEXT NOT NULL CHECK (
+    length(locator_fingerprint) = 64 AND locator_fingerprint NOT GLOB '*[^0-9a-f]*'
+  ),
+  requested_base TEXT CHECK (requested_base IS NULL OR length(requested_base) > 0),
+  creation_commit TEXT NOT NULL CHECK (length(creation_commit) > 0),
+  primary_branch TEXT NOT NULL CHECK (length(primary_branch) > 0),
+  object_format TEXT NOT NULL CHECK (object_format IN ('sha1', 'sha256')),
+  checkout_path TEXT NOT NULL UNIQUE CHECK (
+    length(checkout_path) > 0 AND substr(checkout_path, 1, 1) = '/'
+  )
+) STRICT`,
+    },
+  ],
+  [
+    "workspace_worktrees",
+    {
+      type: "table",
+      sql: `CREATE TABLE workspace_worktrees (
+  repository_name TEXT NOT NULL REFERENCES workspace_repositories(name) ON DELETE RESTRICT,
+  name TEXT NOT NULL CHECK (length(name) > 0),
+  requested_branch TEXT NOT NULL CHECK (length(requested_branch) > 0),
+  requested_base TEXT CHECK (requested_base IS NULL OR length(requested_base) > 0),
+  creation_commit TEXT NOT NULL CHECK (length(creation_commit) > 0),
+  checkout_path TEXT NOT NULL UNIQUE CHECK (
+    length(checkout_path) > 0 AND substr(checkout_path, 1, 1) = '/'
+  ),
+  PRIMARY KEY (repository_name, name)
+) STRICT, WITHOUT ROWID`,
+    },
+  ],
 ]);
 
 export const EXPECTED_SCHEMA = Object.freeze(
@@ -476,20 +513,7 @@ export function verifySchema(database: DatabaseSync, path: string, dofs: Cloudfl
  */
 function verifyStructure(database: DatabaseSync, path: string): void {
   const objects = schemaObjects(database, path);
-  const intermediate = [
-    "definition_retrieval",
-    "document_executions",
-    "journal_events",
-    "workflow_run",
-  ];
-  if (
-    objects.length === intermediate.length &&
-    objects.every((object) => object.type === "table") &&
-    objects
-      .map((object) => object.name)
-      .sort()
-      .join("\0") === intermediate.join("\0")
-  ) {
+  if (isIncompletePreReleaseShape(objects)) {
     throw new WorkflowIncompleteVersionOneError(path);
   }
 
@@ -518,6 +542,55 @@ function verifyStructure(database: DatabaseSync, path: string): void {
 
 function hasDeclaredVersionOneObjects(database: DatabaseSync, path: string): boolean {
   return schemaObjects(database, path).some((object) => OBJECTS.has(object.name));
+}
+
+/**
+ * Every earlier shape that once claimed to be a complete version 1.
+ *
+ * The plan for #293 amends version 1 in place: Repository and Worktree
+ * metadata are part of the only supported complete shape, and any database a
+ * pre-amendment build produced is refused as damaged. Two prior shapes exist
+ * — the very first pre-release with only the run/journal/execution tables,
+ * and the intermediate shape that added Workspace root retention — and both
+ * are named here so the refusal reads as an incomplete pre-release rather
+ * than as arbitrary damage.
+ */
+/** Names introduced by the #293 amendment. Absence marks a pre-amendment shape. */
+const AMENDMENT_OBJECTS: readonly string[] = ["workspace_repositories", "workspace_worktrees"];
+
+/** The very first pre-release shape, before Workspace root retention existed. */
+const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
+  "definition_retrieval",
+  "document_executions",
+  "journal_events",
+  "workflow_run",
+];
+
+/**
+ * Whether these declarations describe an earlier shape that once claimed to be
+ * a complete version 1.
+ *
+ * The plan for #293 amends version 1 in place: Repository and Worktree
+ * metadata are part of the only supported complete shape, and any database a
+ * pre-amendment build produced is refused as an incomplete pre-release rather
+ * than as arbitrary corruption. Two prior shapes exist — the very first
+ * pre-release with only the run/journal/execution tables, and the amended
+ * shape's predecessor that added Workspace root retention but not the
+ * Repository/Worktree tables.
+ */
+function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean {
+  const present = new Set(objects.map((object) => object.name));
+  if (AMENDMENT_OBJECTS.some((name) => present.has(name))) {
+    return false;
+  }
+  const earliest = new Set(EARLIEST_PRE_RELEASE_SHAPE);
+  if (present.size === earliest.size && [...present].every((name) => earliest.has(name))) {
+    return objects.every((object) => object.type === "table");
+  }
+  const preAmendment = new Set(
+    REQUIRED_OBJECTS.filter((name) => !AMENDMENT_OBJECTS.includes(name)),
+  );
+  return present.size === preAmendment.size && [...present].every((name) => preAmendment.has(name));
 }
 
 /**

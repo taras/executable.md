@@ -20,14 +20,23 @@ import { withEnlistedJournalRoute } from "../journal-route.ts";
 import { savepoint } from "../transaction.ts";
 import { isJournalableWorkspaceFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
+import type { WorkspaceMetadata } from "./repositories.ts";
 import {
   type PrivateWorkspaceTransaction,
   withPrivateWorkspaceTransaction,
   workflowRunTransactionToken,
 } from "./private.ts";
 
+/**
+ * What a Workspace mutation is given.
+ *
+ * The authoritative filesystem first, because most mutations are only about
+ * bytes. Retained Repository and Worktree identity follows it, in the same
+ * transaction, so a mutation that needs both commits both or neither.
+ */
 export type DenoWorkspaceMutation<T extends Json> = (
   filesystem: DenoWorkspaceFilesystem,
+  metadata: WorkspaceMetadata,
 ) => Operation<T>;
 
 interface WorkspaceMutationApi {
@@ -125,7 +134,7 @@ function* runMutation<T extends Json>(
           if (candidate !== database) {
             return unavailable();
           }
-          return yield* mutate(workspace.filesystem);
+          return yield* mutate(workspace.filesystem, workspace.metadata);
         },
       },
       { at: "min" },
