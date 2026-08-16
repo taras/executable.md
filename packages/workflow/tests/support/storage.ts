@@ -10,12 +10,9 @@
  * for it can look inside.
  */
 
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ensure, type Operation, resource, type Result, scoped } from "effection";
-import { rm } from "@effectionx/fs";
+import { type Operation, type Result, scoped } from "effection";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   type CreateWorkflowRunRequest,
   type ExecutorLock,
@@ -46,13 +43,7 @@ export const SHA1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
 
 /** A directory that exists for the test that asked for it, and no longer. */
 export function useStorageRoot(): Operation<string> {
-  return resource<string>(function* (provide) {
-    const root = mkdtempSync(join(tmpdir(), "xmd-workflow-runs-"));
-    yield* ensure(function* () {
-      yield* rm(root, { recursive: true, force: true });
-    });
-    yield* provide(root);
-  });
+  return useTempDirectory("xmd-workflow-runs-");
 }
 
 export function definition(

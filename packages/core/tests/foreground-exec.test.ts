@@ -23,8 +23,7 @@ import { when } from "@effectionx/converge";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { Stdio } from "@effectionx/process";
 import { InMemoryStream } from "@executablemd/durable-streams";
-import { mkdtempSync } from "node:fs";
-import * as os from "node:os";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import * as path from "node:path";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
@@ -71,13 +70,6 @@ function* watching<T>(body: (seen: Seen) => Operation<T>): Operation<T> {
     );
     return yield* body(seen);
   });
-}
-
-/** A directory this case owns, removed with it. */
-function* useDirectory(): Operation<string> {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "xmd-fg-"));
-  yield* ensure(() => rm(dir, { recursive: true, force: true }));
-  return dir;
 }
 
 function* runDocument(
@@ -133,7 +125,7 @@ function execOutcome(stream: InMemoryStream): Record<string, unknown> | undefine
 
 describe("Tier FG — foreground execution", () => {
   it("FG1: a chunk is displayed before the child exits", function* () {
-    const dir = yield* useDirectory();
+    const dir = yield* useTempDirectory("xmd-fg-");
     const release = path.join(dir, "release");
     const source = [
       "```bash exec",
@@ -240,7 +232,7 @@ describe("Tier FG — foreground execution", () => {
   });
 
   it("FG7: a nonzero exit stops the document, with no <Output> anywhere", function* () {
-    const dir = yield* useDirectory();
+    const dir = yield* useTempDirectory("xmd-fg-");
     const later = path.join(dir, "later");
     const source = [
       "```bash exec",
@@ -270,7 +262,7 @@ describe("Tier FG — foreground execution", () => {
   });
 
   it("FG8: cancelling a block stops the child and emits nothing afterwards", function* () {
-    const dir = yield* useDirectory();
+    const dir = yield* useTempDirectory("xmd-fg-");
     const source = [
       "```bash exec",
       `echo started; while true; do echo more >> ${path.join(dir, "kept")}; sleep 0.05; done`,
@@ -967,7 +959,7 @@ describe("Tier FG — bound command results", () => {
   });
 
   it("FG30: a timeout stays a failure and binds nothing", function* () {
-    const dir = yield* useDirectory();
+    const dir = yield* useTempDirectory("xmd-fg-");
     const source = [
       '```bash timeout=25ms exec as="probe"',
       `sleep 5; touch ${path.join(dir, "finished")}`,

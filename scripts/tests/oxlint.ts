@@ -5,9 +5,9 @@
  */
 import { scoped } from "effection";
 import type { Operation } from "effection";
+import { copyFile, readTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import fs from "node:fs";
-import os from "node:os";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,23 +78,19 @@ export function* violations(file: string, rule: string): Operation<number[]> {
  * for files whose name marks them as tests.
  */
 export function* fixed(fixture: string, as: string): Operation<string> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oxlint-fix-"));
+  const dir = yield* useTempDirectory("oxlint-fix-");
   const copy = path.join(dir, as);
 
-  try {
-    fs.copyFileSync(path.join(FIXTURES, fixture), copy);
+  yield* copyFile(path.join(FIXTURES, fixture), copy);
 
-    let previous = "";
-    let current = fs.readFileSync(copy, "utf8");
+  let previous = "";
+  let current = yield* readTextFile(copy);
 
-    while (current !== previous) {
-      yield* oxlint(["--fix", copy]);
-      previous = current;
-      current = fs.readFileSync(copy, "utf8");
-    }
-
-    return current;
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+  while (current !== previous) {
+    yield* oxlint(["--fix", copy]);
+    previous = current;
+    current = yield* readTextFile(copy);
   }
+
+  return current;
 }

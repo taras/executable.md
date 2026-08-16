@@ -1,6 +1,11 @@
+import { lstat, readdir, readTextFile } from "@effectionx/fs";
+import { main, until } from "effection";
+import type { Operation } from "effection";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { useTempDirectory } from "./lib/temp-directory.ts";
 import { z } from "zod";
 
 const repositoryRoot = dirname(fileURLToPath(import.meta.url));
@@ -34,13 +39,14 @@ function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function walk(directory: string): string[] {
+function* walk(directory: string): Operation<string[]> {
   const files: string[] = [];
-  for (const entry of Deno.readDirSync(directory)) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory) {
-      files.push(...walk(path));
-    } else if (entry.isFile) {
+  for (const name of yield* readdir(directory)) {
+    const path = join(directory, name);
+    const info = yield* lstat(path);
+    if (info.isDirectory()) {
+      files.push(...(yield* walk(path)));
+    } else if (info.isFile()) {
       files.push(relative(root, path));
     } else {
       throw new Error(`vendored entry is not a regular file: ${relative(root, path)}`);
@@ -49,17 +55,17 @@ function walk(directory: string): string[] {
   return files.sort();
 }
 
-function loadManifest(): Manifest {
+function* loadManifest(): Operation<Manifest> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Deno.readTextFileSync(manifestPath));
+    parsed = JSON.parse(yield* readTextFile(manifestPath));
   } catch (error) {
     throw new Error("Cloudflare DOFS manifest is unreadable", { cause: error });
   }
   return manifestSchema.parse(parsed);
 }
 
-function verifyInventory(manifest: Manifest): void {
+function* verifyInventory(manifest: Manifest): Operation<void> {
   const recorded = manifest.files.map((file) => file.path);
   const duplicates = recorded.filter((path, index) => recorded.indexOf(path) !== index);
   if (duplicates.length > 0) {
@@ -67,7 +73,7 @@ function verifyInventory(manifest: Manifest): void {
   }
 
   const expected = [...recorded, "MANIFEST.json"].sort();
-  const actual = walk(root);
+  const actual = yield* walk(root);
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(
       `vendored inventory differs\nexpected: ${expected.join("\n")}\nactual: ${actual.join("\n")}`,
@@ -75,7 +81,7 @@ function verifyInventory(manifest: Manifest): void {
   }
 
   for (const file of manifest.files) {
-    const actualDigest = digest(Deno.readFileSync(join(root, file.path)));
+    const actualDigest = digest(yield* until(readFile(join(root, file.path))));
     if (actualDigest !== file.sha256) {
       throw new Error(
         `vendored file changed: ${file.path}\nexpected ${file.sha256}\nactual   ${actualDigest}`,
@@ -168,48 +174,49 @@ function emit(manifest: Manifest, output: string, tsc: string): void {
   }
 }
 
-function verifyGenerated(manifest: Manifest, tsc: string): void {
-  const temporary = Deno.makeTempDirSync({ dir: "/tmp", prefix: "xmd-dofs-vendor-" });
-  try {
-    emit(manifest, temporary, tsc);
-    const actual = walkGenerated(temporary);
-    const expected = generatedFiles(manifest);
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      throw new Error(
-        `generated inventory drifted\nexpected: ${expected.join("\n")}\nactual: ${actual.join("\n")}`,
-      );
+function* verifyGenerated(manifest: Manifest, tsc: string): Operation<void> {
+  // Under /tmp, because the task grants write to that path alone.
+  const temporary = yield* useTempDirectory("xmd-dofs-vendor-", { dir: "/tmp" });
+
+  emit(manifest, temporary, tsc);
+  const actual = yield* walkGenerated(temporary);
+  const expected = generatedFiles(manifest);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `generated inventory drifted\nexpected: ${expected.join("\n")}\nactual: ${actual.join("\n")}`,
+    );
+  }
+  for (const path of expected) {
+    const committed = yield* until(readFile(join(root, "generated", path)));
+    const reproduced = yield* until(readFile(join(temporary, path)));
+    if (digest(committed) !== digest(reproduced)) {
+      throw new Error(`generated output drifted: generated/${path}`);
     }
-    for (const path of expected) {
-      const committed = Deno.readFileSync(join(root, "generated", path));
-      const reproduced = Deno.readFileSync(join(temporary, path));
-      if (digest(committed) !== digest(reproduced)) {
-        throw new Error(`generated output drifted: generated/${path}`);
-      }
-    }
-  } finally {
-    Deno.removeSync(temporary, { recursive: true });
   }
 }
 
-function walkGenerated(directory: string): string[] {
+function* walkGenerated(directory: string): Operation<string[]> {
   const files: string[] = [];
-  for (const entry of Deno.readDirSync(directory)) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory) {
-      for (const child of walkGenerated(path)) {
-        files.push(join(entry.name, child));
+  for (const name of yield* readdir(directory)) {
+    const path = join(directory, name);
+    const info = yield* lstat(path);
+    if (info.isDirectory()) {
+      for (const child of yield* walkGenerated(path)) {
+        files.push(join(name, child));
       }
-    } else if (entry.isFile) {
-      files.push(entry.name);
+    } else if (info.isFile()) {
+      files.push(name);
     }
   }
   return files.sort();
 }
 
-const manifest = loadManifest();
-verifyInventory(manifest);
-const tsc = verifiedCompiler(manifest);
-verifyGenerated(manifest, tsc);
-console.log(
-  `verified Cloudflare Computer DOFS ${expectedCommit}: ${manifest.files.length} recorded files; regenerated with TypeScript ${manifest.compiler}`,
-);
+await main(function* () {
+  const manifest = yield* loadManifest();
+  yield* verifyInventory(manifest);
+  const tsc = verifiedCompiler(manifest);
+  yield* verifyGenerated(manifest, tsc);
+  console.log(
+    `verified Cloudflare Computer DOFS ${expectedCommit}: ${manifest.files.length} recorded files; regenerated with TypeScript ${manifest.compiler}`,
+  );
+});

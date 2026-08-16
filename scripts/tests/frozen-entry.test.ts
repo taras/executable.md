@@ -1,12 +1,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
 import type { Operation } from "effection";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { fileURLToPath } from "node:url";
 
 import { RELEASE_TARGET } from "../lib/release-targets.ts";
@@ -26,9 +24,7 @@ const REPO_ROOT = new URL("../../", import.meta.url);
  * definitions, so run these against a committed change.
  */
 function* clone(): Operation<string> {
-  // @effectionx/fs has no mkdtemp.
-  const target = fs.mkdtempSync(path.join(os.tmpdir(), "frozen-entry-"));
-  yield* ensure(() => rm(target, { recursive: true, force: true }));
+  const target = yield* useTempDirectory("frozen-entry-");
 
   yield* exec("git", {
     arguments: ["clone", "--shared", "--quiet", fileURLToPath(REPO_ROOT), target],

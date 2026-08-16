@@ -1,10 +1,11 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdir, readTextFile, stat } from "@effectionx/fs";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { type Operation } from "effection";
+import { type Operation, until } from "effection";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import {
   EMPTY_WORKSPACE_MANIFEST,
@@ -296,26 +297,26 @@ describe("Tier WRR — immutable retained Workspace roots", () => {
     const vendorManifest = fileURLToPath(
       new URL("../vendor/cloudflare-computer-dofs/MANIFEST.json", import.meta.url),
     );
-    const sources = sourceFiles(denoAdapter);
+    const sources = yield* sourceFiles(denoAdapter);
     expect(sources.some((source) => /from\s+["'][^"']*\/gc(?:\.[^"']*)?["']/.test(source))).toBe(
       false,
     );
     expect(sources.some((source) => /\.gc\s*\(/.test(source))).toBe(false);
-    const manifest = JSON.parse(readFileSync(vendorManifest, "utf8"));
+    const manifest = JSON.parse(yield* readTextFile(vendorManifest));
     expect(
       manifest.files.some((file: { path: string }) => /(^|\/)gc(?:\.[^/]*)?$/.test(file.path)),
     ).toBe(false);
   });
 });
 
-function sourceFiles(directory: string): string[] {
+function* sourceFiles(directory: string): Operation<string[]> {
   const sources: string[] = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      sources.push(...sourceFiles(path));
-    } else if (entry.isFile() && entry.name.endsWith(".ts")) {
-      sources.push(readFileSync(path, "utf8"));
+  for (const name of yield* readdir(directory)) {
+    const path = join(directory, name);
+    if ((yield* stat(path)).isDirectory()) {
+      sources.push(...(yield* sourceFiles(path)));
+    } else if (name.endsWith(".ts")) {
+      sources.push(yield* readTextFile(path));
     }
   }
   return sources;

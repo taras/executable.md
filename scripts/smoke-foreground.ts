@@ -14,22 +14,15 @@
  */
 
 import { main, suspend } from "effection";
-import { call, ensure, race, sleep, spawn } from "effection";
+import { call, race, sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
-import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, writeTextFile } from "@effectionx/fs";
 import { when } from "@effectionx/converge";
-import { mkdtempSync } from "node:fs";
-import * as os from "node:os";
+import { useTempDirectory } from "./lib/temp-directory.ts";
 import * as path from "node:path";
 
 const BINARY = path.join(Deno.cwd(), "dist", "xmd");
-
-function* useDirectory(): Operation<string> {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "xmd-smoke-fg-"));
-  yield* ensure(() => rm(dir, { recursive: true, force: true }));
-  return dir;
-}
 
 function fail(claim: string): never {
   console.error(`foreground smoke: ${claim}`);
@@ -41,7 +34,7 @@ await main(function* () {
     fail(`no compiled binary at ${BINARY} — run \`deno task build\` first`);
   }
 
-  const dir = yield* useDirectory();
+  const dir = yield* useTempDirectory("xmd-smoke-fg-");
   const release = path.join(dir, "release");
 
   // 1. Progressive output: the document cannot finish until this script has

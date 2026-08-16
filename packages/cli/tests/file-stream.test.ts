@@ -7,10 +7,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readTextFile, rm } from "@effectionx/fs";
-import { ensure } from "effection";
-import * as fs from "node:fs";
-import * as os from "node:os";
+import { readTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import * as path from "node:path";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -43,8 +41,7 @@ const EVENTS: DurableEvent[] = [
 
 describe("FileStream", () => {
   it("writes exactly the bytes the shared serializer produces", function* () {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xmd-file-stream-"));
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const dir = yield* useTempDirectory("xmd-file-stream-");
 
     const journalPath = path.join(dir, "journal.jsonl");
     const stream = new FileStream(journalPath);
@@ -57,8 +54,7 @@ describe("FileStream", () => {
   });
 
   it("reads back every appended event in append order", function* () {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xmd-file-stream-"));
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const dir = yield* useTempDirectory("xmd-file-stream-");
 
     const stream = new FileStream(path.join(dir, "journal.jsonl"));
 

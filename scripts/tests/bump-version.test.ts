@@ -1,11 +1,8 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 
 import { bumpManifests } from "../lib/bump-version.ts";
@@ -22,9 +19,7 @@ const REVIEW_WORKFLOW = `      - name: Install xmd release binary
 
 /** A workspace with one @executablemd member, one outside the scope, and a workflow. */
 function* workspace(): Operation<URL> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "bump-manifests-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("bump-manifests-");
   const root = pathToFileURL(`${base}/`);
 
   yield* writeTextFile(

@@ -1,11 +1,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, sleep, spawn, withResolvers } from "effection";
+import { sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-// `node:fs` only where `@effectionx/fs` has no equivalent: mkdtemp, chmod, symlink.
-import fs from "node:fs";
-import os from "node:os";
+import { ensureDir, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+// `node:fs/promises` only where `@effectionx/fs` has no equivalent.
+import { chmod, readFile, symlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -19,7 +19,6 @@ import {
   stateOf,
   YIELD_EVERY,
 } from "../lib/prepared-state.ts";
-import type { ReadFile } from "../lib/prepared-state.ts";
 import type { PreparedState } from "../lib/prepared-state.ts";
 
 /**
@@ -28,8 +27,7 @@ import type { PreparedState } from "../lib/prepared-state.ts";
  * small enough to mutate precisely.
  */
 function* prepared(): Operation<{ root: string; denoDir: string }> {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "prepared-state-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("prepared-state-");
 
   const root = path.join(base, "repo");
   for (const store of [".deno/pkg@1.0.0/node_modules/pkg", ".pnpm/pkg@1.0.0/node_modules/pkg"]) {
@@ -39,11 +37,13 @@ function* prepared(): Operation<{ root: string; denoDir: string }> {
       `{"name":"pkg","version":"1.0.0"}\n`,
     );
     yield* writeTextFile(path.join(root, "node_modules", store, "cli.js"), "#!/usr/bin/env node\n");
-    fs.chmodSync(path.join(root, "node_modules", store, "cli.js"), 0o755);
+    yield* until(chmod(path.join(root, "node_modules", store, "cli.js"), 0o755));
   }
-  fs.symlinkSync(
-    path.join(root, "node_modules", ".deno/pkg@1.0.0/node_modules/pkg"),
-    path.join(root, "node_modules", "pkg"),
+  yield* until(
+    symlink(
+      path.join(root, "node_modules", ".deno/pkg@1.0.0/node_modules/pkg"),
+      path.join(root, "node_modules", "pkg"),
+    ),
   );
   yield* writeTextFile(path.join(root, "deno.lock"), `{"version":"5","specifiers":{}}\n`);
 
@@ -113,10 +113,10 @@ describe("preparedState", () => {
         store,
         "pkg@1.0.0/node_modules/pkg/cli.js",
       );
-      fs.chmodSync(script, 0o644);
+      yield* until(chmod(script, 0o644));
 
       expect(changes(before, yield* fixtureState(fixture))).not.toEqual([]);
-      fs.chmodSync(script, 0o755);
+      yield* until(chmod(script, 0o755));
     }
 
     expect(changes(before, yield* fixtureState(fixture))).toEqual([]);
@@ -207,8 +207,7 @@ describe("preparedState", () => {
 describe("cacheRoots", () => {
   /** Against the real pinned runtime, not a fixture: the keys and their location. */
   it("takes the content roots the runtime reports, inside the given directory", function* () {
-    const denoDir = fs.mkdtempSync(path.join(os.tmpdir(), "cache-roots-"));
-    yield* ensure(() => rm(denoDir, { recursive: true, force: true }));
+    const denoDir = yield* useTempDirectory("cache-roots-");
 
     const reported = yield* cacheRoots(denoDir);
 
@@ -258,8 +257,7 @@ describe("contains", () => {
  * files: the point is the count of reads, not their size.
  */
 function* manyFiles(count: number): Operation<{ root: string; roots: Record<string, string> }> {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "prepared-state-halt-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("prepared-state-halt-");
 
   const root = path.join(base, "repo");
   yield* ensureDir(path.join(root, "node_modules", "pkg"));
@@ -272,62 +270,93 @@ function* manyFiles(count: number): Operation<{ root: string; roots: Record<stri
 
 describe("cancelling a fingerprint", () => {
   /**
-   * The walk is synchronous, so a halt can only land on one of its scheduler
-   * yields — and after that nothing reads anything, permanently.
+   * Every read is an operation, so a halt lands between two of them — and
+   * after that the walk starts nothing further, permanently.
    *
    * The halt is triggered by handshake rather than by a timer: the reader
-   * itself says when it has read a known number of files, so the test halts at
-   * the same point on a fast disk and a slow one.
+   * itself says when it has begun a known number of files, so the test halts at
+   * the same point on a fast disk and a slow one. Counting starts rather than
+   * completions is what makes "begins no further read" observable: `until()`
+   * does not cancel the host call already in flight, and this seam never
+   * claimed it did.
    */
-  it("stops reading the moment its task is halted", function* () {
+  it("begins no further read once its task is halted", function* () {
     const files = 4000;
     const partway = 300;
     const fixture = yield* manyFiles(files);
 
     const reached = withResolvers<void>();
-    const read: string[] = [];
-    const counting: ReadFile = (file) => {
-      const bytes = Deno.readFileSync(file);
-      read.push(file);
-      if (read.length === partway) {
+    const begun: string[] = [];
+
+    function* counting(file: string): Operation<Uint8Array> {
+      begun.push(file);
+      if (begun.length === partway) {
         reached.resolve();
       }
-      return bytes;
-    };
+      return yield* until(readFile(file));
+    }
 
     const task = yield* spawn(() =>
       FileReads.with(counting, () => stateOf(fixture.root, fixture.roots)),
     );
     yield* reached.operation;
     yield* task.halt();
-    const atHalt = read.length;
+    const atHalt = begun.length;
 
     // Long enough that anything still in flight would have landed.
     yield* sleep(250);
 
-    expect(read.length).toBe(atHalt);
+    expect(begun.length).toBe(atHalt);
     // Non-vacuous on both sides: it had read, and it had not finished.
     expect(atHalt).toBeGreaterThanOrEqual(partway);
     expect(atHalt).toBeLessThan(files);
-    // And it stopped at a scheduler yield rather than wherever it happened to
-    // be: the walk covers at most one more `YIELD_EVERY` window after the
-    // handshake. Without those yields it runs to completion and this is 4001.
+    // And it stopped where the handshake put it rather than wherever it
+    // happened to be. Without suspending per read it runs to completion and
+    // this is 4001.
     expect(atHalt).toBeLessThanOrEqual(partway + YIELD_EVERY);
   });
 
   /**
-   * The half a counting test cannot show: the seam hands back bytes, not a
-   * promise, so there is nothing for a halt to outlive. A promise-backed reader
-   * satisfies every count above and still completes one read during teardown.
+   * The half a counting test cannot show: the walk no longer owns the
+   * interpreter. A read held open parks the fingerprint alone, and unrelated
+   * Effection work runs to completion beside it.
    */
-  it("reads through a synchronous seam", function* () {
-    const fixture = yield* manyFiles(1);
-    const read = yield* FileReads.expect();
+  it("holds a read without blocking unrelated work", function* () {
+    const fixture = yield* manyFiles(4);
 
-    const bytes = read(`${fixture.root}/deno.lock`);
+    const reached = withResolvers<void>();
+    const release = withResolvers<void>();
+    let held = false;
 
-    expect(bytes).toBeInstanceOf(Uint8Array);
-    expect(bytes).not.toBeInstanceOf(Promise);
+    function* holding(file: string): Operation<Uint8Array> {
+      if (!held) {
+        held = true;
+        reached.resolve();
+        yield* release.operation;
+      }
+      return yield* until(readFile(file));
+    }
+
+    const walk = yield* spawn(() =>
+      FileReads.with(holding, () => stateOf(fixture.root, fixture.roots)),
+    );
+    yield* reached.operation;
+
+    let ticks = 0;
+    const unrelated = yield* spawn(function* () {
+      for (let index = 0; index < 5; index++) {
+        yield* sleep(0);
+        ticks++;
+      }
+    });
+    yield* unrelated;
+
+    // The fingerprint is parked on its read and has produced nothing.
+    expect(ticks).toBe(5);
+
+    release.resolve();
+    const state = yield* walk;
+    expect(state.tree.entries.length).toBeGreaterThan(0);
   });
 });
 
@@ -354,13 +383,13 @@ describe("hostState", () => {
     const permitted = [path.join(root, "node_modules"), path.join(root, "deno.lock")];
     const refused: string[] = [];
 
-    const guarded: ReadFile = (target) => {
+    function* guarded(target: string): Operation<Uint8Array> {
       if (!permitted.some((allowed) => contains(allowed, target))) {
         refused.push(target);
         throw new Error(`read outside the host's own state: ${target}`);
       }
-      return Deno.readFileSync(target);
-    };
+      return yield* until(readFile(target));
+    }
 
     // The fixture's cache is populated, so a snapshot that walked it would read
     // a file and be refused. Succeeding is the assertion.

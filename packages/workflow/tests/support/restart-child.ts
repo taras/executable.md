@@ -24,11 +24,11 @@
  * the caller is comparing two processes' outcomes and a refusal is one of them.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import process from "node:process";
 import { durableCall, durableRun } from "@executablemd/durable-streams";
 import type { Workflow } from "@executablemd/durable-streams";
-import { main } from "effection";
+import { main, until } from "effection";
 import { WorkflowLifecycle, WorkflowStorageError } from "../../mod.ts";
 import { useWorkflowRunHost } from "../../deno.ts";
 
@@ -49,15 +49,15 @@ const DEFINITION = {
 function work(marker: string): () => Workflow<string> {
   return function* (): Workflow<string> {
     const first = yield* durableCall("first", function* () {
-      appendFileSync(marker, "first\n");
+      yield* until(appendFile(marker, "first\n"));
       return "one";
     });
     const second = yield* durableCall("second", function* () {
-      appendFileSync(marker, "second\n");
+      yield* until(appendFile(marker, "second\n"));
       return "two";
     });
     const third = yield* durableCall("third", function* () {
-      appendFileSync(marker, "third\n");
+      yield* until(appendFile(marker, "third\n"));
       return "three";
     });
     return [first, second, third].join(",");

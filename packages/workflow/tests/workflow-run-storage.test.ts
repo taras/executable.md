@@ -12,12 +12,12 @@
  * that damage a file also check the file afterwards.
  */
 
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exists } from "@effectionx/fs";
-import { type Result, scoped } from "effection";
+import { exists, readdir } from "@effectionx/fs";
+import { type Operation, type Result, scoped, until } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -66,8 +66,8 @@ import {
 const { create, lookup } = WorkflowRunStorage.operations;
 
 /** Every entry in the storage root, so a test can prove nothing else appeared. */
-function entries(root: string): string[] {
-  return readdirSync(root);
+function entries(root: string): Operation<string[]> {
+  return readdir(root);
 }
 
 function normalizedSchema(database: DatabaseSync): Array<{
@@ -307,7 +307,7 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     yield* withStorage(root, function* () {
       yield* createRun({ runId: "recognition-rollback" });
     });
-    const before = readFileSync(path);
+    const before = yield* until(readFile(path));
     let observed: DatabaseSync | undefined;
 
     const raised = yield* scoped(function* () {
@@ -328,7 +328,7 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     });
 
     expect(raised).toBeInstanceOf(Error);
-    expect(readFileSync(path)).toEqual(before);
+    expect(yield* until(readFile(path))).toEqual(before);
   });
 });
 
@@ -347,7 +347,7 @@ describe("Tier WS — creating and finding a run", () => {
     expect(record.props).toEqual({ channel: "stable" });
     expect(record.status).toBe("running");
 
-    expect(entries(root)).toEqual([`${hashRunId("release-1.4")}.sqlite`]);
+    expect(yield* entries(root)).toEqual([`${hashRunId("release-1.4")}.sqlite`]);
   });
 
   it("WS2: creating an id twice with the same request addresses one run", function* () {
@@ -361,7 +361,7 @@ describe("Tier WS — creating and finding a run", () => {
 
     expect(second.runId).toBe(first.runId);
     expect(second.createdAt).toBe(first.createdAt);
-    expect(entries(root)).toHaveLength(1);
+    expect(yield* entries(root)).toHaveLength(1);
   });
 
   it("WS3: props are compared as values, not as the text they were written in", function* () {
@@ -435,7 +435,7 @@ describe("Tier WS — creating and finding a run", () => {
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowRunNotFoundError);
-    expect(entries(root)).toEqual([]);
+    expect(yield* entries(root)).toEqual([]);
     expect(yield* exists(runPath(root, "never-started"))).toBe(false);
   });
 
@@ -448,7 +448,7 @@ describe("Tier WS — creating and finding a run", () => {
       // The file is moved to where a different id would look for it, which is
       // what a hash collision or a tampered root would produce.
       const wrong = runPath(root, "release-9.9");
-      writeFileSync(wrong, readFileSync(runPath(root, "release-1.4")));
+      yield* until(writeFile(wrong, yield* until(readFile(runPath(root, "release-1.4")))));
 
       return yield* lookup("release-9.9");
     });
@@ -487,7 +487,7 @@ describe("Tier WS — creating and finding a run", () => {
     expect(descriptor.ok).toBe(false);
     expect(!descriptor.ok && descriptor.error).toBeInstanceOf(WorkflowDefinitionError);
 
-    expect(entries(root)).toEqual([]);
+    expect(yield* entries(root)).toEqual([]);
   });
 
   it("WS8b: a request that is not even a request answers, rather than throwing", function* () {
@@ -511,7 +511,7 @@ describe("Tier WS — creating and finding a run", () => {
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
     }
-    expect(entries(root)).toEqual([]);
+    expect(yield* entries(root)).toEqual([]);
   });
 
   it("WS8c: a lookup id that is not a usable id answers the same way", function* () {
@@ -531,7 +531,7 @@ describe("Tier WS — creating and finding a run", () => {
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
     }
-    expect(entries(root)).toEqual([]);
+    expect(yield* entries(root)).toEqual([]);
   });
 
   it("WS9: a storage root that is not an absolute path is refused", function* () {
@@ -887,7 +887,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
 
     const result = yield* withStorage(root, function* () {
       yield* createRun();
-      writeFileSync(path, "this file is not a database, and padding to be sure of it");
+      yield* until(writeFile(path, "this file is not a database, and padding to be sure of it"));
       return yield* lookup("release-1.4");
     });
 
@@ -942,7 +942,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     for (const [runId, initialize] of partials) {
       const path = runPath(root, runId);
       tamper(path, initialize);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
 
       const result = yield* withStorage(root, function* () {
         return yield* lookup(runId);
@@ -951,7 +951,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
       expect(!result.ok && result.error).not.toBeInstanceOf(WorkflowSchemaVersionError);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -976,14 +976,14 @@ describe("Tier WS — refusing what is not this run's database", () => {
     for (const [runId, occupy] of occupied) {
       const path = runPath(root, runId);
       tamper(path, occupy);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
 
       const result = yield* withStorage(root, function* () {
         return yield* create(request({ runId }));
       });
 
       expect(result.ok).toBe(false);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -1018,12 +1018,12 @@ describe("Tier WS — refusing what is not this run's database", () => {
         yield* createRun({ runId });
         const path = runPath(root, runId);
         tamper(path, damage);
-        const before = readFileSync(path);
+        const before = yield* until(readFile(path));
         const result = yield* lookup(runId);
         seen.push({
           runId,
           result,
-          unchanged: readFileSync(path).equals(before),
+          unchanged: (yield* until(readFile(path))).equals(before),
         });
       }
       return seen;
@@ -1046,7 +1046,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     tamper(path, initializeIntermediateVersionOne);
-    const before = readFileSync(path);
+    const before = yield* until(readFile(path));
 
     const result = yield* withStorage(root, function* () {
       return yield* lookup("release-1.4");
@@ -1055,7 +1055,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
     expect(!result.ok && result.error.message).toContain("Delete and recreate");
-    expect(readFileSync(path)).toEqual(before);
+    expect(yield* until(readFile(path))).toEqual(before);
   });
 
   it("WS22c: partial DOFS and retained-root initialization are corruption and stay unchanged", function* () {
@@ -1086,14 +1086,14 @@ describe("Tier WS — refusing what is not this run's database", () => {
     for (const [runId, initialize] of partials) {
       const path = runPath(root, runId);
       tamper(path, initialize);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
       const result = yield* withStorage(root, function* () {
         return yield* lookup(runId);
       });
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -1132,14 +1132,14 @@ describe("Tier WS — refusing what is not this run's database", () => {
       });
       const path = runPath(root, runId);
       tamper(path, corrupt);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
 
       const result = yield* withStorage(root, function* () {
         return yield* lookup(runId);
       });
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -1323,7 +1323,7 @@ describe("Tier WS — refusing what is not this run's database", () => {
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowRequestError);
     }
-    expect(entries(root)).toEqual([]);
+    expect(yield* entries(root)).toEqual([]);
   });
 
   it("WS26: a malformed row is described without quoting what it held", function* () {
@@ -1362,16 +1362,16 @@ describe("Tier WS — refusing what is not this run's database", () => {
 
       // Every page but the first is scribbled over, which is damage rather
       // than a file that was never a database.
-      const bytes = readFileSync(path);
+      const bytes = yield* until(readFile(path));
       bytes.fill(0x5a, 4096, bytes.length);
-      writeFileSync(path, bytes);
+      yield* until(writeFile(path, bytes));
 
       return yield* lookup("release-1.4");
     });
 
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-    expect(readFileSync(path).length).toBeGreaterThan(4096);
+    expect((yield* until(readFile(path))).length).toBeGreaterThan(4096);
   });
 });
 

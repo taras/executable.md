@@ -44,11 +44,12 @@
  * temporary the document never chose.
  */
 
-import { ensure, Err, Ok, resource, scoped } from "effection";
+import { ensure, Err, Ok, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
@@ -457,27 +458,35 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
    * `ensure` that removes it. `until()` cannot cancel the promise it is waiting
    * on, so an asynchronous `mkdtemp` halted mid-flight would go on to create a
    * directory after the generator had already stopped — one nothing owns and
-   * nothing removes. Reading the canonical path does not suspend either, so the
-   * whole acquisition is a single uninterruptible step.
+   * nothing removes. `mkdtemp` names and creates at once, so the directory is
+   * never one an earlier run left behind.
    *
-   * `mkdtemp` names and creates at once, so the directory is never one an
-   * earlier run left behind. The path is then canonicalized: on macOS `tmpdir()`
-   * is a symlink (`/var/folders/…`) while a child process resolves it
-   * (`/private/var/…`), and canonicalizing is what makes the rendered path, the
-   * contextual directory, and a subprocess's own `cwd` the same string.
+   * Everything after that is ordinary work and suspends. The path is
+   * canonicalized: on macOS `tmpdir()` is a symlink (`/var/folders/…`) while a
+   * child process resolves it (`/private/var/…`), and canonicalizing is what
+   * makes the rendered path, the contextual directory, and a subprocess's own
+   * `cwd` the same string. Cleanup is already registered by then, so a halt
+   * during it still takes the directory away.
    */
   function temporaryDirectory(): Operation<Result<string>> {
     return resource(function* (provide) {
       let created: string;
-      let canonical: string;
       try {
+        // oxlint-disable-next-line local/no-sync-filesystem
         created = mkdtempSync(join(tmpdir(), "xmd-tempdir-"));
-        canonical = realpathSync(created);
       } catch (error) {
         yield* provide(nonWriteFailure("temporary-directory", "acquire", reasonOf(error)));
         return;
       }
       yield* ensure(() => discard(created));
+
+      let canonical: string;
+      try {
+        canonical = yield* until(realpath(created));
+      } catch (error) {
+        yield* provide(nonWriteFailure("temporary-directory", "acquire", reasonOf(error)));
+        return;
+      }
       yield* provide(Ok(canonical));
     });
   }

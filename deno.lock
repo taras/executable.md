@@ -4134,6 +4134,7 @@
       "packages/test-support": {
         "packageJson": {
           "dependencies": [
+            "npm:@effectionx/fs@0.3.0",
             "npm:@effectionx/process@0.8.1",
             "npm:@effectionx/test-adapter@0.7.4",
             "npm:@effectionx/timebox@0.4.3",

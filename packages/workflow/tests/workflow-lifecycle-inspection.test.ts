@@ -13,14 +13,14 @@
  * run.
  */
 
-import { copyFileSync, readFileSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { scoped, until } from "effection";
 import type { Operation } from "effection";
-import { writeTextFile } from "@effectionx/fs";
+import { copyFile, stat, writeTextFile } from "@effectionx/fs";
 import type { Close, DurableEvent, Yield } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import {
@@ -139,7 +139,9 @@ interface Fingerprint {
   readonly rows: string;
 }
 
-function fingerprint(path: string): Fingerprint {
+function* fingerprint(path: string): Operation<Fingerprint> {
+  const bytes = yield* until(readFile(path));
+  const mode = (yield* stat(path)).mode;
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     const rows = [
@@ -149,8 +151,8 @@ function fingerprint(path: string): Fingerprint {
       ...database.prepare("SELECT * FROM workspace_state").all(),
     ];
     return {
-      bytes: readFileSync(path).toString("base64"),
-      mode: statSync(path).mode,
+      bytes: bytes.toString("base64"),
+      mode,
       rows: JSON.stringify(rows),
     };
   } finally {
@@ -217,7 +219,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     const root = yield* useStorageRoot();
     yield* retainedRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
-    const before = fingerprint(path);
+    const before = yield* fingerprint(path);
 
     yield* withLifecycle(root, function* () {
       yield* snapshotOf("release-1.4");
@@ -225,7 +227,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
       yield* historyOf("release-1.4");
     });
 
-    expect(fingerprint(path)).toEqual(before);
+    expect(yield* fingerprint(path)).toEqual(before);
   });
 
   it("WLI4: list orders newest update first and reads only the run namespace", function* () {
@@ -252,7 +254,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     // Named exactly the way a run is named, and holding something else.
     const candidate = join(root, `${"a".repeat(64)}.sqlite`);
     yield* writeTextFile(candidate, "not a workflow run database");
-    const foreign = fileFingerprint(candidate);
+    const foreign = yield* fileFingerprint(candidate);
 
     yield* withLifecycle(root, function* () {
       const listed = yield* list();
@@ -261,7 +263,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     });
 
     // Reported, and left exactly as it was found.
-    expect(fileFingerprint(candidate)).toEqual(foreign);
+    expect(yield* fileFingerprint(candidate)).toEqual(foreign);
   });
 
   it("WLI5b: a healthy database at another run's name is not a second run", function* () {
@@ -272,8 +274,11 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     // structural way, sitting where another run id would put it. Nothing about
     // its contents says so — only its name does.
     const copy = join(root, `${"a".repeat(64)}.sqlite`);
-    copyFileSync(original, copy);
-    const before = { original: fileFingerprint(original), copy: fileFingerprint(copy) };
+    yield* copyFile(original, copy);
+    const before = {
+      original: yield* fileFingerprint(original),
+      copy: yield* fileFingerprint(copy),
+    };
 
     yield* withLifecycle(root, function* () {
       const listed = yield* list();
@@ -290,8 +295,8 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
       expect(snapshot.record.runId).toBe("release-1.4");
     });
 
-    expect(fileFingerprint(original)).toEqual(before.original);
-    expect(fileFingerprint(copy)).toEqual(before.copy);
+    expect(yield* fileFingerprint(original)).toEqual(before.original);
+    expect(yield* fileFingerprint(copy)).toEqual(before.copy);
   });
 
   it("WLI5c: a retained id whose stored bytes no reader sees fails the whole list", function* () {
@@ -310,13 +315,16 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     const shadowed = `release\u0000shadow`;
     const original = runPath(root, "release-1.4");
     const candidate = runPath(root, shadowed);
-    copyFileSync(original, candidate);
+    yield* copyFile(original, candidate);
     tamper(candidate, (database) => {
       database.exec(
         `UPDATE workflow_run SET run_id = CAST(x'${hex(shadowed)}' AS TEXT) WHERE id = 1`,
       );
     });
-    const before = { original: fileFingerprint(original), candidate: fileFingerprint(candidate) };
+    const before = {
+      original: yield* fileFingerprint(original),
+      candidate: yield* fileFingerprint(candidate),
+    };
 
     yield* withLifecycle(root, function* () {
       const listed = yield* list();
@@ -331,8 +339,8 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
       expect(snapshot.record.runId).toBe("release-1.4");
     });
 
-    expect(fileFingerprint(original)).toEqual(before.original);
-    expect(fileFingerprint(candidate)).toEqual(before.candidate);
+    expect(yield* fileFingerprint(original)).toEqual(before.original);
+    expect(yield* fileFingerprint(candidate)).toEqual(before.candidate);
   });
 
   it("WLI6: history is every retained event with its exact id, root and source", function* () {
@@ -400,7 +408,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
     const root = yield* useStorageRoot();
     yield* partialRun(root, "release-1.4");
     const path = runPath(root, "release-1.4");
-    const before = fingerprint(path);
+    const before = yield* fingerprint(path);
     const reached: string[] = [];
 
     yield* scoped(function* () {
@@ -451,7 +459,7 @@ describe("Tier WLI — immutable lifecycle inspection", () => {
 
     expect(reached).toEqual([]);
     // No row appended, no byte moved, no mode changed.
-    expect(fingerprint(path)).toEqual(before);
+    expect(yield* fingerprint(path)).toEqual(before);
   });
   it("WLI9: an id holding * or ? addresses exactly its own run", function* () {
     const root = yield* useStorageRoot();
@@ -572,6 +580,7 @@ function hex(value: string): string {
     .join("");
 }
 
-function fileFingerprint(path: string): string {
-  return `${readFileSync(path).toString("base64")}:${statSync(path).mode}`;
+function* fileFingerprint(path: string): Operation<string> {
+  const bytes = yield* until(readFile(path));
+  return `${bytes.toString("base64")}:${(yield* stat(path)).mode}`;
 }

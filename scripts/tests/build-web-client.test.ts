@@ -1,13 +1,12 @@
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, until } from "effection";
+import { scoped, sleep, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { lstat, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { lstat, readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import fs from "node:fs";
 import { readlink } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -26,9 +25,7 @@ const GENERATED_MODULE = OUTPUT_MODULE;
 
 /** A directory of the calling operation's own, gone when that operation shuts down. */
 function* scratchDirectory(prefix: string): Operation<string> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory(prefix);
   return base;
 }
 

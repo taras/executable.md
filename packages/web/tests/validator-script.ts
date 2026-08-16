@@ -19,10 +19,8 @@
 
 import { ensure, until } from "effection";
 import type { Operation } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 
 import { resolveHelper } from "../client/helpers.ts";
@@ -49,11 +47,9 @@ export interface Registration {
 }
 
 export function* runValidatorScript(script: string): Operation<Registration> {
-  // @effectionx/fs has no mkdtemp. A fresh directory per call also keeps every
-  // script under a distinct URL, so the module cache never answers with an
-  // earlier test's script.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "webform-validator-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  // A fresh directory per call keeps every script under a distinct URL, so the
+  // module cache never answers with an earlier test's script.
+  const base = yield* useTempDirectory("webform-validator-");
 
   const module = new URL("validator.mjs", pathToFileURL(`${base}/`));
   yield* writeTextFile(module, script);

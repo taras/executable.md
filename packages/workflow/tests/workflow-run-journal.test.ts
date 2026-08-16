@@ -14,7 +14,8 @@
  * is that a rejected or cancelled gate leaves no row at all.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readTextFile } from "@effectionx/fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -30,7 +31,17 @@ import {
   type Yield,
 } from "@executablemd/durable-streams";
 import { createSecretScanner, SecretDetectedError } from "@executablemd/core";
-import { all, ensure, type Operation, race, sleep, spawn, suspend, withResolvers } from "effection";
+import {
+  all,
+  ensure,
+  type Operation,
+  race,
+  sleep,
+  spawn,
+  suspend,
+  until,
+  withResolvers,
+} from "effection";
 import {
   WorkflowRecordMalformedError,
   WorkflowRequestError,
@@ -1530,7 +1541,7 @@ describe("Tier WJ — surviving a process", () => {
   it("WJ24: two processes racing to create one run leave one winner", function* () {
     const root = yield* useStorageRoot();
     const marker = join(root, "marker.txt");
-    writeFileSync(marker, "");
+    yield* until(writeFile(marker, ""));
 
     // Genuinely separate processes with genuinely separate connections, so the
     // convergence is SQLite's write lock rather than one thread's turn-taking.
@@ -1562,7 +1573,7 @@ describe("Tier WJ — surviving a process", () => {
   it("WJ25: a second process restores the run and re-executes nothing", function* () {
     const root = yield* useStorageRoot();
     const marker = join(root, "marker.txt");
-    writeFileSync(marker, "");
+    yield* until(writeFile(marker, ""));
 
     const first = yield* runChild(root, "restart", marker);
     expect(first.code).toBe(0);
@@ -1572,7 +1583,7 @@ describe("Tier WJ — surviving a process", () => {
 
     // Every durable operation ran once. The second process restored their
     // results from the retained journal instead of performing them again.
-    expect(readFileSync(marker, "utf8")).toBe("first\nsecond\nthird\n");
+    expect(yield* readTextFile(marker)).toBe("first\nsecond\nthird\n");
 
     const before = JSON.parse(first.out);
     const after = JSON.parse(second.out);

@@ -23,10 +23,9 @@ import type { Operation } from "effection";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
-import { mkdtempSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -106,12 +105,8 @@ interface Invocation {
  * between cases and nothing is written into the repository.
  */
 function* invoke(args: string[], options: { fail?: string } = {}): Operation<Invocation> {
-  // @effectionx/fs has no mkdtemp. Creating the directory synchronously is
-  // what lets its removal be registered with no interruption window between
-  // the two.
-  const base = mkdtempSync(path.join(os.tmpdir(), "xmd-readme-"));
   return yield* scoped(function* () {
-    yield* ensure(() => rm(base, { recursive: true, force: true }));
+    const base = yield* useTempDirectory("xmd-readme-");
 
     const bin = path.join(base, "bin");
     yield* ensureDir(bin);

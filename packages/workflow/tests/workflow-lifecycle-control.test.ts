@@ -10,12 +10,12 @@
  * and still moved a row would be worse than one that failed outright.
  */
 
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
-import { scoped } from "effection";
+import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { WorkflowRunRecord, WorkflowRunStatus } from "../mod.ts";
@@ -255,7 +255,7 @@ describe("Tier WLC — cancellation and deletion", () => {
     yield* runEndedAs(root, "release-1.5", "completed");
     const path = workflowRunPath(root, "release-1.4");
     const neighbour = workflowRunPath(root, "release-1.5");
-    const neighbourBytes = readFileSync(neighbour).toString("base64");
+    const neighbourBytes = (yield* until(readFile(neighbour))).toString("base64");
 
     // A live workflow executor is refused, and the run is still there afterwards.
     yield* withRunHost(root, function* (transitions) {
@@ -285,6 +285,6 @@ describe("Tier WLC — cancellation and deletion", () => {
     // let the next caller lock a different file at the same path.
     expect(yield* exists(workflowRunLock(root, "release-1.4"))).toBe(true);
     // And the run beside it is untouched, byte for byte.
-    expect(readFileSync(neighbour).toString("base64")).toBe(neighbourBytes);
+    expect((yield* until(readFile(neighbour))).toString("base64")).toBe(neighbourBytes);
   });
 });

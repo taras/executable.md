@@ -16,6 +16,7 @@
     "eslint/curly": "error",
     "local/no-module-scoped-registry": "error",
     "local/no-section-divider-comments": "error",
+    "local/no-sync-filesystem": "error",
     "local/no-yield-in-finally": "error",
     "local/prefer-effection-operation": "error",
     "local/prefer-effection-result": "error"
