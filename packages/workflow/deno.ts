@@ -30,7 +30,7 @@ export { useWorkflowLifecycle } from "./src/deno/lifecycle.ts";
 export { useWorkflowRunHost } from "./src/deno/run-host.ts";
 export type {
   WorkflowBeginRequest,
-  WorkflowExecutionAuthority,
+  WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
   WorkflowRunCreation,
 } from "./src/lifecycle/execution.ts";

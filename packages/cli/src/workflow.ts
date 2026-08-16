@@ -65,7 +65,10 @@ import type {
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
-import type { WorkflowExecutionAuthority, WorkflowRunCreation } from "@executablemd/workflow/deno";
+import type {
+  WorkflowExecutionTransitions,
+  WorkflowRunCreation,
+} from "@executablemd/workflow/deno";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 
@@ -78,15 +81,15 @@ import type { EstablishedDefinition } from "./workflow-definition.ts";
  */
 export interface WorkflowHost {
   /**
-   * Install everything one run needs, and answer with the authority that moves
-   * its lifecycle.
+   * Install everything one run needs, and answer with its execution
+   * transitions.
    *
    * Storage and lifecycle over one connection registry, because they write to
-   * the same databases. The authority is a closure rather than something
+   * the same databases. The transitions are a closure rather than something
    * installed: beginning an execution answers with an open database, and a
    * contextual surface anything can reach is the wrong place for that.
    */
-  useRunHost(): Operation<WorkflowExecutionAuthority>;
+  useRunHost(): Operation<WorkflowExecutionTransitions>;
   /**
    * Install this host's run lifecycle for the current scope and its descendants.
    *
@@ -538,10 +541,10 @@ export function runWorkflow(
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
 ): Operation<WorkflowOutcome> {
   return scoped(function* () {
-    const authority = yield* host.useRunHost();
+    const transitions = yield* host.useRunHost();
 
     // The run id first, because everything else needs to be done under its
-    // lease — and a generated one is this invocation's own run.
+    // executor lock — and a generated one is this invocation's own run.
     const runId = request.action === "resume" ? request.target : (request.id ?? generatedRunId());
 
     const creation = yield* startCreation(request, start);
@@ -561,17 +564,17 @@ export function runWorkflow(
     }
     if (acquired.value.kind !== "acquired") {
       report(
-        `workflow run ${runId} is already running: one executor owns a run, and this host ` +
-          "reports the owner rather than following it.",
+        `workflow run ${runId} is already running: one workflow executor advances a run, and ` +
+          "this host reports that executor rather than following it.",
       );
       return { exitCode: 1 };
     }
-    const { lease } = acquired.value;
+    const { lock: executorLock } = acquired.value;
 
-    // One transaction: whatever the previous owner left is reconciled, this
+    // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
     // recorded — or none of it is.
-    const begun = yield* authority.begin(lease, {
+    const begun = yield* transitions.begin(executorLock, {
       runId,
       action: request.action,
       ...(creation.value === undefined ? {} : { creation: creation.value }),
@@ -593,9 +596,8 @@ export function runWorkflow(
 
     // Interruption is the outcome nothing else publishes. Registered before the
     // execution starts, so a scope torn down by Ctrl-C settles the run rather
-    // than leaving a record with no end and a status of `running`. The lease
-    // outlives this finalizer, so the settlement it performs still holds
-    // authority.
+    // than leaving a record with no end and a status of `running`. The executor
+    // lock outlives this finalizer, so its settlement remains authorized.
     //
     // The phase, rather than a boolean: "the document produced an outcome" and
     // "this invocation is durably settled" are different facts, and collapsing
@@ -606,7 +608,7 @@ export function runWorkflow(
       if (phase.state !== "running") {
         return;
       }
-      const retained = yield* authority.settle(lease, {
+      const retained = yield* transitions.settle(executorLock, {
         executionId: execution.executionId,
         status: "interrupted",
         reason: { kind: "host", code: HOST_INTERRUPTED_CODE },
@@ -660,7 +662,7 @@ export function runWorkflow(
 
     const status: WorkflowRunStatus = result.ok ? "completed" : "failed";
     const reason = result.ok ? undefined : yield* failureReason(database);
-    const retained = yield* authority.settle(lease, {
+    const retained = yield* transitions.settle(executorLock, {
       executionId: execution.executionId,
       status,
       ...(reason === undefined ? {} : { reason }),
@@ -686,8 +688,9 @@ export function runWorkflow(
 /**
  * What a `start` creates its run from, or nothing when a resume names one.
  *
- * Checked before the lease is taken, because a definition that cannot be a root
- * document is this invocation's mistake rather than something to hold a run for.
+ * Checked before the executor lock is taken, because a definition that cannot
+ * be a root document is this invocation's mistake rather than something to
+ * hold a run for.
  */
 function* startCreation(
   request: WorkflowRequest,

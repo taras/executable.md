@@ -70,8 +70,8 @@ main(function* () {
   const [root, runId, marker, base = "main"] = process.argv.slice(2);
 
   // The whole host, because beginning a run is a lifecycle transition and the
-  // lease is what authorizes it — here exactly as in production.
-  const authority = yield* useWorkflowRunHost({ root });
+  // executor lock is what authorizes it — here exactly as in production.
+  const transitions = yield* useWorkflowRunHost({ root });
 
   const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
   if (!acquired.ok) {
@@ -81,9 +81,9 @@ main(function* () {
     console.log(JSON.stringify({ refused: "already-running" }));
     return;
   }
-  const { lease } = acquired.value;
+  const { lock: executorLock } = acquired.value;
 
-  const opened = yield* authority.begin(lease, {
+  const opened = yield* transitions.begin(executorLock, {
     runId,
     action: "start",
     creation: { definition: DEFINITION, base, props: { channel: "stable" } },
@@ -99,7 +99,7 @@ main(function* () {
 
   const value = yield* durableRun(work(marker), { stream: database.journal });
 
-  const settled = yield* authority.settle(lease, {
+  const settled = yield* transitions.settle(executorLock, {
     executionId: execution.executionId,
     status: "completed",
   });

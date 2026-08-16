@@ -33,7 +33,8 @@
  * Holding one lets a caller read the run, append to its journal and take part in
  * its transactions. It does not let a caller move the run's lifecycle: beginning
  * a document execution, finishing one and publishing a status are transitions of
- * the Workflow Lifecycle Api, which requires the executor lease. Those used to
+ * the Workflow Lifecycle Api, which requires the exact acquired executor lock.
+ * Those used to
  * be methods here, and a caller who had merely opened the database could
  * therefore advance a run another process was running.
  */

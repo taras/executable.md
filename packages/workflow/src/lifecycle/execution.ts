@@ -6,13 +6,14 @@
  * `WorkflowLifecycleApi`. That Api routes requests to a host and grants no
  * authority, and everything it answers with is parsed immutable data —
  * beginning an execution answers with an open database, which is a transport.
- * A capability that hands one out belongs to the host that already holds the
- * lease, not to a contextual surface anything in the process can reach.
+ * A capability that hands one out belongs to the workflow executor that
+ * already holds the executor lock, not to a contextual surface anything in the
+ * process can reach.
  */
 
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { ExecutorLease } from "./api.ts";
+import type { ExecutorLock } from "./api.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import type { WorkflowDefinition } from "../storage/definition.ts";
 import type { JsonObject } from "../storage/members.ts";
@@ -30,7 +31,7 @@ export interface WorkflowRunCreation {
   readonly retrieval?: Json;
 }
 
-/** One caller's request to begin a document execution under its lease. */
+/** One caller's request to begin a document execution under its executor lock. */
 export interface WorkflowBeginRequest {
   readonly runId: string;
   readonly action: "start" | "resume";
@@ -38,7 +39,7 @@ export interface WorkflowBeginRequest {
   readonly creation?: WorkflowRunCreation;
 }
 
-/** A run this caller now owns, and the execution it just began. */
+/** A run this workflow executor is advancing, and the execution it just began. */
 export interface WorkflowExecutionBegun {
   readonly database: WorkflowRunDatabase;
   readonly record: WorkflowRunRecord;
@@ -55,19 +56,19 @@ export interface WorkflowExecutionBegun {
 }
 
 /**
- * The transitions a trusted host performs under a lease it holds.
+ * The transitions a trusted host performs under an executor lock it holds.
  *
- * Supplied by the host as a closure rather than installed anywhere: the lease
- * travels separately from the data it authorizes, and the provider validates it
- * synchronously inside the transaction that writes.
+ * Supplied by the host as a closure rather than installed anywhere: the exact
+ * executor lock travels separately from the data it authorizes, and the
+ * provider validates it synchronously inside the transaction that writes.
  */
-export interface WorkflowExecutionAuthority {
+export interface WorkflowExecutionTransitions {
   begin(
-    lease: ExecutorLease,
+    lock: ExecutorLock,
     request: WorkflowBeginRequest,
   ): Operation<Result<WorkflowExecutionBegun>>;
   settle(
-    lease: ExecutorLease,
+    lock: ExecutorLock,
     completion: DocumentExecutionCompletion,
   ): Operation<Result<WorkflowRunRecord>>;
 }

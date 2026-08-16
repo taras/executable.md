@@ -2,13 +2,13 @@
  * Tier WLA — who may advance a run.
  *
  * The subject is an operating-system lock, so these tests take it for real and,
- * where ownership across processes is the claim, from a real second process.
+ * where exclusion across processes is the claim, from a real second process.
  * An in-process stand-in would prove that this module agrees with itself.
  *
- * A lease's whole value is that it expires. Every test that acquires one also
- * says what happens after the scope ends, because "the lock was taken" and "the
- * lock is released when the holder is done with it" are different facts and only
- * the pair is worth anything.
+ * The lock's whole value is that the workflow executor cannot retain it beyond
+ * its scope. Every test that acquires one also says what happens after that
+ * scope ends, because "the lock was taken" and "the lock was released" are
+ * different facts and only the pair is worth anything.
  */
 
 import { readFileSync } from "node:fs";
@@ -22,11 +22,11 @@ import { exists, writeTextFile } from "@effectionx/fs";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
-import type { ExecutorAcquisition, ExecutorLease } from "../mod.ts";
-import { useWorkflowLifecycle, workflowRunLock } from "../deno.ts";
+import type { ExecutorAcquisition, ExecutorLock } from "../mod.ts";
+import { useWorkflowLifecycle } from "../deno.ts";
 import {
   creation,
-  leasedRun,
+  withExecutorRun,
   runPath,
   tamper,
   useStorageRoot,
@@ -52,16 +52,16 @@ function* acquired(runId: string): Operation<ExecutorAcquisition> {
   return answered.value;
 }
 
-/** The lease an acquisition produced, or a failure naming what it produced instead. */
-function leaseOf(acquisition: ExecutorAcquisition): ExecutorLease {
+/** The executor lock an acquisition produced, or a failure naming its outcome. */
+function lockOf(acquisition: ExecutorAcquisition): ExecutorLock {
   if (acquisition.kind !== "acquired") {
-    throw new Error(`expected an acquired lease, found ${acquisition.kind}`);
+    throw new Error(`expected an acquired executor lock, found ${acquisition.kind}`);
   }
-  return acquisition.lease;
+  return acquisition.lock;
 }
 
-describe("Tier WLA — executor authority", () => {
-  it("WLA1: a lease is exclusive within a host, and released with its scope", function* () {
+describe("Tier WLA — executor lock", () => {
+  it("WLA1: the executor lock is exclusive within a host and released with its scope", function* () {
     const root = yield* useStorageRoot();
     yield* startedRun(root, "release-1.4");
     yield* startedRun(root, "release-1.5");
@@ -71,7 +71,7 @@ describe("Tier WLA — executor authority", () => {
         const first = yield* acquired("release-1.4");
         expect(first.kind).toBe("acquired");
 
-        // A second acquisition while the first is held reports the owner
+        // A second acquisition while the first is held reports the workflow executor
         // rather than waiting for it.
         const second = yield* acquired("release-1.4");
         expect(second.kind).toBe("already-running");
@@ -88,9 +88,9 @@ describe("Tier WLA — executor authority", () => {
   it("WLA5: an absent run refuses a resume and leaves no candidate behind", function* () {
     const root = yield* useStorageRoot();
 
-    yield* withRunHost(root, function* (authority) {
+    yield* withRunHost(root, function* (transitions) {
       const acquisition = yield* acquired("never-started");
-      const begun = yield* authority.begin(leaseOf(acquisition), {
+      const begun = yield* transitions.begin(lockOf(acquisition), {
         runId: "never-started",
         action: "resume",
         // Carrying a definition must not turn a lookup into a creation.
@@ -115,9 +115,9 @@ describe("Tier WLA — executor authority", () => {
     const pristine = runPath(root, "half-started");
     yield* writeTextFile(pristine, "");
 
-    yield* withRunHost(root, function* (authority) {
+    yield* withRunHost(root, function* (transitions) {
       const acquisition = yield* acquired("half-started");
-      const begun = yield* authority.begin(leaseOf(acquisition), {
+      const begun = yield* transitions.begin(lockOf(acquisition), {
         runId: "half-started",
         action: "resume",
         creation: creation(),
@@ -137,18 +137,24 @@ describe("Tier WLA — executor authority", () => {
     const root = yield* useStorageRoot();
     yield* startedRun(root, "release-1.4");
 
-    yield* withRunHost(root, function* (authority) {
+    yield* withRunHost(root, function* (transitions) {
       yield* scoped(function* () {
-        const lease = leaseOf(yield* acquired("release-1.4"));
-        const first = yield* authority.begin(lease, { runId: "release-1.4", action: "resume" });
+        const executorLock = lockOf(yield* acquired("release-1.4"));
+        const first = yield* transitions.begin(executorLock, {
+          runId: "release-1.4",
+          action: "resume",
+        });
         if (!first.ok) {
           throw first.error;
         }
 
-        // The same lease again. Without a one-use rule this would find its own
+        // The same executor lock again. Without a one-use rule this would find its own
         // live execution, read it as a dead executor's leftovers, close it and
-        // start another — two live executions under one lease.
-        const second = yield* authority.begin(lease, { runId: "release-1.4", action: "resume" });
+        // start another — two live executions under one executor lock.
+        const second = yield* transitions.begin(executorLock, {
+          runId: "release-1.4",
+          action: "resume",
+        });
         expect(second.ok).toBe(false);
 
         yield* withLifecycle(root, function* () {
@@ -172,8 +178,12 @@ describe("Tier WLA — executor authority", () => {
 
     // Each acquisition begins one execution, so a second record comes from a
     // second acquisition — which is what a resume is.
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(authority, { runId: "release-1.4", action: "resume" }, function* () {});
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
+        { runId: "release-1.4", action: "resume" },
+        function* () {},
+      );
     });
 
     yield* withLifecycle(root, function* () {
@@ -183,7 +193,7 @@ describe("Tier WLA — executor authority", () => {
       }
       const executions = snapshot.value.executions;
       expect(executions).toHaveLength(2);
-      // The first was left unfinished by an owner that went away, and the
+      // The first was left unfinished by a workflow executor that went away, and the
       // second acquisition proved it stale and closed it.
       expect(executions[0]?.stopStatus).toBe("interrupted");
       expect(executions[0]?.stoppedAt).toBeDefined();
@@ -194,56 +204,68 @@ describe("Tier WLA — executor authority", () => {
   it("WLA9: an execution is settled once, by the acquisition that began it", function* () {
     const root = yield* useStorageRoot();
 
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(
-        authority,
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
         { runId: "release-1.4", action: "start", creation: creation() },
-        function* (begun, lease) {
+        function* (begun, executorLock) {
           const completion = {
             executionId: begun.execution.executionId,
             status: "completed",
           } as const;
 
-          expect((yield* authority.settle(lease, completion)).ok).toBe(true);
+          expect((yield* transitions.settle(executorLock, completion)).ok).toBe(true);
           // Twice is not once.
-          expect((yield* authority.settle(lease, completion)).ok).toBe(false);
+          expect((yield* transitions.settle(executorLock, completion)).ok).toBe(false);
           // And an execution this acquisition never began is not its to settle.
           expect(
-            (yield* authority.settle(lease, { executionId: "never-began", status: "failed" })).ok,
+            (yield* transitions.settle(executorLock, {
+              executionId: "never-began",
+              status: "failed",
+            })).ok,
           ).toBe(false);
         },
       );
     });
   });
 
-  it("WLA3: no invalid lease moves a run, and none of them creates one", function* () {
+  it("WLA3: no invalid executor lock moves a run or creates one", function* () {
     const root = yield* useStorageRoot();
     yield* startedRun(root, "release-1.4");
     yield* startedRun(root, "release-1.5");
     const path = runPath(root, "release-1.4");
 
-    // Four ways a lease can be wrong, each held against the same run.
-    const leases: { name: string; lease: ExecutorLease }[] = [];
-    yield* withRunHost(root, function* (authority) {
+    // Four ways an executor lock can be wrong, each presented against the same run.
+    const candidates: { name: string; lock: ExecutorLock }[] = [];
+    yield* withRunHost(root, function* (transitions) {
       // Closed: real, issued for this run, and its scope has ended.
       yield* scoped(function* () {
-        leases.push({ name: "closed", lease: leaseOf(yield* acquired("release-1.4")) });
+        candidates.push({
+          name: "closed",
+          lock: lockOf(yield* acquired("release-1.4")),
+        });
       });
       // Foreign: real and live, issued for another run entirely.
-      leases.push({ name: "foreign", lease: leaseOf(yield* acquired("release-1.5")) });
+      candidates.push({
+        name: "foreign",
+        lock: lockOf(yield* acquired("release-1.5")),
+      });
 
-      // The two that matter most are held against a run whose lease is *live*,
+      // The two that matter most are held against a run whose executor lock is *live*,
       // so nothing but identity can tell them from the real one. A copy that
       // was refused because the run happened to be unowned would prove nothing.
-      const live = leaseOf(yield* acquired("release-1.4"));
-      leases.push({ name: "copied", lease: { ...live } });
-      leases.push({ name: "fabricated", lease: { runId: live.runId } });
+      const live = lockOf(yield* acquired("release-1.4"));
+      candidates.push({ name: "copied", lock: { ...live } });
+      candidates.push({ name: "fabricated", lock: { runId: live.runId } });
 
       const before = fingerprint(path);
       const outcomes: string[] = [];
-      for (const { name, lease } of leases) {
-        const begun = yield* authority.begin(lease, { runId: "release-1.4", action: "resume" });
-        const settled = yield* authority.settle(lease, {
+      for (const { name, lock: candidate } of candidates) {
+        const begun = yield* transitions.begin(candidate, {
+          runId: "release-1.4",
+          action: "resume",
+        });
+        const settled = yield* transitions.settle(candidate, {
           executionId: "any-execution",
           status: "completed",
         });
@@ -259,9 +281,9 @@ describe("Tier WLA — executor authority", () => {
       ]);
 
       // And none of them brought a run into existence on the way to refusal.
-      const invented = leaseOf(yield* acquired("never-started"));
+      const invented = lockOf(yield* acquired("never-started"));
       expect(
-        (yield* authority.begin(invented, { runId: "never-started", action: "resume" })).ok,
+        (yield* transitions.begin(invented, { runId: "never-started", action: "resume" })).ok,
       ).toBe(false);
       expect(yield* exists(runPath(root, "never-started"))).toBe(false);
     });
@@ -271,14 +293,14 @@ describe("Tier WLA — executor authority", () => {
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
 
-    yield* withRunHost(root, function* (authority) {
+    yield* withRunHost(root, function* (transitions) {
       // Settlement finishes the execution record and then publishes the run
       // state. The trigger fires from inside SQLite between those two writes —
       // the only moment a half-settled run could become visible.
-      yield* leasedRun(
-        authority,
+      yield* withExecutorRun(
+        transitions,
         { runId: "release-1.4", action: "start", creation: creation() },
-        function* (begun, lease) {
+        function* (begun, executorLock) {
           tamper(path, (database) => {
             database.exec(`
               CREATE TRIGGER refuse_publish BEFORE UPDATE OF status ON workflow_run
@@ -293,7 +315,7 @@ describe("Tier WLA — executor authority", () => {
           // outcome, so it is raised rather than returned. What matters here is
           // what it left behind.
           const raised = yield* raise(
-            authority.settle(lease, {
+            transitions.settle(executorLock, {
               executionId: begun.execution.executionId,
               status: "completed",
             }),
@@ -306,15 +328,15 @@ describe("Tier WLA — executor authority", () => {
       );
     });
 
-    // Begin writes in the same order: it recovers the execution that owner left
+    // Begin writes in the same order: it recovers the execution that the workflow executor left
     // unfinished, publishes, and inserts its own. The same trigger catches it
     // after the first of those writes.
     const before = fingerprint(path);
-    yield* withRunHost(root, function* (authority) {
-      const lease = leaseOf(yield* acquired("release-1.4"));
+    yield* withRunHost(root, function* (transitions) {
+      const executorLock = lockOf(yield* acquired("release-1.4"));
       // However it reports — a refusal or a raise — what matters is that it
       // added no execution and moved no status.
-      yield* raise(authority.begin(lease, { runId: "release-1.4", action: "resume" }));
+      yield* raise(transitions.begin(executorLock, { runId: "release-1.4", action: "resume" }));
     });
     expect(fingerprint(path)).toEqual(before);
   });
@@ -332,16 +354,20 @@ describe("Tier WLA — executor authority", () => {
         expect(refused).toBe("already-running");
       });
 
-      // Released with the scope, so the same second process now owns it.
+      // Released with the scope, so the same second process can now acquire it.
       expect(yield* holder(root, "release-1.4")).toBe("acquired");
     });
   });
 });
 
-/** A run that exists, created the only way one can be: under a lease. */
+/** A run that exists, created the only way one can be: under the executor lock. */
 function* startedRun(root: string, runId: string): Operation<void> {
-  yield* withRunHost(root, function* (authority) {
-    yield* leasedRun(authority, { runId, action: "start", creation: creation() }, function* () {});
+  yield* withRunHost(root, function* (transitions) {
+    yield* withExecutorRun(
+      transitions,
+      { runId, action: "start", creation: creation() },
+      function* () {},
+    );
   });
 }
 

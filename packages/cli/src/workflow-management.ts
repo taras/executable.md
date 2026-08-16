@@ -2,7 +2,7 @@
  * `xmd workflow status`, `list` and `history` — reading a run without running it.
  *
  * These commands answer from immutable lifecycle snapshots. Nothing here opens
- * a writable database, acquires a lease, replays, attaches a Workspace,
+ * a writable database, acquires the executor lock, replays, attaches a Workspace,
  * materializes a root, imports a document or contacts a provider: what a
  * reading command may do is read.
  *

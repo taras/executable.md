@@ -45,7 +45,6 @@ Existing documents and code get aligned to this section retroactively.
 | suspension ID | an opaque stable identifier derived by the trusted workflow execution for one logical suspension request; replay preserves it and only equality and input correlation are public |
 | workflow executor | the live host invocation that advances or settles one workflow run |
 | executor lock | the scope-owned, non-blocking exclusive host lock that permits at most one workflow executor for a run |
-| executor authority | the exact in-process capability held behind an acquired executor lock and required by every lifecycle mutation |
 | stale execution | an unfinished retained document execution found after acquiring the executor lock proves its previous workflow executor is gone |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
 | document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads |
@@ -425,29 +424,27 @@ journal replay, root import or authored work.
 
 The provider-neutral lifecycle API routes acquisition and management requests
 to a host. Routing through a contextual Api selects a provider and grants no
-authority. Acquisition gives the workflow executor an opaque exact object
-registered by that provider for one run and one acquisition. This is executor
-authority: the provider checks the same object, its open scope, its run and the
-expected retained lifecycle state inside every mutating transaction. A run ID,
-database handle, structural look-alike, same-named context value or retained
+authority. Acquisition gives the workflow executor an opaque exact
+`ExecutorLock` object registered by that provider for one run and one
+acquisition. The provider checks the same object, its open scope, its run and
+the expected retained lifecycle state inside every mutating transaction. A run
+ID, database handle, structural look-alike, same-named context value or retained
 token authorizes nothing. Releasing or tearing down the executor lock
-invalidates its authority before another acquisition can mutate the run.
+invalidates that object before another acquisition can mutate the run.
 
 The executor lock is not a time lease. It has no duration, expiry, renewal,
 heartbeat, watcher, generation record or liveness poll. The operating system
-releases the local lock when the workflow executor exits. The source
-identifier `ExecutorLease` names the opaque executor-authority object retained
-by the current API; it does not add lease semantics to this contract.
+releases the local lock when the workflow executor exits.
 
 The shared surface names outcomes and retained data, not a transport:
 
 ```ts
-interface ExecutorLease {
+interface ExecutorLock {
   readonly runId: string;
 }
 
 type ExecutorAcquisition =
-  | { readonly kind: "acquired"; readonly lease: ExecutorLease }
+  | { readonly kind: "acquired"; readonly lock: ExecutorLock }
   | { readonly kind: "already-running" };
 
 interface WorkflowLifecycleSnapshot {
@@ -475,8 +472,8 @@ interface WorkflowLifecycleApi {
 }
 ```
 
-The executor authority's public fields describe it and never validate it.
-Lifecycle transitions accept the exact object separately from their data
+The executor lock's public fields describe it and never validate it. Lifecycle
+transitions accept the exact object separately from their data
 through an adapter-private provider operation, just as Workspace transaction
 authority is validated behind its provider-neutral selection. Inspection,
 cancellation and deletion return immutable parsed values and no database,
@@ -547,8 +544,8 @@ without entering replay. A `cancelled` run reports its retained state without
 entering replay under either command. None can be advanced under the same run
 ID.
 
-The executor lock and authority remain in the trusted host's outer lifecycle
-scope; neither is installed as a document provider. A completed replay may hold
+The executor lock remains in the trusted host's outer lifecycle scope; it is not
+installed as a document provider. A completed replay may hold
 the lock while recording its document-execution envelope, while the run remains
 `completed` and cancellation remains refused. Canonical core returns the
 retained result before preparation or root expansion. It attaches no Workspace,
@@ -562,10 +559,10 @@ deterministic sidecar beside the run database. The open file and its lock belong
 to the workflow executor's scope. The operating system releases the lock when
 that process dies, which is the stale-execution proof the next acquisition
 uses. The sidecar path and empty file are host arrangement: neither takes part
-in run identity, the database schema, the journal or history. The exact in-process executor
-authority registered by the adapter is the private capability validated by
-every mutation; no descriptor publishes it and no second process can address
-it.
+in run identity, the database schema, the journal or history. The exact
+in-process `ExecutorLock` registered by the adapter is the private capability
+validated by every mutation; no descriptor publishes it and no second process
+can address it.
 
 The lock file may remain empty after run deletion. Unlinking a locked sidecar
 would let another process create and lock a different file at the same path
@@ -577,7 +574,7 @@ data.
 
 Inspection has its own provider-neutral immutable snapshot surface. It returns
 run metadata, ordered history and current root identity rather than a writable
-`WorkflowRunDatabase` or executor authority. `status`, `list` and `history` use
+`WorkflowRunDatabase` or an executor lock. `status`, `list` and `history` use
 only that surface. They never invoke canonical execution, read through replay,
 attach a Workspace, materialize a root, import a document, contact an Agent,
 process or external provider, or append.
@@ -635,8 +632,8 @@ Ctrl-C performs orderly scope teardown, publishes `interrupted` and leaves the
 run resumable; it is not explicit cancellation.
 
 Without a live workflow executor, the management host acquires the executor
-lock before any cancellation mutation. Its exact executor authority is
-validated inside the transaction that publishes `cancelled`. A stale `running`
+lock before any cancellation mutation. The exact executor lock is validated
+inside the transaction that publishes `cancelled`. A stale `running`
 execution is first checked for a retained root Close: a Close restores its
 canonical completed or failed outcome and cancellation refuses; without one,
 the transition finishes that exact

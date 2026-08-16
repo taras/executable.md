@@ -22,7 +22,7 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
-import type { WorkflowExecutionAuthority } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
 import type { Json } from "@executablemd/core";
@@ -109,7 +109,7 @@ function useRunStore(): Operation<string> {
 /** A host that records every attachment rather than opening a Workspace. */
 function recordingHost(root: string, attached: string[]): WorkflowHost {
   return {
-    useRunHost(): Operation<WorkflowExecutionAuthority> {
+    useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
@@ -125,7 +125,7 @@ function recordingHost(root: string, attached: string[]): WorkflowHost {
 /**
  * A host whose settlement storage refuses.
  *
- * Substituted at the authority boundary, which is the one the CLI depends on
+ * Substituted at the transitions boundary, which is the one the CLI depends on
  * for lifecycle. Finishing the execution record and publishing the run state
  * are one transaction now, so there is one place a refusal can happen — and one
  * refusal, rather than a dependent write that a refused prerequisite skips.
@@ -133,16 +133,16 @@ function recordingHost(root: string, attached: string[]): WorkflowHost {
 function refusingHost(root: string, refuse: "settle" | "none", attempted: string[]): WorkflowHost {
   const host = recordingHost(root, []);
   return {
-    *useRunHost(): Operation<WorkflowExecutionAuthority> {
-      const authority = yield* host.useRunHost();
+    *useRunHost(): Operation<WorkflowExecutionTransitions> {
+      const transitions = yield* host.useRunHost();
       return {
-        begin: authority.begin,
-        *settle(lease, completion) {
+        begin: transitions.begin,
+        *settle(executorLock, completion) {
           attempted.push(`settle:${completion.status}`);
           if (refuse === "settle") {
             return Err(new Error("PLANTED-STORAGE-REFUSAL"));
           }
-          return yield* authority.settle(lease, completion);
+          return yield* transitions.settle(executorLock, completion);
         },
       };
     },
@@ -170,20 +170,20 @@ function* closeRoot(root: string, runId: string): Operation<void> {
 /** Put a run into the state a previous invocation would have left it in. */
 function* endRun(root: string, runId: string, status: WorkflowRunStatus): Operation<void> {
   yield* scoped(function* () {
-    const authority = yield* useWorkflowRunHost({ root });
+    const transitions = yield* useWorkflowRunHost({ root });
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {
       throw acquired.error;
     }
     if (acquired.value.kind !== "acquired") {
-      throw new Error(`${runId} is already owned by a live executor`);
+      throw new Error(`${runId} already has a live workflow executor`);
     }
-    const { lease } = acquired.value;
-    const begun = yield* authority.begin(lease, { runId, action: "resume" });
+    const { lock: executorLock } = acquired.value;
+    const begun = yield* transitions.begin(executorLock, { runId, action: "resume" });
     if (!begun.ok) {
       throw begun.error;
     }
-    const settled = yield* authority.settle(lease, {
+    const settled = yield* transitions.settle(executorLock, {
       executionId: begun.value.execution.executionId,
       status,
     });
@@ -566,16 +566,16 @@ function* startedRun(root: string): Operation<Started> {
   const objectFormat = (yield* git(repository, ["rev-parse", "--show-object-format"])).trim();
 
   return yield* scoped(function* () {
-    const authority = yield* useWorkflowRunHost({ root });
+    const transitions = yield* useWorkflowRunHost({ root });
     const runId = crypto.randomUUID();
     const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {
       throw acquired.error;
     }
     if (acquired.value.kind !== "acquired") {
-      throw new Error(`${runId} is already owned by a live executor`);
+      throw new Error(`${runId} already has a live workflow executor`);
     }
-    const begun = yield* authority.begin(acquired.value.lease, {
+    const begun = yield* transitions.begin(acquired.value.lock, {
       runId,
       action: "start",
       creation: {

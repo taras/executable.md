@@ -1,5 +1,5 @@
 /**
- * Every write that moves a run's lifecycle, and the authority each one checks.
+ * Every write that moves a run's lifecycle, and the executor lock each one checks.
  *
  * One module holds the lifecycle SQL — creating the run, beginning a document
  * execution, finishing one, publishing a status — because these rows describe
@@ -8,21 +8,19 @@
  * leave a run whose two halves disagree, and inspection would report whichever
  * half it happened to read.
  *
- * ## Authority is checked where it is used
+ * ## The executor lock is checked where it is used
  *
- * Each transition validates the exact live lease inside its own transaction,
- * not before opening it. A lease is only as good as the moment it is spent: one
- * validated in a caller and passed along could have been released by the time
- * the write lands.
+ * Each transition validates the exact live executor lock inside its own
+ * transaction, not before opening it. A lock checked in a caller and passed
+ * along could have been released by the time the write lands.
  *
  * ## The bodies do not yield
  *
  * From the validation to the commit, a transition body is ordinary synchronous
- * code. Suspending in the middle would let the scope that owns the lease tear
- * down between "this caller may write" and the write — the transaction would
- * commit under an authority that no longer exists. What has to happen before
- * the transaction, like reading a control request off the filesystem, happens
- * before it.
+ * code. Suspending in the middle would let the scope that owns the executor
+ * lock tear down between "this caller may write" and the write — the transaction
+ * would commit under a lock that is no longer held. What has to happen before
+ * the transaction happens before it.
  */
 
 import { randomUUID } from "node:crypto";
@@ -50,7 +48,7 @@ import {
 } from "../storage/record.ts";
 import type { RunConnection, RunTransaction, WorkflowRunConnections } from "./connections.ts";
 import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
-import type { ExecutorHold } from "./executor.ts";
+import type { ExecutorLockHold } from "./executor.ts";
 import { reading } from "./reading.ts";
 import { readJournalEntries } from "./journal.ts";
 import { readDocumentExecution, readRetrieval, stopReasonColumns } from "./rows.ts";
@@ -86,7 +84,7 @@ const SELECT_UNFINISHED =
   "SELECT * FROM document_executions WHERE stopped_at IS NULL ORDER BY sequence ASC";
 
 /**
- * Begin one document execution under this exact lease.
+ * Begin one document execution under this exact executor lock.
  *
  * For a run that does not exist yet, the schema, the immutable run, its
  * retrieval metadata, an empty Workspace, the first execution record and
@@ -96,8 +94,8 @@ const SELECT_UNFINISHED =
 export function* beginExecution(
   connections: WorkflowRunConnections,
   path: string,
-  hold: ExecutorHold,
-  authorize: () => ExecutorHold,
+  hold: ExecutorLockHold,
+  authorize: () => ExecutorLockHold,
   request: WorkflowBeginRequest,
 ): Operation<Result<BeginOutcome>> {
   // Asked before a connection exists, because opening one creates the file.
@@ -108,15 +106,16 @@ export function* beginExecution(
   }
 
   // The caller pre-authorized to obtain this hold and the path it names, so a
-  // fabricated lease is refused before a connection exists. The same lease is
-  // checked again inside the transaction, because a scope can end in between.
+  // fabricated lock is refused before a connection exists. The same lock is
+  // checked again inside the transaction, because a scope can end
+  // in between.
   const connection = connections.at(path);
 
-  // One transaction. Recovery decides what the previous owner's execution
+  // One transaction. Recovery decides what the previous workflow executor's execution
   // became, admission decides whether this caller may continue, and an admitted
   // caller's execution is inserted — all or none. Splitting them would publish
   // a recovery that a refusal then had to leave behind, or leave a window where
-  // this owner's own execution looks like somebody else's leftovers.
+  // this workflow executor's own execution looks like somebody else's leftovers.
   const outcome = yield* scoped(function* (): Operation<Result<BegunRows | Refused>> {
     yield* connection.lock.hold();
     return inLifecycleTransaction(connection, path, () =>
@@ -147,7 +146,7 @@ export function* beginExecution(
 /**
  * What one begin transaction committed.
  *
- * A refusal is an outcome, not an absence: the previous owner's execution was
+ * A refusal is an outcome, not an absence: the previous workflow executor's execution was
  * still accounted for, and that has to survive being told this caller may not
  * continue. The refusal itself is translated outside the transaction.
  */
@@ -169,7 +168,7 @@ interface BegunRows {
   readonly closed?: DocumentExecutionRecord;
 }
 
-/** What the run was after the previous owner's execution was accounted for. */
+/** What the run was after the previous workflow executor's execution was accounted for. */
 interface Recovery {
   /** Absent when there is no run yet, which only a `start` may go on from. */
   readonly status?: WorkflowRunStatus;
@@ -185,7 +184,7 @@ interface Refused {
 function recover(
   connection: RunConnection,
   path: string,
-  hold: ExecutorHold,
+  hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
 ): Recovery {
   const { database } = connection;
@@ -210,7 +209,7 @@ function recover(
     }
   }
 
-  // Whatever the previous owner left is proven stale: this caller holds the
+  // Whatever the previous workflow executor left is proven stale: this caller holds the
   // lock, and this acquisition has begun nothing of its own.
   return reconcile(database, path, stored);
 }
@@ -218,15 +217,15 @@ function recover(
 function beginOnce(
   connection: RunConnection,
   path: string,
-  hold: ExecutorHold,
+  hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
 ): BegunRows | Refused {
-  // An acquisition begins one execution. A second would find this owner's own
+  // An acquisition begins one execution. A second would find this workflow executor's own
   // live execution and, seeing it unfinished, reconcile it as a dead executor's
-  // leftovers — then start another beside it, under one lease.
+  // leftovers — then start another beside it under one executor lock.
   if (hold.execution !== undefined) {
     throw new WorkflowRequestError(
-      "this executor lease has already begun a document execution. One acquisition begins one.",
+      "this executor lock has already begun a document execution. One acquisition begins one.",
     );
   }
 
@@ -242,7 +241,7 @@ function beginOnce(
 
   const refusal = admissionRefusal(request.action, recovery.status);
   if (refusal !== undefined) {
-    // Committed all the same: what the previous owner's execution became is not
+    // Committed all the same: what the previous workflow executor's execution became is not
     // undone by this caller being told it may not continue.
     return {
       kind: "refused",
@@ -270,8 +269,8 @@ function beginOnce(
 export function* settleExecution(
   connections: WorkflowRunConnections,
   path: string,
-  hold: ExecutorHold,
-  authorize: () => ExecutorHold,
+  hold: ExecutorLockHold,
+  authorize: () => ExecutorLockHold,
   offered: DocumentExecutionCompletion,
 ): Operation<Result<WorkflowRunRecord>> {
   const checked = parseDocumentExecutionCompletion(offered);
@@ -286,7 +285,7 @@ export function* settleExecution(
     return inLifecycleTransaction(connection, path, () => {
       sameHold(authorize, hold);
       // The execution this acquisition began, and no other: a completion naming
-      // somebody else's execution is not this owner's to settle.
+      // somebody else's execution is not this workflow executor's to settle.
       if (completion.executionId !== hold.execution) {
         throw new WorkflowDocumentExecutionError(completion.executionId);
       }
@@ -309,18 +308,18 @@ interface BegunRows {
 }
 
 /**
- * The hold this lease still stands for, and the one it stood for before.
+ * The hold this executor lock still stands for, and the one it stood for before.
  *
- * Authority is spent, not held: a lease validated when the caller asked can
- * have been released before the transaction opened, and a different hold means
- * a different acquisition entirely.
+ * A lock checked when the caller asked can have been released before the
+ * transaction opened, and a different hold means a different acquisition
+ * entirely.
  */
-function sameHold(authorize: () => ExecutorHold, expected: ExecutorHold): ExecutorHold {
+function sameHold(authorize: () => ExecutorLockHold, expected: ExecutorLockHold): ExecutorLockHold {
   const hold = authorize();
   if (hold !== expected) {
     throw new WorkflowRequestError(
-      "the executor lease changed between authorization and this transaction, so the run may " +
-        "already have another owner.",
+      "the executor lock changed between authorization and this transaction, so another " +
+        "workflow executor may already hold the run's lock.",
     );
   }
   return hold;
@@ -329,7 +328,7 @@ function sameHold(authorize: () => ExecutorHold, expected: ExecutorHold): Execut
 function begin(
   connection: RunConnection,
   path: string,
-  hold: ExecutorHold,
+  hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
   recovered: Recovery,
 ): BegunRows {
@@ -358,7 +357,7 @@ function begin(
 function create(
   connection: RunConnection,
   path: string,
-  hold: ExecutorHold,
+  hold: ExecutorLockHold,
   request: WorkflowBeginRequest,
 ): WorkflowRunRecord {
   const { creation } = request;
@@ -397,7 +396,7 @@ function firstExecution(
  *
  * Answered rather than raised, and asked outside the transaction that recovered
  * the run: refusing is this caller's outcome, not a reason to undo what the
- * previous owner's execution was found to have become.
+ * previous workflow executor's execution was found to have become.
  */
 function admissionRefusal(
   action: "start" | "resume",
@@ -431,7 +430,7 @@ interface Reconciled {
 }
 
 /**
- * Close what the previous owner left, on the evidence the run itself holds.
+ * Close what the previous workflow executor left, on the evidence the run itself holds.
  *
  * Precedence is the architecture's. A retained root Close proves the canonical
  * outcome won before anything else could; failing that, a cancellation
@@ -470,11 +469,11 @@ interface Closing {
 }
 
 /**
- * What the previous owner's execution became, on the evidence the run holds.
+ * What the previous workflow executor's execution became, on the evidence the run holds.
  *
  * A retained root Close proves the canonical outcome won before anything could
  * interrupt it, so it is restored. Failing that, the execution was interrupted:
- * the owner went away without recording an outcome, and that is what happened.
+ * the workflow executor went away without recording an outcome, and that is what happened.
  */
 function closingOutcome(database: DatabaseSync, stored: WorkflowRunRecord): Closing {
   // A replay whose terminal state was preserved closes only its own execution,
@@ -601,8 +600,9 @@ export function readRetrievalRow(database: DatabaseSync) {
 /**
  * One lifecycle transaction, from `BEGIN IMMEDIATE` to `COMMIT`.
  *
- * The body is synchronous on purpose: it validates the lease and writes without
- * ever suspending, so no scope can end between the check and the commit.
+ * The body is synchronous on purpose: it validates the executor lock and
+ * writes without ever suspending, so no scope can end between the check and the
+ * commit.
  */
 function inLifecycleTransaction<T>(
   connection: RunConnection,
@@ -660,12 +660,12 @@ function refusal<T>(error: unknown, path: string): Result<T> {
 }
 
 /**
- * Make one run terminal, under a lease and without starting anything.
+ * Make one run terminal under the executor lock without starting anything.
  *
  * There is no live execution to halt here: acquiring the lock is what proved
  * that. What is left is retained state, and the rules are the architecture's —
  * a root Close means the canonical outcome already won and cancellation is
- * refused; an unfinished execution left by an owner that went away is finished
+ * refused; an unfinished execution left by a workflow executor that went away is finished
  * as cancelled; a run with nothing running becomes cancelled directly; a run
  * already cancelled says so again; and a completed or failed run is not
  * something to cancel.
@@ -673,8 +673,8 @@ function refusal<T>(error: unknown, path: string): Result<T> {
 export function* cancelRun(
   connections: WorkflowRunConnections,
   path: string,
-  hold: ExecutorHold,
-  authorize: () => ExecutorHold,
+  hold: ExecutorLockHold,
+  authorize: () => ExecutorLockHold,
 ): Operation<Result<WorkflowRunRecord>> {
   if (!(yield* exists(path))) {
     return Err(new WorkflowRunNotFoundError(hold.runId));
@@ -705,7 +705,7 @@ export function* cancelRun(
 
       const canonical = rootOutcome(database);
       if (canonical !== undefined) {
-        // The document finished before its owner disappeared. Restoring what it
+        // The document finished before its workflow executor disappeared. Restoring what it
         // recorded is not cancelling it.
         for (const execution of unfinishedExecutions(database)) {
           finish(database, path, {

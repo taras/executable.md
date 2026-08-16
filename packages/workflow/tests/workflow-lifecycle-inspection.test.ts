@@ -39,7 +39,7 @@ import { useWorkflowLifecycle } from "../deno.ts";
 import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
 import {
   creation,
-  leasedRun,
+  withExecutorRun,
   runPath,
   tamper,
   useStorageRoot,
@@ -55,17 +55,17 @@ const { history, inspect, list } = WorkflowLifecycle.operations;
  * apart by what they retain and not only by the ids SQLite happened to assign.
  */
 function* retainedRun(root: string, runId: string): Operation<void> {
-  yield* withRunHost(root, function* (authority) {
-    yield* leasedRun(
-      authority,
+  yield* withRunHost(root, function* (transitions) {
+    yield* withExecutorRun(
+      transitions,
       { runId, action: "start", creation: creation() },
-      function* (begun, lease) {
+      function* (begun, executorLock) {
         yield* begun.database.journal.append(
           sourced("import_component", `Release:${runId}`, { line: 4, column: 2 }),
         );
         yield* begun.database.journal.append(unsourced("exec", `exec:echo ${runId}`));
         yield* begun.database.journal.append(closed("root"));
-        const settled = yield* authority.settle(lease, {
+        const settled = yield* transitions.settle(executorLock, {
           executionId: begun.execution.executionId,
           status: "completed",
         });
@@ -79,9 +79,9 @@ function* retainedRun(root: string, runId: string): Operation<void> {
 
 /** A run interrupted mid-execution: two events, no root Close, still `running`. */
 function* partialRun(root: string, runId: string): Operation<void> {
-  yield* withRunHost(root, function* (authority) {
-    yield* leasedRun(
-      authority,
+  yield* withRunHost(root, function* (transitions) {
+    yield* withExecutorRun(
+      transitions,
       { runId, action: "start", creation: creation() },
       function* (begun) {
         yield* begun.database.journal.append(

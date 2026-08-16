@@ -9,7 +9,7 @@
  */
 
 import type { Operation } from "effection";
-import type { WorkflowExecutionAuthority } from "../lifecycle/execution.ts";
+import type { WorkflowExecutionTransitions } from "../lifecycle/execution.ts";
 import { useWorkflowRunConnections } from "./connections.ts";
 import { installWorkflowLifecycle } from "./lifecycle.ts";
 import { installWorkflowRunStorage, type WorkflowRunStorageOptions } from "./provider.ts";
@@ -17,7 +17,7 @@ import { SavepointObservation } from "./savepoints.ts";
 
 export function* useWorkflowRunHost(
   options: WorkflowRunStorageOptions,
-): Operation<WorkflowExecutionAuthority> {
+): Operation<WorkflowExecutionTransitions> {
   const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
   yield* installWorkflowRunStorage(options, {}, connections);
   return yield* installWorkflowLifecycle({ root: options.root }, connections);

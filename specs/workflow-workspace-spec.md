@@ -183,9 +183,9 @@ that atomically finishes the record and publishes the resulting status.
 Inspection cannot observe half of either transition.
 
 The executor lock stays in the trusted host's lifecycle scope and is not a
-document provider. Behind it, the host retains exact in-process executor
-authority that every lifecycle mutation validates. A completed replay may hold
-the lock for its execution record, but the run remains `completed` and
+document provider. The host validates its exact in-process `ExecutorLock`
+object inside every lifecycle mutation. A completed replay may hold the lock
+for its execution record, but the run remains `completed` and
 cancellation remains refused. Canonical execution returns before preparation
 or root expansion and attaches no
 Workspace, Files, Service, Agent, process or external provider.
@@ -200,7 +200,7 @@ state. A `cancel` command that acquires the executor lock instead publishes
 already won.
 For a replay whose terminal run status was preserved, recovery closes the
 execution as `interrupted` while leaving the completed or failed run state
-unchanged. An old workflow executor or invalidated executor authority cannot
+unchanged. An old workflow executor or invalidated executor lock cannot
 publish a later status.
 
 The host validates namespace authority. There is no separate public
@@ -298,7 +298,7 @@ Cancellation follows the retained status:
 - `completed` and `failed` refuse because their terminal outcome already won.
 
 The released advisory lock is the only stale-execution proof. The cancellation
-transition validates the acquired private executor authority, finishes an
+transition validates the exact acquired executor lock, finishes an
 unfinished stale execution when one exists, and publishes `cancelled`
 atomically. No live scope is halted, watched or polled by another process, and
 there is no request or
@@ -455,8 +455,8 @@ by status. `status` and `history` require exactly one run ID; `list` accepts
 none. A filter names exactly one of the six statuses. Fork ancestry belongs to
 #368.
 
-Both commands use immutable lifecycle snapshots. They do not obtain executor
-authority, replay, attach a Workspace, materialize a root, import a document,
+Both commands use immutable lifecycle snapshots. They do not obtain an executor
+lock, replay, attach a Workspace, materialize a root, import a document,
 contact an Agent, process or external provider, reconcile an effect, or append.
 Human output is the default; `--json` returns the same data structurally.
 
@@ -1092,14 +1092,14 @@ lifecycle contracts; documents do not choose that topology.
 The local lifecycle adapter owns a non-blocking exclusive advisory lock on one
 deterministic sidecar per run. The open file belongs to the workflow executor's
 scope and the operating system releases it when the process exits. The exact
-in-process executor authority is the private mutation capability. The lock file
+in-process `ExecutorLock` is the private mutation capability. The lock file
 is ephemeral host arrangement: it is neither SQLite schema nor run identity,
 journal or history. No owner descriptor or cancellation-request file exists.
 
 Lifecycle settlement uses one compare-and-set SQLite transaction to finish the
 document-execution record and publish the run status under the exact executor
-authority. Inspection opens immutable snapshots and receives no executor
-authority or writable database handle. History reads each existing
+lock. Inspection opens immutable snapshots and receives no executor lock or
+writable database handle. History reads each existing
 `workspace_root_id` with its event and does not invoke the Workspace
 materializer.
 

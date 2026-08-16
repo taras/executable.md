@@ -43,14 +43,14 @@ import type {
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import {
   type ExecutorAcquisition,
-  type ExecutorLease,
+  type ExecutorLock,
   type WorkflowDeletion,
   WorkflowLifecycle,
   type WorkflowLifecycleSnapshot,
 } from "../lifecycle/api.ts";
 import type {
   WorkflowBeginRequest,
-  WorkflowExecutionAuthority,
+  WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
 } from "../lifecycle/execution.ts";
 import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history.ts";
@@ -62,7 +62,11 @@ import {
   WorkflowStorageError,
 } from "../storage/errors.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
-import { createExecutorRegistry, type ExecutorHold, type ExecutorRegistry } from "./executor.ts";
+import {
+  createExecutorLockRegistry,
+  type ExecutorLockHold,
+  type ExecutorLockRegistry,
+} from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
 import { beginExecution, cancelRun, settleExecution } from "./transitions.ts";
 import { workflowRunPath } from "./path.ts";
@@ -94,7 +98,7 @@ export interface WorkflowLifecycleOptions {
  * ahead of one installed nearer the work.
  *
  * The executor registry belongs to this installation's closure rather than to
- * module scope, so the leases it issued last exactly as long as the scope that
+ * module scope, so the locks it issued last exactly as long as the scope that
  * installed the provider and nothing accumulates between runs.
  *
  */
@@ -113,9 +117,9 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
 export function* installWorkflowLifecycle(
   options: WorkflowLifecycleOptions,
   connections: WorkflowRunConnections,
-): Operation<WorkflowExecutionAuthority> {
+): Operation<WorkflowExecutionTransitions> {
   const root = authorizedRoot(options.root);
-  const executors = createExecutorRegistry();
+  const executors = createExecutorLockRegistry();
   yield* WorkflowLifecycle.around(
     {
       *acquireExecutor([runId]) {
@@ -144,13 +148,13 @@ export function* installWorkflowLifecycle(
   // open database, and a contextual surface anything can reach is the wrong
   // place for a capability that hands out transports.
   return {
-    begin(lease, request) {
-      return beginRun(root, connections, executors, lease, request);
+    begin(executorLock, request) {
+      return beginRun(root, connections, executors, executorLock, request);
     },
-    *settle(lease, completion) {
+    *settle(executorLock, completion) {
       // Authorized before a connection exists: the path comes from the hold the
-      // provider issued, never from what the lease says about itself.
-      const authorized = authorizeHold(executors, lease);
+      // provider issued, never from what the lock says about itself.
+      const authorized = authorizeHold(executors, executorLock);
       if (!authorized.ok) {
         return authorized;
       }
@@ -159,7 +163,7 @@ export function* installWorkflowLifecycle(
         connections,
         workflowRunPath(root, hold.runId),
         hold,
-        () => executors.authorize(lease),
+        () => executors.authorize(executorLock),
         completion,
       );
     },
@@ -169,18 +173,18 @@ export function* installWorkflowLifecycle(
 function* beginRun(
   root: string,
   connections: WorkflowRunConnections,
-  executors: ExecutorRegistry,
-  executorLease: ExecutorLease,
+  executors: ExecutorLockRegistry,
+  executorLock: ExecutorLock,
   request: WorkflowBeginRequest,
 ): Operation<Result<WorkflowExecutionBegun>> {
   const checked = checkRunId(request.runId);
   if (!checked.ok) {
     return checked;
   }
-  // Authorized before a connection exists, so a fabricated lease cannot cause a
+  // Authorized before a connection exists, so a fabricated lock cannot cause a
   // database to be created or opened on its way to being refused. The path
-  // comes from the hold rather than from what the lease says about itself.
-  const authorized = authorizeHold(executors, executorLease, checked.value);
+  // comes from the hold rather than from what the lock says about itself.
+  const authorized = authorizeHold(executors, executorLock, checked.value);
   if (!authorized.ok) {
     return authorized;
   }
@@ -189,7 +193,7 @@ function* beginRun(
     connections,
     workflowRunPath(root, hold.runId),
     hold,
-    () => executors.authorize(executorLease, checked.value),
+    () => executors.authorize(executorLock, checked.value),
     request,
   );
   if (!begun.ok) {
@@ -202,23 +206,23 @@ function* beginRun(
 }
 
 /**
- * Remove one run's retained storage, under a lease.
+ * Remove one run's retained storage under its executor lock.
  *
- * The lock decides whether there is anything to refuse: a live executor holds
+ * The lock decides whether there is anything to refuse: a live workflow executor holds
  * it, and a run somebody is running is not one to delete. Everything else may
- * be, including a `running` record whose owner is gone — the released lock is
- * what proves it.
+ * be, including a `running` record whose workflow executor is gone — acquiring
+ * the released lock is what proves it.
  *
  * What goes is the run's database. The lock file stays, empty: unlinking a file
- * this lease still holds would let the next caller create and lock a different
- * file at the same path while this one still exists. An empty lock is host
+ * this workflow executor still holds would let the next caller create and lock
+ * a different file at the same path. An empty lock is host
  * arrangement rather than retained run state, so it is not a category anybody
  * is told about.
  */
 function* remove(
   root: string,
   connections: WorkflowRunConnections,
-  executors: ExecutorRegistry,
+  executors: ExecutorLockRegistry,
   runId: string,
 ): Operation<Result<WorkflowDeletion>> {
   const checked = checkRunId(runId);
@@ -230,8 +234,8 @@ function* remove(
     if (hold === undefined) {
       return Err(
         new WorkflowRequestError(
-          `workflow run ${checked.value} is running: a run a live executor owns is not deleted. ` +
-            "Interrupt the foreground process that owns it first.",
+          `workflow run ${checked.value} is running: a run with a live workflow executor is not ` +
+            "deleted. Interrupt that foreground process first.",
         ),
       );
     }
@@ -253,14 +257,14 @@ function* remove(
   });
 }
 
-/** The hold this lease stands for, as a refusal rather than a raise. */
+/** The hold this executor lock stands for, as a refusal rather than a raise. */
 function authorizeHold(
-  executors: ExecutorRegistry,
-  lease: ExecutorLease,
+  executors: ExecutorLockRegistry,
+  lock: ExecutorLock,
   runId?: string,
-): Result<ExecutorHold> {
+): Result<ExecutorLockHold> {
   try {
-    return Ok(executors.authorize(lease, runId));
+    return Ok(executors.authorize(lock, runId));
   } catch (error) {
     if (error instanceof WorkflowStorageError) {
       return Err(error);
@@ -272,15 +276,15 @@ function authorizeHold(
 /**
  * Make one run terminal, when nothing is running it.
  *
- * The lock is the whole test for whether anything is: a live executor holds it,
+ * The lock is the whole test for whether anything is: a live workflow executor holds it,
  * and this host does not reach into another process's document execution. A
  * caller who wants a running workflow to stop interrupts the foreground process
- * that owns it, which publishes `interrupted` and leaves the run resumable.
+ * running it, which publishes `interrupted` and leaves the run resumable.
  */
 function* cancel(
   root: string,
   connections: WorkflowRunConnections,
-  executors: ExecutorRegistry,
+  executors: ExecutorLockRegistry,
   runId: string,
 ): Operation<Result<WorkflowRunRecord>> {
   const checked = checkRunId(runId);
@@ -293,27 +297,28 @@ function* cancel(
       return Err(
         new WorkflowRequestError(
           `workflow run ${checked.value} is running: cancellation does not reach into a live ` +
-            "document execution. Interrupt the foreground process that owns it — Ctrl-C tears " +
+            "document execution. Interrupt that foreground process — Ctrl-C tears " +
             "its scope down in order, publishes interrupted and leaves the run resumable.",
         ),
       );
     }
     return yield* cancelRun(connections, workflowRunPath(root, hold.runId), hold, () =>
-      executors.authorize(hold.lease, checked.value),
+      executors.authorize(hold.lock, checked.value),
     );
   });
 }
 
 /**
- * Take ownership of one run, or report that a live executor holds it.
+ * Take the executor lock for one run, or report that a live workflow executor holds it.
  *
- * The lock is taken before anything reads or writes the run, and the lease it
- * produces belongs to the scope that asked — so an acquisition made inside a
- * `scoped()` block releases when that block ends, whatever happened inside it.
+ * The lock is taken before anything reads or writes the run, and the executor
+ * lock it produces belongs to the scope that asked. An acquisition made
+ * inside a `scoped()` block releases when that block ends, whatever happened
+ * inside it.
  */
 function* acquire(
   root: string,
-  executors: ExecutorRegistry,
+  executors: ExecutorLockRegistry,
   runId: string,
 ): Operation<Result<ExecutorAcquisition>> {
   const checked = checkRunId(runId);
@@ -324,7 +329,7 @@ function* acquire(
   if (hold === undefined) {
     return Ok({ kind: "already-running" });
   }
-  return Ok({ kind: "acquired", lease: hold.lease });
+  return Ok({ kind: "acquired", lock: hold.lock });
 }
 
 function* inspectRun(root: string, runId: string): Operation<Result<WorkflowLifecycleSnapshot>> {

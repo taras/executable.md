@@ -57,7 +57,7 @@ export type {
 export { WorkflowLifecycle, WorkflowLifecycleProviderError } from "./src/lifecycle/api.ts";
 export type {
   ExecutorAcquisition,
-  ExecutorLease,
+  ExecutorLock,
   WorkflowDeletion,
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,

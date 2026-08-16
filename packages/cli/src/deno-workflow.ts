@@ -23,7 +23,7 @@ import {
   useWorkflowRunHost,
   withWorkflowWorkspace,
 } from "@executablemd/workflow/deno";
-import type { WorkflowExecutionAuthority } from "@executablemd/workflow/deno";
+import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { WorkflowHost } from "./workflow.ts";
 
@@ -38,7 +38,7 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
   return {
-    useRunHost(): Operation<WorkflowExecutionAuthority> {
+    useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {

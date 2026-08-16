@@ -3,7 +3,7 @@
  *
  * Cancellation never reaches into a live document execution. The lock is the
  * whole test for whether one is live, so these suites take it for real: a run
- * with a live lease is refused, and everything else is decided from what the
+ * with a live workflow executor is refused, and everything else is decided from what the
  * run retains.
  *
  * Every refusal is checked for what it left behind. A cancellation that refused
@@ -20,7 +20,7 @@ import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { WorkflowRunRecord, WorkflowRunStatus } from "../mod.ts";
 import { useWorkflowLifecycle, workflowRunLock, workflowRunPath } from "../deno.ts";
-import { creation, leasedRun, useStorageRoot, withRunHost } from "./support/storage.ts";
+import { creation, useStorageRoot, withExecutorRun, withRunHost } from "./support/storage.ts";
 
 const { cancel } = WorkflowLifecycle.operations;
 
@@ -31,22 +31,22 @@ function withLifecycle<T>(root: string, body: () => Operation<T>): Operation<T> 
   });
 }
 
-/** A run left in one retained state, by an owner that is gone. */
+/** A run left in one retained state, by a workflow executor that is gone. */
 function* runEndedAs(
   root: string,
   runId: string,
   status: WorkflowRunStatus | "unfinished",
 ): Operation<void> {
-  yield* withRunHost(root, function* (authority) {
-    yield* leasedRun(
-      authority,
+  yield* withRunHost(root, function* (transitions) {
+    yield* withExecutorRun(
+      transitions,
       { runId, action: "start", creation: creation() },
-      function* (begun, lease) {
+      function* (begun, executorLock) {
         if (status === "unfinished") {
-          // Nothing settles it: the owner went away mid-execution.
+          // Nothing settles it: the workflow executor went away mid-execution.
           return;
         }
-        const settled = yield* authority.settle(lease, {
+        const settled = yield* transitions.settle(executorLock, {
           executionId: begun.execution.executionId,
           status,
         });
@@ -92,16 +92,16 @@ function* cancelled(root: string, runId: string): Operation<WorkflowRunRecord> {
 }
 
 describe("Tier WLC — cancellation and deletion", () => {
-  it("WLC1: a live executor is not cancelled, and nothing moves", function* () {
+  it("WLC1: a live workflow executor is not cancelled, and nothing moves", function* () {
     const root = yield* useStorageRoot();
     yield* runEndedAs(root, "release-1.4", "unfinished");
     const path = workflowRunPath(root, "release-1.4");
 
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(authority, { runId: "release-1.4", action: "resume" }, function* () {
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(transitions, { runId: "release-1.4", action: "resume" }, function* () {
         const before = fingerprint(path);
 
-        // The lock is held by this very scope, which is what a live owner is.
+        // This scope holds the lock, which is what makes its workflow executor live.
         const refused = yield* cancel("release-1.4");
         expect(refused.ok).toBe(false);
         // The caller is told what to do instead of being left guessing.
@@ -112,7 +112,7 @@ describe("Tier WLC — cancellation and deletion", () => {
     });
   });
 
-  it("WLC2: a run with no live owner follows its retained state", function* () {
+  it("WLC2: a run with no live workflow executor follows its retained state", function* () {
     const root = yield* useStorageRoot();
 
     // Nothing running, nothing recorded: cancellable directly.
@@ -152,7 +152,7 @@ describe("Tier WLC — cancellation and deletion", () => {
   it("WLC3: a stale execution cancels, unless its root already recorded one", function* () {
     const root = yield* useStorageRoot();
 
-    // An owner that went away mid-execution, recording nothing.
+    // A workflow executor that went away mid-execution, recording nothing.
     yield* runEndedAs(root, "stale-1", "unfinished");
     const record = yield* cancelled(root, "stale-1");
     expect(record.status).toBe("cancelled");
@@ -167,11 +167,11 @@ describe("Tier WLC — cancellation and deletion", () => {
       expect(snapshot.value.executions[0]?.stopStatus).toBe("cancelled");
     });
 
-    // An owner that went away after its root recorded an outcome. The Close
+    // A workflow executor that went away after its root recorded an outcome. The Close
     // proves the document finished before anything could cancel it.
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(
-        authority,
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
         { runId: "closed-1", action: "start", creation: creation() },
         function* (begun) {
           yield* begun.database.journal.append({
@@ -192,9 +192,9 @@ describe("Tier WLC — cancellation and deletion", () => {
 
     // The same rule when what the root recorded was a failure: a Close that
     // says the document failed is still an outcome that won.
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(
-        authority,
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(
+        transitions,
         { runId: "failed-close-1", action: "start", creation: creation() },
         function* (begun) {
           yield* begun.database.journal.append({
@@ -213,7 +213,7 @@ describe("Tier WLC — cancellation and deletion", () => {
     expect(yield* status(root, "failed-close-1")).toBe("failed");
   });
 
-  it("WLC5: every state without a live owner may be deleted", function* () {
+  it("WLC5: every state without a live workflow executor may be deleted", function* () {
     const root = yield* useStorageRoot();
     const states = [
       "suspended",
@@ -244,12 +244,12 @@ describe("Tier WLC — cancellation and deletion", () => {
       expect(yield* exists(workflowRunPath(root, runId))).toBe(false);
     }
 
-    // Including a `running` record whose owner is gone: the released lock is
+    // Including a `running` record whose workflow executor is gone: the released lock is
     // what proves it stale, and nothing else is consulted.
     expect(yield* exists(workflowRunPath(root, "delete-unfinished"))).toBe(false);
   });
 
-  it("WLC4: deletion removes the exact run, and only when nothing owns it", function* () {
+  it("WLC4: deletion removes the exact run only without a live workflow executor", function* () {
     const root = yield* useStorageRoot();
     yield* runEndedAs(root, "release-1.4", "completed");
     yield* runEndedAs(root, "release-1.5", "completed");
@@ -257,9 +257,9 @@ describe("Tier WLC — cancellation and deletion", () => {
     const neighbour = workflowRunPath(root, "release-1.5");
     const neighbourBytes = readFileSync(neighbour).toString("base64");
 
-    // A live owner is refused, and the run is still there afterwards.
-    yield* withRunHost(root, function* (authority) {
-      yield* leasedRun(authority, { runId: "release-1.4", action: "resume" }, function* () {
+    // A live workflow executor is refused, and the run is still there afterwards.
+    yield* withRunHost(root, function* (transitions) {
+      yield* withExecutorRun(transitions, { runId: "release-1.4", action: "resume" }, function* () {
         const refused = yield* WorkflowLifecycle.operations.delete("release-1.4");
         expect(refused.ok).toBe(false);
       });
@@ -281,7 +281,7 @@ describe("Tier WLC — cancellation and deletion", () => {
     });
 
     expect(yield* exists(path)).toBe(false);
-    // The empty lock file may remain; unlinking one a lease could hold would
+    // The empty lock file may remain; unlinking one a workflow executor could hold would
     // let the next caller lock a different file at the same path.
     expect(yield* exists(workflowRunLock(root, "release-1.4"))).toBe(true);
     // And the run beside it is untouched, byte for byte.
