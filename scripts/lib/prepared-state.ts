@@ -48,10 +48,12 @@
  * and nothing after it reads or hashes anything.
  */
 
-import { createContext, sleep } from "effection";
+import { createContext, sleep, until } from "effection";
 import type { Context, Operation } from "effection";
+import { lstat, readdir } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { createHash } from "node:crypto";
+import { readFile, readlink } from "node:fs/promises";
 import { isAbsolute, resolve, sep } from "node:path";
 
 /** The roots that hold fetched bytes, by the key `deno info --json` reports them under. */
@@ -96,12 +98,19 @@ const FINGERPRINTED: ("tree" | "cache")[] = ["tree", "cache"];
 /** How many entries the walk covers before giving the scheduler a chance to halt it. */
 export const YIELD_EVERY = 256;
 
-/** Reading a file's bytes. The seam a cancellation test counts through. */
-export type ReadFile = (path: string) => Uint8Array;
+/**
+ * Reading a file's bytes. The seam a cancellation test counts through.
+ *
+ * An operation, so the walk suspends at every file it reads and a halt lands
+ * between them. `until()` does not cancel the host call already in flight — the
+ * contract this seam keeps is narrower and is what the tests hold it to: once
+ * the walk is halted, no further read begins.
+ */
+export type ReadFile = (path: string) => Operation<Uint8Array>;
 
 export const FileReads: Context<ReadFile> = createContext<ReadFile>(
   "prepared-state.file-reads",
-  (path) => Deno.readFileSync(path),
+  (path) => until(readFile(path)),
 );
 
 /**
@@ -124,9 +133,9 @@ export function contains(parent: string, path: string): boolean {
   return target === from || target.startsWith(from.endsWith(sep) ? from : `${from}${sep}`);
 }
 
-function exists(path: string): boolean {
+function* exists(path: string): Operation<boolean> {
   try {
-    Deno.lstatSync(path);
+    yield* lstat(path);
     return true;
   } catch {
     return false;
@@ -139,10 +148,7 @@ function* fingerprint(roots: Record<string, string>, read: ReadFile): Operation<
   let covered = 0;
 
   function* walk(root: string): Operation<void> {
-    const names: string[] = [];
-    for (const entry of Deno.readDirSync(root)) {
-      names.push(entry.name);
-    }
+    const names = yield* readdir(root);
     for (const name of names.sort()) {
       if (name.startsWith(DERIVED_MARKER)) {
         continue;
@@ -151,23 +157,23 @@ function* fingerprint(roots: Record<string, string>, read: ReadFile): Operation<
         yield* sleep(0);
       }
       const path = `${root}/${name}`;
-      const info = Deno.lstatSync(path);
+      const info = yield* lstat(path);
       const mode = (info.mode ?? 0) & 0o777;
-      if (info.isSymlink) {
-        entries.push(`${path} ${mode} link ${Deno.readLinkSync(path)}`);
+      if (info.isSymbolicLink()) {
+        entries.push(`${path} ${mode} link ${yield* until(readlink(path))}`);
         continue;
       }
-      if (info.isDirectory) {
+      if (info.isDirectory()) {
         entries.push(`${path} ${mode} dir`);
         yield* walk(path);
         continue;
       }
-      entries.push(`${path} ${mode} file ${digest(read(path))}`);
+      entries.push(`${path} ${mode} file ${digest(yield* read(path))}`);
     }
   }
 
   for (const [name, root] of Object.entries(roots)) {
-    const present_ = exists(root);
+    const present_ = yield* exists(root);
     entries.push(`${name} ${present_ ? "present" : "absent"}`);
     if (present_) {
       present.push(name);
@@ -219,7 +225,7 @@ export function* stateOf(root: string, roots: Record<string, string>): Operation
   return {
     tree: yield* fingerprint({ node_modules: `${root}/node_modules` }, read),
     cache: yield* fingerprint(roots, read),
-    lock: digest(read(`${root}/deno.lock`)),
+    lock: digest(yield* read(`${root}/deno.lock`)),
   };
 }
 
@@ -243,7 +249,7 @@ export function* hostState(root: string): Operation<HostState> {
   const read = yield* FileReads.expect();
   return {
     tree: yield* fingerprint({ node_modules: `${root}/node_modules` }, read),
-    lock: digest(read(`${root}/deno.lock`)),
+    lock: digest(yield* read(`${root}/deno.lock`)),
   };
 }
 

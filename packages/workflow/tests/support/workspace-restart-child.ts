@@ -19,10 +19,10 @@
  * observable from outside the process rather than inferred from its output.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import process from "node:process";
 import { durableRun, type Workflow } from "@executablemd/durable-streams";
-import { main, type Operation } from "effection";
+import { main, type Operation, until } from "effection";
 import { WorkflowRunStorage, type WorkflowRunDatabase } from "../../mod.ts";
 import { useWorkflowRunStorage } from "../../deno.ts";
 import { createWorkspaceEffect, withWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
@@ -63,7 +63,7 @@ function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: n
       database,
       { type: "workspace-proof", name: "seed" },
       function* (filesystem) {
-        appendFileSync(marker, "seed\n");
+        yield* until(appendFile(marker, "seed\n"));
         yield* filesystem.mkdir("/tree", { mode: 0o750 });
         yield* filesystem.writeFile(HISTORICAL_PATH, HISTORICAL_CONTENT, 0o640);
         yield* filesystem.link(HISTORICAL_PATH, "/tree/hardlink.txt");
@@ -75,7 +75,7 @@ function workflow(database: WorkflowRunDatabase, marker: string, clock: { now: n
       database,
       { type: "workspace-proof", name: "revise" },
       function* (filesystem) {
-        appendFileSync(marker, "revise\n");
+        yield* until(appendFile(marker, "revise\n"));
         clock.now = REVISE_CLOCK;
         yield* filesystem.writeFile(HISTORICAL_PATH, "later bytes");
         yield* filesystem.chmod(HISTORICAL_PATH, 0o600);

@@ -1,11 +1,9 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { ensure } from "effection";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
-import { mkdtempSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 
 import { ROOT, runOxlint } from "./oxlint.ts";
 import {
@@ -55,6 +53,7 @@ const GATE_RULES = [
   "eslint/curly",
   "local/no-module-scoped-registry",
   "local/no-section-divider-comments",
+  "local/no-sync-filesystem",
   "local/no-yield-in-finally",
   "local/prefer-effection-operation",
   "local/prefer-effection-result",
@@ -169,13 +168,9 @@ function enabled(rules: Record<string, unknown>): string[] {
     .sort();
 }
 
-/** A directory of this test's own; `mkdtempSync` because `@effectionx/fs` has no mkdtemp. */
-function* scratch(prefix: string): Operation<string> {
-  const directory = mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
-  yield* ensure(function* () {
-    yield* rm(directory, { recursive: true, force: true });
-  });
-  return directory;
+/** A directory of this test's own. */
+function scratch(prefix: string): Operation<string> {
+  return useTempDirectory(`${prefix}-`);
 }
 
 interface Report {

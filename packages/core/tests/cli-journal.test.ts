@@ -9,20 +9,15 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { ensure, type Operation } from "effection";
-import * as fs from "node:fs";
+import { exists, readTextFile, writeTextFile } from "@effectionx/fs";
+import type { Operation } from "effection";
 import * as path from "node:path";
-import * as os from "node:os";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { runCli } from "@executablemd/test-support/launch";
 
 // These runs read fixtures from the repository, so they keep this process's
 // working directory and its whole environment.
 const RUN = { inheritEnv: true, timeout: 15_000 };
-
-function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-cli-test-"));
-}
 
 interface JournalEventView {
   type: string;
@@ -62,9 +57,8 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ3: --journal writes parseable entries for the current run", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const journalPath = path.join(tmpDir, "test.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     const result = yield* runCli(
       [
@@ -87,12 +81,11 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ4: existing journal path is refused without executing the document", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const journalPath = path.join(tmpDir, "test.jsonl");
     const documentPath = path.join(tmpDir, "side-effect.md");
     const markerPath = path.join(tmpDir, "executed.txt");
     const existingContent = '{"type":"partial"';
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(journalPath, existingContent);
     yield* writeTextFile(
@@ -113,11 +106,10 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ5: separate trace paths produce fresh executions", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const documentPath = path.join(tmpDir, "document.md");
     const firstJournal = path.join(tmpDir, "first.jsonl");
     const secondJournal = path.join(tmpDir, "second.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(documentPath, "Version one\n");
     const firstRun = yield* runCli(
@@ -138,9 +130,8 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ6: journal writes exec entries", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const journalPath = path.join(tmpDir, "test.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     const result = yield* runCli(
       ["run", "packages/core/tests/fixtures/streaming/with-exec.md", `--journal=${journalPath}`],
@@ -153,10 +144,9 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ7: a review-style Output root exits zero for ordinary finding text", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const documentPath = path.join(tmpDir, "review.md");
     const journalPath = path.join(tmpDir, "review.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(
       documentPath,
@@ -181,10 +171,9 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ8: an execution error beneath Output exits nonzero without postflight parsing", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const documentPath = path.join(tmpDir, "review.md");
     const journalPath = path.join(tmpDir, "review.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(
       documentPath,
@@ -200,10 +189,9 @@ describe("CLI journal integration", () => {
   });
 
   it("CJ9: a failed Output run leaves its configured journal available", function* () {
-    const tmpDir = makeTmpDir();
+    const tmpDir = yield* useTempDirectory("xmd-cli-test-");
     const documentPath = path.join(tmpDir, "review.md");
     const journalPath = path.join(tmpDir, "review.jsonl");
-    yield* ensure(() => rm(tmpDir, { recursive: true, force: true }));
 
     yield* writeTextFile(
       documentPath,

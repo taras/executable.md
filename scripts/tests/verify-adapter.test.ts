@@ -1,10 +1,11 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, withResolvers } from "effection";
+import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation, Task } from "effection";
+import { exists, readdir, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import fs from "node:fs";
-import os from "node:os";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { chmod, readFile, symlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,11 +15,9 @@ import { compareTracked, UnsupportedEntryError } from "../lib/tracked.ts";
 import type { TrackedEntry } from "../lib/tracked.ts";
 import type { CommandSpec, VerifyHost } from "../lib/verify.ts";
 
-/** A directory of this test's own; `@effectionx/fs` has no mkdtemp. */
-function* scratch(prefix: string): Operation<string> {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
-  yield* ensure(() => fs.rmSync(directory, { recursive: true, force: true }));
-  return directory;
+/** A directory of this test's own. */
+function scratch(prefix: string): Operation<string> {
+  return useTempDirectory(`${prefix}-`);
 }
 
 /**
@@ -45,7 +44,7 @@ function* git(cwd: string, ...args: string[]): Operation<void> {
 function* repository(prefix: string): Operation<string> {
   const root = yield* scratch(prefix);
   yield* git(root, "init", "-q", "-b", "main");
-  fs.writeFileSync(path.join(root, "plain.txt"), "content\n");
+  yield* writeTextFile(path.join(root, "plain.txt"), "content\n");
   yield* git(root, "add", "-A");
   yield* git(root, ...COMMITTER, "commit", "-qm", "base");
   return root;
@@ -57,9 +56,9 @@ function* fixtureHost(root: string): Operation<{ target: VerifyHost; spools: str
 }
 
 /** Runs a Deno script, which is how these tests drive a real child process. */
-function script(root: string, source: string, name = "fixture.ts"): CommandSpec {
+function* script(root: string, source: string, name = "fixture.ts"): Operation<CommandSpec> {
   const file = path.join(root, name);
-  fs.writeFileSync(file, source);
+  yield* writeTextFile(file, source);
   return { id: "fixture", program: "deno", args: ["run", "--allow-all", file] };
 }
 
@@ -67,7 +66,10 @@ describe("the spool", () => {
   it("holds the child's bytes exactly, undecoded", function* () {
     const root = yield* repository("verify-bytes");
     const { target } = yield* fixtureHost(root);
-    const command = script(root, "Deno.stdout.writeSync(new Uint8Array([0, 255, 254, 65, 10]));\n");
+    const command = yield* script(
+      root,
+      "Deno.stdout.writeSync(new Uint8Array([0, 255, 254, 65, 10]));\n",
+    );
 
     expect((yield* target.run(command)).code).toEqual(0);
     expect([...(yield* target.spool("fixture"))]).toEqual([0, 255, 254, 65, 10]);
@@ -76,7 +78,7 @@ describe("the spool", () => {
   it("keeps the last bytes a child writes to stderr as it exits", function* () {
     const root = yield* repository("verify-drain");
     const { target } = yield* fixtureHost(root);
-    const command = script(
+    const command = yield* script(
       root,
       [
         "const line = `${'e'.repeat(4096)}\\n`;",
@@ -102,8 +104,8 @@ describe("the spool", () => {
         "  Deno.stdout.writeSync(chunk);",
         "}",
       ].join("\n");
-    const first = { ...script(root, write("a"), "a.ts"), id: "first" };
-    const second = { ...script(root, write("b"), "b.ts"), id: "second" };
+    const first = { ...(yield* script(root, write("a"), "a.ts")), id: "first" };
+    const second = { ...(yield* script(root, write("b"), "b.ts")), id: "second" };
 
     yield* scoped(function* () {
       const one = yield* spawn(() => target.run(first));
@@ -151,7 +153,7 @@ describe("the synchronous sink", () => {
   it("keeps all 16 MiB of a child that exits the moment it finishes writing", function* () {
     const root = yield* repository("verify-volume");
     const { target } = yield* fixtureHost(root);
-    const command = script(
+    const command = yield* script(
       root,
       [
         `const payload = new Uint8Array(${MIB}).fill(0x61);`,
@@ -198,7 +200,7 @@ describe("cancellation", () => {
     const beats = path.join(root, "beats");
     const ready = path.join(root, "ready");
 
-    fs.writeFileSync(
+    yield* writeTextFile(
       path.join(root, "grandchild.ts"),
       [
         `const beats = ${JSON.stringify(beats)};`,
@@ -215,7 +217,7 @@ describe("cancellation", () => {
         "}",
       ].join("\n"),
     );
-    const command = script(
+    const command = yield* script(
       root,
       [
         "const child = new Deno.Command(Deno.execPath(), {",
@@ -233,52 +235,52 @@ describe("cancellation", () => {
       }),
     );
 
-    while (!fs.existsSync(ready)) {
+    while (!(yield* exists(ready))) {
       yield* sleep(10);
     }
-    expect(fs.readFileSync(beats).length).toBeGreaterThan(0);
+    expect((yield* until(readFile(beats))).length).toBeGreaterThan(0);
     return { task, beats, ready, spools };
   }
 
   /** Unchanged across several intervals; one sample cannot tell stopped from between beats. */
   function* stopped(beating: Beating): Operation<void> {
-    const settled = fs.readFileSync(beating.beats).length;
+    const settled = (yield* until(readFile(beating.beats))).length;
     yield* sleep(500);
-    expect(fs.readFileSync(beating.beats).length).toEqual(settled);
+    expect((yield* until(readFile(beating.beats))).length).toEqual(settled);
   }
 
   it("stops one invocation's descendants and spools, and leaves the other running", function* () {
     const first = yield* beating("cancel-first");
     const second = yield* beating("cancel-second");
-    const beforeHalt = fs.readFileSync(second.beats).length;
+    const beforeHalt = (yield* until(readFile(second.beats))).length;
 
     yield* first.task.halt();
 
     yield* stopped(first);
-    expect(fs.existsSync(first.spools)).toBe(false);
+    expect(yield* exists(first.spools)).toBe(false);
 
     // The survivor is still beating, and still owns its spool.
-    expect(fs.readFileSync(second.beats).length).toBeGreaterThan(beforeHalt);
-    expect(fs.existsSync(second.spools)).toBe(true);
-    expect(fs.readdirSync(second.spools).length).toEqual(1);
+    expect((yield* until(readFile(second.beats))).length).toBeGreaterThan(beforeHalt);
+    expect(yield* exists(second.spools)).toBe(true);
+    expect((yield* readdir(second.spools)).length).toEqual(1);
 
     yield* second.task.halt();
 
     yield* stopped(second);
-    expect(fs.existsSync(second.spools)).toBe(false);
+    expect(yield* exists(second.spools)).toBe(false);
   });
 });
 
 describe("the fingerprint", () => {
   it("records content, executable mode, symlink target, and absence", function* () {
     const root = yield* repository("verify-fingerprint");
-    fs.writeFileSync(path.join(root, "run.sh"), "#!/bin/sh\n");
-    fs.chmodSync(path.join(root, "run.sh"), 0o755);
-    fs.symlinkSync("plain.txt", path.join(root, "link.txt"));
-    fs.writeFileSync(path.join(root, "gone.txt"), "temporary\n");
+    yield* writeTextFile(path.join(root, "run.sh"), "#!/bin/sh\n");
+    yield* until(chmod(path.join(root, "run.sh"), 0o755));
+    yield* until(symlink("plain.txt", path.join(root, "link.txt")));
+    yield* writeTextFile(path.join(root, "gone.txt"), "temporary\n");
     yield* git(root, "add", "-A");
     yield* git(root, ...COMMITTER, "commit", "-qm", "more");
-    fs.rmSync(path.join(root, "gone.txt"));
+    yield* rm(path.join(root, "gone.txt"));
 
     const { target } = yield* fixtureHost(root);
     const state = yield* target.fingerprint();
@@ -296,8 +298,8 @@ describe("the fingerprint", () => {
 
   it("keeps filenames containing a tab or a newline", function* () {
     const root = yield* repository("verify-awkward");
-    fs.writeFileSync(path.join(root, "tab\tname.txt"), "a\n");
-    fs.writeFileSync(path.join(root, "new\nline.txt"), "b\n");
+    yield* writeTextFile(path.join(root, "tab\tname.txt"), "a\n");
+    yield* writeTextFile(path.join(root, "new\nline.txt"), "b\n");
     yield* git(root, "add", "-A");
     yield* git(root, ...COMMITTER, "commit", "-qm", "awkward");
 
@@ -326,7 +328,7 @@ describe("the fingerprint", () => {
    */
   it("refuses a submodule whose working copy is missing", function* () {
     const root = yield* submoduleRepository("verify-gitlink-absent");
-    fs.rmSync(path.join(root, "vendored"), { recursive: true, force: true });
+    yield* rm(path.join(root, "vendored"), { recursive: true, force: true });
     const { target } = yield* fixtureHost(root);
 
     let raised: unknown;
@@ -366,7 +368,7 @@ describe("cleanliness, end to end", () => {
   it("catches a command that rewrote a tracked file", function* () {
     const root = yield* repository("verify-dirty-content");
     const { target } = yield* fixtureHost(root);
-    const command = script(
+    const command = yield* script(
       root,
       `Deno.writeTextFileSync(${JSON.stringify(path.join(root, "plain.txt"))}, "rewritten\\n");\n`,
     );
@@ -382,7 +384,7 @@ describe("cleanliness, end to end", () => {
   it("catches a command that only changed a tracked file's mode", function* () {
     const root = yield* repository("verify-dirty-mode");
     const { target } = yield* fixtureHost(root);
-    const command = script(
+    const command = yield* script(
       root,
       `Deno.chmodSync(${JSON.stringify(path.join(root, "plain.txt"))}, 0o755);\n`,
     );
@@ -398,7 +400,7 @@ describe("cleanliness, end to end", () => {
   it("catches a dirtied tree even when the command failed", function* () {
     const root = yield* repository("verify-dirty-failing");
     const { target } = yield* fixtureHost(root);
-    const command = script(
+    const command = yield* script(
       root,
       [
         `Deno.writeTextFileSync(${JSON.stringify(path.join(root, "plain.txt"))}, "half\\n");`,
@@ -414,9 +416,12 @@ describe("cleanliness, end to end", () => {
   /** A worktree that was already dirty is still one nothing may move further. */
   it("passes a tree that was dirty before the command and stayed put", function* () {
     const root = yield* repository("verify-already-dirty");
-    fs.writeFileSync(path.join(root, "plain.txt"), "dirty before we started\n");
+    yield* writeTextFile(path.join(root, "plain.txt"), "dirty before we started\n");
     const { target } = yield* fixtureHost(root);
-    const command = script(root, 'Deno.stdout.writeSync(new TextEncoder().encode("quiet"));\n');
+    const command = yield* script(
+      root,
+      'Deno.stdout.writeSync(new TextEncoder().encode("quiet"));\n',
+    );
 
     const before = yield* target.fingerprint();
     yield* target.run(command);
@@ -461,13 +466,13 @@ describe("verify on an unprepared worktree", () => {
     yield* git(repo, "clone", "--shared", "--quiet", repo, target);
 
     const sentinel = path.join(target, "adapter-started");
-    fs.writeFileSync(
+    yield* writeTextFile(
       path.join(target, "scripts", "verify.ts"),
       `Deno.writeTextFileSync(${JSON.stringify(sentinel)}, "started");\n`,
     );
 
     const lock = path.join(target, "deno.lock");
-    const before = fs.readFileSync(lock);
+    const before = yield* until(readFile(lock));
 
     const attempt = yield* scoped(function* () {
       const process = yield* exec(Deno.execPath(), {
@@ -489,9 +494,9 @@ describe("verify on an unprepared worktree", () => {
       return { code: status.code, output: chunks.join("") };
     });
 
-    expect(fs.existsSync(sentinel)).toBe(false);
+    expect(yield* exists(sentinel)).toBe(false);
     expect(attempt.output).not.toContain("commands concurrently");
-    expect(fs.readFileSync(lock)).toEqual(before);
+    expect(yield* until(readFile(lock))).toEqual(before);
     expect(attempt.code).not.toEqual(0);
     expect(attempt.output).toContain("deno task setup");
   });
@@ -507,12 +512,12 @@ describe("a conflicted worktree", () => {
     const root = yield* repository("verify-conflict");
     const committer = COMMITTER;
     yield* git(root, "checkout", "-qb", "other");
-    fs.writeFileSync(path.join(root, "plain.txt"), "theirs\n");
+    yield* writeTextFile(path.join(root, "plain.txt"), "theirs\n");
     yield* git(root, "add", "-A");
     yield* git(root, ...committer, "commit", "-qm", "theirs");
 
     yield* git(root, "checkout", "-q", "main");
-    fs.writeFileSync(path.join(root, "plain.txt"), "ours\n");
+    yield* writeTextFile(path.join(root, "plain.txt"), "ours\n");
     yield* git(root, "add", "-A");
     yield* git(root, ...committer, "commit", "-qm", "ours");
 
@@ -572,8 +577,7 @@ describe("complete failure emission", () => {
   });
 
   it("carries raw bytes through the host's emit, short writes and all", function* () {
-    const directory = Deno.makeTempDirSync({ prefix: "xmd-emit-" });
-    yield* ensure(() => Deno.removeSync(directory, { recursive: true }));
+    const directory = yield* useTempDirectory("xmd-emit-");
     const written: number[] = [];
 
     const target = host({
@@ -626,7 +630,7 @@ describe("descendants outside the command's process group", () => {
     const beats = path.join(root, "beats");
     const ready = path.join(root, "ready");
 
-    fs.writeFileSync(
+    yield* writeTextFile(
       path.join(root, "grandchild.sh"),
       [
         "#!/bin/sh",
@@ -637,7 +641,7 @@ describe("descendants outside the command's process group", () => {
         "done",
       ].join("\n"),
     );
-    fs.chmodSync(path.join(root, "grandchild.sh"), 0o755);
+    yield* until(chmod(path.join(root, "grandchild.sh"), 0o755));
 
     // `set -m` puts the background job in a process group of its own, so the
     // group the harness signals is not the group the grandchild is in.
@@ -646,7 +650,7 @@ describe("descendants outside the command's process group", () => {
       program: "bun",
       args: ["run", "--silent", "regrouped"],
     };
-    fs.writeFileSync(
+    yield* writeTextFile(
       path.join(root, "package.json"),
       JSON.stringify(
         { name: "regrouped", scripts: { regrouped: `set -m; ./grandchild.sh & wait` } },
@@ -662,18 +666,18 @@ describe("descendants outside the command's process group", () => {
       }),
     );
 
-    while (!fs.existsSync(ready)) {
+    while (!(yield* exists(ready))) {
       yield* sleep(10);
     }
-    const beating = fs.readFileSync(beats).length;
+    const beating = (yield* until(readFile(beats))).length;
     expect(beating).toBeGreaterThan(0);
 
     yield* task.halt();
 
     // Several intervals: one sample cannot tell stopped from between beats.
     yield* sleep(300);
-    const settled = fs.readFileSync(beats).length;
+    const settled = (yield* until(readFile(beats))).length;
     yield* sleep(500);
-    expect(fs.readFileSync(beats).length).toEqual(settled);
+    expect((yield* until(readFile(beats))).length).toEqual(settled);
   });
 });

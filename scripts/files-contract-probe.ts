@@ -17,11 +17,12 @@
  *   deno compile --allow-all --output <path> scripts/files-contract-probe.ts
  */
 
-import { ensure, exit, main, scoped } from "effection";
+import { ensureDir, exists } from "@effectionx/fs";
+import { exit, main, scoped, until } from "effection";
 import type { Result } from "effection";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { realpath, symlink } from "node:fs/promises";
 import { join } from "node:path";
+import { useTempDirectory } from "./lib/temp-directory.ts";
 import process from "node:process";
 import {
   Files,
@@ -58,25 +59,18 @@ function valueOf<T>(result: Result<T>): T | undefined {
   return result.ok ? result.value : undefined;
 }
 
-function exists(path: string): boolean {
-  try {
-    statSync(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** A junction is what an unprivileged Windows process gets; elsewhere, a symlink. */
 const DIRECTORY_LINK = process.platform === "win32" ? "junction" : "dir";
 
 await main(function* () {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "xmd-files-probe-")));
-  yield* ensure(() => rmSync(root, { recursive: true, force: true }));
+  // Canonical, because on macOS the system temporary directory is a symbolic
+  // link a child process resolves: the probe compares paths a subprocess
+  // reports against the ones it asked for.
+  const root = yield* until(realpath(yield* useTempDirectory("xmd-files-probe-")));
   const workspace = join(root, "workspace");
   const outside = join(root, "outside");
-  mkdirSync(workspace);
-  mkdirSync(outside);
+  yield* ensureDir(workspace);
+  yield* ensureDir(outside);
 
   // Absence is checked before a provider exists, so the terminal handler is the
   // one answering.
@@ -128,9 +122,12 @@ await main(function* () {
     valueOf(yield* Files.operations.readTextFile({ cwd: workspace, path: "nested/notes.md" })) ===
       "probe content",
   );
-  check("the commit left no temporary behind", !exists(join(workspace, "nested/notes.md.tmp")));
+  check(
+    "the commit left no temporary behind",
+    !(yield* exists(join(workspace, "nested/notes.md.tmp"))),
+  );
 
-  symlinkSync(outside, join(workspace, "escape"), DIRECTORY_LINK);
+  yield* until(symlink(outside, join(workspace, "escape"), DIRECTORY_LINK));
   check(
     "a directory link out of the working directory is refused",
     writeReasonOf(
@@ -141,7 +138,7 @@ await main(function* () {
       }),
     ) === "resolved-escape",
   );
-  check("nothing was written through the link", !exists(join(outside, "planted.txt")));
+  check("nothing was written through the link", !(yield* exists(join(outside, "planted.txt"))));
 
   const found = yield* Files.operations.globFiles({
     cwd: workspace,
@@ -156,9 +153,9 @@ await main(function* () {
   let temporary = "";
   yield* scoped(function* () {
     temporary = valueOf(yield* Files.operations.temporaryDirectory()) ?? "";
-    check("a temporary directory is acquired", temporary.length > 0 && exists(temporary));
+    check("a temporary directory is acquired", temporary.length > 0 && (yield* exists(temporary)));
   });
-  check("a temporary directory is removed with its scope", !exists(temporary));
+  check("a temporary directory is removed with its scope", !(yield* exists(temporary)));
 
   // Diagnostics rather than a result, so they go to stderr: this probe's whole
   // output is the account of what it checked.

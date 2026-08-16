@@ -244,7 +244,13 @@ here:
 1. Use Effection `function*` generators with `yield*`; Do not use
    `Promises/async/await`
 2. Use `@effectionx/fs`, do not use `node:fs` operations directly unless
-   `@effectionx/fs` doesn't have appropriate package
+   `@effectionx/fs` doesn't have appropriate package. Never synchronously —
+   where `@effectionx/fs` has no equivalent, adapt the runtime's asynchronous
+   primitive as an Effection operation. Enforced by the
+   `local/no-sync-filesystem` Oxlint rule (`scripts/oxlint-rules/`). A site may
+   stay synchronous only where suspending would lose a correctness property; it
+   carries one `oxlint-disable-next-line local/no-sync-filesystem` and a comment
+   naming that invariant. There is no file-wide or directory-wide exemption.
 3. To convert a promise into an operation use `until` instead of `call`
 4. Only use comments to describe suprising behavior; Do not add code comments
    that explain what code does

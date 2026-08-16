@@ -10,12 +10,10 @@
  * valid TypeScript, `.mjs` proves it is a valid ECMAScript module under every
  * runtime that can load one.
  */
-import { ensure, until } from "effection";
+import { until } from "effection";
 import type { Operation } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 
 export interface GeneratedModule {
@@ -30,9 +28,7 @@ export function* loadGeneratedModule(
   source: string,
   extension: ".ts" | ".mjs",
 ): Operation<GeneratedModule> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "client-bundle-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("client-bundle-");
 
   const module = new URL(`client-bundle${extension}`, pathToFileURL(`${base}/`));
   yield* writeTextFile(module, source);

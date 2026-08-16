@@ -9,12 +9,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { readTextFile, rm } from "@effectionx/fs";
+import { readTextFile } from "@effectionx/fs";
 import { ensure, until } from "effection";
 import type { Operation } from "effection";
 import { appendFile } from "node:fs/promises";
-import * as fs from "node:fs";
-import * as os from "node:os";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import * as path from "node:path";
 import { DurableStreamTestServer } from "@durable-streams/server";
 import {
@@ -99,10 +98,6 @@ function instrumented(timeline: string[], backend: DurableStream): DurableStream
       yield* backend.append(event);
     },
   };
-}
-
-function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-guarded-journal-"));
 }
 
 /**
@@ -228,8 +223,7 @@ describe("a guarded journal", () => {
   });
 
   it("keeps the rejected event out of a file backend", function* () {
-    const dir = makeTmpDir();
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const dir = yield* useTempDirectory("xmd-guarded-journal-");
     const journalPath = path.join(dir, "journal.jsonl");
 
     yield* useStubFs({ "README.md": RECOVERING });

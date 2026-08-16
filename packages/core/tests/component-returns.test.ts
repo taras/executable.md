@@ -8,7 +8,7 @@
 
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -17,7 +17,7 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { randomUUID } from "node:crypto";
-import { symlinkSync } from "node:fs";
+import { symlink } from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -111,7 +111,7 @@ function runFixture(files: Record<string, string>): Operation<Run> {
 
     yield* writeTextFile(path.join(dir, "package.json"), JSON.stringify({ type: "module" }));
     // The only step @effectionx/fs does not cover.
-    symlinkSync(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir");
+    yield* until(symlink(path.join(ROOT, "node_modules"), path.join(dir, "node_modules"), "dir"));
     for (const [name, content] of Object.entries(files)) {
       yield* writeTextFile(path.join(dir, name), content);
     }

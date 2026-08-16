@@ -1,10 +1,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
+import { readTextFile } from "@effectionx/fs";
 import { collect, execute, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { FormAssets } from "../src/assets.ts";
@@ -25,7 +25,7 @@ const DOCUMENT = fileURLToPath(new URL("../src/WebForm.test.md", import.meta.url
  */
 describe("WebForm.test.md", () => {
   it("passes with an installed responder answering its forms", function* () {
-    const source = readFileSync(DOCUMENT, "utf8");
+    const source = yield* readTextFile(DOCUMENT);
 
     const outcome = yield* scoped(function* () {
       yield* useTempFileCompiler();

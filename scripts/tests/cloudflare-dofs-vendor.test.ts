@@ -1,12 +1,14 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { cp } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { exec } from "@executablemd/runtime";
-import { ensure } from "effection";
+import { until } from "effection";
+import type { Operation } from "effection";
 
 const REPOSITORY = fileURLToPath(new URL("../../", import.meta.url));
 const SNAPSHOT = join(REPOSITORY, "packages/workflow/vendor/cloudflare-computer-dofs");
@@ -32,14 +34,11 @@ function verify(snapshot: string) {
   });
 }
 
-function* refused(edit: (copy: string) => void) {
-  const temporary = mkdtempSync(join(tmpdir(), "xmd-dofs-drift-"));
-  yield* ensure(() => {
-    rmSync(temporary, { recursive: true, force: true });
-  });
+function* refused(edit: (copy: string) => Operation<void>) {
+  const temporary = yield* useTempDirectory("xmd-dofs-drift-");
   const copy = join(temporary, "snapshot");
-  cpSync(SNAPSHOT, copy, { recursive: true });
-  edit(copy);
+  yield* until(cp(SNAPSHOT, copy, { recursive: true }));
+  yield* edit(copy);
   return yield* verify(copy);
 }
 
@@ -55,10 +54,13 @@ describe("Cloudflare Computer DOFS vendored snapshot", () => {
   });
 
   it("refuses mismatched compiler provenance", function* () {
-    const mismatch = yield* refused((copy) => {
+    const mismatch = yield* refused(function* (copy) {
       const path = join(copy, "MANIFEST.json");
-      const manifest = readFileSync(path, "utf8");
-      writeFileSync(path, manifest.replace(`"compiler": "${COMPILER}"`, '"compiler": "0.0.0"'));
+      const manifest = yield* readTextFile(path);
+      yield* writeTextFile(
+        path,
+        manifest.replace(`"compiler": "${COMPILER}"`, '"compiler": "0.0.0"'),
+      );
     });
 
     expect(mismatch.exitCode).not.toBe(0);
@@ -68,26 +70,26 @@ describe("Cloudflare Computer DOFS vendored snapshot", () => {
   });
 
   it("rejects changed source or generated output, missing, and extra files", function* () {
-    const changed = yield* refused((copy) => {
-      writeFileSync(join(copy, "upstream/src/path.ts"), "changed\n");
+    const changed = yield* refused(function* (copy) {
+      yield* writeTextFile(join(copy, "upstream/src/path.ts"), "changed\n");
     });
     expect(changed.exitCode).not.toBe(0);
     expect(changed.stderr).toContain("vendored file changed");
 
-    const generated = yield* refused((copy) => {
-      writeFileSync(join(copy, "generated/path.js"), "changed\n");
+    const generated = yield* refused(function* (copy) {
+      yield* writeTextFile(join(copy, "generated/path.js"), "changed\n");
     });
     expect(generated.exitCode).not.toBe(0);
     expect(generated.stderr).toContain("vendored file changed");
 
-    const missing = yield* refused((copy) => {
-      unlinkSync(join(copy, "upstream/src/path.ts"));
+    const missing = yield* refused(function* (copy) {
+      yield* rm(join(copy, "upstream/src/path.ts"));
     });
     expect(missing.exitCode).not.toBe(0);
     expect(missing.stderr).toContain("vendored inventory differs");
 
-    const extra = yield* refused((copy) => {
-      writeFileSync(join(copy, "unrecorded.ts"), "export {};\n");
+    const extra = yield* refused(function* (copy) {
+      yield* writeTextFile(join(copy, "unrecorded.ts"), "export {};\n");
     });
     expect(extra.exitCode).not.toBe(0);
     expect(extra.stderr).toContain("vendored inventory differs");

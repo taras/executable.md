@@ -14,11 +14,11 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { readFileSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -101,8 +101,9 @@ function xmd(fixture: Fixture, args: string[]) {
 }
 
 /** Bytes and mode together: what a read must leave exactly as it found it. */
-function fingerprint(path: string): string {
-  return `${readFileSync(path).toString("base64")}:${statSync(path).mode}`;
+function* fingerprint(path: string): Operation<string> {
+  const bytes = yield* until(readFile(path));
+  return `${bytes.toString("base64")}:${(yield* stat(path)).mode}`;
 }
 
 interface HistoryRow {
@@ -257,13 +258,13 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
       const path = workflowRunPath(fixture.runs, "release-1");
-      const before = fingerprint(path);
+      const before = yield* fingerprint(path);
 
       yield* xmd(fixture, ["workflow", "status", "release-1"]).expect();
       yield* xmd(fixture, ["workflow", "list"]).expect();
       yield* xmd(fixture, ["workflow", "history", "release-1", "--json"]).expect();
 
-      expect(fingerprint(path)).toBe(before);
+      expect(yield* fingerprint(path)).toBe(before);
     });
   });
 
@@ -279,7 +280,7 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       // No healthy subset is offered as though it were the list.
       expect(listed.stdout).not.toContain("release-1");
       // And the candidate it refused is left exactly as it was found.
-      expect(readFileSync(foreign, "utf8")).toBe("not a workflow run database");
+      expect(yield* readTextFile(foreign)).toBe("not a workflow run database");
 
       // The run itself is still readable on its own.
       const status = yield* xmd(fixture, ["workflow", "status", "release-1"]).join();

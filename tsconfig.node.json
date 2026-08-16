@@ -52,6 +52,9 @@
       "@executablemd/test-support/launch": [
         "./packages/test-support/launch.ts"
       ],
+      "@executablemd/test-support/temp": [
+        "./packages/test-support/temp.ts"
+      ],
       "@executablemd/testing": [
         "./packages/testing/mod.ts"
       ],

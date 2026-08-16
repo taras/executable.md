@@ -11,7 +11,7 @@
  * different facts and only the pair is worth anything.
  */
 
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -19,7 +19,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { exec } from "@effectionx/process";
 import process from "node:process";
 import { exists, writeTextFile } from "@effectionx/fs";
-import { scoped } from "effection";
+import { scoped, until } from "effection";
 import type { Operation } from "effection";
 import { WorkflowLifecycle, WorkflowRunNotFoundError } from "../mod.ts";
 import type { ExecutorAcquisition, ExecutorLock } from "../mod.ts";
@@ -258,7 +258,7 @@ describe("Tier WLA — executor lock", () => {
       candidates.push({ name: "copied", lock: { ...live } });
       candidates.push({ name: "fabricated", lock: { runId: live.runId } });
 
-      const before = fingerprint(path);
+      const before = yield* fingerprint(path);
       const outcomes: string[] = [];
       for (const { name, lock: candidate } of candidates) {
         const begun = yield* transitions.begin(candidate, {
@@ -271,7 +271,7 @@ describe("Tier WLA — executor lock", () => {
         });
         outcomes.push(`${name}: begin ${begun.ok}, settle ${settled.ok}`);
         // Every row and every byte of the run it addressed.
-        expect(fingerprint(path)).toEqual(before);
+        expect(yield* fingerprint(path)).toEqual(before);
       }
       expect(outcomes).toEqual([
         "closed: begin false, settle false",
@@ -309,7 +309,7 @@ describe("Tier WLA — executor lock", () => {
               END
             `);
           });
-          const before = fingerprint(path);
+          const before = yield* fingerprint(path);
 
           // An unclassified SQLite failure is a defect rather than an expected
           // outcome, so it is raised rather than returned. What matters here is
@@ -323,7 +323,7 @@ describe("Tier WLA — executor lock", () => {
           expect(raised).toBeDefined();
 
           // The execution is not finished and the status did not move.
-          expect(fingerprint(path)).toEqual(before);
+          expect(yield* fingerprint(path)).toEqual(before);
         },
       );
     });
@@ -331,14 +331,14 @@ describe("Tier WLA — executor lock", () => {
     // Begin writes in the same order: it recovers the execution that the workflow executor left
     // unfinished, publishes, and inserts its own. The same trigger catches it
     // after the first of those writes.
-    const before = fingerprint(path);
+    const before = yield* fingerprint(path);
     yield* withRunHost(root, function* (transitions) {
       const executorLock = lockOf(yield* acquired("release-1.4"));
       // However it reports — a refusal or a raise — what matters is that it
       // added no execution and moved no status.
       yield* raise(transitions.begin(executorLock, { runId: "release-1.4", action: "resume" }));
     });
-    expect(fingerprint(path)).toEqual(before);
+    expect(yield* fingerprint(path)).toEqual(before);
   });
 
   it("WLA4: a second process is refused, and the lock outlives nothing", function* () {
@@ -372,7 +372,8 @@ function* startedRun(root: string, runId: string): Operation<void> {
 }
 
 /** Every row and every byte a transition would have had to change. */
-function fingerprint(path: string): { bytes: string; rows: string } {
+function* fingerprint(path: string): Operation<{ bytes: string; rows: string }> {
+  const bytes = yield* until(readFile(path));
   const database = new DatabaseSync(path, { readOnly: true });
   try {
     const rows = [
@@ -380,7 +381,7 @@ function fingerprint(path: string): { bytes: string; rows: string } {
       ...database.prepare("SELECT * FROM document_executions").all(),
       ...database.prepare("SELECT event_id, record FROM journal_events").all(),
     ];
-    return { bytes: readFileSync(path).toString("base64"), rows: JSON.stringify(rows) };
+    return { bytes: bytes.toString("base64"), rows: JSON.stringify(rows) };
   } finally {
     database.close();
   }

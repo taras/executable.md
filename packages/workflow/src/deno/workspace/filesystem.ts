@@ -76,8 +76,17 @@ export function createDenoWorkspaceFilesystem(
     return filesystemOperation(operation);
   }
 
+  /**
+   * The Workspace is rows in the run's SQLite database, not files on a host.
+   * Every operation here runs inside the savepoint the caller opened, and
+   * `node:sqlite` speaks to that connection synchronously: suspending between
+   * the size this reads and the range it then reads would let another
+   * operation on the same connection commit or roll back in between, and the
+   * bytes returned would no longer be the ones the savepoint saw.
+   */
   function readBytes(path: string): Uint8Array {
     const metadata = statPath(dofs, path);
+    // oxlint-disable-next-line local/no-sync-filesystem
     return new Uint8Array(readRangeSync(dofs, path, 0, metadata.size));
   }
 
@@ -114,6 +123,10 @@ export function createDenoWorkspaceFilesystem(
     *writeFile(path, content, mode): Operation<void> {
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
       execute(() =>
+        // The write belongs to the caller's savepoint on the same synchronous
+        // SQLite connection; suspending inside it would let another operation
+        // commit between the rows this single write is meant to place together.
+        // oxlint-disable-next-line local/no-sync-filesystem
         writeFileSync(dofs, path, bytes, mode === undefined ? {} : { mode }, filesystem.now),
       );
     },

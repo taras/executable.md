@@ -14,13 +14,10 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO_ROOT = new URL("../../", import.meta.url);
@@ -41,9 +38,7 @@ interface FixtureMember {
  * that varies between cases.
  */
 function* generate(members: FixtureMember[]): Operation<string> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "publish-workflow-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("publish-workflow-");
   const root = pathToFileURL(`${base}/`);
 
   yield* writeTextFile(

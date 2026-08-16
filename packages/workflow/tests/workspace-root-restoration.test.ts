@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { inspect } from "node:util";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, type Operation, spawn, suspend, withResolvers } from "effection";
+import { ensure, type Operation, spawn, suspend, until, withResolvers } from "effection";
 import {
   WorkflowDatabaseCorruptError,
   type WorkflowRunDatabase,
@@ -373,13 +373,13 @@ describe("Tier WRR — private Workspace root restoration", () => {
       yield* createCorruptionFixture(storage, one.runId);
       const path = runPath(storage, one.runId);
       tamper(path, one.damage);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
       const result = yield* withStorage(storage, function* () {
         return yield* WorkflowRunStorage.operations.lookup(one.runId);
       });
       expect(result.ok).toBe(false);
       expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -451,7 +451,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
       yield* createCorruptionFixture(storage, one.runId);
       const path = runPath(storage, one.runId);
       tamper(path, one.damage);
-      const before = readFileSync(path);
+      const before = yield* until(readFile(path));
       const result = yield* withStorage(storage, function* () {
         return yield* WorkflowRunStorage.operations.lookup(one.runId);
       });
@@ -463,7 +463,7 @@ describe("Tier WRR — private Workspace root restoration", () => {
       expect(result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
       expect(result.error).not.toBeInstanceOf(RangeError);
       expect(errorSurface(result.error)).not.toContain(SQLITE_MAX_INTEGER);
-      expect(readFileSync(path)).toEqual(before);
+      expect(yield* until(readFile(path))).toEqual(before);
     }
   });
 
@@ -694,13 +694,13 @@ describe("Tier WRR — private Workspace root restoration", () => {
       expect(currentRoot(database)).toBe(currentRootId);
     });
 
-    const before = readFileSync(path);
+    const before = yield* until(readFile(path));
     const result = yield* withStorage(storage, function* () {
       return yield* WorkflowRunStorage.operations.lookup("historical-size");
     });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
-    expect(readFileSync(path)).toEqual(before);
+    expect(yield* until(readFile(path))).toEqual(before);
   });
 });
 

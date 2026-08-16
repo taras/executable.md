@@ -550,8 +550,12 @@ describe("Tier HF — host Files provider", () => {
         return;
       }
       swapped = true;
-      // Synchronous, so nothing runs between the observation and the use.
+      // Synchronous, so nothing runs between the observation and the use: the
+      // seam under test is the window between resolving a parent and writing
+      // through it, and suspending here would widen it into a different one.
+      // oxlint-disable-next-line local/no-sync-filesystem
       renameSync(join(fixture.workspace, "parent"), join(fixture.root, "moved"));
+      // oxlint-disable-next-line local/no-sync-filesystem
       symlinkSync(fixture.outside, join(fixture.workspace, "parent"), DIRECTORY_LINK);
     });
 
@@ -584,7 +588,12 @@ describe("Tier HF — host Files provider", () => {
         return;
       }
       swapped = true;
+      // The same seam on a read, and synchronous for the same reason: the
+      // replacement has to land between resolution and access, with nothing
+      // else running in between.
+      // oxlint-disable-next-line local/no-sync-filesystem
       unlinkSync(join(fixture.workspace, "notes.md"));
+      // oxlint-disable-next-line local/no-sync-filesystem
       symlinkSync(join(fixture.outside, "secret.txt"), join(fixture.workspace, "notes.md"));
     });
 

@@ -44,12 +44,9 @@
  * `--node-modules-dir=none --cached-only --frozen`.
  */
 
-import { ensure, exit, main, scoped } from "effection";
+import { exit, main, scoped } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
-import { rm } from "@effectionx/fs";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -64,6 +61,7 @@ import {
 import type { HostState, PreparedState } from "./lib/prepared-state.ts";
 import { writeTextFile } from "@effectionx/fs";
 import { RELEASE_TARGET } from "./lib/release-targets.ts";
+import { useTempDirectory } from "./lib/temp-directory.ts";
 
 const repoRoot = new URL("../", import.meta.url);
 const root = fileURLToPath(repoRoot);
@@ -138,11 +136,8 @@ export function phases(binary: string): Phase[] {
   ];
 }
 
-function* scratch(prefix: string): Operation<string> {
-  // @effectionx/fs has no mkdtemp.
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  yield* ensure(() => rm(directory, { recursive: true, force: true }));
-  return directory;
+function scratch(prefix: string): Operation<string> {
+  return useTempDirectory(prefix);
 }
 
 /** A clean checkout of `HEAD`, which is what "from a clean checkout" means. */

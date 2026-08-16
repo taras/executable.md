@@ -21,7 +21,8 @@
  * parent kills the child at a point the child has said it has reached.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readTextFile } from "@effectionx/fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
@@ -31,7 +32,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { exec as execProcess } from "@effectionx/process";
 import { exec } from "@executablemd/runtime";
 import { guardDurableStream } from "@executablemd/durable-streams";
-import { call, type Operation, race, scoped, spawn, withResolvers } from "effection";
+import { call, type Operation, race, scoped, spawn, until, withResolvers } from "effection";
 import { setPrivateWorkspaceClock, transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 import {
@@ -308,17 +309,17 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
     const root = yield* useStorageRoot();
     const runId = "workspace-restart";
     const marker = join(root, "restart-marker.txt");
-    writeFileSync(marker, "");
+    yield* until(writeFile(marker, ""));
 
     const first = announced(yield* runChild(RESTART_CHILD, ["commit", root, runId, marker]));
-    expect(readFileSync(marker, "utf8")).toBe("seed\nrevise\n");
+    expect(yield* readTextFile(marker)).toBe("seed\nrevise\n");
 
     const path = runPath(root, runId);
     const stored = committed(path);
     const second = announced(yield* runChild(RESTART_CHILD, ["read", root, runId, marker]));
 
     // Nothing ran twice: the second process restored both recorded results.
-    expect(readFileSync(marker, "utf8")).toBe("seed\nrevise\n");
+    expect(yield* readTextFile(marker)).toBe("seed\nrevise\n");
     expect(second["currentRoot"]).toBe(first["currentRoot"]);
     expect(second["tree"]).toEqual(first["tree"]);
     expect(second["tree"]).toEqual({
@@ -353,7 +354,7 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
     const root = yield* useStorageRoot();
     const runId = "workspace-history";
     const marker = join(root, "history-marker.txt");
-    writeFileSync(marker, "");
+    yield* until(writeFile(marker, ""));
 
     const first = announced(yield* runChild(RESTART_CHILD, ["commit", root, runId, marker]));
     const path = runPath(root, runId);
@@ -375,7 +376,7 @@ describe("Tier WAC — Workspace effects across a process boundary", () => {
     const replayed = announced(
       yield* runChild(RESTART_CHILD, ["restore", root, runId, marker, historical]),
     );
-    expect(readFileSync(marker, "utf8")).toBe("seed\nrevise\n");
+    expect(yield* readTextFile(marker)).toBe("seed\nrevise\n");
 
     const restored = replayed["restored"] as Record<string, unknown>;
     // The negative lookup happened first and was answered from the live

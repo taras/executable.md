@@ -19,24 +19,16 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs, useEchoExec } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import * as fs from "node:fs";
+import { ensureDir, readTextFile, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import type { Operation } from "effection";
 import * as path from "node:path";
-import * as os from "node:os";
 
-function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-sc-test-"));
-}
-
-function cleanup(dir: string): void {
-  fs.rmSync(dir, { recursive: true, force: true });
-}
-
-function writeFiles(dir: string, files: Record<string, string>): void {
+function* writeFiles(dir: string, files: Record<string, string>): Operation<void> {
   for (const [filePath, content] of Object.entries(files)) {
     const fullPath = path.join(dir, filePath);
-    const fileDir = path.dirname(fullPath);
-    fs.mkdirSync(fileDir, { recursive: true });
-    fs.writeFileSync(fullPath, content);
+    yield* ensureDir(path.dirname(fullPath));
+    yield* writeTextFile(fullPath, content);
   }
 }
 
@@ -104,259 +96,229 @@ describe("Tier SC — Sample component", () => {
   beforeAll(() => useTempFileCompiler());
   // SC1: Self-closing with prompt — prompt sent to Sample Api
   it("SC1: self-closing with prompt — response in output", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      // Read the real Sample.md component
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    // Read the real Sample.md component
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProvider("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample model="test-model" prompt="hello world" />',
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProvider("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample model="test-model" prompt="hello world" />',
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      // The stub provider echoes back the model and the prompt
-      expect(output).toContain("[sampled-by-test-model:hello world]");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    // The stub provider echoes back the model and the prompt
+    expect(output).toContain("[sampled-by-test-model:hello world]");
+    expect(output).not.toContain("ERROR");
   });
 
   // SC2: With children containing exec block — children output sent to Sample Api
   it("SC2: with children — children output captured and sampled", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProvider("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample model="test-model">',
-          "",
-          // A command's output reaches the reader, not the rendered children
-          // (#441); a region that wants it as text asks for it.
-          '<Capture as="childrenOutput">',
-          "```bash exec",
-          "echo children-output-here",
-          "```",
-          "</Capture>",
-          "",
-          "{childrenOutput}",
-          "",
-          "</Sample>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProvider("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample model="test-model">',
+        "",
+        // A command's output reaches the reader, not the rendered children
+        // (#441); a region that wants it as text asks for it.
+        '<Capture as="childrenOutput">',
+        "```bash exec",
+        "echo children-output-here",
+        "```",
+        "</Capture>",
+        "",
+        "{childrenOutput}",
+        "",
+        "</Sample>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      // The children exec block produces "children-output-here\n"
-      // The stub provider echoes it back with the model name
-      expect(output).toContain("[sampled-by-test-model:children-output-here");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    // The children exec block produces "children-output-here\n"
+    // The stub provider echoes it back with the model name
+    expect(output).toContain("[sampled-by-test-model:children-output-here");
+    expect(output).not.toContain("ERROR");
   });
 
   // SC3: Model routing — <Sample model="X"> routes to matching provider
   it("SC3: model routing — targets specific provider", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/OuterProv.md": stubProvider("OuterProv"),
-        "components/InnerProv.md": stubProvider("InnerProv"),
-        "doc.md": [
-          '<OuterProv model="outer">',
-          "",
-          '<InnerProv model="inner">',
-          "",
-          "<!-- Target the outer provider explicitly -->",
-          '<Sample model="outer" prompt="routed-to-outer" />',
-          "",
-          "</InnerProv>",
-          "",
-          "</OuterProv>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/OuterProv.md": stubProvider("OuterProv"),
+      "components/InnerProv.md": stubProvider("InnerProv"),
+      "doc.md": [
+        '<OuterProv model="outer">',
+        "",
+        '<InnerProv model="inner">',
+        "",
+        "<!-- Target the outer provider explicitly -->",
+        '<Sample model="outer" prompt="routed-to-outer" />',
+        "",
+        "</InnerProv>",
+        "",
+        "</OuterProv>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      // The outer provider should handle the call
-      expect(output).toContain("[sampled-by-outer:routed-to-outer]");
-      expect(output).not.toContain("[sampled-by-inner");
-    } finally {
-      cleanup(tmpDir);
-    }
+    // The outer provider should handle the call
+    expect(output).toContain("[sampled-by-outer:routed-to-outer]");
+    expect(output).not.toContain("[sampled-by-inner");
   });
 
   // SC4: No provider → descriptive error
   it("SC4: no provider — descriptive error", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "doc.md": '<Sample prompt="no provider" />',
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "doc.md": '<Sample prompt="no provider" />',
+    });
 
-      const stream = new InMemoryStream();
-      const execution = yield* execute({
-        path: path.join(tmpDir, "doc.md"),
-        stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
-      });
-      const result = yield* execution;
+    const stream = new InMemoryStream();
+    const execution = yield* execute({
+      path: path.join(tmpDir, "doc.md"),
+      stream,
+      componentDirs: [path.join(tmpDir, "components"), tmpDir],
+    });
+    const result = yield* execution;
 
-      // Nothing recovers a missing provider, so it is the run's own outcome.
-      expect(result.ok).toBe(false);
-      expect(result.ok ? "" : result.error.message).toContain(
-        "Sample Api requires provider middleware",
-      );
-    } finally {
-      cleanup(tmpDir);
-    }
+    // Nothing recovers a missing provider, so it is the run's own outcome.
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error.message).toContain(
+      "Sample Api requires provider middleware",
+    );
   });
 
   // SC5: Replay returns stored response — no re-execution
   it("SC5: replay returns stored response", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProvider("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample model="test-model" prompt="replay-test" />',
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProvider("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample model="test-model" prompt="replay-test" />',
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      // First run
-      const stream = new InMemoryStream();
-      const output1 = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    // First run
+    const stream = new InMemoryStream();
+    const output1 = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output1).toContain("[sampled-by-test-model:replay-test]");
+    expect(output1).toContain("[sampled-by-test-model:replay-test]");
 
-      // Second run (replay) — same stream
-      const output2 = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    // Second run (replay) — same stream
+    const output2 = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output2).toContain("[sampled-by-test-model:replay-test]");
-      expect(output1).toEqual(output2);
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output2).toContain("[sampled-by-test-model:replay-test]");
+    expect(output1).toEqual(output2);
   });
 
   // SC6: renderChildren returns empty for self-closing component
   it("SC6: self-closing — renderChildren returns empty, prompt used", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProvider("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample model="test-model" prompt="self-closing-prompt" />',
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProvider("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample model="test-model" prompt="self-closing-prompt" />',
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("[sampled-by-test-model:self-closing-prompt]");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("[sampled-by-test-model:self-closing-prompt]");
   });
 
   // SC7: Nested <Sample> inside <Sample> — children contain components.
@@ -365,98 +327,88 @@ describe("Tier SC — Sample component", () => {
   // scopes off the parent chain, and ancestor middleware (installed by
   // the provider) is visible through Effection's scope prototype chain.
   it("SC7: nested Sample inside Sample — no deadlock", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProvider("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample model="test-model">',
-          '<Sample prompt="inner-prompt" model="test-model" />',
-          "extra text to combine",
-          "</Sample>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProvider("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample model="test-model">',
+        '<Sample prompt="inner-prompt" model="test-model" />',
+        "extra text to combine",
+        "</Sample>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      // The inner Sample should resolve first (via renderChildren),
-      // producing [sampled-by-test-model:inner-prompt].
-      // Then the outer Sample sends that rendered output + extra text
-      // to the provider for sampling.
-      expect(output).toContain("[sampled-by-test-model:");
-      expect(output).not.toContain("ERROR");
-      expect(output).not.toContain("Cycle detected");
-    } finally {
-      cleanup(tmpDir);
-    }
+    // The inner Sample should resolve first (via renderChildren),
+    // producing [sampled-by-test-model:inner-prompt].
+    // Then the outer Sample sends that rendered output + extra text
+    // to the provider for sampling.
+    expect(output).toContain("[sampled-by-test-model:");
+    expect(output).not.toContain("ERROR");
+    expect(output).not.toContain("Cycle detected");
   });
 
   // SC8: Nested Sample with multiple providers — model routing works
   // Tests that nested Samples inside renderChildren() correctly route
   // to different providers via the middleware chain.
   it("SC8: nested Sample with multi-provider routing", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/OuterProv.md": stubProvider("OuterProv"),
-        "components/InnerProv.md": stubProvider("InnerProv"),
-        "doc.md": [
-          '<OuterProv model="outer">',
-          '<InnerProv model="inner">',
-          "",
-          '<Sample model="inner">',
-          '<Sample prompt="routed-to-outer" model="outer" />',
-          '<Sample prompt="routed-to-inner" model="inner" />',
-          "combine these results",
-          "</Sample>",
-          "",
-          "</InnerProv>",
-          "</OuterProv>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/OuterProv.md": stubProvider("OuterProv"),
+      "components/InnerProv.md": stubProvider("InnerProv"),
+      "doc.md": [
+        '<OuterProv model="outer">',
+        '<InnerProv model="inner">',
+        "",
+        '<Sample model="inner">',
+        '<Sample prompt="routed-to-outer" model="outer" />',
+        '<Sample prompt="routed-to-inner" model="inner" />',
+        "combine these results",
+        "</Sample>",
+        "",
+        "</InnerProv>",
+        "</OuterProv>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      // Inner Samples should route to their respective providers
-      // The rendered children output contains both provider responses
-      expect(output).toContain("[sampled-by-outer:routed-to-outer]");
-      expect(output).toContain("[sampled-by-inner:routed-to-inner]");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    // Inner Samples should route to their respective providers
+    // The rendered children output contains both provider responses
+    expect(output).toContain("[sampled-by-outer:routed-to-outer]");
+    expect(output).toContain("[sampled-by-inner:routed-to-inner]");
+    expect(output).not.toContain("ERROR");
   });
 });
 
@@ -755,170 +707,148 @@ describe("Tier IN — Instruction component", () => {
   beforeAll(() => useTempFileCompiler());
   // IN1: Instruction enriches Sample context with instructions
   it("IN1: Instruction enriches Sample context", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
-      const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Instruction.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
+    const instructionMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Instruction.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/Instruction.md": instructionMd,
-        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Instruction system="You are a pirate. Respond in pirate speak.">',
-          '<Sample prompt="hello" model="test-model" />',
-          "</Instruction>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/Instruction.md": instructionMd,
+      "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Instruction system="You are a pirate. Respond in pirate speak.">',
+        '<Sample prompt="hello" model="test-model" />',
+        "</Instruction>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("system:You are a pirate. Respond in pirate speak.");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("system:You are a pirate. Respond in pirate speak.");
+    expect(output).not.toContain("ERROR");
   });
 
   // IN2: No Instruction — backward compatible, instructions is none
   it("IN2: no Instruction — instructions is none", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Sample prompt="hello" model="test-model" />',
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Sample prompt="hello" model="test-model" />',
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("system:none");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("system:none");
+    expect(output).not.toContain("ERROR");
   });
 
   // IN3: Instruction passes non-Sample children through via Content
   it("IN3: Instruction passes text children through", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
-      const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Instruction.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
+    const instructionMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Instruction.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/Instruction.md": instructionMd,
-        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          '<Instruction system="Be a pirate.">',
-          "",
-          "Some visible text before the sample.",
-          "",
-          '<Sample prompt="hello" model="test-model" />',
-          "</Instruction>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/Instruction.md": instructionMd,
+      "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        '<Instruction system="Be a pirate.">',
+        "",
+        "Some visible text before the sample.",
+        "",
+        '<Sample prompt="hello" model="test-model" />',
+        "</Instruction>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("Some visible text before the sample.");
-      expect(output).toContain("system:Be a pirate.");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("Some visible text before the sample.");
+    expect(output).toContain("system:Be a pirate.");
+    expect(output).not.toContain("ERROR");
   });
 
   // IN4: Instruction with no Sample children — no error
   it("IN4: Instruction with no Sample — no error", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const instructionMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Instruction.md"),
-        "utf-8",
-      );
+    const instructionMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Instruction.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Instruction.md": instructionMd,
-        "doc.md": [
-          '<Instruction system="Be concise.">',
-          "",
-          "Just some text, no Sample here.",
-          "</Instruction>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Instruction.md": instructionMd,
+      "doc.md": [
+        '<Instruction system="Be concise.">',
+        "",
+        "Just some text, no Sample here.",
+        "</Instruction>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("Just some text");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("Just some text");
+    expect(output).not.toContain("ERROR");
   });
 });
 
@@ -926,148 +856,138 @@ describe("Tier AG — Agent component pattern", () => {
   beforeAll(() => useTempFileCompiler());
   // AG1: Agent component installs instruction middleware + Content
   it("AG1: agent component with instruction middleware", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
-        "components/CodeReviewer.md": [
-          "---",
-          "meta:",
-          "  componentName: CodeReviewer",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    const existing = context.system || '';",
-          "    const instruction = 'You are a code reviewer. Be concise.';",
-          "    return yield* next({",
-          "      ...context,",
-          "      system: existing ? existing + '\\n' + instruction : instruction,",
-          "    });",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          "<CodeReviewer>",
-          '<Sample prompt="def add(a, b): return a - b" model="test-model" />',
-          "</CodeReviewer>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+      "components/CodeReviewer.md": [
+        "---",
+        "meta:",
+        "  componentName: CodeReviewer",
+        "---",
+        "",
+        "```js persist eval",
+        "yield* Sample.around({",
+        "  *sample([context], next) {",
+        "    const existing = context.system || '';",
+        "    const instruction = 'You are a code reviewer. Be concise.';",
+        "    return yield* next({",
+        "      ...context,",
+        "      system: existing ? existing + '\\n' + instruction : instruction,",
+        "    });",
+        "  },",
+        "}, { at: 'min' });",
+        "```",
+        "",
+        "<Content />",
+      ].join("\n"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        "<CodeReviewer>",
+        '<Sample prompt="def add(a, b): return a - b" model="test-model" />',
+        "</CodeReviewer>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("system:You are a code reviewer. Be concise.");
-      expect(output).toContain("def add(a, b): return a - b");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("system:You are a code reviewer. Be concise.");
+    expect(output).toContain("def add(a, b): return a - b");
+    expect(output).not.toContain("ERROR");
   });
 
   // AG2: Nested agents compose instructions
   it("AG2: nested agents compose instructions", function* () {
-    const tmpDir = makeTempDir();
+    const tmpDir = yield* useTempDirectory("xmd-sc-test-");
 
-    try {
-      const sampleMd = fs.readFileSync(
-        path.join(process.cwd(), "packages/core/components/Sample.md"),
-        "utf-8",
-      );
+    const sampleMd = yield* readTextFile(
+      path.join(process.cwd(), "packages/core/components/Sample.md"),
+    );
 
-      writeFiles(tmpDir, {
-        "components/Sample.md": sampleMd,
-        "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
-        "components/CodeReviewer.md": [
-          "---",
-          "meta:",
-          "  componentName: CodeReviewer",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    const existing = context.system || '';",
-          "    const instruction = 'You are a code reviewer.';",
-          "    return yield* next({",
-          "      ...context,",
-          "      system: existing ? existing + '\\n' + instruction : instruction,",
-          "    });",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n"),
-        "components/SecurityAuditor.md": [
-          "---",
-          "meta:",
-          "  componentName: SecurityAuditor",
-          "---",
-          "",
-          "```js persist eval",
-          "yield* Sample.around({",
-          "  *sample([context], next) {",
-          "    const existing = context.system || '';",
-          "    const instruction = 'Focus on security vulnerabilities.';",
-          "    return yield* next({",
-          "      ...context,",
-          "      system: existing ? existing + '\\n' + instruction : instruction,",
-          "    });",
-          "  },",
-          "}, { at: 'min' });",
-          "```",
-          "",
-          "<Content />",
-        ].join("\n"),
-        "doc.md": [
-          '<TestProvider model="test-model">',
-          "",
-          "<CodeReviewer>",
-          "<SecurityAuditor>",
-          '<Sample prompt="check this" model="test-model" />',
-          "</SecurityAuditor>",
-          "</CodeReviewer>",
-          "",
-          "</TestProvider>",
-        ].join("\n"),
-      });
+    yield* writeFiles(tmpDir, {
+      "components/Sample.md": sampleMd,
+      "components/TestProvider.md": stubProviderWithInstructions("TestProvider"),
+      "components/CodeReviewer.md": [
+        "---",
+        "meta:",
+        "  componentName: CodeReviewer",
+        "---",
+        "",
+        "```js persist eval",
+        "yield* Sample.around({",
+        "  *sample([context], next) {",
+        "    const existing = context.system || '';",
+        "    const instruction = 'You are a code reviewer.';",
+        "    return yield* next({",
+        "      ...context,",
+        "      system: existing ? existing + '\\n' + instruction : instruction,",
+        "    });",
+        "  },",
+        "}, { at: 'min' });",
+        "```",
+        "",
+        "<Content />",
+      ].join("\n"),
+      "components/SecurityAuditor.md": [
+        "---",
+        "meta:",
+        "  componentName: SecurityAuditor",
+        "---",
+        "",
+        "```js persist eval",
+        "yield* Sample.around({",
+        "  *sample([context], next) {",
+        "    const existing = context.system || '';",
+        "    const instruction = 'Focus on security vulnerabilities.';",
+        "    return yield* next({",
+        "      ...context,",
+        "      system: existing ? existing + '\\n' + instruction : instruction,",
+        "    });",
+        "  },",
+        "}, { at: 'min' });",
+        "```",
+        "",
+        "<Content />",
+      ].join("\n"),
+      "doc.md": [
+        '<TestProvider model="test-model">',
+        "",
+        "<CodeReviewer>",
+        "<SecurityAuditor>",
+        '<Sample prompt="check this" model="test-model" />',
+        "</SecurityAuditor>",
+        "</CodeReviewer>",
+        "",
+        "</TestProvider>",
+      ].join("\n"),
+    });
 
-      const stream = new InMemoryStream();
-      const output = yield* collect(
-        yield* execute({
-          path: path.join(tmpDir, "doc.md"),
-          stream,
-          componentDirs: [path.join(tmpDir, "components"), tmpDir],
-        }),
-      );
+    const stream = new InMemoryStream();
+    const output = yield* collect(
+      yield* execute({
+        path: path.join(tmpDir, "doc.md"),
+        stream,
+        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      }),
+    );
 
-      expect(output).toContain("You are a code reviewer.");
-      expect(output).toContain("Focus on security vulnerabilities.");
-      expect(output).not.toContain("ERROR");
-    } finally {
-      cleanup(tmpDir);
-    }
+    expect(output).toContain("You are a code reviewer.");
+    expect(output).toContain("Focus on security vulnerabilities.");
+    expect(output).not.toContain("ERROR");
   });
 });

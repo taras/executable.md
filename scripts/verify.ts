@@ -40,15 +40,20 @@
  * that scope exits is therefore closing it after the last byte.
  */
 
-import { createContext, ensure, exit, main, scoped, sleep } from "effection";
+import { createContext, ensure, exit, main, scoped, sleep, until } from "effection";
 import type { Context, Operation } from "effection";
+import { lstat, rm } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
+import type { Stats } from "node:fs";
+import { readFile, readlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import { digest, FileReads, YIELD_EVERY } from "./lib/prepared-state.ts";
+import type { ReadFile } from "./lib/prepared-state.ts";
 import { parseStageRecords, UnsupportedEntryError } from "./lib/tracked.ts";
 import type { TrackedEntry, TrackedState } from "./lib/tracked.ts";
+import { useTempDirectory } from "./lib/temp-directory.ts";
 import { verify } from "./lib/verify.ts";
 import type { CommandSpec, Settled, VerifyHost, VerifyOptions } from "./lib/verify.ts";
 
@@ -83,6 +88,11 @@ export type OpenSpool = (path: string) => Spool;
  * of them.
  */
 export const openSpool: OpenSpool = (path) => {
+  // Synchronous on purpose: a sink that suspends can be halted mid-chunk with
+  // the pump's backlog queued behind it, and those bytes never reach the
+  // spool. `the synchronous sink` in scripts/tests/verify-adapter.test.ts is
+  // what keeps this handle from becoming an asynchronous one.
+  // oxlint-disable-next-line local/no-sync-filesystem
   const file = Deno.openSync(path, { create: true, write: true, truncate: true });
   let open = true;
   return {
@@ -90,6 +100,10 @@ export const openSpool: OpenSpool = (path) => {
     *write(bytes) {
       let written = 0;
       while (written < bytes.length) {
+        // Part of the same sink: the loop runs to completion in one turn, so
+        // the pump's next chunk cannot arrive while a partial write is
+        // outstanding and no backlog can be dropped at a halt.
+        // oxlint-disable-next-line local/no-sync-filesystem
         written += file.writeSync(bytes.subarray(written));
       }
     },
@@ -173,28 +187,33 @@ function* capture(command: string, args: string[], cwd: string): Operation<strin
   });
 }
 
-function describeEntry(at: string, path: string, read: (path: string) => Uint8Array): TrackedEntry {
+/** A missing entry, as `node:fs` reports one. */
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function* describeEntry(at: string, path: string, read: ReadFile): Operation<TrackedEntry> {
   const absolute = join(at, path);
-  let info: Deno.FileInfo;
+  let info: Stats;
   try {
-    info = Deno.lstatSync(absolute);
+    info = yield* lstat(absolute);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if (isNotFound(error)) {
       return { kind: "absent" };
     }
     throw error;
   }
-  if (info.isDirectory) {
+  if (info.isDirectory()) {
     throw new UnsupportedEntryError(
       `${path} is a directory, which this fingerprint cannot describe`,
     );
   }
-  if (info.isSymlink) {
-    return { kind: "symlink", target: Deno.readLinkSync(absolute) };
+  if (info.isSymbolicLink()) {
+    return { kind: "symlink", target: yield* until(readlink(absolute)) };
   }
   return {
     kind: "file",
-    digest: digest(read(absolute)),
+    digest: digest(yield* read(absolute)),
     executable: ((info.mode ?? 0) & 0o111) !== 0,
   };
 }
@@ -269,7 +288,7 @@ export interface HostOptions {
  * halt part way through.
  */
 export function* useVerifyHost(options: HostOptions): Operation<VerifyHost> {
-  yield* ensure(() => Deno.removeSync(options.spools, { recursive: true }));
+  yield* ensure(() => rm(options.spools, { recursive: true }));
   return host(options);
 }
 
@@ -314,7 +333,7 @@ export function host(options: HostOptions): VerifyHost {
       if (!path) {
         return new Uint8Array();
       }
-      return Deno.readFileSync(path);
+      return yield* until(readFile(path));
     },
 
     *fingerprint(): Operation<TrackedState> {
@@ -322,7 +341,7 @@ export function host(options: HostOptions): VerifyHost {
       const records = parseStageRecords(yield* capture("git", ["ls-files", "--stage", "-z"], at));
       const entries = new Map<string, TrackedEntry>();
       for (const [index, record] of records.entries()) {
-        entries.set(record.path, describeEntry(at, record.path, read));
+        entries.set(record.path, yield* describeEntry(at, record.path, read));
         if (index % YIELD_EVERY === YIELD_EVERY - 1) {
           yield* sleep(0);
         }
@@ -333,6 +352,10 @@ export function host(options: HostOptions): VerifyHost {
     git: (args) => capture("git", args, at),
     log,
     emit(bytes) {
+      // The report's own bytes, written where the process is about to exit:
+      // suspending here can lose a failed command's output to the exit that
+      // follows it.
+      // oxlint-disable-next-line local/no-sync-filesystem
       emitAll(options.write ?? ((chunk) => Deno.stdout.writeSync(chunk)), bytes);
     },
   };
@@ -347,7 +370,7 @@ export function* runVerify(args: string[]): Operation<number> {
     }
   }
 
-  const spools = Deno.makeTempDirSync({ prefix: "xmd-verify-" });
+  const spools = yield* useTempDirectory("xmd-verify-");
   const target = yield* useVerifyHost({
     spools,
     root,

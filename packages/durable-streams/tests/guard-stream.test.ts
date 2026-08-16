@@ -12,9 +12,8 @@ import { exists, readTextFile, rm } from "@effectionx/fs";
 import { ensure, sleep, spawn, suspend, until } from "effection";
 import type { Operation } from "effection";
 import { appendFile } from "node:fs/promises";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import {
   durableAll,
   durableCall,
@@ -77,10 +76,6 @@ function backendAppends(timeline: string[]): string[] {
 /** The events of one coroutine, in the order the backend received them. */
 function coroutineOrder(events: DurableEvent[], coroutineId: string): string[] {
   return events.filter((event) => event.coroutineId === coroutineId).map(label);
-}
-
-function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-guard-"));
 }
 
 /** A durable-call executor that takes some time and returns a Json value. */
@@ -313,7 +308,7 @@ describe("guardDurableStream", () => {
   });
 
   it("keeps a rejected event out of a file backend", function* () {
-    const dir = makeTmpDir();
+    const dir = yield* useTempDirectory("xmd-guard-");
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     const journalPath = path.join(dir, "journal.jsonl");
 

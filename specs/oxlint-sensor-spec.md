@@ -340,7 +340,7 @@ the file is reachable only through an explicit `extends`.
 }
 ```
 
-The gate adds the local JavaScript plugin, five blocking rules, and one further
+The gate adds the local JavaScript plugin, seven blocking rules, and one further
 test override. The sensor adds nothing:
 
 ```jsonc
@@ -353,7 +353,9 @@ test override. The sensor adds nothing:
     "eslint/curly": "error",
     "local/no-module-scoped-registry": "error",
     "local/no-section-divider-comments": "error",
+    "local/no-sync-filesystem": "error",
     "local/no-yield-in-finally": "error",
+    "local/prefer-effection-operation": "error",
     "local/prefer-effection-result": "error"
   },
   "overrides": [
@@ -373,6 +375,15 @@ test override. The sensor adds nothing:
 
 Oxlint merges inherited override arrays, so both test overrides apply to the
 gate and the shared one applies to the sensor.
+
+Every local rule belongs to the gate alone. `local/no-sync-filesystem` is the
+one whose escape hatch is itself part of the contract: the only accepted
+suppression is a single `oxlint-disable-next-line` carrying an adjacent comment
+that names the invariant a suspension would break, and no configuration
+override, file-wide directive, or unexplained directive is allowed. Oxlint
+suppresses a rule's own diagnostics inside a disabled range, so a rule cannot
+report a file-wide disable of itself; `scripts/tests/no-sync-filesystem.test.ts`
+audits the gate configuration and every linted source for that contract instead.
 
 ### 4.2 Rule catalog
 
@@ -1120,7 +1131,7 @@ production module, a test module, and a review component.
 | OP6 | Curated signals enabled | Every `SENSOR_RULES` entry is `warn` and categorizes as other than `other` |
 | OP7 | Denials hold | Every conflict and named candidate is off in both merged profiles |
 | OP8 | Sensor advisory | No JavaScript plugin, no `local/*` rule, no error severity |
-| OP9 | Gate blocking rules | `curly` and the four local rules stay errors |
+| OP9 | Gate blocking rules | `curly` and the six local rules stay errors |
 | OP10 | Overrides survive | Both test overrides reach the gate, the shared one reaches the sensor |
 | OP11 | Override applies | A `tests/` file reports no `no-console`; its sibling does |
 | OP12 | Doctor catalog | Available equals `SENSOR_RULES`; syntax-only misses exactly `TYPE_AWARE_RULES` |

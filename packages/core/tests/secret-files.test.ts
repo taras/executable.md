@@ -7,11 +7,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure } from "effection";
+import { ensure, until } from "effection";
 import type { Operation } from "effection";
 import { FsApi } from "@effectionx/fs";
 import { readTextFile as fsReadTextFile } from "@effectionx/fs";
-import * as fs from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { mkdir, rm as removePath, symlink, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { API } from "@executablemd/runtime";
@@ -27,15 +28,18 @@ const BLINDED = "nothing to see here";
  * `node:fs` is used directly for staging and teardown. The candidate under
  * test has to exist on the real filesystem — writing it through an API whose
  * middleware the test also installs would prove nothing.
+ *
+ * Creation stays synchronous so nothing suspends between it and the `ensure`
+ * each caller registers: a halt landing in that gap leaves a directory nothing
+ * owns and nothing removes.
  */
-function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "xmd-secret-files-"));
-}
+// oxlint-disable-next-line local/no-sync-filesystem
+const makeTmpDir = (): string => mkdtempSync(path.join(os.tmpdir(), "xmd-secret-files-"));
 
-function write(dir: string, relative: string, content: string): void {
+function* write(dir: string, relative: string, content: string): Operation<void> {
   const absolute = path.join(dir, relative);
-  fs.mkdirSync(path.dirname(absolute), { recursive: true });
-  fs.writeFileSync(absolute, content);
+  yield* until(mkdir(path.dirname(absolute), { recursive: true }));
+  yield* until(writeFile(absolute, content));
 }
 
 /** Blinds every filesystem API a document can reach. */
@@ -72,8 +76,8 @@ describe("scanFiles", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, "journal.jsonl", '{"type":"close","result":"ok"}\n');
-    write(dir, "manifest.json", '{"secretDetection":true}\n');
+    yield* write(dir, "journal.jsonl", '{"type":"close","result":"ok"}\n');
+    yield* write(dir, "manifest.json", '{"secretDetection":true}\n');
 
     expect(yield* scanFiles(dir, createSecretScanner())).toEqual([]);
   });
@@ -82,8 +86,8 @@ describe("scanFiles", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, "journal.jsonl", '{"type":"close"}\n');
-    write(dir, "artifacts/report.md", `token: ${CANARY}\n`);
+    yield* write(dir, "journal.jsonl", '{"type":"close"}\n');
+    yield* write(dir, "artifacts/report.md", `token: ${CANARY}\n`);
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 
@@ -100,9 +104,9 @@ describe("scanFiles", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, "one.txt", `a: ${CANARY}\n`);
-    write(dir, "nested/two.txt", `b: npm_${A.slice(0, 36)}\n`);
-    write(dir, "clean.txt", "nothing here\n");
+    yield* write(dir, "one.txt", `a: ${CANARY}\n`);
+    yield* write(dir, "nested/two.txt", `b: npm_${A.slice(0, 36)}\n`);
+    yield* write(dir, "clean.txt", "nothing here\n");
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 
@@ -115,7 +119,7 @@ describe("the trust boundary", () => {
   it("reads the real file even when every reachable Fs API is blinded", function* () {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
-    write(dir, "leak.txt", `token: ${CANARY}\n`);
+    yield* write(dir, "leak.txt", `token: ${CANARY}\n`);
 
     yield* useHostileFilesystem();
 
@@ -138,7 +142,7 @@ describe("paths are scanned before content", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, `${CANARY}.txt`, "this file's contents are perfectly ordinary\n");
+    yield* write(dir, `${CANARY}.txt`, "this file's contents are perfectly ordinary\n");
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 
@@ -150,7 +154,7 @@ describe("paths are scanned before content", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, `${CANARY}.txt`, "ordinary\n");
+    yield* write(dir, `${CANARY}.txt`, "ordinary\n");
 
     const findings = yield* scanFiles(dir, createSecretScanner());
     const serialized = JSON.stringify(findings);
@@ -173,7 +177,7 @@ describe("paths are scanned before content", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, path.join(CANARY, "report.md"), "ordinary contents\n");
+    yield* write(dir, path.join(CANARY, "report.md"), "ordinary contents\n");
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 
@@ -186,7 +190,7 @@ describe("paths are scanned before content", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, "artifacts/nested/report.md", `token: ${CANARY}\n`);
+    yield* write(dir, "artifacts/nested/report.md", `token: ${CANARY}\n`);
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 
@@ -205,8 +209,8 @@ describe("symbolic links", () => {
     yield* ensure(() => rm(outside));
     yield* ensure(() => rm(dir));
 
-    write(outside, "clean.txt", "entirely ordinary content\n");
-    fs.symlinkSync(path.join(outside, "clean.txt"), path.join(dir, "link.txt"));
+    yield* write(outside, "clean.txt", "entirely ordinary content\n");
+    yield* until(symlink(path.join(outside, "clean.txt"), path.join(dir, "link.txt")));
 
     let failure: Error | undefined;
     try {
@@ -229,8 +233,8 @@ describe("symbolic links", () => {
 
     // The target path itself carries a credential, which is the case where a
     // dereferencing scanner would leak one through its own printed error.
-    write(outside, `${CANARY}.txt`, "ordinary\n");
-    fs.symlinkSync(path.join(outside, `${CANARY}.txt`), path.join(dir, "link.txt"));
+    yield* write(outside, `${CANARY}.txt`, "ordinary\n");
+    yield* until(symlink(path.join(outside, `${CANARY}.txt`), path.join(dir, "link.txt")));
 
     let failure: Error | undefined;
     try {
@@ -248,9 +252,8 @@ describe("symbolic links", () => {
 });
 
 /** Teardown reaches node:fs directly so a blinded API cannot strand a temp dir. */
-// deno-lint-ignore require-yield
 function* rm(dir: string): Operation<void> {
-  fs.rmSync(dir, { recursive: true, force: true });
+  yield* until(removePath(dir, { recursive: true, force: true }));
 }
 
 /**
@@ -267,11 +270,11 @@ describe("the candidate root", () => {
     yield* ensure(() => rm(base));
 
     const real = path.join(base, "real");
-    fs.mkdirSync(real);
-    fs.writeFileSync(path.join(real, "clean.txt"), "entirely ordinary content\n");
+    yield* until(mkdir(real));
+    yield* until(writeFile(path.join(real, "clean.txt"), "entirely ordinary content\n"));
 
     const candidate = path.join(base, "candidate");
-    fs.symlinkSync(real, candidate);
+    yield* until(symlink(real, candidate));
 
     let failure: Error | undefined;
     try {
@@ -291,13 +294,13 @@ describe("the candidate root", () => {
     yield* ensure(() => rm(base));
 
     const real = path.join(base, CANARY);
-    fs.mkdirSync(real);
-    fs.writeFileSync(path.join(real, "clean.txt"), "ordinary\n");
+    yield* until(mkdir(real));
+    yield* until(writeFile(path.join(real, "clean.txt"), "ordinary\n"));
 
     // A distinctive name: "candidate" would collide with the error's own
     // wording and make the assertion pass or fail for the wrong reason.
     const linked = path.join(base, "staged-snapshot-root");
-    fs.symlinkSync(real, linked);
+    yield* until(symlink(real, linked));
 
     let failure: Error | undefined;
     try {
@@ -318,7 +321,7 @@ describe("the candidate root", () => {
     yield* ensure(() => rm(base));
 
     const file = path.join(base, "not-a-directory.txt");
-    fs.writeFileSync(file, "ordinary\n");
+    yield* until(writeFile(file, "ordinary\n"));
 
     let failure: Error | undefined;
     try {
@@ -349,7 +352,7 @@ describe("the candidate root", () => {
     const dir = makeTmpDir();
     yield* ensure(() => rm(dir));
 
-    write(dir, "artifacts/report.md", `token: ${CANARY}\n`);
+    yield* write(dir, "artifacts/report.md", `token: ${CANARY}\n`);
 
     const findings = yield* scanFiles(dir, createSecretScanner());
 

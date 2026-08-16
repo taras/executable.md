@@ -30,6 +30,10 @@ const SETUP = "deno task setup";
 
 function read(path: string): string | undefined {
   try {
+    // Synchronous because this file may import nothing: an Effection operation
+    // would need `effection` in the cache, and a cold cache is the condition
+    // this check exists to report on.
+    // oxlint-disable-next-line local/no-sync-filesystem
     return Deno.readTextFileSync(new URL(path, repoRoot));
   } catch {
     return undefined;

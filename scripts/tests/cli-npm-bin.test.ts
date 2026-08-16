@@ -15,6 +15,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure } from "effection";
+import { readTextFile } from "@effectionx/fs";
 import type { Operation } from "effection";
 import { exec, Stdio } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
@@ -36,8 +37,8 @@ interface Manifest {
   version?: string;
 }
 
-function readManifest(...segments: string[]): Manifest {
-  return JSON.parse(Deno.readTextFileSync(path.join(ROOT, ...segments)));
+function* readManifest(...segments: string[]): Operation<Manifest> {
+  return JSON.parse(yield* readTextFile(path.join(ROOT, ...segments)));
 }
 
 function* buildCliPackage(version: string): Operation<ProcessResult> {
@@ -81,7 +82,7 @@ function* runEmittedBin(args: string[]): Operation<ProcessResult> {
 describe("npm CLI package", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("relaunches its test-agent worker under Node", function* () {
     yield* ensure(removeNpmOutput);
-    const { version } = readManifest(PKG_DIR, "deno.json");
+    const { version } = yield* readManifest(PKG_DIR, "deno.json");
 
     const built = yield* buildCliPackage(version ?? "0.0.0-dev");
     if (built.code !== 0) {

@@ -1,21 +1,17 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, ensure, scoped, spawn, suspend, until } from "effection";
+import { all, scoped, spawn, suspend, until } from "effection";
 import type { Operation } from "effection";
-import { readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import fs from "node:fs";
+import { readdir, readTextFile, writeTextFile } from "@effectionx/fs";
 import { writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 
 import { FileWrites, replaceThroughStaging } from "../lib/staged-write.ts";
 import type { WriteFile } from "../lib/staged-write.ts";
 
 function* target(contents: string): Operation<URL> {
-  // @effectionx/fs has no mkdtemp.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "staged-write-"));
-  yield* ensure(() => rm(base, { recursive: true, force: true }));
+  const base = yield* useTempDirectory("staged-write-");
 
   const file = new URL("package.json", pathToFileURL(`${base}/`));
   yield* writeTextFile(file, contents);
