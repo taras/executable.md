@@ -37,6 +37,10 @@ export const WORKSPACE_GIT_ADD = "workspace_git_add";
 /**
  * How one staging command is identified.
  *
+ * Takes the admitted snapshot, like everything below it: `createGitAdd()` is the
+ * only door, so nothing here can be handed a request whose values may still
+ * change underneath it.
+ *
  * The expansion makes two elements different effects and one element the same
  * effect across replays; the configuration fingerprint makes a document edited
  * to name other paths, another directory or another Repository diverge rather
@@ -47,47 +51,47 @@ export const WORKSPACE_GIT_ADD = "workspace_git_add";
  * repetition or in where one entry ends and the next begins are different
  * identities — which is the whole of what `paths` means.
  */
-export function* describeAdd(request: GitAddRequest): Operation<EffectDescription> {
+function* describeAdd(admitted: GitAddRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
   const configuration = gitOperationFingerprint([
-    request.repository.name,
-    request.repository.locatorFingerprint,
-    request.repository.requestedBase,
-    request.repository.creationCommit,
-    request.repository.primaryBranch,
-    request.repository.objectFormat,
-    request.repository.checkoutPath,
-    request.workingDirectory,
-    ...request.paths,
+    admitted.repository.name,
+    admitted.repository.locatorFingerprint,
+    admitted.repository.requestedBase,
+    admitted.repository.creationCommit,
+    admitted.repository.primaryBranch,
+    admitted.repository.objectFormat,
+    admitted.repository.checkoutPath,
+    admitted.workingDirectory,
+    ...admitted.paths,
   ]);
   return {
     type: WORKSPACE_GIT_ADD,
-    name: `${expansion.id}:${request.repository.name}:${configuration}`,
+    name: `${expansion.id}:${admitted.repository.name}:${configuration}`,
     configuration,
     ...sourceDescription(expansion.position),
   };
 }
 
-export function performGitAdd(
+function performGitAdd(
   context: MutationContext,
   host: RepositoryHost,
-  request: GitAddRequest,
+  admitted: GitAddRequest,
 ): Operation<CompositionOutcome> {
   return performGitOperation(
     context,
     host,
     ADD,
-    { repository: request.repository, workingDirectory: request.workingDirectory },
+    { repository: admitted.repository, workingDirectory: admitted.workingDirectory },
     (checkout: GitCheckout) =>
       addPaths(checkout.git, {
         operation: ADD,
         workingDirectory: checkout.workingDirectory,
-        paths: request.paths,
+        paths: admitted.paths,
       }),
     (checkout, before: GitCheckoutState, after: GitCheckoutState): Json =>
       gitAddResultJson({
         checkout: checkout.identity,
-        paths: request.paths,
+        paths: admitted.paths,
         before,
         after,
       }),
@@ -100,20 +104,28 @@ export function* createGitAdd(
   host: RepositoryHost,
   request: GitAddRequest,
 ): Operation<GitAddResult> {
-  // Before an identity is built and before anything is spawned: a pathspec this
-  // host cannot carry unchanged is malformed input, and a durable effect
-  // recording one would describe a command Git never received.
-  admitPathspecs(request.paths);
+  // Admission takes a snapshot, and the snapshot is what the operation runs on.
+  // A caller's array and record are its own objects, and this operation has
+  // suspension points — a Git command, a transaction, an import — across which
+  // whoever handed them over can still change them. Reading them again later
+  // would let an effect identify one request, hand Git a second and retain a
+  // third, and would put an unpaired surrogate back on the way to a process
+  // argument list after it had been refused.
+  const admitted: GitAddRequest = Object.freeze({
+    repository: Object.freeze({ ...request.repository }),
+    workingDirectory: request.workingDirectory,
+    paths: admitPathspecs(request.paths),
+  });
 
   const outcome = yield* settled(
     "git",
     ADD,
     database,
-    yield* describeAdd(request),
-    (filesystem, metadata) => performGitAdd({ filesystem, metadata }, host, request),
+    yield* describeAdd(admitted),
+    (filesystem, metadata) => performGitAdd({ filesystem, metadata }, host, admitted),
   );
-  const result = parseGitAddResult(outcome, request);
-  if (result === undefined || !placedCheckout(result.checkout, request.repository)) {
+  const result = parseGitAddResult(outcome, admitted);
+  if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {
     throw new GitOperationProtocolError(ADD);
   }
   return result;

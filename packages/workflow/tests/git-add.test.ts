@@ -37,6 +37,7 @@ import { canonicalPaths } from "../src/composition/components/GitAdd.ts";
 import type { RepositoryRecord } from "../src/composition/records.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
+import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
@@ -901,6 +902,131 @@ describe("workflow Git.Add pathspec text", () => {
         yield* expectation(database, [REPLACEMENT]),
       );
       expect(retained?.paths).toEqual([REPLACEMENT]);
+    });
+  });
+});
+
+/**
+ * Admission takes a snapshot, and the snapshot is what runs.
+ *
+ * A caller's array is the caller's object, and this operation suspends several
+ * times before Git is spawned. If any step read that array again instead of what
+ * admission returned, a request could be admitted as one thing and performed as
+ * another — including as an unpaired surrogate that had already been refused.
+ *
+ * The mutation lands at a real point in the operation rather than at a guessed
+ * moment: the host performs it when Git reads the index tree, which is the last
+ * command before the staging itself and long after the effect's identity was
+ * built.
+ */
+describe("workflow Git.Add request ownership", () => {
+  it("performs the pathspecs it admitted, not what the caller changed them to", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const replacement = "�";
+    const mutable = ["original.txt"];
+    let synchronized = false;
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      const counting = countingHost({
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          if (invocation.args[0] === "write-tree" && !synchronized) {
+            synchronized = true;
+            mutable[0] = "\ud800";
+          }
+          return yield* inner.git(invocation);
+        },
+        useDirectory: inner.useDirectory,
+      });
+
+      yield* scoped(function* () {
+        return yield* withWorkflowWorkspace(
+          database,
+          scoped(function* () {
+            yield* registerComponents([
+              {
+                name: "Probe",
+                origin: "test",
+                props: { type: "object", additionalProperties: false },
+                *fn(): Operation<string> {
+                  const repository = yield* currentRepository();
+                  if (repository === undefined) {
+                    throw new Error("the probe was written outside a Repository");
+                  }
+                  yield* GitComposition.operations.addPaths({
+                    repository,
+                    workingDirectory: yield* cwd(),
+                    paths: mutable,
+                  });
+                  return "";
+                },
+              },
+            ]);
+            return yield* collect(
+              yield* execute({
+                ...inlineSource(
+                  document(
+                    remote.locator,
+                    `<File path="original.txt">`,
+                    "fresh",
+                    "</File>",
+                    `<File path={${JSON.stringify(replacement)}}>`,
+                    "replacement",
+                    "</File>",
+                    "<Probe />",
+                  ),
+                ),
+                stream: database.journal,
+              }),
+            );
+          }),
+          countingOptions(counting),
+        );
+      });
+
+      // The premise: the caller's array really changed, at a point the operation
+      // really reached.
+      expect(synchronized).toBe(true);
+      expect(mutable).toEqual(["\ud800"]);
+
+      // Git received what was admitted.
+      const staging = counting.counters.commands.find((command) => command[0] === "add");
+      expect(staging).toEqual(["add", "--", "original.txt"]);
+
+      // And staged it. The file a substituted surrogate would have named is
+      // sitting right there, untouched.
+      expect(yield* stagedPaths(database, yield* checkout(database))).toEqual(["original.txt"]);
+
+      // The retained result and the effect's own identity say the same thing.
+      const [outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const retained = parseGitAddResult(
+        outcome?.record,
+        yield* expectation(database, ["original.txt"]),
+      );
+      expect(retained?.paths).toEqual(["original.txt"]);
+
+      const [repository] = yield* retainedRepositories(database);
+      const record = repository?.record;
+      if (record === undefined) {
+        throw new Error("the run retained no repository");
+      }
+      const [event] = yield* gitEvents(database);
+      expect(event?.type === "yield" ? event.description.configuration : undefined).toBe(
+        gitOperationFingerprint([
+          record.name,
+          record.locatorFingerprint,
+          record.requestedBase,
+          record.creationCommit,
+          record.primaryBranch,
+          record.objectFormat,
+          record.checkoutPath,
+          record.checkoutPath,
+          "original.txt",
+        ]),
+      );
     });
   });
 });
