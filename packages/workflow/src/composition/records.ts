@@ -21,6 +21,7 @@
  */
 
 import type { Json } from "@executablemd/durable-streams";
+import { members, optionalText, text } from "./parse.ts";
 
 export type GitObjectFormat = "sha1" | "sha256";
 
@@ -99,28 +100,6 @@ const WORKTREE_MEMBERS = [
   "creationCommit",
   "checkoutPath",
 ] as const;
-
-function members(value: unknown, expected: readonly string[]): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const record: Record<string, unknown> = Object.fromEntries(Object.entries(value));
-  if (Object.keys(record).length !== expected.length) {
-    return undefined;
-  }
-  return expected.every((member) => Object.hasOwn(record, member)) ? record : undefined;
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value !== "" ? value : undefined;
-}
-
-function optionalText(value: unknown): string | null | undefined {
-  if (value === null) {
-    return null;
-  }
-  return text(value);
-}
 
 export function parseObjectFormat(value: unknown): GitObjectFormat | undefined {
   return value === "sha1" || value === "sha256" ? value : undefined;

@@ -34,6 +34,7 @@ import { ensureDir, lstat, readdir, readTextFile, writeTextFile } from "@effecti
 import type { Stats } from "node:fs";
 import { chmod, readFile, readlink, realpath, symlink, writeFile } from "node:fs/promises";
 import { RepositoryStaleStateError } from "../../composition/errors.ts";
+import { canonicalWorkspacePath } from "../../composition/parse.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
 
 /** Where the two administration files a linked worktree needs are written. */
@@ -50,32 +51,8 @@ const GITDIR_PREFIX = "gitdir: ";
  * out of the disposable tree and into the host.
  *
  * So containment is proven rather than assumed, here, at the one place the two
- * are joined. A Workspace path is absolute and made of ordinary segments: no
- * empty one, no `.`, no `..`. That is a property of the path itself, decided
- * before any host call, which is what makes it a proof rather than a check of
- * what the filesystem happened to resolve — `realpath` after the fact would
- * already have followed a symbolic link somewhere.
+ * are joined.
  */
-/**
- * The one place beneath the Workspace root this string names, or `undefined`.
- *
- * Absolute, and made of ordinary segments: no empty one, no `.`, no `..`. It is
- * a property of the string, decided before any host call, which is what makes it
- * a proof rather than a check of what a filesystem happened to resolve — a
- * `realpath` after the fact has already followed a link by the time it answers.
- */
-function canonicalWorkspacePath(value: string): string | undefined {
-  if (!value.startsWith("/")) {
-    return undefined;
-  }
-  for (const segment of value.slice(1).split("/")) {
-    if (segment === "" || segment === "." || segment === "..") {
-      return undefined;
-    }
-  }
-  return value;
-}
-
 function hostPath(root: string, workspacePath: string): string {
   if (canonicalWorkspacePath(workspacePath) === undefined) {
     throw new RepositoryStaleStateError(

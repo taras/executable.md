@@ -46,13 +46,20 @@ export type { RepositoryCompositionApi } from "./src/composition/api.ts";
 export { currentRepository, RepositoryContext } from "./src/composition/context.ts";
 export type { RepositoryContextApi } from "./src/composition/context.ts";
 export {
+  GitCompositionProviderError,
+  GitOperationError,
+  GitOperationProtocolError,
   RepositoryCompositionError,
   RepositoryCompositionProtocolError,
   RepositoryCompositionProviderError,
   RepositoryStaleStateError,
   WorktreeCompositionError,
 } from "./src/composition/errors.ts";
-export type { RepositoryFailureReason, WorktreeFailureReason } from "./src/composition/errors.ts";
+export type {
+  GitFailureReason,
+  RepositoryFailureReason,
+  WorktreeFailureReason,
+} from "./src/composition/errors.ts";
 export {
   parseRepositoryRecord,
   parseWorktreeRecord,
@@ -67,6 +74,20 @@ export type {
   WorktreeCreationRequest,
   WorktreeRecord,
 } from "./src/composition/records.ts";
+export { GitComposition } from "./src/composition/git-api.ts";
+export type { GitCompositionApi } from "./src/composition/git-api.ts";
+export {
+  gitSwitchResultJson,
+  parseGitCheckoutIdentity,
+  parseGitCheckoutState,
+  parseGitSwitchResult,
+} from "./src/composition/git-records.ts";
+export type {
+  GitCheckoutIdentity,
+  GitCheckoutState,
+  GitSwitchRequest,
+  GitSwitchResult,
+} from "./src/composition/git-records.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";

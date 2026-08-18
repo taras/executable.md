@@ -28,6 +28,10 @@
 
 import type { Operation } from "effection";
 import type { GitObjectFormat } from "../../composition/records.ts";
+import {
+  GitOperationInfrastructureError,
+  type GitFailureReason,
+} from "../../composition/errors.ts";
 import type { GitOutcome, RepositoryHost } from "./host.ts";
 
 /** The branch a checkout gets when the base names something that is not one. */
@@ -261,7 +265,11 @@ export function* addWorktree(
  * `worktree add <path> <branch>` then creates the local branch tracking it,
  * which is the same thing a person would get by hand.
  */
-function* branchExists(git: GitSession, directory: string, branch: string): Operation<boolean> {
+export function* branchExists(
+  git: GitSession,
+  directory: string,
+  branch: string,
+): Operation<boolean> {
   const local = yield* resolveCommit(git, directory, `refs/heads/${branch}`);
   if (local !== undefined) {
     return true;
@@ -293,20 +301,120 @@ function* worktreeArguments(
   const start =
     base === undefined
       ? yield* resolveCommit(git, repositoryDirectory, "HEAD")
-      : yield* resolveWorktreeBase(git, repositoryDirectory, base);
+      : yield* resolveBaseCommit(git, repositoryDirectory, base);
   if (start === undefined) {
     throw new GitRefusal("unresolved-base");
   }
   return ["worktree", "add", "-b", branch, worktreeDirectory, start];
 }
 
-function* resolveWorktreeBase(
+/**
+ * The commit a supplied base names, preferring the repository's own remote.
+ *
+ * A document that writes `base="main"` means the branch of that name, which in a
+ * clone is a remote-tracking ref rather than a local one. Anything else that
+ * resolves to a commit — a tag, an object id, a local branch — is taken as
+ * written.
+ */
+export function* resolveBaseCommit(
   git: GitSession,
   directory: string,
   base: string,
 ): Operation<string | undefined> {
   const remote = yield* resolveCommit(git, directory, `refs/remotes/origin/${base}`);
   return remote ?? (yield* resolveCommit(git, directory, base));
+}
+
+/** The tree `HEAD` names, or `undefined` when the checkout reports none. */
+export function headTree(git: GitSession, directory: string): Operation<string | undefined> {
+  return git.read(
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{tree}"],
+    directory,
+  );
+}
+
+/**
+ * The tree the index currently describes.
+ *
+ * `write-tree` rather than a read of a ref, because the index is the only place
+ * that state lives: staged content that no commit holds yet has no other name.
+ * It writes tree objects into the checkout's own object database and moves no
+ * ref, so what a run retains is the identity of what was staged rather than a
+ * summary of it — and the objects travel back into the Workspace with the rest
+ * of the checkout.
+ */
+export function indexTree(git: GitSession, directory: string): Operation<string | undefined> {
+  return git.read(["write-tree"], directory);
+}
+
+/**
+ * Put a checkout on a branch, creating it at `start` when it has none.
+ *
+ * `switch` rather than `checkout`, and with no force, discard or detach: the
+ * refusals are the point. A branch another checkout of the same repository holds
+ * is refused rather than moved, and changes Git would overwrite are refused
+ * rather than discarded — both are conditions a document can act on, and neither
+ * is something this provider decides on an author's behalf.
+ *
+ * With no start point the branch already exists, locally or on the repository's
+ * remote. Git creates the local tracking branch for the second case, which is
+ * the same thing a person would get by hand and the same thing `<Worktree>`
+ * already does with a branch the remote published.
+ */
+export interface BranchSwitch {
+  /** The component this is performed for, as a document writes it. */
+  readonly operation: string;
+  /** Where the command runs. */
+  readonly workingDirectory: string;
+  /** The checkout the command answers about. */
+  readonly checkout: string;
+  readonly branch: string;
+  /** The commit a missing branch is created at, or `undefined` when it exists. */
+  readonly start: string | undefined;
+}
+
+export function* switchBranch(git: GitSession, request: BranchSwitch): Operation<void> {
+  const { branch, start } = request;
+  const outcome = yield* git.run(
+    start === undefined ? ["switch", branch, "--"] : ["switch", "--create", branch, start, "--"],
+    request.workingDirectory,
+  );
+  if (outcome.code !== 0) {
+    const refusal = switchFailure(outcome);
+    if (refusal === undefined) {
+      throw new GitOperationInfrastructureError(
+        request.operation,
+        "native Git refused it in a way this provider has no word for",
+      );
+    }
+    throw new GitRefusal(refusal);
+  }
+  if ((yield* currentBranch(git, request.checkout)) !== branch) {
+    throw new GitOperationInfrastructureError(
+      request.operation,
+      "the checkout did not end on the branch the command reported switching to",
+    );
+  }
+}
+
+/**
+ * Which condition a refused `switch` reported, or `undefined` for none of them.
+ *
+ * The message selects a word and is then discarded, on the same terms as every
+ * other reading here; `LC_ALL=C` is what makes it stable. A condition this
+ * cannot recognize is *not* given a word. The set of refusals is closed because
+ * each of them is something a document can act on, and calling an unrecognized
+ * exit the nearest one would publish a durable result claiming this run knows
+ * what happened.
+ */
+function switchFailure(outcome: GitOutcome): GitFailureReason | undefined {
+  if (checkedOutElsewhere(outcome)) {
+    return "branch-checked-out-elsewhere";
+  }
+  if (/would be overwritten by/.test(outcome.stderr)) {
+    return "overwrites-local-changes";
+  }
+  return undefined;
 }
 
 /**

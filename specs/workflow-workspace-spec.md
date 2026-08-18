@@ -761,11 +761,44 @@ the transactional Workspace Git implementation, not an implicit host command.
 ```
 
 `branch` is required. Creation-only `base` is optional and defaults to current
-HEAD. Existing branches switch without reset; missing branches are created.
-Compatible local changes may carry, changes Git would overwrite fail and a
-branch checked out elsewhere fails. There are initially no path, detached,
-force or discard controls. `<Git.Checkout>` remains absent until its broader
-commit/path-restoration behavior has a distinct contract.
+HEAD. Existing branches switch without reset; missing branches are created. A
+branch the repository's remote published counts as existing, so naming one
+checks it out rather than creating another. `base` is therefore consulted only
+when the branch must be created. Compatible local changes may carry, changes Git
+would overwrite fail and a branch checked out elsewhere fails. There are
+initially no path, detached, force or discard controls. `<Git.Checkout>` remains
+absent until its broader commit/path-restoration behavior has a distinct
+contract.
+
+Which checkout moves is decided by where the element is written: the enclosing
+`<Repository>` supplies the Repository and the contextual working directory
+supplies the place, so the same element inside a `<Dir>` at a Worktree moves that
+Worktree. A directory *inside* a checkout selects that checkout — a Git operation
+written in `<Dir path="packages/core">` still operates on the whole checkout that
+directory belongs to, and that directory is only where the operation runs.
+
+Neither observation carries authority. The Repository is compared with the row
+the run retained under that name, member for member, and the working directory
+has to be a real directory inside one of the checkouts the run retains for it.
+No enclosing `<Repository>` at all, a Repository that is not the retained one, a
+directory inside no retained checkout, and retained state that no longer agrees
+with the identity naming it are failures of the run rather than outcomes: no Git
+runs, nothing is published, and `<PrintErrors>` cannot print them. The same is
+true of a native Git failure the provider has no word for — the refusals are a
+closed set, and an unrecognized one is infrastructure rather than the nearest
+word.
+
+Switch renders nothing, binds nothing and takes no content. What it retains is
+evidence: the checkout it ran in, the requested and resolved branch, the
+requested base and the commit a created branch actually started from, and the
+branch, commit, HEAD tree and index tree the checkout held before and after.
+
+A retained result is read back for the invocation that recorded it, and one whose
+identity, branch, base or transition does not describe that invocation is damage
+rather than history. A Worktree's name and its path are one identity, held to the
+placement that produced them; and switching to the branch a checkout is already
+on moves nothing, so a result whose commit, HEAD tree or index tree changed
+across it describes a transition Switch does not make.
 
 ### 7.2 Add
 
@@ -1277,7 +1310,7 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
-| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | defined here; unbuilt (#294) |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` built by #294, Deno provider only; `Git.Add` and `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |

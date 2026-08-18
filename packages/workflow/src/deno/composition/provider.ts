@@ -26,6 +26,8 @@
 
 import { type Operation } from "effection";
 import { RepositoryComposition } from "../../composition/api.ts";
+import { GitComposition } from "../../composition/git-api.ts";
+import type { GitSwitchRequest, GitSwitchResult } from "../../composition/git-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -41,7 +43,10 @@ import {
 } from "./repository.ts";
 import { createWorktree, prepareWorktreeAttachment, worktreeDisagreement } from "./worktree.ts";
 
+import { createGitSwitch } from "./switch.ts";
+
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
+export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
 
 /**
  * What a provider may observe about itself, for suites that count.
@@ -51,7 +56,7 @@ export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
  * and the provider counts the effects and attachments it performed.
  */
 export interface CompositionObserver {
-  effect?: (kind: "repository" | "worktree", name: string) => void;
+  effect?: (kind: "repository" | "worktree" | "git", name: string) => void;
   attachment?: (kind: "repository" | "worktree", name: string) => void;
 }
 
@@ -146,6 +151,33 @@ export function useRepositoryComposition(
             ),
           (git, attached) => worktreeDisagreement(git, attached, record),
         );
+      },
+    },
+    { at: "min" },
+  );
+}
+
+/**
+ * Install this run's transactional Git operations for the current scope and
+ * below.
+ *
+ * Separate from the composition provider above and installed beside it, because
+ * they answer different questions: that one owns what a checkout *is*, and this
+ * one owns what may be done to one. Both are installed only where a Workspace is
+ * attached, so ordinary `xmd run` has neither.
+ */
+export function useGitComposition(
+  database: WorkflowRunDatabase,
+  options: CompositionProviderOptions = {},
+): Operation<void> {
+  const host = options.host ?? denoRepositoryHost();
+  const observe = options.observe ?? {};
+
+  return GitComposition.around(
+    {
+      *switchBranch([request]: [GitSwitchRequest]): Operation<GitSwitchResult> {
+        observe.effect?.("git", "switch");
+        return yield* createGitSwitch(database, host, request);
       },
     },
     { at: "min" },
