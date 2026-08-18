@@ -318,29 +318,47 @@ write as much as a 404: a publish npm rejects is reported in npm's own words,
 where `silent` would have hidden both channels and left an exit code with the
 reason discarded.
 
+No read decides whether to publish. A read is a claim about a moment that has
+passed, and npm accepts a write before its package reads report it — so a
+reservation a read finds missing may have been made since, and one it makes may
+not be visible yet. Both failure modes were observed bootstrapping
+`@executablemd/workflow`: a completed run reported as failed because the read
+back still answered 404, and the re-run that followed planning a publish for a
+version that already existed. The placeholder is therefore always offered, and
+npm's answer settles it. npm 11.17 asks the registry for the package's versions
+with `preferOnline` before uploading anything and refuses over one it already
+carries with an uncoded error carrying `You cannot publish over the previously
+published versions: <version>` (`lib/commands/publish.js`); a registry that
+answered that check staler than itself refuses the upload instead, as
+`EPUBLISHCONFLICT`. Either is the answer "already reserved", from the party that
+decides it. Any other refusal is a failure and is reported as one.
+
+The reads that remain are guards, not decisions. A package carrying real
+versions is not one to offer a placeholder to — a mistyped `--props-package` is
+how that happens — so the versions and dist-tags are read before the code is
+requested and again after it, and either read refuses. Neither selects what
+happens next.
+
 The one-time password is requested after the preview succeeds and before the
 trusted publisher is read. `npm trust list` needs a code to answer at all: npm
 makes a package's trusted publisher readable only to someone who could change
 it, so what a package already trusts cannot be established without one. Every
 run that gets past the version reads is therefore asked for a code — including a
 re-run against a package that is already reserved and already trusted, which
-reads, reports the end state, and writes nothing. A package that needs only the
-trust half is asked for a code but builds no artifact, since there is nothing to
-publish for a preview to show.
+reads, reports the end state, and writes nothing. The artifact is built on every run, because
+every run offers it — the preview shows what will actually be attempted.
 
-npm accepts a publish before its package reads report it, and while it catches
-up a name it has just started carrying gives the same 404 as a name it does not
-carry at all. Reading straight back would call a completed run a failed one, so
-the confirming reads wait first: `when` asks the registry for the package until
-it answers, for up to a minute, and a package that was already there is answered
-on the first ask. The two answers come from one registry at different speeds, so
-reads still behind after that wait are reported as exactly that — the writes
-stand, and a re-run reports the end state.
+Nothing reads the package back to confirm it. Each write already answered, and
+that answer came from the party that decides it, so a package read could only
+disagree with what just happened. What is read back is the trusted publisher,
+which npm serves from an authenticated path rather than the packument cache and
+which answered truthfully while the package reads were still behind — it carries
+the id that revokes the configuration, which the document prints.
 
 Re-running is safe, and the two halves are skipped independently:
 
-- a package already at `0.0.0-bootstrap.0` under the `bootstrap` dist-tag is not
-  published again;
+- a package already at `0.0.0-bootstrap.0` is offered the placeholder again and
+  npm refuses it, which is how the run learns the reservation stands;
 - a trusted publisher already matching §4's table exactly — GitHub Actions,
   `taras/executable.md`, `publish-packages.yml`, `npm-publish`, and publish as
   its only permission — is not created again.

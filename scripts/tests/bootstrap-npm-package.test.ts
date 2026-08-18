@@ -8,8 +8,7 @@
  *
  * Substitution happens only at contextual Api boundaries: `Env.cwd` for the
  * workspace the document reads, `Elicitation` for the question, `API.Process`
- * for the code blocks, and `FetchApi` for the readiness probe the confirming
- * reads wait on. The document's own shell runs for real under bash, and
+ * for the code blocks. The document's own shell runs for real under bash, and
  * its manifests, artifact, comparisons and branching are the real components
  * and eval blocks. Only `npm` is replaced, by a shell function on `BASH_ENV`.
  * Nothing here contacts a registry.
@@ -25,9 +24,6 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-import { FetchApi } from "@effectionx/fetch";
-import type { FetchResponse } from "@effectionx/fetch";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -135,6 +131,10 @@ npm() {
     publish)
       echo 'npm notice publishing bootstrap artifact'
       if [ "\${NPM_PUBLISH_FAILS-}" = "1" ]; then return 1; fi
+      if [ "$(cat "$NPM_STATE_FILE")" != "missing" ]; then
+        echo "npm error You cannot publish over the previously published versions: ${BOOTSTRAP_VERSION}." >&2
+        return 1
+      fi
       printf 'bootstrap' > "$NPM_STATE_FILE"
       ;;
     trust)
@@ -214,39 +214,6 @@ function useFixture(): Operation<Fixture> {
   });
 }
 
-/**
- * What the registry answers the document's readiness probe.
- *
- * The probe reads a status and nothing else — it never touches the body — so
- * the response is built from a real `Response` and carries the fields that
- * status is read through. Consuming one of the body operations is a mistake
- * this substitute is entitled to make loudly rather than answer.
- */
-function readinessResponse(status: number, url: string): FetchResponse {
-  const raw = new Response(null, { status });
-  const noBody = () => {
-    throw new Error("the readiness probe reads no body");
-  };
-  return {
-    raw,
-    bodyUsed: false,
-    ok: raw.ok,
-    status: raw.status,
-    statusText: raw.statusText,
-    headers: raw.headers,
-    url,
-    redirected: false,
-    type: raw.type,
-    json: noBody,
-    text: noBody,
-    arrayBuffer: noBody,
-    blob: noBody,
-    formData: noBody,
-    body: noBody,
-    expect: noBody,
-  } as unknown as FetchResponse;
-}
-
 /** One recorded call to the fake npm. */
 interface NpmCall {
   args: string;
@@ -288,8 +255,6 @@ interface RunOptions {
   trustListFails?: boolean;
   /** Makes `npm view` report nothing published however the registry answers. */
   viewAlwaysMissing?: boolean;
-  /** How many readiness probes answer 404 before the registry reports ready. */
-  probeMisses?: number;
   /** How the provider behaves: answer correctly, fail, or break its schema. */
   elicit?: "answer" | "throw" | "invalid";
   /** Overrides the `package` prop, for the input-validation cases. */
@@ -303,8 +268,6 @@ interface Run {
   output: string;
   calls: NpmCall[];
   requests: ElicitationRequest[];
-  /** Every URL the document's readiness probe asked for. */
-  probes: string[];
   /** Every command the Process Api was asked to run, interception included. */
   execCount: number;
 }
@@ -320,7 +283,6 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
     yield* writeTextFile(fixture.logFile, "");
 
     const requests: ElicitationRequest[] = [];
-    const probes: string[] = [];
     const counter = { execs: 0 };
 
     // Installed on this scope, not inside a resource: middleware installs on the
@@ -360,22 +322,6 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
             return { unexpected: true };
           }
           return { code: CODE };
-        },
-      },
-      { at: "min" },
-    );
-
-    // The document's readiness probe is a real HTTP request, and the fake npm
-    // is a shell function it cannot reach. Answering it from the same state
-    // file keeps the two agreeing, and keeps this suite off the network.
-    yield* FetchApi.around(
-      {
-        *fetch([input]) {
-          const url = String(input);
-          probes.push(url);
-          const lagging = probes.length <= (options.probeMisses ?? 0);
-          const missing = (yield* readTextFile(fixture.stateFile)) === "missing";
-          return readinessResponse(lagging || missing ? 404 : 200, url);
         },
       },
       { at: "min" },
@@ -433,7 +379,6 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
       output: chunks.join(""),
       calls: parseLog(yield* readLog(fixture)),
       requests,
-      probes,
       execCount: counter.execs,
     };
   });
@@ -547,28 +492,27 @@ describe("bootstrap an npm package", () => {
       expect(trustAt).toBeGreaterThan(publishAt);
     });
 
-    it("skips the publish for an existing reservation and installs the missing trust", function* () {
+    it("installs the missing trust on a reservation that is already there", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "bootstrap", trust: "" });
 
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
       expect(result.output).toContain(
-        "@executablemd/fixture is already reserved at 0.0.0-bootstrap.0 — the publish will be skipped",
+        "@executablemd/fixture already carries 0.0.0-bootstrap.0 — the publish below will say so",
       );
     });
 
-    it("asks for a code but builds no artifact when only the trust is missing", function* () {
+    it("previews the artifact it will attempt, whatever the read said", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "bootstrap", trust: "" });
 
       expect(result.ok).toBe(true);
-      // There is something to write, so it asks.
       expect(result.requests.length).toBe(1);
-      // But nothing to publish, so it previews no artifact that will not ship.
-      expect(called(result, "pack")).toBe(false);
-      expect(called(result, "publish")).toBe(false);
+      // The publish is attempted either way, so the preview always shows the
+      // artifact that will be offered — there is no plan for it to disagree with.
+      expect(called(result, "pack")).toBe(true);
+      expect(called(result, "publish")).toBe(true);
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
     });
 
@@ -578,17 +522,16 @@ describe("bootstrap an npm package", () => {
 
       expect(result.failure).toBe("");
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
+      // The publish is offered and refused, so nothing is written by it; the
+      // trust is not offered at all, because the read said it is already ours.
+      expect(result.output).toContain("was already reserved — npm refused a second copy");
       expect(called(result, "trust github")).toBe(false);
       expect(result.output).toContain("Its trusted publisher already matches");
       // It still asks: npm answers `trust list` only with a code, so a run
-      // cannot establish that there is nothing to do without one. Nothing is
-      // written on that answer, and no artifact is built for a publish that
-      // will not happen.
+      // cannot establish that there is nothing to do without one.
       expect(result.requests.length).toBe(1);
-      expect(called(result, "pack")).toBe(false);
-      // It still reads the registry back and reports the end state.
-      expect(result.output).toContain("is the only published version");
+      // It still reports the end state it read back.
+      expect(result.output).toContain("is reserved under the bootstrap dist-tag");
     });
   });
 
@@ -785,7 +728,7 @@ describe("bootstrap an npm package", () => {
       expect(yield* readTextFile(fixture.trustFile)).toBe(foreign);
     });
 
-    it("adopts a reservation somebody else completed, without publishing again", function* () {
+    it("adopts a reservation somebody else completed while you answered", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, {
         state: "missing",
@@ -794,7 +737,9 @@ describe("bootstrap an npm package", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
+      // npm refuses the publish it was offered, which is how the document
+      // learns the reservation arrived while the operator was away.
+      expect(result.output).toContain("was already reserved — npm refused a second copy");
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
     });
   });
@@ -825,40 +770,39 @@ describe("bootstrap an npm package", () => {
 
       expect(again.failure).toBe("");
       expect(again.ok).toBe(true);
-      expect(called(again, "publish")).toBe(false);
+      expect(again.output).toContain("was already reserved — npm refused a second copy");
       expect(called(again, "trust github @executablemd/fixture")).toBe(true);
       expect(yield* readTextFile(fixture.trustFile)).toBe(EXPECTED_TRUST);
     });
   });
 
-  describe("waiting out a registry that has not caught up", () => {
-    it("asks the registry for this package before reading it back", function* () {
+  describe("letting the write settle the reservation", () => {
+    it("reserves the name when npm accepts the publish", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "missing", trust: "" });
 
       expect(result.ok).toBe(true);
-      // Named, so a gate that stopped running cannot pass by doing nothing.
-      expect(result.probes.length).toBeGreaterThan(0);
-      expect(result.probes[0]).toContain("@executablemd/fixture");
+      expect(result.output).toContain(
+        "Reserved @executablemd/fixture@0.0.0-bootstrap.0 under the bootstrap dist-tag",
+      );
     });
 
-    it("keeps asking until the registry carries the package it just wrote", function* () {
+    it("takes npm's refusal over an existing version as the reservation", function* () {
       const fixture = yield* useFixture();
-      const result = yield* run(fixture, {
-        state: "missing",
-        trust: "",
-        probeMisses: 2,
-      });
+      const result = yield* run(fixture, { state: "bootstrap", trust: "" });
 
-      // The run that started this: both writes land, the registry has not
-      // caught up, and the old document called that a failed publish.
+      // The run that broke: a stale read planned a publish for a version that
+      // was already there. npm refusing it is the answer, not a failure.
       expect(result.failure).toBe("");
       expect(result.ok).toBe(true);
-      expect(result.probes.length).toBe(3);
-      expect(result.output).toContain("is the only published version");
+      expect(called(result, "publish --access public --tag bootstrap")).toBe(true);
+      expect(result.output).toContain(
+        "@executablemd/fixture@0.0.0-bootstrap.0 was already reserved — npm refused a second copy",
+      );
+      expect(called(result, "trust github @executablemd/fixture")).toBe(true);
     });
 
-    it("says the reads are behind rather than that nothing was published", function* () {
+    it("confirms a publish it made without reading the package back", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, {
         state: "missing",
@@ -866,14 +810,31 @@ describe("bootstrap an npm package", () => {
         viewAlwaysMissing: true,
       });
 
+      // The other run that broke: `npm view` never reports the package, which
+      // is what a registry lagging its own writes looks like. Nothing reads it
+      // back, so nothing contradicts the publish that succeeded.
+      expect(result.failure).toBe("");
+      expect(result.ok).toBe(true);
+
+      // Structural, not incidental: no package read happens after the write.
+      const publishAt = result.calls.findIndex((call) => call.args.startsWith("publish"));
+      expect(publishAt).toBeGreaterThanOrEqual(0);
+      const readBack = result.calls.findIndex(
+        (call, index) => index > publishAt && call.args.startsWith("view"),
+      );
+      expect(readBack).toBe(-1);
+    });
+
+    it("reports a publish npm refused for some other reason", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "missing", trust: "", publishFails: true });
+
       expect(result.ok).toBe(false);
-      // Both writes happened; only the reading half is behind.
-      expect(called(result, "publish --access public --tag bootstrap")).toBe(true);
-      expect(called(result, "trust github @executablemd/fixture")).toBe(true);
-      expect(result.output).toContain("package reads still report nothing published");
-      expect(result.output).toContain("Nothing here failed and nothing is half done");
-      // The claim the old message made, and the one the operator acted on.
-      expect(result.output).not.toContain("is not reserved at");
+      // A refusal that is not a conflict is a failure, and says so in npm's
+      // words rather than being read as "already reserved".
+      expect(result.output).toContain("npm refused to publish");
+      expect(result.output).not.toContain("was already reserved");
+      expect(called(result, "trust github")).toBe(false);
     });
   });
 
