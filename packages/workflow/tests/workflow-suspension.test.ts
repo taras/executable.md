@@ -16,7 +16,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, type Operation, race, scoped } from "effection";
+import { call, ensure, type Operation, race, resource, scoped, until } from "effection";
+import { cp, mkdtemp, symlink } from "node:fs/promises";
+import { rm } from "@effectionx/fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { type Api, createApi } from "@effectionx/context-api";
 import {
   createDurableOperation,
@@ -32,6 +37,7 @@ import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { useStorageRoot, withBegunRun } from "./support/storage.ts";
 import type { WorkflowRun } from "../src/run.ts";
 import { WorkflowSuspension } from "../src/suspension/api.ts";
+import type { WorkflowSuspensionRequest } from "../src/suspension/api.ts";
 import type { WorkflowSuspensionApi } from "../src/suspension/api.ts";
 import { parseSuspensionRequest, WorkflowSuspensionRequestError } from "../src/suspension/api.ts";
 import { SUSPENSION_REQUEST, suspendFor } from "../src/suspension/suspend.ts";
@@ -142,6 +148,41 @@ function* forgedRequest(id: string): Workflow<void> {
       return id;
     },
   );
+}
+
+interface LoadedCopy {
+  readonly suspendFor: (request: WorkflowSuspensionRequest) => Operation<Json>;
+}
+
+/**
+ * This package, loaded a second time from a copy of its own source.
+ *
+ * `node_modules` is linked rather than copied so the copy resolves the same
+ * Effection — which is the realistic shape, since a component's dependency
+ * resolves through the same store the binary did. What differs is this
+ * package's own module instances, and therefore its `WorkflowSuspension`.
+ */
+function useLoadedCopy(): Operation<LoadedCopy> {
+  return resource<LoadedCopy>(function* (provide) {
+    const workflow = fileURLToPath(new URL("../", import.meta.url));
+    const root = fileURLToPath(new URL("../../../", import.meta.url));
+    const directory = yield* until(mkdtemp(join(tmpdir(), "xmd-workflow-copy-")));
+    yield* ensure(function* () {
+      yield* rm(directory, { recursive: true, force: true });
+    });
+
+    yield* until(cp(join(workflow, "src"), join(directory, "src"), { recursive: true }));
+    yield* until(cp(join(workflow, "mod.ts"), join(directory, "mod.ts")));
+    yield* until(cp(join(workflow, "deno.json"), join(directory, "deno.json")));
+    yield* until(symlink(join(root, "node_modules"), join(directory, "node_modules")));
+
+    const loaded = yield* until(import(pathToFileURL(join(directory, "mod.ts")).href));
+    const suspendFor = Reflect.get(Object(loaded), "suspendFor");
+    if (typeof suspendFor !== "function") {
+      throw new Error("the loaded copy exports no suspendFor()");
+    }
+    yield* provide({ suspendFor });
+  });
 }
 
 describe("Tier WS — a durable wait's request and identity", () => {
@@ -347,7 +388,7 @@ describe("Tier WS — a durable wait's request and identity", () => {
     });
   });
 
-  it("WS7: a durable operation wearing the request's shape does not enter its wait", function* () {
+  it("WS7: an operation replaying the request at its exact position is that wait", function* () {
     yield* withRun(function* (database) {
       const reached: string[] = [];
 
@@ -401,19 +442,23 @@ describe("Tier WS — a durable wait's request and identity", () => {
             request: { kind: "approval" },
             responseSchema: SCHEMA,
           });
-          refusal = "accepted";
         } catch (error) {
           refusal = String(error);
         }
       });
 
-      // Standing in the right place is not being the right operation.
-      expect(refusal).toContain("only this run's own suspendFor()");
-      expect(forged.notice).toBeUndefined();
+      // Standing at the validated wait *is* being at it. The operation that
+      // replayed the retained request arrived where the real one publishes, so
+      // it reports the same wait rather than a new one — what identifies a wait
+      // is the request at that position, not which code reached it.
+      expect(refusal).toBe("");
+      expect(forged.notice?.suspensionId).toBe(id);
 
-      // It settled no wait and published nothing: the request it replayed is
-      // still the one the real operation made.
+      // And it is the same wait, not another: nothing was appended.
       expect(requests(forged.events)).toHaveLength(1);
+      expect(
+        forged.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toHaveLength(0);
 
       // And the prior effect was performed once, by the first execution.
       expect(reached).toEqual(["performed-prior-effect"]);
@@ -442,19 +487,63 @@ describe("Tier WS — a durable wait's request and identity", () => {
         continued.push("continued-past-the-wait");
       });
 
-      // The wait reached the execution-owned controller regardless: the real
-      // operation does not go through the replaceable path.
-      expect(attempted.notice?.suspensionId).toBeDefined();
-      expect(requests(attempted.events)).toHaveLength(1);
-
-      // The middleware's value was never returned and the document never ran on.
+      // Middleware may refuse the route for its descendants, so the controller
+      // may never hear of this wait — that is composition. What it may not do is
+      // answer: the value it returned is not a suspension answer, so the
+      // operation does not return it and the document does not run on.
       expect(returned).toBeUndefined();
       expect(continued).toEqual([]);
 
-      // No outcome was recorded for a document that is waiting.
+      // Nor did it synthesize a wait for anyone to settle, and the operation
+      // said why rather than passing the value on.
+      expect(attempted.notice).toBeUndefined();
+      expect(String(attempted.thrown)).toContain("other than this run's suspension controller");
+
+      // The request the document published is still exactly one.
+      expect(requests(attempted.events)).toHaveLength(1);
+
+      // The run did not complete. A suppressed route is a wait that could not be
+      // entered, so the document fails there rather than finishing as though it
+      // had been answered.
+      const closes = attempted.events.filter(
+        (event) => event.type === "close" && event.coroutineId === "root",
+      );
+      for (const close of closes) {
+        expect(close.type === "close" && close.result.status).not.toBe("ok");
+      }
+    });
+  });
+
+  it("WS9: a separately loaded copy of this package reaches the running controller", function* () {
+    yield* withRun(function* (database) {
+      // A real second copy of the package, imported through its own path so it
+      // is a distinct module instance with its own `WorkflowSuspension`. This is
+      // the deployment shape a component brings its own dependency in: the
+      // binary runs one copy and the component carries another, and the wait has
+      // to cross that boundary.
+      const copy = yield* useLoadedCopy();
+
+      const attempted = yield* attempt(database, function* () {
+        yield* copy.suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+      });
+
+      // It found the controller this execution installed, not a default that
+      // refuses: the route is a stable name, and a name is what two copies share.
+      expect(String(attempted.thrown)).not.toContain("no suspension controller");
+      expect(attempted.notice?.suspensionId).toBeDefined();
+
+      // One request, and the wait is still open.
+      expect(requests(attempted.events)).toHaveLength(1);
       expect(
         attempted.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
       ).toHaveLength(0);
+
+      // A resume through the same copy reaches the same wait and adds nothing.
+      const resumed = yield* attempt(database, function* () {
+        yield* copy.suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+      });
+      expect(resumed.notice?.suspensionId).toBe(attempted.notice?.suspensionId);
+      expect(requests(resumed.events)).toHaveLength(1);
     });
   });
 });

@@ -25,13 +25,13 @@
  * Yield means the request was retained. It does not mean the wait ended, and it
  * does not authorize anything.
  *
- * **Authority last, and it is this operation running.** The execution-owned
- * controller accepts the wait only from this operation, at the position it just
- * published from. Neither half is sufficient alone: a retained request proves
- * publication rather than arrival, and a position can be reached by any durable
- * operation of the same shape. Nothing is handed to the caller to present,
- * because anything a caller could hold is something another caller could
- * obtain.
+ * **Authority last, and it is the request at this position.** The controller is
+ * reached through a stable contextual name, which is how a component's own
+ * loaded copy of this package finds the controller the running binary installed.
+ * That route is composition rather than authority: middleware may refuse it, but
+ * no value it returns is an answer and none of them makes this operation
+ * continue. What authorizes the wait is the retained request at the exact
+ * position this operation just published from.
  *
  * ## Why replay reaches the same wait
  *
@@ -48,8 +48,12 @@ import { canonicalFingerprint, type Json } from "@executablemd/core";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
 import { getWorkflowRun } from "../run.ts";
-import { armSuspensionEntry, enterSuspension } from "./entry.ts";
-import { parseSuspensionRequest, type WorkflowSuspensionRequest } from "./api.ts";
+import {
+  parseSuspensionRequest,
+  WorkflowSuspension,
+  WorkflowSuspensionRequestError,
+  type WorkflowSuspensionRequest,
+} from "./api.ts";
 
 /** The effect type one durable wait's request is retained under. */
 export const SUSPENSION_REQUEST = "suspension_request";
@@ -115,9 +119,16 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
   // it to check.
   yield* publishRequest(id, parsed);
 
-  // Armed immediately before entering, and taken by the controller: the wait is
-  // entered by the operation that is running, not by whatever reached this
-  // position.
-  armSuspensionEntry(id);
-  return yield* enterSuspension(run.runId, id, parsed);
+  yield* WorkflowSuspension.operations.enter(id, parsed);
+
+  // Reaching this line means the route answered. Nothing may: this slice
+  // delivers no answers, so the controller that accepts a wait never returns
+  // from it, and any value here came from a handler standing between this
+  // operation and that controller. A suppressed route is a wait that cannot be
+  // entered — it is not an answer, and the document does not continue past it.
+  throw new WorkflowSuspensionRequestError(
+    "the durable wait was answered by something other than this run's suspension controller. " +
+      "No answer delivery exists yet, so a value here is a handler standing in the way of the " +
+      "wait rather than the end of it.",
+  );
 }

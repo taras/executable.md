@@ -22,14 +22,17 @@
  * suspension request. Remaining pending is what makes the halt the only way out
  * of the wait, and the halt is what leaves the root without a Close.
  *
- * ## Authority is the operation, then the position
+ * ## The route composes; the position authorizes
  *
- * `enter` accepts a suspension only from `suspendFor()` itself — which says so
- * through a slot no other module can reach — and only at the position that
- * operation just published from. Both are required. Retained history is evidence
- * of publication rather than of arrival, and a position is reachable by any
- * durable operation of the same type and name, since that pair is all replay
- * identity compares.
+ * The controller is reached through a stable contextual name, so a component
+ * carrying its own loaded copy of this package finds the controller the running
+ * binary installed. That name is composition: middleware may refuse it for its
+ * descendants, and nothing it returns is an answer.
+ *
+ * What authorizes entry is the retained request at the caller's exact current
+ * durable position. Another durable operation can reproduce that request and
+ * arrive there — replay identity is a type and a name, both public — and when it
+ * does, it is standing at the same validated wait rather than at one of its own.
  *
  * There is deliberately nothing to hold and nothing to present. A capability
  * object has to be reachable to be used, and in this runtime anything reachable
@@ -52,7 +55,6 @@ import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
 import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
 import { durablePosition } from "@executablemd/durable-streams";
-import { installSuspensionEntry, takeSuspensionEntry } from "../suspension/entry.ts";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
@@ -65,10 +67,11 @@ export interface SuspensionNotice {
 
 export interface SuspensionControllerOptions {
   /**
-   * The run whose retained history is read as evidence for a wait.
+   * The run whose retained request at the caller's position admits a wait.
    *
-   * Evidence, not admission: what the journal shows is checked, and the entry
-   * the real `suspendFor()` armed is what admits.
+   * Read here rather than trusted from the caller: the identifier presented has
+   * to be the one this run derives for the position immediately behind the
+   * caller's own, and the yield there has to be that request.
    */
   readonly database: WorkflowRunDatabase;
   /**
@@ -213,20 +216,11 @@ export function createSuspensionController(
         }
 
         function* accept(suspension: string, request: WorkflowSuspensionRequest): Operation<never> {
-          const armedFor = takeSuspensionEntry();
-
           if (!(yield* atOwnRequest(options.database, suspension, request))) {
             throw new WorkflowRequestError(
               "this execution is not at that durable wait. A wait is entered by the execution " +
                 "that has just published its request, at the position that request was made — " +
                 "not by presenting an identifier a run retains somewhere else.",
-            );
-          }
-          if (armedFor !== suspension) {
-            throw new WorkflowRequestError(
-              "only this run's own suspendFor() may enter a durable wait. A durable " +
-                "operation that reproduces a retained request reaches the same position " +
-                "without being the operation that request belongs to.",
             );
           }
           seen = { suspensionId: suspension, request };
@@ -245,14 +239,6 @@ export function createSuspensionController(
         if (duringTeardown !== undefined) {
           yield* ensure(duringTeardown);
         }
-
-        // Installed where `suspendFor()` looks, which is not a contextual API:
-        // a contextual API composes, and a public handler that answered this
-        // without delegating would return a value from a wait that never
-        // happened. The public API is still installed below, and still refuses
-        // — nothing reaches it with an armed entry, because the real operation
-        // never goes that way.
-        yield* ensure(installSuspensionEntry(options.database.record.runId, accept));
 
         yield* WorkflowSuspension.around(
           {
