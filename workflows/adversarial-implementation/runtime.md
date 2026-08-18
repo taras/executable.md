@@ -183,8 +183,10 @@ An automated iteration stops on the first applicable signal:
 
 Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
 question during execution, and under `xmd run` the WebForm provider answers it
-in a browser. Under `xmd workflow` it is the same `<Elicit>`, answered inside the
-execution that asked it.
+in a browser. Under `xmd workflow` it is the same `<Elicit>` and the same
+provider: an unanswered question opens a loopback form and blocks the run, which
+stays `running`, settles nothing as `suspended`, records no suspension request,
+and keeps its executor lock. An authored `<Answers>` region answers it instead.
 
 A durable suspension is a different mechanism, and it is shipped as substrate:
 `suspendFor()` suspends a run and gives its executor lock back (#367), and a
