@@ -1034,7 +1034,7 @@ durable observations and mutations restore.
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | Git.Add/Switch/Commit | restore transactional result |
-| Git.Push/PullRequest | restore or reconcile stable external identity |
+| Git.Push/PullRequest/Issue | restore the retained reconciliation record, or observe the forge again under the same external identity and adopt only a proven compatible completion |
 
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
@@ -1090,19 +1090,65 @@ declarative Git operations use this boundary.
 
 ### 10.2 External effects
 
-Prompt, Push and PullRequest cannot place provider-owned state in SQLite. Each
-derives one stable effect identity from run and expansion, performs or observes
-the provider operation and commits one local result transaction.
+Prompt, Push, pull request and issue creation cannot place provider-owned state
+in SQLite. Each derives one stable effect identity from run and expansion,
+observes the provider operation and commits one local result transaction.
 
-After interruption:
+One reconciliation serves all of them. `reconcileForgeEffect(request)` is the
+state machine every external forge effect runs through, so a new effect kind
+supplies a request and a provider rather than a replay policy of its own.
+
+**The request.** Identity is the run ID and the expansion ID, derived by the
+shared operation. Neither the document nor the provider supplies either member.
+The effect supplies a non-empty `kind`, JSON `inputs` and a JSON `naturalKey` —
+what the provider looks the effect up by when no local result exists.
+Credentials are not inputs and stay inside the provider. The durable operation
+is named by a SHA-256 fingerprint of the complete detached request, so a changed
+kind, input or natural key diverges rather than consuming the result retained at
+the same journal position.
+
+**The decision.** One live attempt observes before it mutates:
 
 ```text
-definitely absent        → perform
-definitely compatible    → adopt result
-temporarily unobservable → explicit middleware may retry or suspend
+definitely absent        → perform, once
+definitely compatible    → adopt the observed result
 conflicting              → fail
 permanently ambiguous    → fail; never duplicate
+temporarily unobservable → fail as itself; explicit middleware may retry or suspend
 ```
+
+Proven absence is the only state that performs, and one attempt performs at most
+once. Temporary unavailability is neither absence nor conflict, and never
+authorizes a mutation: a later explicit attempt starts again at observation.
+
+**The record.** A decision publishes one journal result holding the request, the
+normalized pre-state, the normalized observations, the decision — `adopted` or
+`performed` — and the normalized result. Replaying it contacts no provider and
+installs none, and the retained record is parsed and compared with the request
+being made before it is accepted. Conflict, permanent ambiguity and temporary
+unavailability publish the same effect's failed result and replay as the same
+fixed local failure, reconstructed from its closed name rather than recognized
+across loaded copies.
+
+**Provider routing.** The contextual forge surface selects a provider; it is not
+completion authority. Each phase mints a one-use route and a separate opaque
+credential, routes only the route through the contextual call, and places the
+phase's evidence and its answer behind a capability that accepts only the
+credential. A handler may observe, narrow or refuse a phase; a short circuit, a
+forged return, a substituted selection and a reused request complete nothing,
+and a throw after a real provider answered cannot replace that answer. A
+provider answers only the closed normalized shapes, parsed at that boundary
+before the durable operation returns. A missing, foreign, substituted or reused
+selection and an unreadable answer publish nothing and fail the run's
+durability, because no provider outcome exists to record.
+
+**Cancellation.** Cancellation tears down the provider call, publishes no
+invented completion, and is never reported as provider unavailability.
+
+**The journal.** Every description and result crosses the existing
+pre-persistence secret filter. There is no side journal, table, raw provider
+log, payload cache or alternate persistence route, and no schema change: the
+filtered Yield is the local record.
 
 No separate local `started` and `completed` journal protocol is required. A
 missing result causes reconciliation under the same deterministic identity.

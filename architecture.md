@@ -913,13 +913,35 @@ authority ends. The transaction-bound Files provider selects that operation for
 every document filesystem read, write and search, and the workflow lifecycle
 commands install that provider.
 
-An external provider cannot join that transaction. Prompt, Git push and pull
-request effects derive a stable identity from the run and expansion, ask the
-provider to perform or reconcile that identity, then append one local result
-transaction. Replay adopts proven compatible completion, performs a proven
-absence and refuses conflicting or permanently ambiguous state. Temporary
-provider unavailability may be retried or suspended by explicit middleware; it
-never authorizes a duplicate effect while completion is unknown.
+An external provider cannot join that transaction. Prompt, Git push, pull
+request and issue effects derive a stable identity from the run and expansion,
+ask the provider to observe that identity, then append one local result
+transaction. One shared provider-neutral reconciliation owns that boundary for
+all of them, so a new external effect kind supplies a request and a provider
+rather than a replay policy of its own. A live attempt observes before it
+mutates: it adopts proven compatible completion, performs a proven absence
+exactly once, and refuses conflicting or permanently ambiguous state. Temporary
+provider unavailability is its own ordinary failure; explicit middleware may
+retry or suspend it, and it never authorizes a duplicate effect while completion
+is unknown.
+
+That reconciliation reuses the capability-backed Workspace coordination shape
+without its transaction. A replaceable contextual API selects a provider and
+carries no completion authority. Each phase mints a one-use route and a separate
+opaque credential, routes only the route through the contextual call, and places
+the phase's evidence and its answer behind an execution-owned capability that
+accepts only that credential. The durable operation is named by a fingerprint of
+the complete detached request, so a changed kind, input or natural key diverges
+rather than consuming the result retained at the same position, and the
+provider's answer is parsed at that boundary before the durable executor
+returns, so a raw payload becomes a fixed protocol failure rather than journal
+content. Conflict, permanent ambiguity and temporary unavailability publish the
+effect's failed result and replay as the same fixed local failure, reconstructed
+from its closed name rather than recognized by identity across loaded copies. A
+missing, foreign, substituted or reused selection and an unreadable answer
+publish nothing and activate fail-stop instead, because no provider outcome
+exists to record and a live operation that appended nothing would leave the next
+one to append at its position.
 
 Every committed journal event references the current logical Workspace root.
 Only committed event boundaries are checkpoints. A history fork cheaply retains
@@ -2094,6 +2116,7 @@ Status is measured against main.
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
+| shared forge reconciliation | reconciles every external forge effect through one provider-neutral state machine: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, and temporary unavailability as its own ordinary failure; provider selection is replaceable context and completion is an execution-owned capability | built on the #297 stack; `Git.Push`, pull request and issue components are its consumers, unbuilt (#370, #295, #296) |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |

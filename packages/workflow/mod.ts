@@ -24,6 +24,18 @@
  * names no provider. The Deno host installs its own from
  * `@executablemd/workflow/deno`; nothing here imports it, and nothing here
  * imports SQLite, Deno or any other host.
+ *
+ * ## External forge effects
+ *
+ * A forge — whatever service holds branches, pull requests and issues — owns
+ * state no local transaction can enclose, so pushing, opening a pull request
+ * and filing an issue all face the same question after an interruption: did the
+ * previous attempt already succeed? `reconcileForgeEffect()` answers it once,
+ * for all of them. A live attempt observes under an identity derived from the
+ * run and the expansion, then adopts a proven compatible completion, performs a
+ * proven absence exactly once, or refuses. `withForgeProvider()` installs the
+ * provider that answers those phases; the provider is selected contextually and
+ * completes nothing on that surface's authority.
  */
 
 export {
@@ -89,6 +101,36 @@ export type {
   GitSwitchResult,
 } from "./src/composition/git-records.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
+
+export { Forge } from "./src/forge/api.ts";
+export type { ForgeApi, ForgeProvider } from "./src/forge/api.ts";
+export {
+  ForgeAmbiguousError,
+  ForgeConflictError,
+  ForgeProtocolError,
+  ForgeProviderError,
+  ForgeUnavailableError,
+} from "./src/forge/errors.ts";
+export {
+  completeForgeEffectRequestJson,
+  forgeReconciliationRecordJson,
+  parseCompleteForgeEffectRequest,
+  parseForgeCompletion,
+  parseForgeEffectIdentity,
+  parseForgeObservation,
+  parseForgeReconciliationRecord,
+  sameCompleteForgeEffectRequest,
+} from "./src/forge/records.ts";
+export type {
+  CompleteForgeEffectRequest,
+  ForgeCompletion,
+  ForgeDecision,
+  ForgeEffectIdentity,
+  ForgeEffectRequest,
+  ForgeObservation,
+  ForgeReconciliationRecord,
+} from "./src/forge/records.ts";
+export { reconcileForgeEffect, withForgeProvider } from "./src/forge/effect.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
 export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";

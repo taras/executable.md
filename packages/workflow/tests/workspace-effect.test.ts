@@ -80,13 +80,20 @@ function successfulProvider(observe?: (authority: WorkspaceCoordinationAuthority
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 
 /**
- * Storage and adapter type names that mean a host reached this surface.
+ * Storage, adapter and provider names that mean a host reached this surface.
  *
  * Distinctive enough to be read as text. Runtime globals are not here — `Bun`
  * is inside `Bundle` and `Deno` inside `Denominator`, so those are recognized
  * as identifiers instead.
+ *
+ * A forge's name is on the list for the same reason a database's is. The shared
+ * external-effect boundary exists so that any forge can be adapted to it, and
+ * the first adapter naming itself in a shared contract is how a neutral surface
+ * quietly becomes one provider's.
  */
 const FORBIDDEN = [
+  "GitHub",
+  "github",
   "DatabaseSync",
   "SQLite",
   "sqlite",
@@ -641,6 +648,14 @@ describe("Tier DLC — Workspace coordination selection", () => {
     expect(forbiddenNames(`import "@executablemd/runtime";`)).toEqual([]);
     expect(forbiddenNames("const id = crypto.randomUUID();")).toEqual([]);
 
+    // The first forge adapter is a provider, never a shared contract.
+    expect(forbiddenNames(`type Request = { readonly repository: string };`)).toEqual([]);
+    expect(forbiddenNames(`type Request = { readonly gitHubRepository: string };`)).toEqual([]);
+    expect(forbiddenNames(`type Request = { readonly githubRepository: string };`)).toEqual([
+      "github",
+    ]);
+    expect(forbiddenNames(`import { push } from "./GitHubForge.ts";`)).toEqual(["GitHub"]);
+
     const found = (yield* glob({
       root: REPOSITORY,
       patterns: [
@@ -679,6 +694,13 @@ describe("Tier DLC — Workspace coordination selection", () => {
         "packages/workflow/src/composition/errors.ts",
         "packages/workflow/src/composition/installation.ts",
         "packages/workflow/src/composition/records.ts",
+        // The shared external-effect boundary is provider-neutral on the same
+        // terms and for a sharper reason: it exists so a forge adapter can be
+        // written for any forge, and a host name here would decide which one.
+        "packages/workflow/src/forge/api.ts",
+        "packages/workflow/src/forge/effect.ts",
+        "packages/workflow/src/forge/errors.ts",
+        "packages/workflow/src/forge/records.ts",
         "packages/workflow/src/storage/api.ts",
         "packages/workflow/src/workspace/api.ts",
         "packages/workflow/src/workspace/effect.ts",
