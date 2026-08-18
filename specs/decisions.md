@@ -463,16 +463,17 @@ store durable runtime state, not overridable core operations.
 
 ---
 
-## DEC-013: A red `main` is reported as an issue; no required checks, no merge queue
+## DEC-013: A red `main` is reported as an issue and gates pull requests; no merge queue
 
-**Status:** Decided
+**Status:** Decided (extended 2026-08-18)
 **Date:** 2026-08-05
 
 ### Context
 
 The `main` ruleset (id `13643935`) carries `deletion`, `non_fast_forward`, and
-`pull_request`, and **no required status checks**. A failed CI run on `main`
-therefore blocks nothing, notifies nobody, and sits until someone opens the
+`pull_request`, and requires the single aggregate check `green`. When this
+decision was first taken it required **no status checks at all**, so a failed CI
+run on `main` blocked nothing, notified nobody, and sat until someone opened the
 Actions tab.
 
 The cost of that is not hypothetical. `main` was red for two consecutive runs
@@ -515,27 +516,78 @@ Three properties follow, and each is the answer to a way the first design broke:
   same action then says there is nothing to do.
 - **A failed read fails the run.** Reading "no authoritative run" out of a query
   that failed would make an outage indistinguishable from a green `main`.
+- **The reporter runs trusted code only.** It holds `issues: write`, so it checks
+  out `main` rather than the ref that woke it — everything it executes has to be
+  code that was already reviewed. The gate below is the other side of that rule:
+  it holds no write permission at all, so it runs the pull request's own
+  checkout, and stays changeable by the pull request that changes it.
 
-**Required status checks: one, not eight — and separately.** GitHub's rule
-matches check-run names, and every job is its own check run; there is no
-built-in check meaning "the CI workflow passed". Listing the eight jobs would
-put a hand-maintained copy of `ci.yml`'s job list in repository settings, where
-a job added and not listed is silently ungated and nothing reports it. The
-decision is therefore to require **one** aggregate check that fails unless every
-job succeeded or was deliberately skipped.
+**Required status checks: one, not eight.** GitHub's rule matches check-run
+names, and every job is its own check run; there is no built-in check meaning
+"the CI workflow passed". Listing the jobs would put a hand-maintained copy of
+`ci.yml`'s job list in repository settings, where a job added and not listed is
+silently ungated and nothing reports it. The ruleset therefore requires **one**
+aggregate check, `green`, and `ci.yml`'s own regression test holds `green.needs`
+to every job in the file.
 
-It is tracked as #336, not built here. Gating pull
-requests does not reach a push to `main`, which is the gap this decision exists
-for, so the two are complementary and neither waits on the other.
+`green` requires each job to produce the result its event calls for. "Succeeded
+or was deliberately skipped" was the original rule and it became too weak the
+moment a job was conditional: it read a job that never ran as satisfied. So a job
+that always runs must succeed outright, and each conditional job is required
+exactly where it runs.
 
-**Merge queue: not now.** It is the only mechanism that makes "every commit
+**Reporting is not gating, so `main-green` gates.** An issue reaches a person; it
+does not stop the next pull request merging onto the base that broke. That is the
+worse half of the failure, because work then lands on an unproven `main` and the
+next failure cannot be told apart from the one already open. The `main-green` job
+withholds `green` from an ordinary pull request until CI has completed
+successfully for `main`'s **exact** current head.
+
+Exactness is the whole claim. A successful run for the previous head is precisely
+the state a red `main` is in one commit after it broke, so an inexact gate would
+pass in the case it exists for. The gate therefore selects the authoritative run
+with this decision's own rules — `selectAuthoritative()`, shared with the
+reporter rather than reimplemented — and reads `main`'s head a second time after
+inspecting the run, because a head that moved in between means the verdict is
+about a commit that is no longer the base. Missing, unfinished, cancelled,
+timed-out, startup-failed and failed runs all block; only `completed` plus
+`success` passes.
+
+The gate holds `contents: read` and `actions: read` and nothing more. It decides
+a required check, so it must not be able to write an issue, a pull request, or
+the repository.
+
+It answers about `main` and not about the branch, which is the other half of the
+ruleset's job: `main-green` proves the base is healthy, and the ruleset's strict
+required-checks policy proves the branch is on top of that base. Neither claim
+substitutes for the other, and a gate that read the pull request's merge base
+instead would pass on a base `main` had already left behind.
+
+**Repair takes a label, and the label buys one lookup.** A pull request that
+restores a red `main` cannot satisfy the gate by construction: the base it would
+prove is the broken one. A maintainer applies `ci-main-red-fix` to one pull
+request, and it is excused the remote main-health lookup and nothing else — the
+labelled pull request runs `composability`, the clean-checkout battery a `main`
+push runs, and `green` fails if that job fails or is skipped. So the branch
+claiming to repair `main` is proven the way `main` itself is proven.
+
+This is deliberately not a maintainer bypass. No actor, branch name, commit
+message or other label grants the exception, the label is visible on the pull
+request and in the run's log, and removing it recomputes `green` as an ordinary
+pull request — which is why `ci.yml`'s `pull_request` trigger lists `labeled` and
+`unlabeled`. The ruleset's own general bypass is removed for the same reason: an
+exception that leaves no trace and proves nothing is the mechanism this decision
+was taken to avoid.
+
+**Merge queue: still not now.** It is the only mechanism that makes "every commit
 provides a clean slate" a guarantee rather than a practice, and it costs a full
-serialized run per merge. That tax scales with the slowest job, and #313 puts
-`composability` at roughly eleven minutes on its own (#331). The condition that
-would change this is evidence: if the `ci-main-red` issues show `main` breaking
-often enough that the tax is cheaper than the breakage, adopt it. Until those
-issues exist there is no base rate to decide against — which is itself the
-argument for doing the cheap mechanism first.
+serialized run per merge. That tax scales with the slowest job, and `composability`
+is roughly eleven minutes on its own (#331). `main-green` buys most of the
+guarantee for none of the tax: it cannot prove a pull request against the merge
+result, but it does prove the base, which is where the observed breakage came
+from. The condition that would change this is unchanged and now measurable — if
+the `ci-main-red` issues show `main` breaking often enough that a serialized run
+per merge is cheaper than the breakage, adopt it.
 
 ### What this does not depend on
 

@@ -117,20 +117,46 @@ function results(workflow: Record<string, Job>, result: string): Record<string, 
   return Object.fromEntries(allDependencies(workflow).map((dependency) => [dependency, result]));
 }
 
+/** The three shapes GitHub delivers this workflow in. */
+type Occasion = "push" | "pull-request" | "repair";
+
+const EVENTS: Record<Occasion, { EVENT: string; REPAIR: string }> = {
+  push: { EVENT: "push", REPAIR: "false" },
+  "pull-request": { EVENT: "pull_request", REPAIR: "false" },
+  repair: { EVENT: "pull_request", REPAIR: "true" },
+};
+
 function* runGreen(
   commandText: string,
   values: Record<string, string>,
+  occasion: Occasion,
 ): Operation<number | undefined> {
   const result = yield* exec("/bin/bash", {
     arguments: ["-c", commandText],
     env: {
       PATH: "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+      ...EVENTS[occasion],
       RESULTS: JSON.stringify(
         Object.fromEntries(Object.entries(values).map(([key, result]) => [key, { result }])),
       ),
     },
   }).join();
   return result.code;
+}
+
+/**
+ * Every job at the result the occasion requires: the two conditional jobs run
+ * where they are meant to and are skipped where they are meant to be.
+ */
+function required(workflow: Record<string, Job>, occasion: Occasion): Record<string, string> {
+  const values = results(workflow, "success");
+  if (occasion === "push") {
+    values["main-green"] = "skipped";
+  }
+  if (occasion === "pull-request") {
+    values.composability = "skipped";
+  }
+  return values;
 }
 
 describe("the CI smoke job", () => {
@@ -187,6 +213,48 @@ describe("the CI smoke job", () => {
   });
 });
 
+describe("the conditional CI jobs", () => {
+  function conditional(workflow: Record<string, Job>, id: string): string {
+    const found = workflow[id];
+    if (found === undefined) {
+      throw new Error(`workflow.jobs.${id} is missing`);
+    }
+    if (found.if === undefined) {
+      throw new Error(`workflow.jobs.${id}.if is missing`);
+    }
+    return found.if;
+  }
+
+  it("runs main-green on a pull request and on nothing else", function* () {
+    expect(conditional(yield* workflow(), "main-green")).toEqual(
+      "github.event_name == 'pull_request'",
+    );
+  });
+
+  /**
+   * The repair path is two halves: the gate excuses itself, and this job runs in
+   * its place. `green` requires this job to succeed on a labelled pull request,
+   * so a condition that stopped matching the label would not make the repair
+   * path lax — it would make it unsatisfiable.
+   */
+  it("runs composability for a main push and for a repair pull request", function* () {
+    const condition = conditional(yield* workflow(), "composability");
+
+    expect(condition).toContain("github.event_name == 'push'");
+    expect(condition).toContain(
+      "contains(github.event.pull_request.labels.*.name, 'ci-main-red-fix')",
+    );
+  });
+
+  /** An ordinary pull request keeps paying for neither of them. */
+  it("gives an ordinary pull request no path to composability", function* () {
+    const condition = conditional(yield* workflow(), "composability");
+
+    expect(condition).not.toContain("github.event_name == 'pull_request'");
+    expect(condition).not.toContain("always()");
+  });
+});
+
 describe("the CI workflow aggregate", () => {
   it("defines green", function* () {
     expect(green(yield* workflow())).toBeDefined();
@@ -195,6 +263,31 @@ describe("the CI workflow aggregate", () => {
   it("requires every other job and no future job can be omitted", function* () {
     const parsed = yield* workflow();
     expect(needsOf(green(parsed))).toEqual(allDependencies(parsed));
+  });
+
+  /**
+   * Derived coverage cannot notice a job that left the workflow entirely — the
+   * expectation shrinks with it. So the set is also named. A job added later
+   * belongs in `green.needs` too, and the derived check above is what enforces
+   * that half.
+   */
+  it("still requires every job that existed before the gate", function* () {
+    const needs = needsOf(green(yield* workflow()));
+
+    for (const job of [
+      "lint",
+      "test-deno",
+      "jsr",
+      "smoke",
+      "filesystem-contract",
+      "composability",
+      "site",
+      "test-node",
+      "test-bun",
+      "main-green",
+    ]) {
+      expect(needs).toContain(job);
+    }
   });
 
   it("does not depend on itself", function* () {
@@ -231,23 +324,127 @@ describe("the CI workflow aggregate", () => {
     expect(decision).toBeGreaterThan(printed);
   });
 
-  it("accepts only success and skipped", function* () {
+  it("accepts the result every job is required to produce, on each occasion", function* () {
     const parsed = yield* workflow();
     const commandText = command(green(parsed));
-    const accepted = ["success", "skipped"];
+
+    for (const occasion of ["push", "pull-request", "repair"] as const) {
+      expect(yield* runGreen(commandText, required(parsed, occasion), occasion)).toEqual(0);
+    }
+  });
+
+  /**
+   * A skip used to be accepted from every job, which made "this job never ran"
+   * indistinguishable from "this job passed". Two jobs are conditional now, so
+   * the accepted result is per job and per event instead.
+   */
+  it("rejects an unexpected skip from a job that always runs", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+    const unconditional = ["lint", "test-deno", "jsr", "smoke", "site", "test-node", "test-bun"];
+
+    for (const occasion of ["push", "pull-request", "repair"] as const) {
+      for (const job of unconditional) {
+        const values = required(parsed, occasion);
+        values[job] = "skipped";
+        expect({ occasion, job, code: yield* runGreen(commandText, values, occasion) }).not.toEqual(
+          {
+            occasion,
+            job,
+            code: 0,
+          },
+        );
+      }
+    }
+  });
+
+  it("rejects failure and cancellation from every job, on every occasion", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
     const rejected = ["failure", "cancelled", "timed_out", "neutral", "action_required"];
 
-    expect(commandText).toContain('.value.result != "success"');
-    expect(commandText).toContain('.value.result != "skipped"');
-    for (const result of accepted) {
-      expect(yield* runGreen(commandText, results(parsed, result))).toEqual(0);
+    for (const occasion of ["push", "pull-request", "repair"] as const) {
+      for (const result of rejected) {
+        expect(yield* runGreen(commandText, results(parsed, result), occasion)).not.toEqual(0);
+      }
     }
-    const pullRequestResults = results(parsed, "success");
-    pullRequestResults.composability = "skipped";
-    expect(yield* runGreen(commandText, pullRequestResults)).toEqual(0);
-    for (const result of rejected) {
-      expect(yield* runGreen(commandText, results(parsed, result))).not.toEqual(0);
+  });
+
+  /** MG9: the gate is what an ordinary pull request offers in composability's place. */
+  it("requires main-green to succeed on an ordinary pull request", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    for (const result of ["skipped", "failure", "cancelled"]) {
+      const values = required(parsed, "pull-request");
+      values["main-green"] = result;
+      expect(yield* runGreen(commandText, values, "pull-request")).not.toEqual(0);
     }
+  });
+
+  /** MG10 and MG11: the repair path buys the lookup, never composability. */
+  it("requires both main-green and composability on a repair pull request", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    for (const job of ["main-green", "composability"]) {
+      for (const result of ["skipped", "failure", "cancelled"]) {
+        const values = required(parsed, "repair");
+        values[job] = result;
+        expect({ job, result, code: yield* runGreen(commandText, values, "repair") }).not.toEqual({
+          job,
+          result,
+          code: 0,
+        });
+      }
+    }
+  });
+
+  /**
+   * MG12: removing the label recomputes this check as an ordinary pull request,
+   * where the same results no longer satisfy it — the repair path cannot survive
+   * its own label.
+   */
+  it("stops accepting the repair shape once the label is gone", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    // A repair run that passed: composability ran, main-green was excused.
+    const repaired = required(parsed, "repair");
+    expect(yield* runGreen(commandText, repaired, "repair")).toEqual(0);
+
+    // The same jobs, re-decided without the label, where composability being
+    // skipped is now permitted and the gate's own result is not.
+    const ordinary = required(parsed, "pull-request");
+    ordinary["main-green"] = "skipped";
+    expect(yield* runGreen(commandText, ordinary, "pull-request")).not.toEqual(0);
+  });
+
+  /** MG13: a push proves the base itself, so composability is not optional there. */
+  it("requires composability on a main push and excuses main-green", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    for (const result of ["skipped", "failure", "cancelled"]) {
+      const values = required(parsed, "push");
+      values.composability = result;
+      expect(yield* runGreen(commandText, values, "push")).not.toEqual(0);
+    }
+
+    const excused = required(parsed, "push");
+    expect(yield* runGreen(commandText, excused, "push")).toEqual(0);
+    // "May be skipped" is permission, not a requirement.
+    excused["main-green"] = "success";
+    expect(yield* runGreen(commandText, excused, "push")).toEqual(0);
+  });
+
+  it("decides from the event and the labels rather than from a job name alone", function* () {
+    const step = green(yield* workflow()).steps[0];
+
+    expect(step?.env?.EVENT).toEqual("${{ github.event_name }}");
+    expect(step?.env?.REPAIR).toEqual(
+      "${{ contains(github.event.pull_request.labels.*.name, 'ci-main-red-fix') }}",
+    );
   });
 
   it("does not install dependencies", function* () {

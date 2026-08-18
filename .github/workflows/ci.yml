@@ -5,8 +5,51 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # `labeled` and `unlabeled` are here because a label decides a required
+    # result: applying `ci-main-red-fix` has to recompute `green`, and removing
+    # it has to recompute it back. Listing types replaces the default set, so
+    # the three defaults are spelled out beside them.
+    types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
+  # An ordinary pull request may claim `green` only once CI has completed
+  # successfully for `main`'s exact current head.
+  #
+  # Main Health reports a red `main`; reporting is not gating. Without this job a
+  # pull request proves itself against a base nothing proved, and the next `main`
+  # failure cannot be told apart from the one already open. Exactness is the
+  # whole claim — a successful run for the previous head is the state a red
+  # `main` is in one commit after it broke — so the decision reuses Main
+  # Health's own authoritative-run rules rather than re-deciding main health.
+  #
+  # Only `contents: read` and `actions: read`: this job decides a required
+  # check, so it holds no permission to write an issue, a pull request, or the
+  # repository. That is also why it checks out the pull request rather than
+  # `main` — nothing it runs is privileged, and the gate has to be changeable by
+  # the pull request that changes it.
+  #
+  # A `main` push skips it. The push is the run that decides main health, so a
+  # job waiting on its own workflow would never resolve.
+  main-green:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # list main's CI runs
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      - name: CI has proven main's exact current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PULL_REQUEST_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: deno run --frozen --allow-env --allow-run=gh scripts/main-green.ts
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -424,7 +467,14 @@ jobs:
     # proves — a clean checkout prepares, builds stay cache-pure and offline,
     # and concurrent checks do not dirty what another reads — is worth a
     # post-merge run, not a place on every pull request's critical path (#279).
-    if: github.event_name == 'push'
+    #
+    # A `ci-main-red-fix` pull request is the exception, and the reason the
+    # exception is safe: it is excused the main-health lookup because the base it
+    # would prove is the broken one, so it proves itself the way `main` is
+    # proven instead. `green` requires this job to succeed there.
+    if: >-
+      github.event_name == 'push'
+      || contains(github.event.pull_request.labels.*.name, 'ci-main-red-fix')
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -537,10 +587,21 @@ jobs:
       - name: Bun entrypoint smoke
         run: bun run packages/cli/src/bun.ts test smoke-test/test-agent/README.md --raw
 
+  # The one required check. It installs nothing and uses no action, so the
+  # result it reports is the jobs' and never the infrastructure's.
+  #
+  # "Succeeded or skipped" was too weak once two jobs became conditional: it
+  # read a `main-green` that never ran, and a `composability` that never ran, as
+  # satisfied. So the requirement is per event instead. `main-green` runs on a
+  # pull request and may be skipped on a push; `composability` runs on a push and
+  # on a `ci-main-red-fix` pull request, and may be skipped on an ordinary one.
+  # Every other job must succeed outright — an unexpected skip is an unproven
+  # job, which is exactly what this check exists to catch.
   green:
     needs:
       [
         lint,
+        main-green,
         test-deno,
         jsr,
         smoke,
@@ -553,16 +614,29 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Every CI job succeeded
+      - name: Every CI job produced the result this event requires
         env:
           RESULTS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          REPAIR: ${{ contains(github.event.pull_request.labels.*.name, 'ci-main-red-fix') }}
         run: |
           set -euo pipefail
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.value.result)\t\(.key)"' | sort
-          unproven=$(echo "$RESULTS" | jq -r '
+          echo "event=$EVENT repair=$REPAIR"
+          unproven=$(echo "$RESULTS" | jq -r --arg event "$EVENT" --arg repair "$REPAIR" '
+            def required($job):
+              if $job == "main-green" then
+                (if $event == "push" then ["success", "skipped"] else ["success"] end)
+              elif $job == "composability" then
+                (if $event == "push" or $repair == "true"
+                 then ["success"]
+                 else ["success", "skipped"] end)
+              else ["success"]
+              end;
             to_entries[]
-            | select(.value.result != "success" and .value.result != "skipped")
-            | .key')
+            | . as $entry
+            | select((required($entry.key) | index($entry.value.result)) == null)
+            | "\($entry.key)=\($entry.value.result)"')
           if [ -n "$unproven" ]; then
             echo "::error::CI is not green: $(echo "$unproven" | tr '\n' ' ')"
             exit 1
