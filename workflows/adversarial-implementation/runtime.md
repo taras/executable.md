@@ -113,10 +113,12 @@ must render everything the reviewer has to judge rather than pointing at it.
 
 Three outcomes are distinct, and none of them is a failure of the document:
 
-- **Suspension.** A checkpoint that reaches a person records its pending
-  request and the Workspace frontier, releases the executor, and returns with a
-  run ID and stop reason on standard error. `resume` continues when the answer
-  is available.
+- **Suspension.** A run that calls `suspendFor()` records its pending request
+  and the Workspace frontier, gives the executor lock back, and returns with a
+  run ID and stop reason on standard error; `resume` continues when the answer
+  is available (#367, shipped). It is an Api operation rather than a v1 Markdown
+  element, and this workflow calls nothing that suspends, so no checkpoint here
+  reaches it.
 - **Interruption.** Losing the executor outside an authored wait, including
   Ctrl-C, leaves the run `interrupted` and resumable at the journal frontier.
 - **Cancellation.** `xmd workflow cancel <run-id>` never reaches into a live
@@ -151,10 +153,12 @@ the foreground process, and Ctrl-C tears the scope down in order, publishes
 management host acquires the lock and publishes `cancelled` inside the
 transaction that validates it.
 
-The wait is here too. A run suspends durably at an authored wait and gives its
-executor lock back (#367), and a typed answer can be delivered to it (#300).
-What is still missing is anything that *acts* on that: delivery executes
-nothing, no scheduler resumes a run, and forks and forkability remain #368.
+The wait is here too, as substrate. `suspendFor()` suspends a run durably and
+gives its executor lock back (#367), and a typed answer can be delivered to it
+(#300). What is missing is anything that reaches or acts on it: `suspendFor()`
+is an Api operation with no v1 element spelling it, this document calls nothing
+that suspends, delivery executes nothing, no scheduler resumes a run, and forks
+and forkability remain #368.
 
 ## Cleanup follows the invocation
 
@@ -179,12 +183,18 @@ An automated iteration stops on the first applicable signal:
 
 Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
 question during execution, and under `xmd run` the WebForm provider answers it
-in a browser. Under `xmd workflow` the same question becomes a durable
-suspension (#367, shipped), and a typed answer can be delivered to the run that
-is waiting ([#300](https://github.com/taras/executable.md/issues/300), shipped).
-Delivery is non-executing and arbitration between signals is not implemented:
-nothing schedules a resumption, and premature watcher semantics are deliberately
-excluded.
+in a browser. Under `xmd workflow` it is the same `<Elicit>`, answered inside the
+execution that asked it.
+
+A durable suspension is a different mechanism, and it is shipped as substrate:
+`suspendFor()` suspends a run and gives its executor lock back (#367), and a
+typed answer can be delivered to the waiting run
+([#300](https://github.com/taras/executable.md/issues/300)). `suspendFor()` is an
+Api operation — there is no v1 Markdown element for it — and this workflow
+installs no component or middleware that turns an `<Elicit>` into one, so no
+checkpoint here releases the executor. Delivery executes nothing, arbitration
+between signals is not implemented, nothing schedules a resumption, and
+premature watcher semantics are deliberately excluded.
 
 `<Loop>` already records part of this: it journals every iteration it enters and
 one terminal record whose outcome is `break`, `exhausted`, or `error`, and it
