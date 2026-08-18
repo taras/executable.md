@@ -10,16 +10,19 @@
  *
  * ## Nothing happens before the whole fragment has been read
  *
- * The complete source is parsed and walked before the first effect. A fragment
- * whose second element is an executable block performs nothing at all, however
- * safe its first element was — which is the difference between an allowlist and
- * a filter that runs while the document does.
+ * The complete source is parsed and walked inside the durable admission itself,
+ * before the first effect. A fragment whose second element is an executable
+ * block performs nothing at all, however safe its first element was — which is
+ * the difference between an allowlist and a filter that runs while the document
+ * does.
  *
  * What is refused is a construct *class*: executable code blocks, expression
  * props, interpolation that reads a binding, a result binding, a component the
- * host did not admit, and a request outside the admitted set. The diagnostic
- * names the class and nothing else. Generated source is exactly the text a
- * refusal must not echo.
+ * host did not admit, and a request outside the admitted set. The record and
+ * the diagnostic name the class and nothing else. Generated source is exactly
+ * the text a refusal must not echo — and a refusal is *returned* by the
+ * admission rather than thrown out of it, because a thrown one would be
+ * serialized into the journal with a stack trace nobody asked for.
  *
  * ## A name is not an identity
  *
@@ -31,14 +34,29 @@
  * it cannot answer one, because canonical core issues a witness for the answer
  * it produced and verifies it at the call site.
  *
+ * ## A resumed run is held to the ceilings it was admitted under
+ *
+ * Durable replay matches an effect by its type and name; what a description
+ * carries is stored, never compared. So the retained admission carries the
+ * normalized policy in its **result** as well as in the event input, and a
+ * continuation compares that retained policy to the one this run states — whole
+ * and exactly — before a single generated component is invoked or a single
+ * request is performed. Changed roots, a changed pinned identity behind the
+ * same name, and a widened request ceiling are each refused there.
+ *
+ * That is also why the walk lives inside the admission's live executor. A
+ * continuation restores what was admitted without consulting the current source
+ * at all, so what expands is the fragment this run admitted rather than
+ * whatever a later caller happens to be holding.
+ *
  * ## What the run keeps
  *
- * One ordinary durable event records the admitted source, the roots the host
- * selected, the pinned identities, and the exact request policy the fragment
- * ran under. It commits *before* the first admitted observation, so a fragment
- * refused in preflight appends nothing. The observations themselves are
- * retained by their own durable effects — `fetch` for `<Fetch>` — and a replay
- * restores both without asking anyone anything a second time.
+ * One ordinary durable event records the decision. An admission carries the
+ * exact source, the pinned identities the fragment named, and the normalized
+ * policy; a refusal carries the construct class and nothing else. Either way it
+ * commits before the first admitted observation, and the observations
+ * themselves are retained by their own durable effects — `fetch` for `<Fetch>`
+ * — so a replay restores both without asking anyone anything a second time.
  */
 
 import { createDurableOperation, ephemeral } from "@executablemd/durable-streams";
@@ -54,7 +72,7 @@ import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegments } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
-import { prepareFetchRequest, requestRecord } from "./fetch-request.ts";
+import { parseRequestRecord, prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
@@ -67,6 +85,16 @@ export class GeneratedXmdError extends Error {
   override name = "GeneratedXmdError";
 }
 
+/** The construct classes a fragment can be refused for. */
+type Construct =
+  | "block"
+  | "expression"
+  | "interpolation"
+  | "binding"
+  | "component"
+  | "construct"
+  | "request";
+
 /**
  * The fixed diagnostics.
  *
@@ -74,7 +102,7 @@ export class GeneratedXmdError extends Error {
  * component name, a URL, a header, or anything else the fragment carried: the
  * candidate is untrusted text, and a refusal is not a reason to publish it.
  */
-const REFUSED = {
+const CONSTRUCT: Record<Construct, string> = {
   block: "a generated fragment carries an executable code block, which it may not.",
   expression: "a generated fragment carries an expression prop, which it may not.",
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
@@ -82,6 +110,24 @@ const REFUSED = {
   component: "a generated fragment names a component this host did not admit.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
   request: "a generated fragment asks for a request this host did not admit.",
+};
+
+/**
+ * What a resumed run is refused with when its ceilings moved.
+ *
+ * Fixed, like every other diagnostic here, and deliberately naming nothing it
+ * compared: which root, identity or request changed is exactly the material a
+ * refusal must not publish.
+ */
+const CEILING =
+  "a generated fragment was admitted under ceilings this run no longer states. A retained " +
+  "admission resumes only under the exact Workspace roots, pinned identities and requests it " +
+  "was admitted with.";
+
+const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
+
+/** How an import that did not come from canonical execution is refused. */
+const WITNESS = {
   unissued:
     "Component.importComponent middleware answered a generated import with a definition " +
     "canonical execution did not produce. A handler may observe, delegate or refuse a " +
@@ -93,6 +139,22 @@ const REFUSED = {
     "Component.importComponent middleware changed the definition canonical execution produced " +
     "for a generated import before it was invoked.",
 } as const;
+
+/**
+ * One construct class the walk refused.
+ *
+ * Module-private and never published: the durable executor turns it into a
+ * record, and the caller turns that record back into a `GeneratedXmdError`.
+ */
+class Refusal extends Error {
+  override name = "GeneratedRefusal";
+  readonly construct: Construct;
+
+  constructor(construct: Construct) {
+    super(construct);
+    this.construct = construct;
+  }
+}
 
 /**
  * One request a generated fragment may perform, written the way an element
@@ -109,7 +171,9 @@ export type GeneratedRequest = Record<string, Json>;
  * definition that name runs.
  *
  * `identity` is the stable, non-secret descriptor the run retains: it says
- * which implementation was admitted, and holding it grants nothing.
+ * which implementation was admitted, and holding it grants nothing. It is also
+ * what a continuation is compared against, so changing the definition behind a
+ * name means changing this.
  */
 export interface GeneratedObservation {
   readonly name: string;
@@ -181,12 +245,29 @@ interface RetainedIdentity {
   readonly identity: string;
 }
 
-/** The admission this run recorded, restored from its own durable record. */
-interface RetainedAdmission {
-  readonly decision: "admitted";
-  readonly source: string;
-  readonly named: readonly RetainedIdentity[];
+/**
+ * The ceilings one fragment ran under, normalized.
+ *
+ * Normalized because this is what a continuation is compared against: a request
+ * the host spelled differently but meant identically must compare equal, and
+ * one it meant differently must not.
+ */
+interface Policy {
+  readonly roots: readonly string[];
+  readonly selectedRoot: string;
+  readonly allowed: readonly RetainedIdentity[];
+  readonly requests: readonly FetchRequest[];
 }
+
+/** The decision this run recorded, restored from its own durable record. */
+type RetainedAdmission =
+  | {
+      readonly decision: "admitted";
+      readonly source: string;
+      readonly named: readonly RetainedIdentity[];
+      readonly policy: Policy;
+    }
+  | { readonly decision: "refused"; readonly construct: Construct };
 
 /**
  * The authority a generated fragment imports through.
@@ -208,11 +289,11 @@ class GeneratedImportAuthority implements ImportAuthority {
   issue(name: string): ImportedDefinition {
     const pinned = this.#observations.get(name);
     if (pinned === undefined) {
-      throw new GeneratedXmdError(REFUSED.component);
+      throw new GeneratedXmdError(CONSTRUCT.component);
     }
     const copy = retain(pinned.definition);
     if (copy === undefined) {
-      throw new GeneratedXmdError(REFUSED.component);
+      throw new GeneratedXmdError(CONSTRUCT.component);
     }
     return this.#imports.issue(name, copy);
   }
@@ -221,7 +302,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     return this.#imports.authorize(
       name,
       answer,
-      (refusal) => new GeneratedXmdError(REFUSED[refusal]),
+      (refusal) => new GeneratedXmdError(WITNESS[refusal]),
     );
   }
 }
@@ -272,8 +353,147 @@ function reads(content: string): boolean {
 }
 
 /** Two normalized requests describing the same read. */
-function same(one: FetchRequest, other: FetchRequest): boolean {
+function sameRequest(one: FetchRequest, other: FetchRequest): boolean {
   return JSON.stringify(requestRecord(one)) === JSON.stringify(requestRecord(other));
+}
+
+/** The ceilings this run states, with every request normalized. */
+function* currentPolicy(
+  request: GeneratedXmdRequest,
+  table: ReadonlyMap<string, GeneratedObservation>,
+): Operation<Policy> {
+  const requests: FetchRequest[] = [];
+  const allowed: RetainedIdentity[] = [];
+  for (const observation of table.values()) {
+    allowed.push({ name: observation.name, identity: observation.identity });
+    for (const props of observation.requests ?? []) {
+      requests.push(yield* prepareFetchRequest(props));
+    }
+  }
+  return {
+    roots: [...request.workspaceRoots],
+    selectedRoot: request.selectedRoot,
+    allowed,
+    requests,
+  };
+}
+
+/** The policy as journal data. */
+function policyRecord(policy: Policy): JsonObject {
+  return {
+    roots: [...policy.roots],
+    selectedRoot: policy.selectedRoot,
+    allowed: policy.allowed.map((entry) => ({ name: entry.name, identity: entry.identity })),
+    requests: policy.requests.map(requestRecord),
+  };
+}
+
+/**
+ * The policy a record holds, parsed rather than trusted.
+ *
+ * A history is durable input: a record somebody else wrote is not a policy
+ * because it happens to have the right keys, and a policy this version cannot
+ * read is refused rather than treated as matching.
+ */
+function readPolicy(value: Json): Policy | undefined {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  const { roots, selectedRoot, allowed, requests } = value;
+  if (!Array.isArray(roots) || typeof selectedRoot !== "string") {
+    return undefined;
+  }
+  if (!Array.isArray(allowed) || !Array.isArray(requests)) {
+    return undefined;
+  }
+  const retainedRoots: string[] = [];
+  for (const root of roots) {
+    if (typeof root !== "string") {
+      return undefined;
+    }
+    retainedRoots.push(root);
+  }
+  const identities = readIdentities(allowed);
+  if (identities === undefined) {
+    return undefined;
+  }
+  const retainedRequests: FetchRequest[] = [];
+  for (const request of requests) {
+    const parsed = readRequest(request);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    retainedRequests.push(parsed);
+  }
+  return {
+    roots: retainedRoots,
+    selectedRoot,
+    allowed: identities,
+    requests: retainedRequests,
+  };
+}
+
+/** One retained request, or nothing when this version cannot read it. */
+function readRequest(value: Json): FetchRequest | undefined {
+  try {
+    return parseRequestRecord(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readIdentities(value: readonly Json[]): RetainedIdentity[] | undefined {
+  const identities: RetainedIdentity[] = [];
+  for (const entry of value) {
+    if (!isJsonObject(entry)) {
+      return undefined;
+    }
+    const { name, identity } = entry;
+    if (typeof name !== "string" || typeof identity !== "string") {
+      return undefined;
+    }
+    identities.push({ name, identity });
+  }
+  return identities;
+}
+
+/**
+ * Whether a resumed run states exactly the ceilings the retained admission was
+ * granted under.
+ *
+ * Whole and exact, in order: a root added, a root reordered, one identity
+ * behind a name replaced, or one request added to the allowed set each make
+ * this false. Widening is the case that matters most — a ceiling that still
+ * contains the original request is precisely the one that comparing the
+ * *fragment* against the *current* policy would wave through.
+ */
+function samePolicy(retained: Policy, current: Policy): boolean {
+  if (retained.selectedRoot !== current.selectedRoot) {
+    return false;
+  }
+  if (retained.roots.length !== current.roots.length) {
+    return false;
+  }
+  if (retained.roots.some((root, index) => root !== current.roots[index])) {
+    return false;
+  }
+  if (retained.allowed.length !== current.allowed.length) {
+    return false;
+  }
+  const replaced = retained.allowed.some((entry, index) => {
+    const here = current.allowed[index];
+    return here === undefined || here.name !== entry.name || here.identity !== entry.identity;
+  });
+  if (replaced) {
+    return false;
+  }
+  if (retained.requests.length !== current.requests.length) {
+    return false;
+  }
+  return retained.requests.every((request, index) => {
+    const here = current.requests[index];
+    return here !== undefined && sameRequest(request, here);
+  });
 }
 
 /** What one fragment turned out to name, in the order it named it. */
@@ -322,29 +542,29 @@ function* walk(
     switch (segment.type) {
       case "text": {
         if (reads(segment.content)) {
-          throw new GeneratedXmdError(REFUSED.interpolation);
+          throw new Refusal("interpolation");
         }
         break;
       }
       case "codeBlock": {
-        throw new GeneratedXmdError(REFUSED.block);
+        throw new Refusal("block");
       }
       case "component": {
         const observation = table.get(segment.name);
         if (observation === undefined) {
-          throw new GeneratedXmdError(REFUSED.component);
+          throw new Refusal("component");
         }
         if (Object.keys(segment.expressions).length > 0) {
-          throw new GeneratedXmdError(REFUSED.expression);
+          throw new Refusal("expression");
         }
         if ("as" in segment.props) {
-          throw new GeneratedXmdError(REFUSED.binding);
+          throw new Refusal("binding");
         }
         const ceiling = ceilings.get(segment.name);
         if (ceiling !== undefined) {
           const candidate = yield* prepareFetchRequest(segment.props);
-          if (!ceiling.some((allowed) => same(allowed, candidate))) {
-            throw new GeneratedXmdError(REFUSED.request);
+          if (!ceiling.some((allowed) => sameRequest(allowed, candidate))) {
+            throw new Refusal("request");
           }
         }
         named.push({ name: observation.name, identity: observation.identity });
@@ -352,7 +572,7 @@ function* walk(
         break;
       }
       default: {
-        throw new GeneratedXmdError(REFUSED.construct);
+        throw new Refusal("construct");
       }
     }
   }
@@ -360,28 +580,56 @@ function* walk(
 
 const GENERATED_XMD = "generated_xmd";
 
-/** Record what this fragment was admitted as, before its first observation. */
+/**
+ * What the durable admission records for this source.
+ *
+ * A refusal is a value rather than a failure. Throwing out of a durable
+ * executor journals the error *and its stack*, which for a refusal caused by
+ * untrusted input would put host paths in the run's history to say something
+ * one word already says.
+ */
+function* admitSource(
+  source: string,
+  table: ReadonlyMap<string, GeneratedObservation>,
+  policy: Policy,
+): Operation<DurableJson> {
+  try {
+    const { named } = yield* preflight(source, table);
+    return parseJson({
+      decision: "admitted",
+      source,
+      named: named.map((entry) => ({ name: entry.name, identity: entry.identity })),
+      policy: policyRecord(policy),
+    });
+  } catch (error) {
+    if (error instanceof Refusal) {
+      return parseJson({ decision: "refused", construct: error.construct });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Decide this fragment, once, and keep the decision.
+ *
+ * The walk runs inside the executor, so a continuation restores what was
+ * decided without reading the current source at all.
+ */
 function* persistAdmission(
   id: string,
-  policy: JsonObject,
-  admission: RetainedAdmission,
+  source: string,
+  table: ReadonlyMap<string, GeneratedObservation>,
+  policy: Policy,
 ): Workflow<Json> {
   const stored = yield createDurableOperation<DurableJson>(
-    { type: GENERATED_XMD, name: `generated:${id}`, input: policy },
-    // deno-lint-ignore require-yield
-    function* (): Operation<DurableJson> {
-      return parseJson({
-        decision: admission.decision,
-        source: admission.source,
-        named: admission.named.map((entry) => ({ ...entry })),
-      });
-    },
+    { type: GENERATED_XMD, name: `generated:${id}`, input: policyRecord(policy) },
+    () => admitSource(source, table, policy),
   );
   return parseJson(stored);
 }
 
 /**
- * The admission this run recorded, read back from the journal.
+ * The decision this run recorded, read back from the journal.
  *
  * Parsed rather than trusted: a replay hands back whatever the history holds,
  * and a record somebody else wrote is not an admission because it happens to
@@ -391,44 +639,31 @@ function readAdmission(value: Json): RetainedAdmission | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
-  const { decision, source, named } = value;
-  if (decision !== "admitted" || typeof source !== "string" || !Array.isArray(named)) {
+  const { decision } = value;
+  if (decision === "refused") {
+    const { construct } = value;
+    return typeof construct === "string" && isConstruct(construct)
+      ? { decision, construct }
+      : undefined;
+  }
+  if (decision !== "admitted") {
     return undefined;
   }
-  const identities: RetainedIdentity[] = [];
-  for (const entry of named) {
-    if (!isJsonObject(entry)) {
-      return undefined;
-    }
-    const { name, identity } = entry;
-    if (typeof name !== "string" || typeof identity !== "string") {
-      return undefined;
-    }
-    identities.push({ name, identity });
+  const { source, named, policy } = value;
+  if (typeof source !== "string" || !Array.isArray(named) || policy === undefined) {
+    return undefined;
   }
-  return { decision, source, named: identities };
+  const identities = readIdentities(named);
+  const retained = readPolicy(policy);
+  if (identities === undefined || retained === undefined) {
+    return undefined;
+  }
+  return { decision, source, named: identities, policy: retained };
 }
 
-/** What the run retains about the ceilings this fragment ran under. */
-function* describePolicy(
-  request: GeneratedXmdRequest,
-  table: ReadonlyMap<string, GeneratedObservation>,
-): Operation<JsonObject> {
-  const requests: JsonObject[] = [];
-  for (const observation of table.values()) {
-    for (const props of observation.requests ?? []) {
-      requests.push(requestRecord(yield* prepareFetchRequest(props)));
-    }
-  }
-  return {
-    roots: [...request.workspaceRoots],
-    selectedRoot: request.selectedRoot,
-    allowed: [...table.values()].map((observation) => ({
-      name: observation.name,
-      identity: observation.identity,
-    })),
-    requests,
-  };
+/** Whether a retained string names one of the construct classes this version has. */
+function isConstruct(value: string): value is Construct {
+  return Object.hasOwn(CONSTRUCT, value);
 }
 
 /**
@@ -487,27 +722,25 @@ function expand(
  */
 export function* evaluateGeneratedXmd(request: GeneratedXmdRequest): Workflow<string> {
   const table = admitted(request.observations);
+  const policy = yield* ephemeral(currentPolicy(request, table));
 
-  // Preflight decides the candidate before anything is appended, which is what
-  // makes a refused fragment leave no generated-XMD event behind.
-  const candidate = yield* ephemeral(preflight(request.source, table));
-  const policy = yield* ephemeral(describePolicy(request, table));
-
-  const stored = yield* persistAdmission(request.id, policy, {
-    decision: "admitted",
-    source: request.source,
-    named: candidate.named,
-  });
-  const admission = readAdmission(stored);
-  if (admission === undefined) {
-    throw new GeneratedXmdError(
-      "the retained generated-XMD admission record cannot be read as one.",
-    );
+  const stored = yield* persistAdmission(request.id, request.source, table, policy);
+  const decided = readAdmission(stored);
+  if (decided === undefined) {
+    throw new GeneratedXmdError(UNREADABLE);
+  }
+  if (decided.decision === "refused") {
+    throw new GeneratedXmdError(CONSTRUCT[decided.construct]);
+  }
+  // Before a single component is invoked or a single request is performed: a
+  // retained admission is a grant under the ceilings it was granted with, and a
+  // run that states different ones is asking for a different grant.
+  if (!samePolicy(decided.policy, policy)) {
+    throw new GeneratedXmdError(CEILING);
   }
 
   // The retained source is what expands, so a continuation runs the fragment
-  // this run admitted rather than whatever a later caller happens to hold. On a
-  // live run the two are the same text, and this walk finds the same fragment.
-  const restored = yield* ephemeral(preflight(admission.source, table));
+  // this run admitted rather than whatever a later caller happens to hold.
+  const restored = yield* ephemeral(preflight(decided.source, table));
   return yield* ephemeral(expand(request.id, restored.segments, table));
 }

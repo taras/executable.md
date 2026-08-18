@@ -201,6 +201,29 @@ function admissions(events: DurableEvent[]): DurableEvent[] {
   );
 }
 
+/** What one generated-XMD record decided, when it decided anything. */
+function decisionOf(event: DurableEvent): string | undefined {
+  if (event.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const { decision } = value;
+  return typeof decision === "string" ? decision : undefined;
+}
+
+/** Every generated-XMD record that admitted its fragment. */
+function admittedFragments(events: DurableEvent[]): DurableEvent[] {
+  return admissions(events).filter((event) => decisionOf(event) === "admitted");
+}
+
+/** Every generated-XMD record that refused its fragment. */
+function refusals(events: DurableEvent[]): DurableEvent[] {
+  return admissions(events).filter((event) => decisionOf(event) === "refused");
+}
+
 /** Every Fetch observation this run committed. */
 function observations(events: DurableEvent[]): DurableEvent[] {
   return events.filter(
@@ -243,6 +266,14 @@ describe("Tier GX — the trusted-host seam", () => {
         decision: "admitted",
         source: "<Probe />\n",
         named: [{ name: "Probe", identity: "test://probe" }],
+        // Retained in the result as well as the input, because durable replay
+        // matches an effect by type and name and never compares a description.
+        policy: {
+          roots: ROOTS,
+          selectedRoot: ROOTS[0],
+          allowed: [{ name: "Probe", identity: "test://probe" }],
+          requests: [],
+        },
       },
     });
   });
@@ -265,7 +296,8 @@ describe("Tier GX — the complete fragment is read first", () => {
       const attempt = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST]), probe()]));
 
       expect(transport.performed).toHaveLength(0);
-      expect(admissions(attempt.events)).toHaveLength(0);
+      expect(admittedFragments(attempt.events)).toHaveLength(0);
+      expect(refusals(attempt.events)).toHaveLength(1);
       expect(observations(attempt.events)).toHaveLength(0);
       expect(attempt.failure).toContain("executable code block");
     });
@@ -299,7 +331,8 @@ describe("Tier GX — the complete fragment is read first", () => {
       const attempt = yield* evaluate(request(source, [pinnedFetch([ADMITTED_REQUEST]), probe()]));
 
       expect(transport.performed).toHaveLength(0);
-      expect(admissions(attempt.events)).toHaveLength(0);
+      expect(admittedFragments(attempt.events)).toHaveLength(0);
+      expect(refusals(attempt.events)).toHaveLength(1);
       expect(attempt.failure).toContain(diagnostic);
     });
   }
@@ -315,7 +348,8 @@ describe("Tier GX — the complete fragment is read first", () => {
     );
 
     expect(transport.performed).toHaveLength(0);
-    expect(admissions(attempt.events)).toHaveLength(0);
+    expect(admittedFragments(attempt.events)).toHaveLength(0);
+    expect(refusals(attempt.events)).toHaveLength(1);
     expect(attempt.failure).toContain("executable code block");
   });
 
@@ -333,6 +367,10 @@ describe("Tier GX — the complete fragment is read first", () => {
 
     expect(attempt.failure).toContain("executable code block");
     expect(attempt.failure).not.toContain("leaked-fragment-text");
+    // The refusal is retained, so what it retains matters as much as what it
+    // says: the class, and no part of the fragment that caused it.
+    expect(persisted(attempt.events)).not.toContain("leaked-fragment-text");
+    expect(persisted(attempt.events)).toContain('"construct":"block"');
   });
 });
 
@@ -369,7 +407,8 @@ describe("Tier GX — only pinned identities execute", () => {
     });
 
     expect(attempt.failure).toContain("did not admit");
-    expect(admissions(attempt.events)).toHaveLength(0);
+    expect(admittedFragments(attempt.events)).toHaveLength(0);
+    expect(refusals(attempt.events)).toHaveLength(1);
   });
 
   const SUBSTITUTIONS: Array<[string, ExecutionInstallation, string]> = [
@@ -532,7 +571,8 @@ describe("Tier GX — the request a generated fragment may perform", () => {
       const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch([CEILING])]));
 
       expect(transport.performed).toHaveLength(0);
-      expect(admissions(attempt.events)).toHaveLength(0);
+      expect(admittedFragments(attempt.events)).toHaveLength(0);
+      expect(refusals(attempt.events)).toHaveLength(1);
       expect(attempt.failure).toContain("did not admit");
     });
   }
@@ -672,6 +712,220 @@ describe("Tier GX — what the run keeps", () => {
     expect(transport.performed).toHaveLength(2);
     expect(admissions(continued.events)).toHaveLength(1);
     expect(observations(continued.events)).toHaveLength(1);
+  });
+});
+
+describe("Tier GX — a resumed run is held to the ceilings it was admitted under", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** A second definition under the same name, so a substitution is visible. */
+  const OTHER: FunctionComponentDefinition = {
+    kind: "function",
+    name: "Probe",
+    props: { type: "object", properties: {}, additionalProperties: false },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<Json> {
+      return "the other implementation ran";
+    },
+  };
+
+  /**
+   * A history left by a run interrupted during preparation: the admission
+   * committed, and nothing after it did.
+   *
+   * That is the shape these cases need, because a refusal raised by a trusted
+   * preparation against a history that already holds *later* entries is
+   * reported as the engine's early-return divergence rather than as its own
+   * diagnostic — see GX21b, and the same masking for any ordinary preparation
+   * failure.
+   */
+  function duringPreparation(events: DurableEvent[]): InMemoryStream {
+    const admitted = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    return new InMemoryStream(events.slice(0, admitted + 1));
+  }
+
+  /** The journal without the root's close, which is what makes the next run replay. */
+  function partial(events: DurableEvent[]): InMemoryStream {
+    return new InMemoryStream(
+      events.filter((event) => !(event.type === "close" && event.coroutineId === "root")),
+    );
+  }
+
+  /**
+   * A history that holds the admission and no observation.
+   *
+   * The Fetch append never lands, so the run is interrupted between the two —
+   * which is the only state in which a resumed fragment still has an
+   * observation left to perform, and therefore the only one where a changed
+   * ceiling could still widen a request.
+   */
+  function* interrupted(candidate: GeneratedXmdRequest): Operation<DurableEvent[]> {
+    const blocked = new InMemoryStream();
+    const reached = withResolvers<void>();
+    const holding: DurableStream = {
+      readAll: () => blocked.readAll(),
+      *append(event: DurableEvent): Operation<void> {
+        if (event.type === "yield" && event.description.type === "fetch") {
+          reached.resolve();
+          yield* suspend();
+        }
+        yield* blocked.append(event);
+      },
+    };
+    yield* scoped(function* () {
+      const running = yield* spawn(function* () {
+        const installation: ExecutionInstallation = {
+          *prepare() {
+            yield* evaluateGeneratedXmd(candidate);
+          },
+        };
+        yield* collect(
+          yield* executeInstalled(
+            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, componentDirs: [] },
+            [installation],
+          ),
+        );
+      });
+      yield* reached.operation;
+      yield* running.halt();
+    });
+    return yield* blocked.readAll();
+  }
+
+  it("GX21: a changed identity behind the same name refuses before invoking it", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+    expect(first.output).toContain("probed");
+
+    const again = yield* evaluate(
+      request("<Probe />\n", [pinnedComponent("Probe", "test://other", OTHER)]),
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toContain("admitted under");
+    // Fixed: which identity moved is exactly what a refusal must not publish.
+    expect(again.failure).not.toContain("test://other");
+    expect(again.failure).not.toContain("test://probe");
+    expect(String(again.output ?? "")).not.toContain("the other implementation ran");
+    expect(persisted(again.events)).not.toContain("the other implementation ran");
+  });
+
+  it("GX21b: the same substitution invokes nothing against a full partial history", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const again = yield* evaluate(
+      request("<Probe />\n", [pinnedComponent("Probe", "test://other", OTHER)]),
+      { stream: partial(first.events) },
+    );
+
+    // The run refuses and the replacement never runs. The message is the
+    // engine's early-return divergence rather than the ceiling diagnostic:
+    // a trusted preparation that fails against a history holding later entries
+    // is reported that way whatever it failed for, generated XMD included.
+    expect(again.failure).toBeDefined();
+    expect(String(again.output ?? "")).not.toContain("the other implementation ran");
+    expect(persisted(again.events)).not.toContain("the other implementation ran");
+    expect(admittedFragments(again.events)).toHaveLength(1);
+  });
+
+  it("GX22: changed retained roots refuse before expansion", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: [...ROOTS, "workspace://added"],
+        selectedRoot: ROOTS[0] ?? "",
+        observations: [probe()],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toContain("admitted under");
+    expect(String(again.output ?? "")).not.toContain("probed");
+  });
+
+  it("GX22b: a changed selected root refuses before expansion", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: ROOTS,
+        selectedRoot: ROOTS[1] ?? "",
+        observations: [probe()],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toContain("admitted under");
+    expect(String(again.output ?? "")).not.toContain("probed");
+  });
+
+  it("GX23: a widened Fetch ceiling refuses before API.Fetch", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+    const candidate = request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+
+    const history = yield* interrupted(candidate);
+    expect(transport.performed).toHaveLength(1);
+    expect(admissions(history)).toHaveLength(1);
+    expect(observations(history)).toHaveLength(0);
+
+    // The widened ceiling still contains the original request, so a run that
+    // consulted only the current policy would admit this fragment again.
+    const again = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST, { url: URL_TWO }])]),
+      { stream: new InMemoryStream(history) },
+    );
+
+    expect(transport.performed).toHaveLength(1);
+    expect(observations(again.events)).toHaveLength(0);
+    expect(again.failure).toContain("admitted under");
+  });
+
+  it("GX23b: the unchanged ceiling still resumes and commits the observation", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+    const candidate = request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+
+    const history = yield* interrupted(candidate);
+    expect(transport.performed).toHaveLength(1);
+
+    const again = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]),
+      { stream: new InMemoryStream(history) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(transport.performed).toHaveLength(2);
+    expect(observations(again.events)).toHaveLength(1);
+  });
+
+  it("GX24: a changed current source does not change what replay expands", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const again = yield* evaluate(
+      request("<Probe />\n\nan extra sentence the first run never had.\n", [probe()]),
+      { stream: partial(first.events) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
+    expect(again.output).not.toContain("an extra sentence");
+  });
+
+  it("GX24b: an unsafe current source does not stop replay of the retained one", function* () {
+    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+
+    const again = yield* evaluate(
+      request("<Probe />\n\n```bash exec\nprintf ran\n```\n", [probe()]),
+      { stream: partial(first.events) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
   });
 });
 

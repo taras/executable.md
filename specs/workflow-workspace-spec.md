@@ -1297,19 +1297,37 @@ A refusal ends the whole fragment. Its diagnostic names the construct class and
 echoes no part of the candidate, so a rejected fragment publishes nothing —
 including a credential a rejected element carried.
 
-One ordinary durable `generated_xmd` event records the admitted source, the
-retained roots and the selected one, the pinned identities the fragment named,
-and the exact request policy it ran under. It commits before the first admitted
-observation, so a fragment refused in preflight leaves no admission behind at
-all, and the whole event crosses the journal's secret filter like any other. The
-observations themselves are retained by their ordinary effects — `fetch` for
-`<Fetch>` (§10.1) — so a partial continuation restores the admission and every
-committed observation rather than performing them again, and a completed replay
-restores the run's result without asking the Agent or a server anything.
+One ordinary durable `generated_xmd` event records the decision. An admission
+carries the exact source, the retained roots and the selected one, the pinned
+identities the fragment named, and the normalized request policy it ran under; a
+refusal carries the construct class and nothing else. The whole event crosses
+the journal's secret filter like any other, and it commits before the first
+admitted observation. The observations themselves are retained by their ordinary
+effects — `fetch` for `<Fetch>` (§10.1) — so a partial continuation restores the
+admission and every committed observation rather than performing them again, and
+a completed replay restores the run's result without asking the Agent or a
+server anything.
 
 An interruption before an observation's own record commits retains no partial
 observation; a later continuation may perform that read once more under the same
 retained admission.
+
+#### A continuation is held to the ceilings it was admitted under
+
+A retained admission is a grant, and it resumes only under the ceilings it was
+granted with. Durable replay matches an effect by its type and name, and what a
+description carries is stored rather than compared, so the normalized policy is
+retained in the admission's own result. Before one generated component is
+invoked or one request is performed, a continuation compares the retained policy
+to the one the run now states — whole and exactly. Changed retained roots, a
+changed selected root, a changed pinned identity behind an unchanged name, and a
+widened or otherwise altered request ceiling are each refused, with a fixed
+diagnostic that names none of what it compared.
+
+The fragment is decided inside that durable effect rather than before it. So a
+continuation restores what was admitted without parsing the current candidate at
+all: a later caller holding different source changes nothing about what expands,
+and what expands is the source this run admitted.
 
 `Fetch` is admitted only as core's pinned identity, and only for an exact
 bounded request: the scheme, host, path, method, normalized headers and

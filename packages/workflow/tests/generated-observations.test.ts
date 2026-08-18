@@ -99,6 +99,20 @@ function admissions(events: DurableEvent[]): DurableEvent[] {
   );
 }
 
+/** Every generated-XMD record that admitted its fragment. */
+function admittedFragments(events: DurableEvent[]): DurableEvent[] {
+  return admissions(events).filter((event) => {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      return false;
+    }
+    const value = event.result.value;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    return value.decision === "admitted";
+  });
+}
+
 function observations(events: DurableEvent[]): DurableEvent[] {
   return events.filter(
     (event) =>
@@ -179,7 +193,7 @@ describe("Tier WGX — the reads a run is willing to state", () => {
 
     expect(attempt.failure).toContain("did not admit");
     expect(transport.performed).toHaveLength(0);
-    expect(admissions(attempt.events)).toHaveLength(0);
+    expect(admittedFragments(attempt.events)).toHaveLength(0);
   });
 
   it("WGX6: an empty ceiling admits the pinned Fetch identity not at all", function* () {
@@ -189,7 +203,7 @@ describe("Tier WGX — the reads a run is willing to state", () => {
 
     expect(attempt.failure).toContain("did not admit");
     expect(transport.performed).toHaveLength(0);
-    expect(admissions(attempt.events)).toHaveLength(0);
+    expect(admittedFragments(attempt.events)).toHaveLength(0);
   });
 
   it("WGX7: a fragment that asks for nothing is admitted and retains its source", function* () {

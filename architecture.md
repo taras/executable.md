@@ -1122,8 +1122,21 @@ refuse a generated import and cannot answer, replace or mutate one.
 retained Workspace roots exist and which one is selected, which pinned
 identities are on the allowlist, and which exact requests each may perform.
 Generated source receives none of those values, and nothing contextual carries
-them. A refusal in preflight appends no admission at all, and its diagnostic
-names the construct class without echoing the candidate.
+them. A refusal names the construct class and echoes no part of the candidate —
+in its diagnostic and in what it retains alike, because the decision is recorded
+either way.
+
+A retained admission is a grant under the ceilings it was granted with, and a
+resumed run is held to them. Durable replay matches an effect by its type and
+name, and what a description carries is stored rather than compared, so the
+normalized policy is retained in the admission's own result and a continuation
+compares it — whole and exactly — before one generated component is invoked or
+one request is performed. Changed roots, a changed pinned identity behind an
+unchanged name, and a widened request ceiling are each refused there. Deciding
+the fragment inside that durable effect is what makes this hold: a continuation
+restores what was admitted without consulting the current candidate at all, so
+what expands is the source this run admitted rather than whatever a later caller
+is holding.
 
 An XMD-mediated HTTP read is how a network-denied Agent is given external
 information: the authored document performs the read with `<Fetch>` and the
@@ -2308,7 +2321,7 @@ Status is measured against main.
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
-| generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted before its first effect, only the pinned observation identities the host supplied execute, the admitted source, selected root, identities and exact request policy are retained as one `generated_xmd` durable event before the first observation, and each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
+| generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
 | read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
