@@ -10,6 +10,7 @@
  */
 import {
   GitOperationError,
+  GitOperationInfrastructureError,
   RepositoryCompositionError,
   WorktreeCompositionError,
   type GitFailureReason,
@@ -41,22 +42,15 @@ const WORKTREE_REASONS: ReadonlyMap<string, WorktreeFailureReason> = new Map([
  * back through the journal.
  */
 const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
-  ["not-a-checkout", "not-a-checkout"],
   ["invalid-branch", "invalid-branch"],
   ["unresolved-base", "unresolved-base"],
   ["branch-checked-out-elsewhere", "branch-checked-out-elsewhere"],
   ["overwrites-local-changes", "overwrites-local-changes"],
-  ["unusable-repository", "unusable-repository"],
 ] as const);
 
 const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
   ["no-repository-context", "there is no enclosing <Repository>."],
   ["invalid-invocation", "it is not written the way that component is written."],
-  [
-    "not-a-checkout",
-    "the working directory it ran in is not a checkout this run retains for that repository. A " +
-      "Git operation runs in the Repository or Worktree it is written inside.",
-  ],
   ["invalid-branch", "the branch it names cannot be used as one."],
   ["unresolved-base", "its base does not name a commit in that repository."],
   [
@@ -69,7 +63,6 @@ const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
     "changes in the checkout would be overwritten by it. Nothing was discarded, stashed or " +
       "forced to make it apply.",
   ],
-  ["unusable-repository", "the checkout it ran in is not one this run can operate on."],
 ]);
 
 const REPOSITORY_SENTENCES: ReadonlyMap<RepositoryFailureReason, string> = new Map([
@@ -121,13 +114,25 @@ export function repositoryRefusal(name: string, reason: string): RepositoryCompo
  * sentence is built around, and what a replayed refusal is rebuilt with — so a
  * live refusal and a replayed one are the same sentence for the same element.
  */
-export function gitRefusal(operation: string, reason: string): GitOperationError {
-  const word = GIT_REASONS.get(reason) ?? "unusable-repository";
+export function gitRefusal(operation: string, reason: GitFailureReason): GitOperationError {
   return new GitOperationError(
     operation,
-    word,
-    `${operation} could not run: ${GIT_SENTENCES.get(word)}`,
+    reason,
+    `${operation} could not run: ${GIT_SENTENCES.get(reason)}`,
   );
+}
+
+/**
+ * The refusal a retained failure name describes, or `undefined` for none.
+ *
+ * A word outside the closed set is not a refusal this build may rebuild. It is a
+ * retained result that says something this version cannot read, and the caller
+ * treats it as one rather than receiving a plausible refusal assembled from a
+ * word nobody wrote.
+ */
+export function restoredGitRefusal(operation: string, word: string): GitOperationError | undefined {
+  const reason = GIT_REASONS.get(word);
+  return reason === undefined ? undefined : gitRefusal(operation, reason);
 }
 
 export function worktreeRefusal(name: string, reason: string): WorktreeCompositionError {
@@ -192,6 +197,20 @@ export function worktreeRefused(name: string, reason: string): never {
   throw new CompositionRefusal("worktree", reason, worktreeRefusal(name, reason).message);
 }
 
-export function gitRefused(operation: string, reason: string): never {
-  throw new CompositionRefusal("git", reason, gitRefusal(operation, reason).message);
+/**
+ * Refuse a Git operation under one word from the closed set.
+ *
+ * A word outside it is not refused under the nearest one: an unrecognized
+ * condition is infrastructure, and publishing it as a refusal would put an
+ * outcome this run cannot describe into its own history.
+ */
+export function gitRefused(operation: string, word: string): never {
+  const refusal = restoredGitRefusal(operation, word);
+  if (refusal === undefined) {
+    throw new GitOperationInfrastructureError(
+      operation,
+      "native Git reported a condition this provider has no word for",
+    );
+  }
+  throw new CompositionRefusal("git", word, refusal.message);
 }

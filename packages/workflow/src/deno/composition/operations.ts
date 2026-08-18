@@ -7,16 +7,29 @@
  * around that is here, because every one of them needs the same thing done in
  * the same order.
  *
- * ## Selection, before authority
+ * ## Authority, before anything
  *
  * A document says which checkout it means by where it writes the element: the
- * enclosing `<Repository>` names the repository, the contextual working
- * directory names the checkout. Neither is trusted. The name is looked up in
- * this run's own retained rows, every row is held to the identity that names it,
- * and the working directory has to be exactly one of the checkout paths those
- * rows carry. A working directory that names none is a refusal — Git never runs,
- * and nothing is materialized — so a forged context selects nothing rather than
- * selecting something else.
+ * enclosing `<Repository>` supplies the record, the contextual working directory
+ * supplies the place. Neither is trusted. The record is compared member for
+ * member against the row this run retained under that name, every retained row
+ * is held to the identity that names it, and the working directory has to be a
+ * place inside one of the checkouts those rows carry.
+ *
+ * A failure of any of that is not an outcome. Nobody asked for a checkout that
+ * is not there, and a document cannot avoid a record that stopped matching, so
+ * these fail the run rather than publishing a Git result that says an operation
+ * happened. Git never runs, nothing is materialized, and no history is written.
+ *
+ * ## The checkout and the place inside it are different things
+ *
+ * A checkout is what the operation belongs to; the working directory is where
+ * inside it the element was written. `<Dir path="packages/core">` inside a
+ * Repository still operates on that Repository — it is where Git runs, not what
+ * Git runs on. So the two travel separately: identity comes from the retained
+ * row, and the place is the retained checkout's own path with the rest of the
+ * directory joined onto it, proven to be a real directory inside the export
+ * before any command is given it.
  *
  * ## The whole family, every time
  *
@@ -38,10 +51,22 @@
  * that says only "switched" cannot be checked against anything.
  */
 
-import { scoped, type Operation } from "effection";
+import { scoped, type Operation, until } from "effection";
+import { lstat } from "@effectionx/fs";
+import type { Stats } from "node:fs";
+import { realpath } from "node:fs/promises";
 import type { Json } from "@executablemd/durable-streams";
 import type { GitCheckoutIdentity, GitCheckoutState } from "../../composition/git-records.ts";
-import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
+import {
+  sameRepositoryRecord,
+  type RepositoryRecord,
+  type WorktreeRecord,
+} from "../../composition/records.ts";
+import { beneath, canonicalWorkspacePath } from "../../composition/parse.ts";
+import {
+  GitOperationAuthorityError,
+  GitOperationInfrastructureError,
+} from "../../composition/errors.ts";
 import type { StoredRepository } from "../workspace/repositories.ts";
 import {
   currentBranch,
@@ -67,15 +92,15 @@ import {
   canonicalizeAdministration,
 } from "./materialize.ts";
 import { attempted, type CompositionOutcome, type MutationContext } from "./effects.ts";
-import { gitRefused } from "./refusals.ts";
 import { repositoryDisagreement } from "./repository.ts";
 import { worktreeDisagreement } from "./worktree.ts";
 
 /** What a component supplies about where its operation belongs. */
 export interface GitOperationRequest {
-  readonly repositoryName: string;
+  /** The whole Repository record the component observed, to be compared. */
+  readonly repository: RepositoryRecord;
   /** The logical working directory the component observed. */
-  readonly checkoutPath: string;
+  readonly workingDirectory: string;
 }
 
 /** The materialized checkout one operation runs in. */
@@ -85,6 +110,14 @@ export interface GitCheckout {
   readonly directory: string;
   /** The real host directory the Repository it belongs to was exported to. */
   readonly repositoryDirectory: string;
+  /**
+   * The real host directory the element was written in.
+   *
+   * The checkout's own directory when the element was written at its root, and a
+   * directory inside it otherwise. This is where a command runs; `directory` is
+   * what it runs on.
+   */
+  readonly workingDirectory: string;
   readonly identity: GitCheckoutIdentity;
 }
 
@@ -94,64 +127,94 @@ interface Selection {
   /** The Worktree this operation runs in, or `undefined` for the primary checkout. */
   readonly worktree: WorktreeRecord | undefined;
   readonly identity: GitCheckoutIdentity;
+  /** What the working directory adds to the checkout's own path, or `""`. */
+  readonly within: string;
   readonly subject: string;
 }
 
+function unauthorized(operation: string, reason: string): never {
+  throw new GitOperationAuthorityError(operation, reason);
+}
+
 /**
- * Which retained checkout the name and the working directory select.
+ * Which retained checkout the observed Repository and working directory select.
  *
  * Every row read here is held to the identity that names it before it is used
  * for anything, so a placement or a locator that no longer agrees is found
- * before a host path is joined and before Git exists in the story.
+ * before a host path is joined and before Git exists in the story. The observed
+ * record is then compared with the retained one member for member: a name can
+ * only be looked up, and looking one up is what a replaced context would rely
+ * on.
  */
 function select(
   context: MutationContext,
   operation: string,
   request: GitOperationRequest,
 ): Selection {
-  const repository = context.metadata.readRepository(request.repositoryName);
-  if (repository === undefined) {
-    gitRefused(operation, "not-a-checkout");
+  const observed = request.repository;
+  const stored = context.metadata.readRepository(observed.name);
+  if (stored === undefined) {
+    unauthorized(operation, "this run retains no Repository under the name it was given");
   }
-  const repositorySubjectName = repositorySubject(request.repositoryName);
-  agreedStored(repository, repositorySubjectName);
+  const repositorySubjectName = repositorySubject(observed.name);
+  agreedStored(stored, repositorySubjectName);
+  if (!sameRepositoryRecord(stored.record, observed)) {
+    unauthorized(
+      operation,
+      "the Repository it observed is not the one this run retained under that name",
+    );
+  }
 
   const worktrees = context.metadata
-    .readWorktreesForRepository(request.repositoryName)
+    .readWorktreesForRepository(observed.name)
     .map((worktree) => agreedWorktree(worktree, worktreeSubject(worktree.name)));
 
-  if (request.checkoutPath === repository.record.checkoutPath) {
-    return {
-      repository,
-      worktrees,
-      worktree: undefined,
-      identity: {
-        repositoryName: repository.record.name,
-        worktreeName: null,
-        checkoutPath: repository.record.checkoutPath,
-      },
-      subject: repositorySubjectName,
-    };
+  const directory = canonicalWorkspacePath(request.workingDirectory);
+  if (directory === undefined) {
+    unauthorized(operation, "its working directory does not name one place in the Workspace");
   }
 
-  const worktree = worktrees.find((candidate) => candidate.checkoutPath === request.checkoutPath);
-  if (worktree === undefined) {
-    gitRefused(operation, "not-a-checkout");
+  // The longest match rather than the first: a checkout nested inside another
+  // one is the checkout its own paths belong to. Placement keeps worktrees out
+  // of the Repository's tree, so this is a proof rather than a preference.
+  const worktree = worktrees
+    .filter((candidate) => beneath(candidate.checkoutPath, directory))
+    .sort((left, right) => right.checkoutPath.length - left.checkoutPath.length)[0];
+  const checkout =
+    worktree === undefined
+      ? beneath(stored.record.checkoutPath, directory)
+        ? stored.record.checkoutPath
+        : undefined
+      : worktree.checkoutPath;
+  if (checkout === undefined) {
+    unauthorized(
+      operation,
+      "its working directory is not inside any checkout this run retains for that Repository",
+    );
   }
+
   return {
-    repository,
+    repository: stored,
     worktrees,
     worktree,
     identity: {
-      repositoryName: repository.record.name,
-      worktreeName: worktree.name,
-      checkoutPath: worktree.checkoutPath,
+      repositoryName: stored.record.name,
+      worktreeName: worktree === undefined ? null : worktree.name,
+      checkoutPath: checkout,
     },
-    subject: worktreeSubject(worktree.name),
+    within: directory.slice(checkout.length),
+    subject: worktree === undefined ? repositorySubjectName : worktreeSubject(worktree.name),
   };
 }
 
-/** What the checkout holds right now, or the refusal that it holds nothing readable. */
+/**
+ * What the checkout holds right now.
+ *
+ * A checkout this run retains, verified moments earlier, that cannot answer
+ * where its branch, its commit or its trees are is not a condition a document
+ * asked for. It is infrastructure, and publishing it as an outcome would record
+ * a transition nobody can describe.
+ */
 function* checkoutState(
   git: GitSession,
   directory: string,
@@ -162,11 +225,76 @@ function* checkoutState(
   const head = yield* headTree(git, directory);
   const index = yield* indexTree(git, directory);
   if (branch === undefined || commit === undefined || head === undefined || index === undefined) {
-    gitRefused(operation, "unusable-repository");
+    throw new GitOperationInfrastructureError(
+      operation,
+      "the checkout it ran in did not report the branch, commit and trees it holds",
+    );
   }
   return Object.freeze({ branch, commit, headTree: head, indexTree: index });
 }
 
+/**
+ * The real directory inside the export the element was written in.
+ *
+ * Proven rather than assumed, at the one place the retained path and the host
+ * root are joined. The checkout root already resolves to itself; what is added
+ * here is the rest of the working directory, which may name anything a checkout
+ * contains — including a tracked symbolic link, which the operating system would
+ * resolve before Git ever reported where it was running.
+ */
+function* workingDirectoryOf(
+  checkout: string,
+  within: string,
+  operation: string,
+): Operation<string> {
+  const directory = `${checkout}${within}`;
+  if (within === "") {
+    return directory;
+  }
+  const info = yield* entry(directory);
+  if (info === undefined || !info.isDirectory()) {
+    unauthorized(operation, "its working directory is not a directory in the checkout it selected");
+  }
+  // `lstat` says the entry itself is not a link; this says no segment above it
+  // is either. The operating system resolves a working directory before Git
+  // sees it, so a link anywhere along the way would run every command somewhere
+  // this run does not own.
+  if ((yield* until(realpath(directory))) !== directory) {
+    unauthorized(
+      operation,
+      "its working directory does not resolve to a place inside the checkout it selected",
+    );
+  }
+  return directory;
+}
+
+/**
+ * What the host holds at this path, or `undefined` when it holds nothing there.
+ *
+ * `lstat` rather than `stat`, so a symbolic link answers as itself. Absence is
+ * keyed on the code rather than on a runtime's own error class, so this reads
+ * the same wherever the adapter runs.
+ */
+function* entry(path: string): Operation<Stats | undefined> {
+  try {
+    return yield* lstat(path);
+  } catch (error) {
+    const code = error instanceof Error ? Reflect.get(error, "code") : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * That the exported checkout is still the one the retained record names.
+ *
+ * Creation identity, read back out of the bytes: where it came from, how it
+ * names objects, the commit it was created at, and — for a linked worktree —
+ * that it is a worktree of the Repository it belongs to. A disagreement is stale
+ * retained state, which is fatal: nothing published, nothing repaired.
+ */
 function* disagreement(
   git: GitSession,
   attached: Attached,
@@ -237,6 +365,7 @@ function runInCheckout<T>(
       git,
       directory,
       repositoryDirectory,
+      workingDirectory: yield* workingDirectoryOf(directory, selection.within, operation),
       identity: selection.identity,
     };
 

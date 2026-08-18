@@ -3,10 +3,11 @@
  *
  * A Git operation is not identified by a path a document wrote. It runs in the
  * checkout the enclosing `<Repository>` and the contextual working directory
- * select, so what a component sends is a Repository name and the logical
- * directory it observed — neither of which carries authority. Which retained
- * checkout those two select, and whether they select one at all, is the
- * provider's answer.
+ * select, so what a component sends is the whole Repository record it observed
+ * and the logical directory it observed — neither of which carries authority.
+ * The provider authenticates both against what this run retained; a record that
+ * is not the retained one, or a directory inside no retained checkout, is a
+ * failure of authority rather than an outcome, and nothing is published for it.
  *
  * What comes back is evidence rather than a summary. The checkout the operation
  * ran in, and the branch, commit, HEAD tree and index tree the checkout held
@@ -21,7 +22,8 @@
  */
 
 import type { Json } from "@executablemd/durable-streams";
-import { members, optionalText, text } from "./parse.ts";
+import { beneath, canonicalWorkspacePath, members, optionalText, text } from "./parse.ts";
+import type { GitObjectFormat, RepositoryRecord } from "./records.ts";
 
 /** Which retained checkout one Git operation ran in. */
 export interface GitCheckoutIdentity {
@@ -40,11 +42,23 @@ export interface GitCheckoutState {
   readonly indexTree: string;
 }
 
-/** What a `<Git.Switch>` invocation asks the provider to do. */
+/**
+ * What a `<Git.Switch>` invocation asks the provider to do.
+ *
+ * The Repository arrives whole rather than by name. A name alone can only be
+ * looked up; the record can be *compared*, which is what lets the provider hold
+ * a replaced context to the exact row this run retained rather than to whichever
+ * Repository happens to answer to that name.
+ *
+ * The working directory is kept apart from the checkout throughout. A checkout
+ * is what the operation belongs to; the working directory is where inside it the
+ * element was written, and the two are equal only when a document wrote the
+ * element at the checkout root.
+ */
 export interface GitSwitchRequest {
-  readonly repositoryName: string;
+  readonly repository: RepositoryRecord;
   /** The logical working directory the component observed. */
-  readonly checkoutPath: string;
+  readonly workingDirectory: string;
   readonly branch: string;
   readonly base: string | undefined;
 }
@@ -82,6 +96,22 @@ const SWITCH_MEMBERS = [
   "after",
 ] as const;
 
+/**
+ * An object id in the algorithm this repository names its objects with.
+ *
+ * Length and case both, because a digest is a fixed-width lowercase hex string
+ * everywhere Git writes one. A value that is merely a non-empty string is not an
+ * object id, and treating one as an id is how a retained result that says
+ * nothing passes for one that says something.
+ */
+function objectId(value: unknown, format: GitObjectFormat): string | undefined {
+  const candidate = text(value);
+  const width = format === "sha1" ? 40 : 64;
+  return candidate !== undefined && new RegExp(`^[0-9a-f]{${width}}$`).test(candidate)
+    ? candidate
+    : undefined;
+}
+
 export function parseGitCheckoutIdentity(value: unknown): GitCheckoutIdentity | undefined {
   const record = members(value, IDENTITY_MEMBERS);
   if (record === undefined) {
@@ -89,27 +119,25 @@ export function parseGitCheckoutIdentity(value: unknown): GitCheckoutIdentity | 
   }
   const repositoryName = text(record.repositoryName);
   const worktreeName = optionalText(record.worktreeName);
-  const checkoutPath = text(record.checkoutPath);
-  if (
-    repositoryName === undefined ||
-    worktreeName === undefined ||
-    checkoutPath === undefined ||
-    !checkoutPath.startsWith("/")
-  ) {
+  const checkoutPath = canonicalWorkspacePath(record.checkoutPath);
+  if (repositoryName === undefined || worktreeName === undefined || checkoutPath === undefined) {
     return undefined;
   }
   return Object.freeze({ repositoryName, worktreeName, checkoutPath });
 }
 
-export function parseGitCheckoutState(value: unknown): GitCheckoutState | undefined {
+export function parseGitCheckoutState(
+  value: unknown,
+  format: GitObjectFormat,
+): GitCheckoutState | undefined {
   const record = members(value, STATE_MEMBERS);
   if (record === undefined) {
     return undefined;
   }
   const branch = text(record.branch);
-  const commit = text(record.commit);
-  const headTree = text(record.headTree);
-  const indexTree = text(record.indexTree);
+  const commit = objectId(record.commit, format);
+  const headTree = objectId(record.headTree, format);
+  const indexTree = objectId(record.indexTree, format);
   if (
     branch === undefined ||
     commit === undefined ||
@@ -121,18 +149,47 @@ export function parseGitCheckoutState(value: unknown): GitCheckoutState | undefi
   return Object.freeze({ branch, commit, headTree, indexTree });
 }
 
-export function parseGitSwitchResult(value: unknown): GitSwitchResult | undefined {
+/**
+ * What the invocation this result is being read for asked for.
+ *
+ * A result is read back for one request, and a result that does not describe
+ * *that* request is not this invocation's result whatever else it is. Passing
+ * the request in is what turns reading into checking: the identity, the branch,
+ * the base and the transition are all compared rather than accepted.
+ */
+export interface GitSwitchExpectation {
+  readonly repository: RepositoryRecord;
+  readonly workingDirectory: string;
+  readonly branch: string;
+  readonly base: string | undefined;
+}
+
+/**
+ * The switch result this value describes for this request, or `undefined`.
+ *
+ * Total, exact about membership, and closed about meaning. Beyond the shape it
+ * refuses a result whose checkout is not the one the request selects, whose
+ * branch or base is not the one the request asked for, and whose two readings do
+ * not describe a switch: a created branch ends at the commit it was created
+ * from and cannot be the branch the checkout was already on, and a checkout that
+ * ends on the branch it began on cannot have moved.
+ */
+export function parseGitSwitchResult(
+  value: unknown,
+  expected: GitSwitchExpectation,
+): GitSwitchResult | undefined {
   const record = members(value, SWITCH_MEMBERS);
   if (record === undefined) {
     return undefined;
   }
+  const format = expected.repository.objectFormat;
   const checkout = parseGitCheckoutIdentity(record.checkout);
   const requestedBranch = text(record.requestedBranch);
   const resolvedBranch = text(record.resolvedBranch);
   const requestedBase = optionalText(record.requestedBase);
-  const resolvedBase = optionalText(record.resolvedBase);
-  const before = parseGitCheckoutState(record.before);
-  const after = parseGitCheckoutState(record.after);
+  const resolvedBase = record.resolvedBase === null ? null : objectId(record.resolvedBase, format);
+  const before = parseGitCheckoutState(record.before, format);
+  const after = parseGitCheckoutState(record.after, format);
   if (
     checkout === undefined ||
     requestedBranch === undefined ||
@@ -144,6 +201,38 @@ export function parseGitSwitchResult(value: unknown): GitSwitchResult | undefine
   ) {
     return undefined;
   }
+
+  if (
+    checkout.repositoryName !== expected.repository.name ||
+    !beneath(checkout.checkoutPath, expected.workingDirectory) ||
+    (checkout.worktreeName === null &&
+      checkout.checkoutPath !== expected.repository.checkoutPath) ||
+    (checkout.worktreeName !== null && checkout.checkoutPath === expected.repository.checkoutPath)
+  ) {
+    return undefined;
+  }
+
+  if (
+    requestedBranch !== expected.branch ||
+    requestedBase !== (expected.base ?? null) ||
+    resolvedBranch !== expected.branch ||
+    after.branch !== resolvedBranch
+  ) {
+    return undefined;
+  }
+
+  const created = resolvedBase !== null;
+  if (created && (after.commit !== resolvedBase || before.branch === after.branch)) {
+    return undefined;
+  }
+  if (
+    !created &&
+    before.branch === after.branch &&
+    (before.commit !== after.commit || before.headTree !== after.headTree)
+  ) {
+    return undefined;
+  }
+
   return Object.freeze({
     checkout,
     requestedBranch,

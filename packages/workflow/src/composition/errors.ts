@@ -133,12 +133,10 @@ export class RepositoryCompositionProtocolError extends WorkflowStorageError {
 export type GitFailureReason =
   | "no-repository-context"
   | "invalid-invocation"
-  | "not-a-checkout"
   | "invalid-branch"
   | "unresolved-base"
   | "branch-checked-out-elsewhere"
-  | "overwrites-local-changes"
-  | "unusable-repository";
+  | "overwrites-local-changes";
 
 /** A Git operation the document asked for and did not get. */
 export class GitOperationError extends Error {
@@ -152,6 +150,62 @@ export class GitOperationError extends Error {
     super(sentence);
     this.operation = operation;
     this.reason = reason;
+  }
+}
+
+/**
+ * The observation an operation arrived with is not this run's retained state.
+ *
+ * A Repository record that is not the row this run retains, a working directory
+ * inside no checkout it holds, a retained path that has stopped agreeing with
+ * the identity naming it — none of these is something a document asked for and
+ * did not get. Each is the run's own state disagreeing with what was presented
+ * for it, so each fails the run the way a stale-state condition does: children
+ * and later siblings do not begin, `<PrintErrors>` cannot print it, and no
+ * result is published for an operation that was never authorized to happen.
+ *
+ * The sentence names the operation and the condition, and nothing else. What a
+ * caller presented is not quoted back: a forged record is untrusted input, and
+ * an untrusted value belongs in a diagnostic even less than a retained one does.
+ */
+export class GitOperationAuthorityError extends StaleInputError {
+  override name = "GitOperationAuthorityError";
+
+  readonly operation: string;
+
+  constructor(operation: string, reason: string) {
+    super(
+      `${operation} is not authorized against this run's retained state: ${reason}. The run is ` +
+        "left exactly as it was found; no Git ran and no result was recorded for it.",
+    );
+    this.operation = operation;
+  }
+}
+
+/**
+ * Native Git failed in a way this provider does not recognize.
+ *
+ * A refusal is a condition a document can act on, and the set of them is closed.
+ * Everything else Git can do — an exit this provider has no word for, a state
+ * read that answered nothing, a checkout that did not end where the command said
+ * it would — is infrastructure. Publishing one as a failed durable result would
+ * put a fabricated Git outcome in the run's history, so it fails the run
+ * instead, and the mutation it was part of commits nothing.
+ *
+ * Nothing Git printed travels with it. The condition is named by what this
+ * provider was doing, which is what a reader needs and all it may have.
+ */
+export class GitOperationInfrastructureError extends WorkflowStorageError {
+  override name = "GitOperationInfrastructureError";
+
+  readonly operation: string;
+
+  constructor(operation: string, reason: string) {
+    super(
+      `${operation} could not be completed: ${reason}. Nothing was committed: the run is ` +
+        "exactly what it was before this operation began.",
+    );
+    this.operation = operation;
   }
 }
 

@@ -51,15 +51,25 @@ export const WORKSPACE_GIT_SWITCH = "workspace_git_switch";
  */
 export function* describeSwitch(request: GitSwitchRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
+  // The whole observation, not only what it asked for. The record a document was
+  // written against is part of what this effect is: replaying a result recorded
+  // for one Repository under an observation naming another would hand back a
+  // transition that never described this invocation.
   const configuration = fingerprintOf([
-    request.repositoryName,
-    request.checkoutPath,
+    request.repository.name,
+    request.repository.locatorFingerprint,
+    request.repository.requestedBase,
+    request.repository.creationCommit,
+    request.repository.primaryBranch,
+    request.repository.objectFormat,
+    request.repository.checkoutPath,
+    request.workingDirectory,
     request.branch,
     request.base ?? null,
   ]);
   return {
     type: WORKSPACE_GIT_SWITCH,
-    name: `${expansion.id}:${request.repositoryName}:${configuration}`,
+    name: `${expansion.id}:${request.repository.name}:${configuration}`,
     configuration,
     ...sourceDescription(expansion.position),
   };
@@ -80,19 +90,34 @@ function* performSwitch(
     gitRefused(SWITCH, "invalid-branch");
   }
 
-  if (yield* branchExists(checkout.git, checkout.directory, branch)) {
-    yield* switchBranch(checkout.git, checkout.directory, branch, undefined);
+  // Git runs where the element was written; what it answers about is the
+  // checkout that directory belongs to.
+  const { git, workingDirectory, directory } = checkout;
+  if (yield* branchExists(git, directory, branch)) {
+    yield* switchBranch(git, {
+      operation: SWITCH,
+      workingDirectory,
+      checkout: directory,
+      branch,
+      start: undefined,
+    });
     return { resolvedBase: null };
   }
 
   const start =
     base === undefined
-      ? yield* resolveCommit(checkout.git, checkout.directory, "HEAD")
-      : yield* resolveBaseCommit(checkout.git, checkout.directory, base);
+      ? yield* resolveCommit(git, directory, "HEAD")
+      : yield* resolveBaseCommit(git, directory, base);
   if (start === undefined) {
     gitRefused(SWITCH, "unresolved-base");
   }
-  yield* switchBranch(checkout.git, checkout.directory, branch, start);
+  yield* switchBranch(git, {
+    operation: SWITCH,
+    workingDirectory,
+    checkout: directory,
+    branch,
+    start,
+  });
   return { resolvedBase: start };
 }
 
@@ -105,7 +130,7 @@ export function performGitSwitch(
     context,
     host,
     SWITCH,
-    { repositoryName: request.repositoryName, checkoutPath: request.checkoutPath },
+    { repository: request.repository, workingDirectory: request.workingDirectory },
     (checkout) => performSwitch(checkout, request.branch, request.base),
     (checkout, before: GitCheckoutState, after: GitCheckoutState, performed: Switched): Json =>
       gitSwitchResultJson({
@@ -133,7 +158,10 @@ export function* createGitSwitch(
     yield* describeSwitch(request),
     (filesystem, metadata) => performGitSwitch({ filesystem, metadata }, host, request),
   );
-  const result = parseGitSwitchResult(outcome);
+  // Read for this request rather than merely read: a result that does not
+  // describe the checkout, branch, base and transition this invocation asked for
+  // is not this invocation's result, whatever else it is.
+  const result = parseGitSwitchResult(outcome, request);
   if (result === undefined) {
     throw new GitOperationProtocolError(SWITCH);
   }

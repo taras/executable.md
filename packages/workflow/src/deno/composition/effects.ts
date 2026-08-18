@@ -16,7 +16,10 @@
 import { type Operation } from "effection";
 import type { EffectDescription, Json, Workflow } from "@executablemd/durable-streams";
 import { createHash } from "node:crypto";
-import { RepositoryCompositionProtocolError } from "../../composition/errors.ts";
+import {
+  GitOperationProtocolError,
+  RepositoryCompositionProtocolError,
+} from "../../composition/errors.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { WorkflowStorageError } from "../../storage/errors.ts";
 import { savepoint } from "../transaction.ts";
@@ -27,11 +30,11 @@ import type { WorkspaceMetadata } from "../workspace/repositories.ts";
 import { GitRefusal } from "./git.ts";
 import {
   CompositionRefusal,
-  gitRefusal,
   gitRefused,
   refusalReason,
   repositoryRefusal,
   repositoryRefused,
+  restoredGitRefusal,
   worktreeRefusal,
   worktreeRefused,
   type RefusalKind,
@@ -167,6 +170,13 @@ function* compositionEffect(
  * travels on untouched — a stale-state condition stays fatal, and cancellation
  * stays cancellation.
  */
+/**
+ * The refusal a restored failure describes, or the protocol failure it is.
+ *
+ * A retained refusal carries a word, and a word outside the vocabulary this
+ * build speaks is not a refusal it may rebuild — it is a retained result this
+ * version cannot read, which is fatal rather than something to approximate.
+ */
 function refusal(kind: RefusalKind, name: string, reason: string): Error {
   if (kind === "repository") {
     return repositoryRefusal(name, reason);
@@ -174,7 +184,7 @@ function refusal(kind: RefusalKind, name: string, reason: string): Error {
   if (kind === "worktree") {
     return worktreeRefusal(name, reason);
   }
-  return gitRefusal(name, reason);
+  return restoredGitRefusal(name, reason) ?? new GitOperationProtocolError(name);
 }
 
 export function* settled(

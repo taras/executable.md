@@ -28,6 +28,10 @@
 
 import type { Operation } from "effection";
 import type { GitObjectFormat } from "../../composition/records.ts";
+import {
+  GitOperationInfrastructureError,
+  type GitFailureReason,
+} from "../../composition/errors.ts";
 import type { GitOutcome, RepositoryHost } from "./host.ts";
 
 /** The branch a checkout gets when the base names something that is not one. */
@@ -357,39 +361,60 @@ export function indexTree(git: GitSession, directory: string): Operation<string 
  * the same thing a person would get by hand and the same thing `<Worktree>`
  * already does with a branch the remote published.
  */
-export function* switchBranch(
-  git: GitSession,
-  directory: string,
-  branch: string,
-  start: string | undefined,
-): Operation<void> {
+export interface BranchSwitch {
+  /** The component this is performed for, as a document writes it. */
+  readonly operation: string;
+  /** Where the command runs. */
+  readonly workingDirectory: string;
+  /** The checkout the command answers about. */
+  readonly checkout: string;
+  readonly branch: string;
+  /** The commit a missing branch is created at, or `undefined` when it exists. */
+  readonly start: string | undefined;
+}
+
+export function* switchBranch(git: GitSession, request: BranchSwitch): Operation<void> {
+  const { branch, start } = request;
   const outcome = yield* git.run(
     start === undefined ? ["switch", branch, "--"] : ["switch", "--create", branch, start, "--"],
-    directory,
+    request.workingDirectory,
   );
   if (outcome.code !== 0) {
-    throw new GitRefusal(switchFailure(outcome));
+    const refusal = switchFailure(outcome);
+    if (refusal === undefined) {
+      throw new GitOperationInfrastructureError(
+        request.operation,
+        "native Git refused it in a way this provider has no word for",
+      );
+    }
+    throw new GitRefusal(refusal);
   }
-  if ((yield* currentBranch(git, directory)) !== branch) {
-    throw new GitRefusal("unusable-repository");
+  if ((yield* currentBranch(git, request.checkout)) !== branch) {
+    throw new GitOperationInfrastructureError(
+      request.operation,
+      "the checkout did not end on the branch the command reported switching to",
+    );
   }
 }
 
 /**
- * Which condition a refused `switch` reported.
+ * Which condition a refused `switch` reported, or `undefined` for none of them.
  *
  * The message selects a word and is then discarded, on the same terms as every
- * other reading here: `LC_ALL=C` is what makes it stable, and a condition this
- * cannot recognize is reported as an unusable checkout rather than guessed at.
+ * other reading here; `LC_ALL=C` is what makes it stable. A condition this
+ * cannot recognize is *not* given a word. The set of refusals is closed because
+ * each of them is something a document can act on, and calling an unrecognized
+ * exit the nearest one would publish a durable result claiming this run knows
+ * what happened.
  */
-function switchFailure(outcome: GitOutcome): string {
+function switchFailure(outcome: GitOutcome): GitFailureReason | undefined {
   if (checkedOutElsewhere(outcome)) {
     return "branch-checked-out-elsewhere";
   }
   if (/would be overwritten by/.test(outcome.stderr)) {
     return "overwrites-local-changes";
   }
-  return "unusable-repository";
+  return undefined;
 }
 
 /**

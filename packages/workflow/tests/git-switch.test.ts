@@ -15,6 +15,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { registerComponents } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
@@ -23,10 +24,16 @@ import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { pathToFileURL } from "node:url";
 import { cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
-import { GitCompositionProviderError, GitOperationError } from "../src/composition/errors.ts";
+import {
+  GitCompositionProviderError,
+  GitOperationAuthorityError,
+  GitOperationError,
+  GitOperationInfrastructureError,
+} from "../src/composition/errors.ts";
 import { currentRepository, RepositoryContext } from "../src/composition/context.ts";
 import { GitComposition } from "../src/composition/git-api.ts";
 import { parseGitSwitchResult } from "../src/composition/git-records.ts";
+import type { GitSwitchExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
@@ -46,6 +53,7 @@ import {
   gitOutcomes,
   raised,
   retainedRepositories,
+  retainedWorktrees,
   runDocument,
   subcommands,
   survivingRoots,
@@ -84,6 +92,14 @@ function isGitFailure(value: unknown): value is GitOperationError {
 
 function isProviderError(value: unknown): value is GitCompositionProviderError {
   return value instanceof GitCompositionProviderError;
+}
+
+function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
+  return value instanceof GitOperationAuthorityError;
+}
+
+function isInfrastructureFailure(value: unknown): value is GitOperationInfrastructureError {
+  return value instanceof GitOperationInfrastructureError;
 }
 
 /** A well-formed record naming a Repository nothing retains. */
@@ -159,6 +175,36 @@ function* physicalGitApiCopy(): Operation<LoadedGitApi> {
   return loaded;
 }
 
+/**
+ * What a retained result is read back for.
+ *
+ * A result is parsed for one request, so a suite that wants to read one has to
+ * say which request it is reading it for — which is the point: the parse is a
+ * comparison, and a suite that could skip the comparison would be asserting
+ * something weaker than the run does.
+ */
+function* expectation(
+  database: WorkflowRunDatabase,
+  branch: string,
+  base?: string,
+  within = "",
+): Operation<GitSwitchExpectation> {
+  const [repository] = yield* retainedRepositories(database);
+  if (repository === undefined) {
+    throw new Error("the run retained no repository to read a result against");
+  }
+  const [worktree] = yield* retainedWorktrees(database, repository.record.name);
+  return {
+    repository: repository.record,
+    workingDirectory:
+      within === "" || worktree === undefined
+        ? `${repository.record.checkoutPath}${within}`
+        : worktree.checkoutPath,
+    branch,
+    base,
+  };
+}
+
 function document(locator: string, ...lines: string[]): string {
   return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
 }
@@ -189,7 +235,10 @@ describe("workflow Git.Switch", () => {
 
       const [outcome] = yield* gitOutcomes(database);
       expect(outcome?.status).toBe("ok");
-      const retained = parseGitSwitchResult(outcome?.record);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release"),
+      );
       expect(retained?.checkout.repositoryName).toBe("project");
       expect(retained?.checkout.worktreeName).toBe(null);
       expect(retained?.requestedBranch).toBe("release");
@@ -226,7 +275,10 @@ describe("workflow Git.Switch", () => {
 
       expect(String(output)).toContain("after: main");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(outcome?.record);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "feature/new"),
+      );
       expect(retained?.resolvedBranch).toBe("feature/new");
       expect(retained?.requestedBase).toBe(null);
       expect(retained?.resolvedBase).toBe(remote.heads.get("main"));
@@ -253,7 +305,10 @@ describe("workflow Git.Switch", () => {
 
       expect(String(output)).toContain("after: release");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(outcome?.record);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "feature/new", "release"),
+      );
       expect(retained?.requestedBase).toBe("release");
       expect(retained?.resolvedBase).toBe(remote.heads.get("release"));
       expect(retained?.after.commit).toBe(remote.heads.get("release"));
@@ -290,7 +345,10 @@ describe("workflow Git.Switch", () => {
       expect(rendered).toContain("outside: main");
 
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(outcome?.record);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release", undefined, "/worktrees/"),
+      );
       expect(retained?.checkout.worktreeName).toBe("implementation");
       expect(retained?.before.branch).toBe("feature/new");
       expect(retained?.after.branch).toBe("release");
@@ -326,7 +384,10 @@ describe("workflow Git.Switch", () => {
         yield* workspaceText(database, `${repository?.record.checkoutPath}/shared.txt`),
       ).toContain("carried");
       const [outcome] = yield* gitOutcomes(database);
-      const retained = parseGitSwitchResult(outcome?.record);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release"),
+      );
       // A modified working tree is not a staged one: the index still describes
       // HEAD on both sides of the switch.
       expect(retained?.before.indexTree).toBe(retained?.before.headTree);
@@ -402,7 +463,80 @@ describe("workflow Git.Switch", () => {
 });
 
 describe("workflow Git.Switch selection", () => {
-  it("refuses a working directory that is not one of this run's checkouts", function* () {
+  it("selects the enclosing checkout from a directory inside it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        document(
+          remote.locator,
+          `<Dir path="nested">`,
+          `<Git.Switch branch="release" />`,
+          "</Dir>",
+          `<File path="which.txt" as="which" />`,
+          "",
+          "after: {which}",
+        ),
+      );
+
+      // A directory inside a checkout is where Git runs, not what it runs on:
+      // the whole checkout moved, and the retained identity is the Repository's.
+      expect(String(output)).toContain("after: release");
+      const [outcome] = yield* gitOutcomes(database);
+      const [repository] = yield* retainedRepositories(database);
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release", undefined, "/nested"),
+      );
+      expect(retained?.checkout.worktreeName).toBe(null);
+      expect(retained?.checkout.checkoutPath).toBe(repository?.record.checkoutPath);
+      expect(retained?.after.branch).toBe("release");
+    });
+  });
+
+  it("selects a linked Worktree from a directory inside it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        document(
+          remote.locator,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "<Dir path={worktree}>",
+          `<Dir path="nested">`,
+          `<Git.Switch branch="release" />`,
+          "</Dir>",
+          `<File path="which.txt" as="inside" />`,
+          "",
+          "inside: {inside}",
+          "</Dir>",
+          `<File path="which.txt" as="outside" />`,
+          "",
+          "outside: {outside}",
+        ),
+      );
+
+      const rendered = String(output);
+      expect(rendered).toContain("inside: release");
+      expect(rendered).toContain("outside: main");
+      const [outcome] = yield* gitOutcomes(database);
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release", undefined, "/worktrees/"),
+      );
+      expect(retained?.checkout.worktreeName).toBe("implementation");
+      expect(retained?.checkout.checkoutPath).toBe(worktree?.checkoutPath);
+    });
+  });
+
+  it("fails on a working directory inside no checkout, without running Git", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
@@ -414,7 +548,7 @@ describe("workflow Git.Switch selection", () => {
           database,
           document(
             remote.locator,
-            `<Dir path="nested">`,
+            `<Dir path="/somewhere">`,
             `<Git.Switch branch="release" />`,
             "</Dir>",
           ),
@@ -422,13 +556,38 @@ describe("workflow Git.Switch selection", () => {
         ),
       );
 
-      const refusal = causedBy(failure, isGitFailure);
-      expect(refusal?.reason).toBe("not-a-checkout");
-      // A directory inside a checkout is not that checkout, and nothing was run
-      // to find that out.
+      // Nobody asked for a checkout that is not there, so nothing was published
+      // to say an operation happened.
+      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isGitFailure)).toBe(undefined);
+      expect(yield* gitEvents(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("switch");
-      const [outcome] = yield* gitOutcomes(database);
-      expect(outcome?.status).toBe("err");
+    });
+  });
+
+  it("fails on a working directory that is not a real directory in the checkout", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const failure = yield* raised(
+        runDocument(
+          database,
+          document(
+            remote.locator,
+            `<Dir path="absent">`,
+            `<Git.Switch branch="release" />`,
+            "</Dir>",
+          ),
+          countingOptions(counting),
+        ),
+      );
+
+      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(yield* gitEvents(database)).toHaveLength(0);
+      expect(subcommands(counting.counters)).not.toContain("switch");
     });
   });
 
@@ -449,19 +608,38 @@ describe("workflow Git.Switch selection", () => {
       const unretained = yield* raised(
         runForged(unretainedRun, FORGED, source, countingOptions(counting)),
       );
-      expect(causedBy(unretained, isGitFailure)?.reason).toBe("not-a-checkout");
-      const [ghost] = yield* gitOutcomes(unretainedRun);
-      expect(ghost?.status).toBe("err");
+      expect(causedBy(unretained, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(unretained, isGitFailure)).toBe(undefined);
+      // Not an outcome: nothing about it is in this run's history.
+      expect(yield* gitEvents(unretainedRun)).toHaveLength(0);
 
-      // The second context names a Repository this run really retains. What it
-      // cannot supply is a working directory inside that checkout, because the
-      // provider reads the directory from the run rather than from the context.
-      const retainedRun = yield* createRun({ runId: "mismatched" });
-      const real = yield* raised(
-        runForged(retainedRun, { ...FORGED, name: "project" }, source, countingOptions(counting)),
+      // The second context names a Repository this run really retains, and
+      // carries a record that is not the retained one. A name can be looked up;
+      // the record is compared, so the substitution is what fails.
+      const substitutedRun = yield* createRun({ runId: "substituted" });
+      const substituted = yield* raised(
+        runForged(
+          substitutedRun,
+          { ...FORGED, name: "project" },
+          source,
+          countingOptions(counting),
+        ),
       );
-      expect(causedBy(real, isGitFailure)?.reason).toBe("not-a-checkout");
-      expect(yield* retainedRepositories(retainedRun)).toHaveLength(1);
+      expect(causedBy(substituted, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(yield* retainedRepositories(substitutedRun)).toHaveLength(1);
+      expect(yield* gitEvents(substitutedRun)).toHaveLength(0);
+
+      // And a context carrying the exact retained record still supplies no
+      // place: the working directory a self-closing Repository leaves behind is
+      // the Workspace root, which is inside no checkout. The record is the one
+      // the first run retained, which the same fixture retains again here —
+      // creation identity is a function of the name, the url and the base.
+      const [retained] = yield* retainedRepositories(unretainedRun);
+      const exactRun = yield* createRun({ runId: "exact" });
+      const exact = yield* raised(
+        runForged(exactRun, retained?.record ?? FORGED, source, countingOptions(counting)),
+      );
+      expect(causedBy(exact, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
       expect(subcommands(counting.counters)).not.toContain("switch");
     });
   });
@@ -577,6 +755,53 @@ describe("workflow Git.Switch failure kinds", () => {
     });
   });
 
+  it("does not turn a Git failure it has no word for into a refusal", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      const unfamiliar = {
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          if (invocation.args[0] === "switch") {
+            // Sanitized, and unlike anything this provider recognizes: the
+            // question is what happens to an exit it has no word for.
+            return { code: 1, stdout: "", stderr: "fatal: a condition from a later Git\n" };
+          }
+          return yield* inner.git(invocation);
+        },
+        useDirectory: inner.useDirectory,
+      };
+
+      const failure = yield* raised(
+        runDocument(
+          database,
+          [
+            "<PrintErrors>",
+            document(remote.locator, `<Git.Switch branch="release" />`),
+            "",
+            "later",
+            "</PrintErrors>",
+          ].join("\n"),
+          { composition: { host: unfamiliar } },
+        ),
+      );
+
+      // Naming it the nearest refusal would publish a durable result claiming
+      // this run knows what happened, so it fails the run and retains nothing.
+      expect(causedBy(failure, isInfrastructureFailure)).toBeInstanceOf(
+        GitOperationInfrastructureError,
+      );
+      expect(causedBy(failure, isGitFailure)).toBe(undefined);
+      expect(yield* gitEvents(database)).toHaveLength(0);
+      const [repository] = yield* retainedRepositories(database);
+      expect(yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`)).toBe(
+        "main\n",
+      );
+    });
+  });
+
   it("does not turn a Workspace that cannot retain the result into a refusal", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -656,36 +881,11 @@ describe("workflow Git composition routing", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      let refused: unknown;
       const output = yield* scoped(function* () {
         return yield* withWorkflowWorkspace(
           database,
           scoped(function* () {
-            yield* registerComponents([
-              {
-                name: "Probe",
-                origin: "test",
-                props: { type: "object", additionalProperties: false },
-                *fn(): Operation<string> {
-                  const repository = yield* currentRepository();
-                  refused = yield* raised(
-                    copy.GitComposition.operations.switchBranch({
-                      repositoryName: "ghost",
-                      checkoutPath: yield* cwd(),
-                      branch: "release",
-                      base: undefined,
-                    }),
-                  );
-                  yield* copy.GitComposition.operations.switchBranch({
-                    repositoryName: String(repository?.name),
-                    checkoutPath: yield* cwd(),
-                    branch: "release",
-                    base: undefined,
-                  });
-                  return "";
-                },
-              },
-            ]);
+            yield* registerComponents([probe(copy, (repository) => repository)]);
             return yield* collect(
               yield* execute({
                 ...inlineSource(
@@ -704,11 +904,60 @@ describe("workflow Git composition routing", () => {
         );
       });
 
+      // Two `Api` objects, one provider: the name is the routing, and the copy
+      // performed a real effect through the installed one.
       expect(String(output)).toContain("after: release");
-      expect(causedBy(refused, isGitFailure)?.reason).toBe("not-a-checkout");
-      expect(causedBy(refused, isProviderError)).toBe(undefined);
       const outcomes = yield* gitOutcomes(database);
-      expect(outcomes.map((outcome) => outcome.status)).toEqual(["err", "ok"]);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok"]);
+
+      // What the copy does not get is authority. Its request is read against the
+      // same retained rows, and one naming something this run does not hold
+      // fails the run rather than being answered.
+      const forgedRun = yield* createRun({ runId: "loaded-copy-forged" });
+      const failure = yield* raised(
+        scoped(function* () {
+          return yield* withWorkflowWorkspace(
+            forgedRun,
+            scoped(function* () {
+              yield* registerComponents([probe(copy, () => FORGED)]);
+              return yield* collect(
+                yield* execute({
+                  ...inlineSource(document(remote.locator, "<Probe />")),
+                  stream: forgedRun.journal,
+                }),
+              );
+            }),
+          );
+        }),
+      );
+      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isProviderError)).toBe(undefined);
+      expect(yield* gitEvents(forgedRun)).toHaveLength(0);
     });
   });
 });
+
+/** A component that switches through a loaded copy's Api, on a chosen record. */
+function probe(
+  copy: LoadedGitApi,
+  observe: (repository: RepositoryRecord) => RepositoryRecord,
+): ComponentRegistration {
+  return {
+    name: "Probe",
+    origin: "test",
+    props: { type: "object", additionalProperties: false },
+    *fn(): Operation<string> {
+      const repository = yield* currentRepository();
+      if (repository === undefined) {
+        throw new Error("the probe was written outside a Repository");
+      }
+      yield* copy.GitComposition.operations.switchBranch({
+        repository: observe(repository),
+        workingDirectory: yield* cwd(),
+        branch: "release",
+        base: undefined,
+      });
+      return "";
+    },
+  };
+}

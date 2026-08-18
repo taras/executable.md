@@ -28,7 +28,6 @@ import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts"
 import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { when } from "@effectionx/converge";
 import {
   causedBy,
   countingHost,
@@ -147,49 +146,98 @@ describe("workflow Git.Switch durability", () => {
     });
   });
 
-  it("fails a replay whose retained result no longer parses", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const path = runPath(root, "release-1.4");
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      yield* runDocument(database, source(remote.locator));
-
-      dropRootClose(path);
-      damageSwitchResult(path, (record) => {
+  /**
+   * Every way a retained result can stop describing the invocation it was
+   * recorded for.
+   *
+   * Shape is the cheap half. The rest is meaning: an object id that is not one,
+   * a checkout that is not the one this request selects, a branch or base that
+   * is not the one it asked for, and a transition the two readings cannot both
+   * be part of. Each is damage a hand-edited or foreign database can hold, and
+   * each has to stop the replay rather than be read around.
+   */
+  const DAMAGE: { name: string; damage: (record: Record<string, unknown>) => void }[] = [
+    {
+      name: "is missing a member the protocol declares",
+      damage: (record) => {
         delete record.after;
-      });
-
-      const counting = countingHost();
-      const failure = yield* raised(
-        runDocument(database, source(remote.locator), countingOptions(counting)),
-      );
-
-      expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
-      // Nothing was re-run to make up for the damage.
-      expect(subcommands(counting.counters)).not.toContain("switch");
-    });
-  });
-
-  it("fails a replay whose retained result carries more than the protocol", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const path = runPath(root, "release-1.4");
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      yield* runDocument(database, source(remote.locator));
-
-      dropRootClose(path);
-      damageSwitchResult(path, (record) => {
+      },
+    },
+    {
+      name: "carries more than the protocol declares",
+      damage: (record) => {
         record.stashed = "extra";
-      });
+      },
+    },
+    {
+      name: "holds something that is not an object id",
+      damage: (record) => {
+        Object(record.after).commit = "not-an-oid";
+      },
+    },
+    {
+      name: "holds an object id in the wrong case",
+      damage: (record) => {
+        Object(record.after).commit = String(Object(record.after).commit).toUpperCase();
+      },
+    },
+    {
+      name: "names another Repository",
+      damage: (record) => {
+        Object(record.checkout).repositoryName = "other";
+      },
+    },
+    {
+      name: "names a checkout path that is not one place in the Workspace",
+      damage: (record) => {
+        Object(record.checkout).checkoutPath = "/repositories/../etc";
+      },
+    },
+    {
+      name: "names a branch the invocation did not ask for",
+      damage: (record) => {
+        record.requestedBranch = "other";
+      },
+    },
+    {
+      name: "ends on a branch the invocation did not ask for",
+      damage: (record) => {
+        record.resolvedBranch = "other";
+        Object(record.after).branch = "other";
+      },
+    },
+    {
+      name: "claims a base the transition contradicts",
+      damage: (record) => {
+        record.resolvedBase = Object(record.before).commit;
+      },
+    },
+  ];
 
-      const failure = yield* raised(runDocument(database, source(remote.locator)));
-      expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
+  for (const { name, damage } of DAMAGE) {
+    it(`fails a replay whose retained result ${name}`, function* () {
+      const root = yield* useStorageRoot();
+      const remote = yield* useBareRemote(REMOTE);
+      const path = runPath(root, "release-1.4");
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* runDocument(database, source(remote.locator));
+
+        dropRootClose(path);
+        damageSwitchResult(path, damage);
+
+        const counting = countingHost();
+        const failure = yield* raised(
+          runDocument(database, source(remote.locator), countingOptions(counting)),
+        );
+
+        expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
+        // Nothing was re-run to make up for the damage.
+        expect(subcommands(counting.counters)).not.toContain("switch");
+      });
     });
-  });
+  }
 
   it("leaves the frontier untouched when a blocked switch is halted", function* () {
     const root = yield* useStorageRoot();
@@ -312,17 +360,12 @@ describe("workflow Git operation teardown", () => {
       return opened;
     });
 
-    // Converged on rather than sampled once: `kill` returns before the signal
-    // has been delivered, so a write attempted immediately can still land in a
-    // pipe whose reader is about to disappear. A child that was never killed
-    // keeps reading, and every attempt keeps succeeding.
-    yield* when(
-      function* () {
-        const refused = yield* raised(until(writer.write("content")));
-        expect(Reflect.get(Object(refused), "code")).toBe("EPIPE");
-      },
-      { timeout: 5000 },
-    );
+    // Sampled once, immediately, and deliberately: teardown waits for the
+    // child to close, so by the time `halt()` has returned there is nothing
+    // left holding the read end. A cleanup that only signalled would still be
+    // racing here, and this write would land in the pipe.
+    const refused = yield* raised(until(writer.write("content")));
     yield* until(writer.close());
+    expect(Reflect.get(Object(refused), "code")).toBe("EPIPE");
   });
 });

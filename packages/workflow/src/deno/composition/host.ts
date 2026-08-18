@@ -101,11 +101,24 @@ export function denoRepositoryHost(): RepositoryHost {
       // Registered with no suspension point between spawning and registering,
       // so a halt cannot land between the two and leave a Git process running
       // after the scope that started it is gone.
+      //
+      // Teardown waits for the child to close rather than only signalling it.
+      // `kill` returns once the signal is queued, not once it has been
+      // delivered, so a cleanup that returned there would let the scope that
+      // owns this command finish while the process it started is still alive —
+      // and the disposable materialization it is working in is removed moments
+      // later. `close` is the event that fires once the process is gone and
+      // both pipes have ended, which is what makes cancellation complete rather
+      // than merely started.
       let settled = false;
-      yield* ensure(() => {
-        if (!settled) {
-          child.kill("SIGKILL");
+      const closed = withResolvers<void>();
+      child.on("close", () => closed.resolve());
+      yield* ensure(function* () {
+        if (settled) {
+          return;
         }
+        child.kill("SIGKILL");
+        yield* closed.operation;
       });
 
       const outcome = withResolvers<GitOutcome>();

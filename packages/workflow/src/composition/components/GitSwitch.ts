@@ -92,8 +92,8 @@ export default function* GitSwitch(props: Record<string, Json>): Operation<strin
   }
 
   yield* GitComposition.operations.switchBranch({
-    repositoryName: repository.name,
-    checkoutPath: yield* cwd(),
+    repository,
+    workingDirectory: yield* cwd(),
     branch,
     base,
   });

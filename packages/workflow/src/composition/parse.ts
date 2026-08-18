@@ -34,3 +34,29 @@ export function optionalText(value: unknown): string | null | undefined {
   }
   return text(value);
 }
+
+/**
+ * The one place beneath the Workspace root this string names, or `undefined`.
+ *
+ * Absolute, and made of ordinary segments: no empty one, no `.`, no `..`. It is
+ * a property of the string, decided before any host call, which is what makes it
+ * a proof rather than a check of what a filesystem happened to resolve — a
+ * `realpath` after the fact has already followed a link by the time it answers.
+ */
+export function canonicalWorkspacePath(value: unknown): string | undefined {
+  const candidate = text(value);
+  if (candidate === undefined || !candidate.startsWith("/")) {
+    return undefined;
+  }
+  for (const segment of candidate.slice(1).split("/")) {
+    if (segment === "" || segment === "." || segment === "..") {
+      return undefined;
+    }
+  }
+  return candidate;
+}
+
+/** Whether `path` is `root` itself or one place beneath it, by whole segments. */
+export function beneath(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
