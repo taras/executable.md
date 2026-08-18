@@ -624,9 +624,13 @@ and directs the caller to interrupt the foreground process, while an eligible
 retained state transitions to `cancelled` under the exact lock, and a
 `completed` or `failed` outcome stays authoritative.
 
-What is not built is the wait. Durable suspension and releasing the executor at
-a checkpoint remain #367; versioned history checkpoints, compatible forks,
-`history --forkable`, and forkability reasons remain #368.
+The wait is built too: `suspendFor()` suspends a run durably and gives its
+executor lock back (#367), and a typed answer can be delivered to it (#300).
+What is not built is anything that reaches or acts on it — no v1 Markdown
+element spells the operation, this workflow calls nothing that suspends,
+delivery executes nothing, and no scheduler resumes a run. Versioned history
+checkpoints, compatible forks, `history --forkable`, and forkability reasons
+remain #368.
 
 **Still missing: who answered.** The journal records the validated decision, the
 question fingerprint, and the document execution it belongs to. It does not
