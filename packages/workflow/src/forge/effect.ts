@@ -50,6 +50,16 @@
  * substituted selection and a reused request all complete nothing, and a throw
  * after a real provider answered cannot take that answer away.
  *
+ * Refusing is not the same as deciding, and the difference is the whole point of
+ * the boundary. Anything on this path can *raise* — selection, middleware, the
+ * provider's own body — and none of that may become the effect's outcome. Only
+ * an answer accepted through the capability can, so the attempt records what it
+ * authored itself and reads it back by object identity. A name is a string
+ * anyone can write and `instanceof` is wrong in both directions across loaded
+ * copies; without the identity check, middleware raising a conflict would retire
+ * the effect as conflicted forever with no provider ever asked. See
+ * {@link ForgeSettlement}.
+ *
  * ## What is durable
  *
  * The record — the request, the pre-state, the observations, the decision and
@@ -83,7 +93,6 @@ import {
   ForgeProtocolError,
   ForgeProviderError,
   ForgeUnavailableError,
-  isForgeAuthorityFailure,
   isForgeUnavailable,
 } from "./errors.ts";
 import {
@@ -143,6 +152,50 @@ interface ProviderSelection {
   readonly credential: object;
 }
 
+/**
+ * What one attempt itself decided, kept where no replaceable code can reach it.
+ *
+ * A forge outcome may come from exactly one place: a closed answer accepted
+ * through the execution-owned capability. Everything else that can throw on the
+ * way — provider selection, routing middleware, the provider's own body — is
+ * the boundary failing, and a boundary failure is not something the run
+ * happened to find at the forge.
+ *
+ * Which of those a raised error is cannot be decided from the error. A name is
+ * a string any middleware can write, and `instanceof` answers "no" for a second
+ * loaded copy's genuine failure and "yes" for a look-alike this module never
+ * constructed. So authorship is recorded here as the attempt makes it, and read
+ * back by object identity: an error is this attempt's own decision only if this
+ * attempt is holding that exact object.
+ */
+interface ForgeSettlement {
+  authored?: { readonly failure: Error; readonly outcome: boolean };
+}
+
+/**
+ * Record a failure as this attempt's own, and hand it back to be thrown.
+ *
+ * `outcome` says whether it is something the forge told us — a conflict, an
+ * ambiguity, an unavailability — and therefore belongs in the journal as this
+ * effect's failed result. A boundary failure is authored too, so it keeps its
+ * exact sentence, but it is not an outcome and is never published.
+ */
+function author(settlement: ForgeSettlement, failure: Error, outcome: boolean): Error {
+  settlement.authored = { failure, outcome };
+  return failure;
+}
+
+/** Whether `error` is the exact failure this attempt authored, and what it is. */
+function authorship(
+  settlement: ForgeSettlement,
+  error: unknown,
+): { readonly outcome: boolean } | undefined {
+  const held = settlement.authored;
+  return held !== undefined && Object.is(held.failure, error)
+    ? { outcome: held.outcome }
+    : undefined;
+}
+
 const ForgeInvocation: Api<ForgeInvocationApi> = createApi<ForgeInvocationApi>(
   FORGE_INVOCATION_API,
   {
@@ -153,7 +206,10 @@ const ForgeInvocation: Api<ForgeInvocationApi> = createApi<ForgeInvocationApi>(
   },
 );
 
-function providerSelection(value: object | undefined): ProviderSelection {
+function providerSelection(
+  value: object | undefined,
+  settlement: ForgeSettlement,
+): ProviderSelection {
   const route = value === undefined ? undefined : Reflect.get(value, "route");
   const credential = value === undefined ? undefined : Reflect.get(value, "credential");
   if (
@@ -162,7 +218,14 @@ function providerSelection(value: object | undefined): ProviderSelection {
     typeof credential !== "object" ||
     credential === null
   ) {
-    throw new ForgeProviderError("the selected forge provider is missing, foreign, or substituted");
+    throw author(
+      settlement,
+      new ForgeProviderError(
+        "no forge provider is installed, or the selected one is missing, foreign or " +
+          "substituted — a workflow host installs one for a live execution",
+      ),
+      false,
+    );
   }
   return { route, credential };
 }
@@ -258,26 +321,42 @@ function closedAnswer<T>(
   subject: string,
   parse: (value: unknown) => T | undefined,
   value: unknown,
+  settlement: ForgeSettlement,
 ): Result<T> {
   const outcome = readResult(value);
   if (outcome === undefined) {
-    throw new ForgeProtocolError(
-      `the forge provider answered the ${phase} phase with a value that is not a result`,
+    throw author(
+      settlement,
+      new ForgeProtocolError(
+        `the forge provider answered the ${phase} phase with a value that is not a result`,
+      ),
+      false,
     );
   }
   if (!outcome.ok) {
+    // The provider's own error selects a word from the closed vocabulary and is
+    // then discarded. What travels on is this module's instance, so nothing the
+    // provider wrote reaches the journal or a document.
     if (!isForgeUnavailable(outcome.error)) {
-      throw new ForgeProtocolError(
-        `the forge provider failed the ${phase} phase with something other than temporary ` +
-          "unavailability",
+      throw author(
+        settlement,
+        new ForgeProtocolError(
+          `the forge provider failed the ${phase} phase with something other than temporary ` +
+            "unavailability",
+        ),
+        false,
       );
     }
     return Err(new ForgeUnavailableError());
   }
   const parsed = parse(outcome.value);
   if (parsed === undefined) {
-    throw new ForgeProtocolError(
-      `the forge provider answered the ${phase} phase with a value that is not ${subject}`,
+    throw author(
+      settlement,
+      new ForgeProtocolError(
+        `the forge provider answered the ${phase} phase with a value that is not ${subject}`,
+      ),
+      false,
     );
   }
   return Ok(parsed);
@@ -288,6 +367,7 @@ function invocationCapability<T>(
   details: ForgeInvocationDetails,
   subject: string,
   parse: (value: unknown) => T | undefined,
+  settlement: ForgeSettlement,
 ): {
   capability: ForgeInvocationCapability;
   authoritativeAnswer: () => Result<T> | undefined;
@@ -298,7 +378,11 @@ function invocationCapability<T>(
 
   function requireCredential(candidate: object): void {
     if (candidate !== credential) {
-      throw new ForgeProviderError("the live forge invocation has foreign authority");
+      throw author(
+        settlement,
+        new ForgeProviderError("the live forge invocation has foreign authority"),
+        false,
+      );
     }
   }
 
@@ -307,8 +391,12 @@ function invocationCapability<T>(
       *inspect(candidate: object): Operation<ForgeInvocationDetails> {
         requireCredential(candidate);
         if (state !== "available") {
-          throw new ForgeProviderError(
-            "the live forge invocation is missing, reused, completed, or stale",
+          throw author(
+            settlement,
+            new ForgeProviderError(
+              "the live forge invocation is missing, reused, completed, or stale",
+            ),
+            false,
           );
         }
         state = "active";
@@ -317,12 +405,16 @@ function invocationCapability<T>(
       *answer(candidate: object, answer: unknown): Operation<void> {
         requireCredential(candidate);
         if (state !== "active") {
-          throw new ForgeProviderError("the live forge invocation is completed or stale");
+          throw author(
+            settlement,
+            new ForgeProviderError("the live forge invocation is completed or stale"),
+            false,
+          );
         }
         // Parsed before it is recorded, so a raw payload or a shape this
         // boundary cannot read is refused while there is still nothing to
         // publish.
-        answered = closedAnswer(details.phase, subject, parse, answer);
+        answered = closedAnswer(details.phase, subject, parse, answer, settlement);
         state = "complete";
       },
     }),
@@ -339,9 +431,16 @@ function* coordinatedAnswer<T>(
   details: ForgeInvocationDetails,
   subject: string,
   parse: (value: unknown) => T | undefined,
+  settlement: ForgeSettlement,
 ): Operation<Result<T> | undefined> {
-  const selection = providerSelection(yield* Forge.operations.provider);
-  const invocation = invocationCapability(selection.credential, details, subject, parse);
+  const selection = providerSelection(yield* Forge.operations.provider, settlement);
+  const invocation = invocationCapability(
+    selection.credential,
+    details,
+    subject,
+    parse,
+    settlement,
+  );
   try {
     yield* ForgeInvocation.operations.coordinate({
       type: "start",
@@ -367,15 +466,22 @@ function* forgePhase<T>(
   details: ForgeInvocationDetails,
   subject: string,
   parse: (value: unknown) => T | undefined,
+  settlement: ForgeSettlement,
 ): Operation<T> {
-  const answer = yield* coordinatedAnswer(details, subject, parse);
+  const answer = yield* coordinatedAnswer(details, subject, parse, settlement);
   if (answer === undefined) {
-    throw new ForgeProviderError(
-      `the selected forge provider did not answer the ${details.phase} phase`,
+    throw author(
+      settlement,
+      new ForgeProviderError(
+        `the selected forge provider did not answer the ${details.phase} phase`,
+      ),
+      false,
     );
   }
   if (!answer.ok) {
-    throw answer.error;
+    // Accepted through the capability, so it is what the forge said: an outcome
+    // this run records, rebuilt here rather than carried from the provider.
+    throw author(settlement, new ForgeUnavailableError(), true);
   }
   return answer.value;
 }
@@ -388,18 +494,22 @@ function* forgePhase<T>(
  * the provider to mutate at most once, and a second attempt is something a
  * document or explicit middleware asks for, starting again at observation.
  */
-function* reconcile(request: CompleteForgeEffectRequest): Operation<Json> {
+function* reconcile(
+  request: CompleteForgeEffectRequest,
+  settlement: ForgeSettlement,
+): Operation<Json> {
   const observation = yield* forgePhase(
     { phase: "observe", request },
     "an observation",
     parseForgeObservation,
+    settlement,
   );
 
   if (observation.state === "conflict") {
-    throw new ForgeConflictError();
+    throw author(settlement, new ForgeConflictError(), true);
   }
   if (observation.state === "ambiguous") {
-    throw new ForgeAmbiguousError();
+    throw author(settlement, new ForgeAmbiguousError(), true);
   }
   if (observation.state === "compatible") {
     return forgeReconciliationRecordJson({
@@ -415,6 +525,7 @@ function* reconcile(request: CompleteForgeEffectRequest): Operation<Json> {
     { phase: "perform", request, observation },
     "a completion",
     parseForgeCompletion,
+    settlement,
   );
   return forgeReconciliationRecordJson({
     request,
@@ -426,49 +537,72 @@ function* reconcile(request: CompleteForgeEffectRequest): Operation<Json> {
 }
 
 /**
- * The ordinary live path, with one distinction the default coordinator cannot
- * make.
+ * What this effect's journal entry may say, and who is allowed to say it.
  *
- * A conflict, an ambiguity and an unavailability are what this effect found, so
- * each is published as the effect's failed result and replays as itself. A
- * missing, foreign, substituted or reused provider selection, and an answer
- * this boundary cannot read, are not findings at all: no provider spoke, so
- * there is no outcome to record, and recording one would hold every later
- * execution of this run to a failure that describes the host rather than the
- * forge.
+ * A conflict, an ambiguity and an unavailability are what the forge told this
+ * attempt, so each is published as the effect's failed result and replays as
+ * itself. Everything else that can throw between here and the provider —
+ * selection, routing middleware, the provider's own body — is the boundary
+ * failing rather than a finding, and publishing one would let whoever threw
+ * write this run's history: a middleware that raises a conflict would retire
+ * the effect as conflicted forever, without a provider ever being asked.
+ *
+ * So the decision is not read from the error. It is read from this attempt's
+ * own record of what it authored, by object identity, which no name and no
+ * `instanceof` can imitate. An unauthored throw becomes one fixed, cause-free
+ * sentence: nothing the thrower wrote is repeated, and nothing it wrote is
+ * journaled, because nothing is journaled at all.
  *
  * Not publishing is only half of it. A live operation that appended nothing
  * would leave the next operation to append at this one's journal position, so
- * the attempt activates the run's existing fail-stop state instead of quietly
- * stepping aside.
+ * an unpublished failure activates the run's existing fail-stop state instead
+ * of quietly stepping aside.
  */
-const forgeCoordinator: LiveDurableOperationCoordinator = {
-  *run<T extends Json>(
-    execute: () => Operation<T>,
-    publish: (result: DurableResult) => Operation<void>,
-    activateFailure: ActivateDurabilityFailure,
-  ): Operation<DurableResult> {
-    let result: DurableResult;
-    try {
-      result = { status: "ok", value: yield* execute() };
-    } catch (error) {
-      if (isForgeAuthorityFailure(error)) {
-        throw activateFailure(error);
+function forgeCoordinator(settlement: ForgeSettlement): LiveDurableOperationCoordinator {
+  return {
+    *run<T extends Json>(
+      execute: () => Operation<T>,
+      publish: (result: DurableResult) => Operation<void>,
+      activateFailure: ActivateDurabilityFailure,
+    ): Operation<DurableResult> {
+      let result: DurableResult;
+      try {
+        result = { status: "ok", value: yield* execute() };
+      } catch (error) {
+        const authored = authorship(settlement, error);
+        if (authored === undefined) {
+          throw activateFailure(
+            new ForgeProviderError(
+              "the forge boundary failed before any provider answer was accepted, so this " +
+                "effect reached no outcome and what was raised is withheld",
+            ),
+          );
+        }
+        if (!authored.outcome) {
+          throw activateFailure(error instanceof Error ? error : new Error("forge boundary"));
+        }
+        result = { status: "err", error: serializeError(errorOf(error)) };
       }
-      const failure = error instanceof Error ? error : new Error(String(error));
-      result = { status: "err", error: serializeError(failure) };
-    }
-    yield* publish(result);
-    return result;
-  },
-};
+      yield* publish(result);
+      return result;
+    },
+  };
+}
+
+function errorOf(value: unknown): Error {
+  return value instanceof Error ? value : new Error("forge outcome");
+}
 
 function* attempt(
   description: EffectDescription,
   request: CompleteForgeEffectRequest,
 ): Workflow<unknown> {
-  return yield createDurableOperation(description, () => reconcile(request), {
-    coordinator: forgeCoordinator,
+  // One settlement per attempt, created here and reachable only from the two
+  // halves of this operation. Nothing a document, a provider or a handler holds
+  // can put a decision in it.
+  const settlement: ForgeSettlement = {};
+  return yield createDurableOperation(description, () => reconcile(request, settlement), {
+    coordinator: forgeCoordinator(settlement),
   });
 }
 

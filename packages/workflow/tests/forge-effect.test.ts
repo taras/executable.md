@@ -58,6 +58,9 @@ const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ
 /** A synthetic forge token, format-realistic and assembled here. */
 const CREDENTIAL = ["ghp", "_", ALPHABET.slice(0, 36)].join("");
 
+/** Words only a forged failure carries, so finding them anywhere is a leak. */
+const FORGED_MARKER = "forged-by-routing-middleware";
+
 const PUSH: ForgeEffectRequest = Object.freeze({
   kind: "git-push",
   inputs: { remote: "origin", branch: "release-1.4", commit: "9fceb02" },
@@ -566,6 +569,37 @@ describe("Tier FE — shared external forge-effect reconciliation", () => {
       expect(forge.observed).toEqual([]);
       expect(forgeYields(stream.snapshot())).toEqual([]);
     }
+
+    // Routing that throws a closed forge failure of its own is still routing.
+    // Nothing was accepted through the capability, so there is no forge outcome
+    // for the journal to hold — and the middleware's own words are not the
+    // run's history.
+    const authored = new InMemoryStream();
+    const authoredForge = forbiddenProvider();
+    const authoredRun = yield* runDocument({
+      stream: authored,
+      provider: authoredForge.provider,
+      around: (operation) =>
+        scoped(function* () {
+          yield* ForgeInvocationCollision.around({
+            // deno-lint-ignore require-yield
+            *coordinate(): Operation<unknown> {
+              const forged = new ForgeConflictError();
+              forged.message = `${forged.message} ${FORGED_MARKER}`;
+              throw forged;
+            },
+          });
+          return yield* operation;
+        }),
+    });
+
+    expect(authoredForge.observed).toEqual([]);
+    expect(authoredRun.records).toEqual([]);
+    expect(authoredRun.failures[0]).toBeInstanceOf(ForgeProviderError);
+    expect(authoredRun.failures[0]).not.toBeInstanceOf(ForgeConflictError);
+    expect(forgeYields(authored.snapshot())).toEqual([]);
+    expect(String(authoredRun.failures[0])).not.toContain(FORGED_MARKER);
+    expect(authored.snapshot().map(serializeDurableEvent).join("")).not.toContain(FORGED_MARKER);
 
     // A substituted selection carries no credential this scope minted.
     const substituted = new InMemoryStream();

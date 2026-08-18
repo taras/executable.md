@@ -1092,11 +1092,16 @@ declarative Git operations use this boundary.
 
 Prompt, Push, pull request and issue creation cannot place provider-owned state
 in SQLite. Each derives one stable effect identity from run and expansion,
-observes the provider operation and commits one local result transaction.
+performs or observes the provider operation and commits one local result
+transaction.
 
-One reconciliation serves all of them. `reconcileForgeEffect(request)` is the
-state machine every external forge effect runs through, so a new effect kind
-supplies a request and a provider rather than a replay policy of its own.
+The three forge mutations — Push, pull-request creation and issue creation —
+share one reconciliation of that boundary. `reconcileForgeEffect(request)` is
+the state machine each runs through, so a new forge effect kind supplies a
+request and a provider rather than a replay policy of its own. Prompt is not one
+of them: it derives identity the same way and commits its result the same way,
+but it reaches the Agent provider under §8's own contract and is unchanged by
+what follows.
 
 **The request.** Identity is the run ID and the expansion ID, derived by the
 shared operation. Neither the document nor the provider supplies either member.
@@ -1127,8 +1132,8 @@ normalized pre-state, the normalized observations, the decision — `adopted` or
 installs none, and the retained record is parsed and compared with the request
 being made before it is accepted. Conflict, permanent ambiguity and temporary
 unavailability publish the same effect's failed result and replay as the same
-fixed local failure, reconstructed from its closed name rather than recognized
-across loaded copies.
+fixed local failure, rebuilt from its closed name rather than recognized across
+loaded copies.
 
 **Provider routing.** The contextual forge surface selects a provider; it is not
 completion authority. Each phase mints a one-use route and a separate opaque
@@ -1138,9 +1143,22 @@ credential. A handler may observe, narrow or refuse a phase; a short circuit, a
 forged return, a substituted selection and a reused request complete nothing,
 and a throw after a real provider answered cannot replace that answer. A
 provider answers only the closed normalized shapes, parsed at that boundary
-before the durable operation returns. A missing, foreign, substituted or reused
-selection and an unreadable answer publish nothing and fail the run's
-durability, because no provider outcome exists to record.
+before the durable operation returns.
+
+**Who may author an outcome.** Only an answer accepted through that capability.
+A conflict, an ambiguity or an unavailability so accepted is the effect's
+recorded failure. Everything else that can raise on the way — provider
+selection, routing middleware, the provider's own body — is the boundary
+failing: it publishes nothing, activates the run's fail-stop fence, and is
+reported as one fixed cause-free failure that repeats no message, payload, cause
+or stack from whatever raised it. Which of the two a raised failure is, is
+decided by the attempt's own record of what it authored, never by a name or a
+class received from replaceable code — otherwise a routing handler could raise a
+conflict and retire the effect as conflicted without a provider ever being
+asked. Fail-stop rather than a bare refusal, because a live operation that
+appended nothing would leave the next one to append at its journal position. A
+malformed value actually submitted through the capability remains the distinct
+local protocol failure, which likewise publishes nothing.
 
 **Cancellation.** Cancellation tears down the provider call, publishes no
 invented completion, and is never reported as provider unavailability.

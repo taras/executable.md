@@ -57,15 +57,19 @@ export class ForgeUnavailableError extends Error {
   }
 }
 
-/** No forge provider is installed, or the selected one is not this scope's. */
+/**
+ * The boundary failed, so the forge never answered.
+ *
+ * No provider installed, a selection this scope did not mint, an invocation
+ * already spent, or anything at all raised before an answer was accepted. The
+ * condition is named; what was raised is not, because at this boundary it came
+ * from replaceable code and would otherwise travel into logs and output.
+ */
 export class ForgeProviderError extends Error {
   override name = "ForgeProviderError";
 
   constructor(condition: string) {
-    super(
-      `${condition}, so this external effect cannot execute or publish. A workflow host ` +
-        "installs a forge provider for a live execution.",
-    );
+    super(`${condition}. This external effect executed and published nothing.`);
   }
 }
 
@@ -108,18 +112,4 @@ export function forgeFailure(error: unknown): unknown {
 /** Whether this error is the closed temporary-unavailability condition. */
 export function isForgeUnavailable(error: unknown): boolean {
   return error instanceof Error && error.name === "ForgeUnavailableError";
-}
-
-/**
- * Whether this error says the boundary failed rather than the forge.
- *
- * Classified by the closed name for the same reason every other forge failure
- * is: a second loaded copy of this package raises its own class, and the
- * condition is what matters rather than which copy named it.
- */
-export function isForgeAuthorityFailure(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "ForgeProviderError" || error.name === "ForgeProtocolError")
-  );
 }
