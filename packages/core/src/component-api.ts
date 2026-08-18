@@ -123,6 +123,25 @@ export interface ComponentApi {
    */
   hasBinding(): Operation<boolean>;
   /**
+   * Write this invocation's `as` binding now, before the invocation returns
+   * (spec §6.10).
+   *
+   * The engine binds what a component returns, which is after everything the
+   * component did — including expanding the content it was written with. A
+   * construct whose content is *about* what the construct produced therefore
+   * has nothing to say: the value exists, and the name it will be bound under
+   * is the engine's, so neither side can reach the other.
+   *
+   * This is that one hole, and it stays the engine's on the same terms
+   * `hasBinding()` does: the caller hands over a value and learns nothing. The
+   * name does not cross, the environment does not cross, and an invocation
+   * written without `as` binds nothing here rather than inventing a name to
+   * bind under. What a component returns is still what ends up bound — calling
+   * this makes the value visible earlier, it does not decide what the binding
+   * finally is.
+   */
+  publishBinding(value: unknown): Operation<void>;
+  /**
    * Create a resource owned by the scope that invoked this component
    * (spec §4.4).
    *
@@ -249,6 +268,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     );
   },
   // deno-lint-ignore require-yield
+  *publishBinding(_value: unknown): Operation<void> {
+    throw new Error(
+      "Component.publishBinding() has no provider: not inside a function component invocation.",
+    );
+  },
+  // deno-lint-ignore require-yield
   *retain<T>(_resource: () => Operation<T>): Operation<T> {
     throw new Error("Component.retain() has no provider: not inside a component invocation.");
   },
@@ -279,6 +304,8 @@ export const persistent: Operations<ComponentApi>["persistent"] = Component.oper
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
 export const hasBinding: Operations<ComponentApi>["hasBinding"] = Component.operations.hasBinding;
+export const publishBinding: Operations<ComponentApi>["publishBinding"] =
+  Component.operations.publishBinding;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;

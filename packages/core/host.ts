@@ -44,8 +44,21 @@
  * second copy to disagree about and nothing for anyone else to reach.
  */
 
+/**
+ * The nested-execution authority is here for the same reason.
+ *
+ * `useTestHarness()` answers with what canonical `<Test>` minted for the
+ * invocation currently expanding. Running another document as a root is
+ * infrastructure — its own root import, its own journal, its own scope — so the
+ * authority for it is reachable where the other infrastructure boundaries are,
+ * and nothing a document or a component reaches by importing
+ * `@executablemd/core` can ask for it.
+ */
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
+
+export { TestHarnessError, useTestHarness } from "./src/test-harness.ts";
+export type { TestHarness, TestHarnessAuthorization } from "./src/test-harness.ts";

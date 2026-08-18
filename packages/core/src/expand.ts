@@ -2749,6 +2749,19 @@ function* expandFunctionComponent(
             *hasBinding(_args, _next) {
               return asBinding !== undefined;
             },
+            // The same prop, written early. The name stays here: what crosses
+            // is the value, and only for an invocation the engine is going to
+            // bind anyway. An invocation without `as` has nowhere to write, so
+            // this does nothing rather than inventing somewhere.
+            *publishBinding([value], _next) {
+              if (asBinding === undefined) {
+                return;
+              }
+              const parentEnv = yield* env;
+              if (parentEnv) {
+                parentEnv.values[asBinding] = value;
+              }
+            },
             // deno-lint-ignore require-yield
             *hasCapture([captureName], _next) {
               return captureName in literalCaptures || captureName in expressionCaptures;

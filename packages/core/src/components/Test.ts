@@ -17,10 +17,16 @@
  * name (specs/testing-spec.md).
  *
  * What a test *does* is not here. That arrives through `TestBehavior`.
+ *
+ * What this function does own, beside the containment grant, is the authority a
+ * nested execution is run under. It is minted here, in this invocation's frame,
+ * for the same reason containment is decided here: an invocation of *this*
+ * definition is the only thing that may hold it (`test-harness.ts`).
  */
 
 import type { Operation } from "effection";
 import { TestBehavior } from "../test-behavior.ts";
+import { provideTestHarness } from "../test-harness.ts";
 import type { Json } from "../types.ts";
 
 export const props = {
@@ -30,5 +36,8 @@ export const props = {
 };
 
 export default function* Test(props: Record<string, Json>): Operation<Json> {
+  // Published before the behavior runs and expired when this frame unwinds, so
+  // the harness exists for exactly the body this invocation expands.
+  yield* provideTestHarness();
   return yield* TestBehavior.operations.test(props);
 }

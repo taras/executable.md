@@ -27,4 +27,20 @@ export { Test, testing, record, results, TestFailureError } from "./src/test-api
 export type { TestApi, TestResult, BoundaryOutcome } from "./src/test-api.ts";
 export { installTestingComponents } from "./src/components.ts";
 export { useTesting } from "./src/use-testing.ts";
+// The nested-execution harness. This package owns the authored components and
+// the request-only host-profile surface; the trusted answer is the CLI's, and
+// it is installed with `installExecutionHost`.
+export { ExecutionHost, ExecutionHostError, installExecutionHost } from "./src/execution-host.ts";
+export type {
+  ChildInvocation,
+  ChildSettlement,
+  ExecutionHostApi,
+  ExecutionHostProvider,
+  ExecutionHostRequest,
+  ExecutionOutcome,
+  HostProfileName,
+  HostProfileRequest,
+  JournalPolicy,
+  WorkflowRunScope,
+} from "./src/execution-host.ts";
 export type { Testing } from "./src/use-testing.ts";

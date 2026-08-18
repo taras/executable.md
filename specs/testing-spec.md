@@ -207,6 +207,93 @@ and carries the original error as its cause.
 Nested `<Test>` elements are invalid. Skip, focus, and retry behavior is not
 supported.
 
+## Nested Executions
+
+A test can run another document as a real root execution, without translating it
+into TypeScript and without launching another `xmd` process:
+
+```md
+<Test name="bootstraps a package">
+  <Execution host="run" target="./scripts/bootstrap.md" props={{ name: "x" }} as="run">
+    <CollectOutput as="output" />
+
+    <AssertEquals actual={run.kind} expected="settled" />
+    <AssertEquals actual={run.result.ok} expected={true} />
+    <AssertStringIncludes actual={output} expected="created x" />
+  </Execution>
+</Test>
+```
+
+This is not component composition. `<Execution>` creates a child document
+execution with its own root import, target selection, journal, output stream,
+scope and teardown. `host` names a **host profile** the trusted host supplies by
+reusing the production assembly its command line already produces; a host that
+offers no such profile refuses before the child's root is imported, and so does
+an `<Execution>` written anywhere but inside a canonical `<Test>`.
+
+`host="run"` takes exactly one of `target` or `source`. A `target` is an ordinary
+document reference — a path, optionally followed by `#` and one target selector —
+resolved by the same loader `xmd run` uses, so a kebab-named document in an
+arbitrary directory is addressable without being a component. A `source` is
+markdown supplied directly and follows the production `run -e` path: it reports
+the `<eval>` identity and writes no file. `props` are the child root's props.
+
+`host="workflow"`, and the `<WorkflowRun>` scope it requires, are specified in
+issue #454 and are not built: a host that provides no workflow profile refuses
+them, naming that.
+
+### Outcome and failure
+
+With `as`, the binding receives one outcome, and it is readable from the
+assertion body:
+
+```ts
+type ExecutionOutcome =
+  | { kind: "settled"; result: Result<Json> }
+  | { kind: "suspended"; runId: string; suspensionId: string };
+```
+
+A settled `Ok` or `Err` is test data: the assertion body runs and can assert
+about either. Without `as` there is nothing to assert about, so a settled `Err`
+fails the owning test rather than passing vacuously. A host refusal before a
+child exists raises directly and binds nothing.
+
+### Declarations
+
+`<DiagnosticJournal>`, `<CollectOutput>` and `<CollectJournal>` are declarations,
+valid only as direct children of `<Execution>` and only before assertion content.
+They are installed for the whole child lifetime, before the child's root is
+imported; malformed or conflicting declarations fail before it too.
+
+`<CollectOutput as="…">` accumulates the child's rendered output for assertions.
+It is passive: the child's output is displayed progressively either way, and
+collection changes neither routing nor completion. When the child fails or is
+cancelled, the binding holds the partial prefix. Ordinary `<Capture>` stays
+lexical — it captures the rendered content it wraps and never the child's stream.
+
+`<DiagnosticJournal>` selects an isolated diagnostic journal for a `run` child,
+equivalent to what `xmd run --journal` retains. Without it a run is transient and
+allocates no journal because output was displayed. `<CollectJournal as="…">`
+binds a read-only snapshot of a journal the host already selected; it grants no
+retention, and declaring it without a selected journal is malformed.
+
+A declaration is recognized by the definition it resolves to, never by its name.
+A repository `CollectOutput.md` is chosen ahead of this package's, so it is an
+ordinary component: it renders where it is written and configures nothing.
+
+### Authority
+
+Canonical core mints one opaque harness per `<Test>` invocation and expires it
+with that invocation; each `<Execution>` spends a single-use authorization from
+it. A repository component named `Test`, `Execution` or `WorkflowRun`, a package
+registering those names, `printErrors(fn)`, a separately loaded package copy and
+replaceable context acquire none of it.
+
+Host-profile middleware is policy. It receives a request rather than a child, so
+it may observe, narrow, refuse and delegate — and cannot create a child,
+substitute a completion, or publish an outcome. A handler that returns without
+delegating produces no child and is reported as the protocol violation it is.
+
 ## Test API
 
 `TestApi` controls testing mode. The `testing` operation returns `false` by
