@@ -91,6 +91,8 @@ import { Err, ensure, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { getExpansion } from "@executablemd/core";
 import { getWorkflowRun } from "../run.ts";
+import { GIT_HOST_EFFECT } from "./effect-type.ts";
+import { retainedGitHostIdentity } from "./replay.ts";
 import { GIT_HOST_API, GitHost } from "./api.ts";
 import type {
   GitHostApi,
@@ -125,8 +127,7 @@ import {
   sameGitHostEffectRequest,
 } from "./records.ts";
 
-/** The durable type every external Git-host effect is journaled under. */
-export const GIT_HOST_EFFECT = "git_host_effect";
+export { GIT_HOST_EFFECT } from "./effect-type.ts";
 
 /**
  * What one attempt itself decided, kept where no replaceable code can reach it.
@@ -598,7 +599,12 @@ export function* reconcileGitHostEffect(
 ): Operation<GitHostReconciliationRecord> {
   const run = yield* getWorkflowRun();
   const expansion = yield* getExpansion();
-  const complete = completeRequest(run.runId, expansion.id, request);
+  // A position this run already retains a record at is named by the identity
+  // that record holds; everywhere else by this run's own. That is what lets a
+  // fork consume the completion it inherited without asking a provider
+  // anything, while every live attempt still performs under the run making it.
+  const retainedIdentity = yield* retainedGitHostIdentity(expansion.id);
+  const complete = completeRequest(retainedIdentity ?? run.runId, expansion.id, request);
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),

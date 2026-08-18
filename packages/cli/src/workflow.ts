@@ -72,6 +72,7 @@ import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
   definitionComponents,
+  gitHostReplayInstallation,
   retainedWorkflowInstallation,
   workflowBundleInstallation,
   WORKFLOW_RUN_STATUSES,
@@ -907,6 +908,10 @@ export function runWorkflow(
           base: record.base,
           pinnedCommit: record.definition.objectId,
         }),
+        // A retained Git-host record replays at the position it occupies, under
+        // the identity it holds. Every run installs it: for one that is not a
+        // fork every retained identity is already its own.
+        gitHostReplayInstallation(),
         // The bundle this run is a run of, when it is a run of one. Both start
         // and resume install it, and a completed replay installs it too: the
         // retained history is held to the same components before its recorded

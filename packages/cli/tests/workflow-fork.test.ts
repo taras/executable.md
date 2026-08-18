@@ -126,6 +126,54 @@ const SLOW = [
 /** Nothing at all after the heading, so it never reaches the checkpoint. */
 const EMPTY = ["# Release", "", "Nothing happens here.", ""].join("\n");
 
+/**
+ * A document that pushes to a local bare remote and then does one more thing.
+ *
+ * `<Git.Push>` is the shipped external-effect surface, and a completed push
+ * retains a reconciliation record — the pre-state, the observations, the
+ * decision and the result — that replays without contacting anything.
+ */
+function pushing(remote: string, tail: string): string {
+  return [
+    '<Repository name="project" url="' + remote + '">',
+    '<Git.Switch branch="publish/1" />',
+    '<File path="notes.md">',
+    "prepared",
+    "</File>",
+    '<Git.Add paths="notes.md" />',
+    '<Git.Commit message="prepare" as="commit" />',
+    "<Git.Push />",
+    "</Repository>",
+    "",
+    "```bash exec",
+    tail,
+    "```",
+    "",
+  ].join("\n");
+}
+
+/** A bare remote with one commit on `main`, and optionally one that refuses pushes. */
+function* useRemote(root: string, refusing = false): Operation<string> {
+  const bare = join(root, refusing ? "refusing.git" : "remote.git");
+  const seed = join(root, `seed-${refusing ? "refusing" : "remote"}`);
+  yield* ensureDir(seed);
+  yield* git(seed, ["init", "-q", "--initial-branch=main", "."]);
+  yield* git(seed, ["config", "user.email", "tier-wff@example.test"]);
+  yield* git(seed, ["config", "user.name", "Tier WFF"]);
+  yield* writeTextFile(join(seed, "which.txt"), "main\n");
+  yield* git(seed, ["add", "-A"]);
+  yield* git(seed, ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "first"]);
+  yield* git(root, ["init", "-q", "--bare", bare]);
+  yield* git(seed, ["push", "-q", bare, "main"]);
+  if (refusing) {
+    // The destination ref already exists, at a commit the run's own branch does
+    // not descend from. The push observes that and refuses, so what the run
+    // retains is a Git-host effect that established no completion.
+    yield* git(seed, ["push", "-q", bare, "main:refs/heads/publish/1"]);
+  }
+  return bare;
+}
+
 function* git(repository: string, args: string[]): Operation<void> {
   const result = yield* exec("git", { arguments: args, cwd: repository }).expect();
   if (result.code !== 0) {
@@ -186,6 +234,7 @@ interface HistoryRow {
     readonly type: string;
     readonly coroutineId: string;
     readonly description?: { readonly type: string; readonly name?: string };
+    readonly result?: { readonly status: string };
   };
   readonly workspaceRootId: string;
   readonly source?: { readonly path?: string; readonly line: number; readonly column: number };
@@ -638,6 +687,104 @@ describe("Tier WFF — xmd workflow fork", () => {
         "--props-channel=beta",
       ]).join();
       expect(again.code).toBe(0);
+    });
+  });
+
+  it("WFF10: a completed Git-host record is inherited without contacting anything", function* () {
+    yield* useFixture({ [DEFINITION]: "# placeholder\n" }, function* (fixture) {
+      const remote = yield* useRemote(join(fixture.repository, ".."));
+      yield* commit(fixture, { [DEFINITION]: pushing(remote, "echo original") }, "pushing");
+
+      yield* xmd(fixture, ["workflow", "start", "--id=source-1", DEFINITION]).expect();
+      const source = yield* history(fixture, "source-1");
+      const pushed = at(source, "git_host_effect");
+
+      // The checkpoint at the push is forkable: what the history holds about
+      // the remote is a completed reconciliation record, not a promise to ask.
+      expect(pushed.forkability).toEqual({ forkable: true, blockers: [] });
+
+      yield* commit(fixture, { [DEFINITION]: pushing(remote, "echo corrected") }, "corrected");
+
+      // The remote is gone. Anything that reached for it — an observation, a
+      // second push — would fail here rather than be replayed.
+      yield* rm(remote, { recursive: true, force: true });
+
+      const forked = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${pushed.eventId}`,
+        "--id=fork-1",
+        DEFINITION,
+      ]).join();
+      expect(forked.code).toBe(0);
+      expect(forked.stderr).toContain("workflow status: completed");
+
+      const entries = yield* history(fixture, "fork-1");
+      const inherited = at(entries, "git_host_effect");
+
+      // The inherited event is the source's, unchanged and unrewritten: its
+      // public id, its Workspace root, and the run it came from.
+      expect(inherited.eventId).toBe(pushed.eventId);
+      expect(inherited.workspaceRootId).toBe(pushed.workspaceRootId);
+      expect(inherited.event).toEqual(pushed.event);
+      expect(inherited.inherited).toEqual({
+        sourceRunId: "source-1",
+        sourceEventId: pushed.eventId,
+      });
+
+      // And the fork is the authority for what it ran itself.
+      const live = at(entries, "exec");
+      expect(live.inherited).toBe(undefined);
+      expect(live.eventId).not.toBe(at(source, "exec").eventId);
+    });
+  });
+
+  it("WFF11: a Git-host effect that established nothing is not forkable", function* () {
+    yield* useFixture({ [DEFINITION]: "# placeholder\n" }, function* (fixture) {
+      const remote = yield* useRemote(join(fixture.repository, ".."), true);
+      yield* commit(fixture, { [DEFINITION]: pushing(remote, "echo original") }, "pushing");
+
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=source-1",
+        DEFINITION,
+      ]).join();
+      // The remote refused, so the run failed and retains no completion.
+      expect(started.code).not.toBe(0);
+
+      const source = yield* history(fixture, "source-1");
+      const refused = at(source, "git_host_effect");
+      expect(refused.event.result?.status).not.toBe("ok");
+      expect(refused.forkability.forkable).toBe(false);
+      expect(refused.forkability.blockers).toEqual([
+        { code: "external-state-unavailable", eventId: refused.eventId },
+      ]);
+
+      // Cumulative: every later checkpoint carries it, naming that event.
+      for (const entry of source.slice(source.indexOf(refused))) {
+        expect(entry.forkability.blockers).toEqual([
+          { code: "external-state-unavailable", eventId: refused.eventId },
+        ]);
+      }
+
+      const forked = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${refused.eventId}`,
+        "--id=fork-1",
+        DEFINITION,
+      ]).join();
+      expect(forked.code).toBe(1);
+      expect(forked.stderr).toContain("external-state-unavailable");
+      // The refusal names a code and an event, and nothing the remote said.
+      expect(forked.stderr).not.toContain("refuses pushes");
+
+      // An earlier checkpoint is still forkable: the blocker is where it is.
+      const before = at(source, "workspace_git_commit");
+      expect(before.forkability.forkable).toBe(true);
     });
   });
 

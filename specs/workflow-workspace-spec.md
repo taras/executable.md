@@ -1857,12 +1857,28 @@ Workspace root. Nonmutating events reuse the previous root. Only committed
 events are selectable checkpoints, and the run's own canonical outcome is not
 one: a prefix that contains it leaves nothing to continue.
 
-Fork never rewinds external systems. Agent conversation state is present only
-when the provider can fork or checkpoint that exact session at the selected
-event. No supported provider can, so a checkpoint at or after an Agent turn is
-not forkable; XMD never substitutes a new session or transcript. A Git-host
-effect is refused on the same terms: what it did happened on somebody else's
-server, and a fork cannot own a copy of it.
+Fork never rewinds external systems, and it never repeats one either. What
+decides an external effect is what the history holds about it.
+
+A completed Git-host reconciliation record carries the pre-state, the
+observations, the decision and the result, and replays without installing or
+contacting a provider. A fork inherits it: the remote was mutated once, by the
+source, exactly as the record says, and consuming the record asks nobody
+anything. The record keeps the identity it was written under — a fork does not
+rewrite an inherited event as its own — so the effect at that position is named
+by the identity the record holds, while every live attempt is named by the run
+performing it. That is what keeps the fork the authority for what it does next
+without making it the author of what it inherited.
+
+A Git-host event that settled into no such record is the other case. The run
+stopped without establishing what happened at the remote, so continuing across
+it would mean asking a provider the question the source could not answer, and
+the checkpoint is not forkable.
+
+Agent conversation state is present only when the provider can fork or
+checkpoint that exact session at the selected event. No supported provider can,
+so a checkpoint at or after an Agent turn is not forkable; XMD never substitutes
+a new session or transcript.
 
 ## 12. Retention, deletion and training
 

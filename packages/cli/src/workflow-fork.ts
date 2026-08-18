@@ -56,6 +56,7 @@ import { retainedSource } from "@executablemd/core";
 import {
   forkJournal,
   forkRunRecordEvent,
+  gitHostReplayInstallation,
   isRootImportEvent,
   retainedWorkflowInstallation,
   selectForkPrefix,
@@ -327,6 +328,7 @@ function execution(
     stream,
     installations: [
       retainedWorkflowInstallation(run),
+      gitHostReplayInstallation(),
       ...(request.established.components.length === 0
         ? []
         : [workflowBundleInstallation(request.established.components)]),

@@ -1084,6 +1084,14 @@ the inherited prefix under a compatible modified definition and appends new
 history under a new run ID. It never rewinds external branches, pushes, pull
 requests or provider state.
 
+An external effect is judged by its retained record rather than by its type. A
+completed Git-host reconciliation record replays without contacting a provider,
+so a fork inherits it and the remote is mutated once; the record keeps the
+identity it was written under, and the effect at a position the history already
+holds a record at is named by that identity, while every live attempt is named
+by the run performing it. A Git-host event that settled into no such record
+leaves the remote's state unestablished, and that checkpoint is not forkable.
+
 A fork inherits the source's normalized props as its baseline; explicit
 generated arguments add to or override them, and the merged set is validated
 against the candidate definition before anything is created. Those props are

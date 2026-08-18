@@ -7,9 +7,11 @@
  * a run could hold rather than against a run that had to be produced.
  *
  * The blockers are the reason this tier is not folded into the CLI's: an Agent
- * turn, a Git-host effect and an effect a later build wrote are all histories
- * this build cannot produce on purpose, and a test that waited for one would
- * assert nothing on the days it did not arrive.
+ * turn and an effect a later build wrote are histories this build cannot
+ * produce on purpose, and a test that waited for one would assert nothing on
+ * the days it did not arrive. The Git-host pair is here for the opposite
+ * reason — both sides of that boundary can be stated exactly — and Tier WFF
+ * proves them end to end against a real `<Git.Push>`.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -115,6 +117,8 @@ describe("Tier WFK — forkability and fork selection", () => {
     const forkability = classify(
       [
         { id: "e1", event: RUN_RECORD },
+        // A Git-host event holding no completed reconciliation record: the run
+        // stopped without establishing what happened at the remote.
         { id: "e2", event: retained("git_host_effect", "git-push:1") },
         { id: "e3", event: retained("something_a_later_build_wrote", "whatever") },
         { id: "e4", event: retained("exec", "exec:echo hi"), root: "c".repeat(64) },
@@ -141,6 +145,55 @@ describe("Tier WFK — forkability and fork selection", () => {
         expect(JSON.stringify(blocker)).not.toContain("whatever");
       }
     }
+  });
+
+  it("WFK3b: a completed Git-host record is inherited, not refused", function* () {
+    // What decides a Git-host event is what the history holds about it, not its
+    // type. A completed reconciliation record carries the pre-state, the
+    // observations, the decision and the result, and replays without
+    // contacting a provider at all.
+    const completed = retained("git_host_effect", "git-push:1", {
+      request: {
+        identity: { runId: "source-1", expansionId: "x" },
+        kind: "git-push",
+        inputs: { remote: "origin" },
+        naturalKey: { destinationRef: "refs/heads/publish/1" },
+      },
+      preState: { remoteCommit: null },
+      observations: { remoteCommit: "abc" },
+      decision: "performed",
+      result: { remoteCommit: "abc" },
+    });
+
+    const forkability = classify([
+      { id: "e1", event: RUN_RECORD },
+      { id: "e2", event: completed },
+      { id: "e3", event: retained("exec", "exec:echo hi") },
+    ]);
+
+    expect(forkability.map((entry) => entry.forkable)).toEqual([true, true, true]);
+    expect(forkability.every((entry) => entry.blockers.length === 0)).toBe(true);
+
+    // A record that is nearly one is still not one: a member the shape does not
+    // declare describes something else, and a fork does not guess at it.
+    const nearly = retained("git_host_effect", "git-push:2", {
+      request: {
+        identity: { runId: "source-1", expansionId: "y" },
+        kind: "git-push",
+        inputs: {},
+        naturalKey: {},
+      },
+      preState: null,
+      observations: null,
+      decision: "performed",
+      result: null,
+      extra: "a member this shape does not declare",
+    });
+    const refused = classify([
+      { id: "e1", event: RUN_RECORD },
+      { id: "e2", event: nearly },
+    ]);
+    expect(refused[1]?.blockers).toEqual([{ code: "external-state-unavailable", eventId: "e2" }]);
   });
 
   it("WFK4: selection takes the prefix and leaves the two records a fork writes", function* () {
