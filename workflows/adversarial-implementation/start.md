@@ -335,11 +335,12 @@ shipped (#366), and a resume restores completed durable effects from the journal
 rebuilds ephemeral attachments, and continues the partial remainder at the
 retained frontier. Reading a run back is shipped too: `xmd workflow status`,
 `list`, and `history` report immutable lifecycle snapshots without advancing
-anything (#460). What is still missing is the wait itself — releasing the
-executor at a checkpoint, and the single-executor ownership and atomic lifecycle
-transitions around it, remain #367 and unbuilt, as do cancellation and deletion.
-So a question asked today is answered inside the document execution that asked
-it. Gating is expressed by nesting, which
+anything (#460). So is the authority underneath: the executor lock owns
+lifecycle transitions, so single-executor ownership, atomic begin and settle,
+cancellation and deletion are shipped (#466). What is still missing is the wait
+itself — durable suspension, and releasing the executor at a checkpoint, remain
+#367. So a question asked today is answered inside the document execution that
+asked it. Gating is expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
 execution: it still reaches the final-gate report inside the root's `<Output>`
 and completes.

@@ -599,15 +599,17 @@ History reads already-filtered retained protocol events, so it exposes no value
 the security policy has not already seen, and the authored source position it
 reports is descriptive evidence about an event rather than identity.
 
-The rest of the lifecycle is not built. Durable suspension and releasing the
-executor at a checkpoint, the single-executor ownership and atomic lifecycle
-transitions around them, and cancellation and deletion are shipped as #367's
-second slice (#466): the executor lock owns every transition, and a cancellation
-that meets a live executor refuses without mutation and directs the caller to
-interrupt the foreground process rather than signalling it. Durable suspension
-and releasing the executor at a checkpoint remain #367; versioned
-history checkpoints, compatible forks, `history --forkable`, and forkability
-reasons remain #368.
+The authority underneath is shipped as #367's second slice (#466). The executor
+lock owns every lifecycle transition, so single-executor ownership, atomic begin
+and settle, cancellation and deletion are built. Cancellation never reaches into
+a live document execution: meeting a live executor it refuses without mutation
+and directs the caller to interrupt the foreground process, while an eligible
+retained state transitions to `cancelled` under the exact lock, and a
+`completed` or `failed` outcome stays authoritative.
+
+What is not built is the wait. Durable suspension and releasing the executor at
+a checkpoint remain #367; versioned history checkpoints, compatible forks,
+`history --forkable`, and forkability reasons remain #368.
 
 **Still missing: who answered.** The journal records the validated decision, the
 question fingerprint, and the document execution it belongs to. It does not
@@ -695,8 +697,9 @@ is composition and isolation, not a security boundary — the security boundary 
 the host's Agent ceiling and the Workspace the document's file operations resolve
 inside.
 
-`<Repository>` and `<Worktree>` (#293) and `<Agent.AddDir>` (#302) are not
-implemented. `API.Files` and its host provider are: every document file operation
+`<Repository>` and `<Worktree>` are built and registered by the workflow host
+(#293, shipped); `<Agent.AddDir>` (#302) and the durable Git and forge effects
+below them are not. `API.Files` and its host provider are: every document file operation
 routes through that provider, which confines document paths to `Env.cwd` while the
 host namespace is stable. That claim is about traversal rather than about the
 filesystem being stable — a directory that is real when it is read could be
