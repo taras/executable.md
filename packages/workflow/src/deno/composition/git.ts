@@ -398,6 +398,38 @@ export function* switchBranch(git: GitSession, request: BranchSwitch): Operation
 }
 
 /**
+ * Stage exactly these pathspecs, from the directory the element was written in.
+ *
+ * One command for the whole array. `--` separates the pathspecs from the
+ * options, so an entry that reads as a flag is still a pathspec, and Git's own
+ * magic keeps its ordinary meaning. Git applies the whole command or none of it:
+ * a pathspec it refuses leaves the index exactly as it was, so there is no
+ * partial staging for this provider to take back.
+ *
+ * Every refusal is infrastructure for now. The conditions a document could act
+ * on — a pathspec that matched nothing, one the repository ignores, one outside
+ * the checkout, one whose magic is invalid — are recognizable, but which of them
+ * becomes a durable refusal is a product decision this slice does not make on an
+ * author's behalf.
+ */
+export function* addPaths(
+  git: GitSession,
+  request: {
+    readonly operation: string;
+    readonly workingDirectory: string;
+    readonly paths: readonly string[];
+  },
+): Operation<void> {
+  const outcome = yield* git.run(["add", "--", ...request.paths], request.workingDirectory);
+  if (outcome.code !== 0) {
+    throw new GitOperationInfrastructureError(
+      request.operation,
+      "native Git refused it in a way this provider has no word for",
+    );
+  }
+}
+
+/**
  * Which condition a refused `switch` reported, or `undefined` for none of them.
  *
  * The message selects a word and is then discarded, on the same terms as every

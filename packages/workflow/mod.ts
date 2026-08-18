@@ -77,14 +77,21 @@ export type {
 export { GitComposition } from "./src/composition/git-api.ts";
 export type { GitCompositionApi } from "./src/composition/git-api.ts";
 export {
+  gitAddResultJson,
   gitSwitchResultJson,
+  parseGitAddResult,
   parseGitCheckoutIdentity,
   parseGitCheckoutState,
   parseGitSwitchResult,
 } from "./src/composition/git-records.ts";
 export type {
+  GitAddExpectation,
+  GitAddRequest,
+  GitAddResult,
+  GitCheckoutExpectation,
   GitCheckoutIdentity,
   GitCheckoutState,
+  GitSwitchExpectation,
   GitSwitchRequest,
   GitSwitchResult,
 } from "./src/composition/git-records.ts";

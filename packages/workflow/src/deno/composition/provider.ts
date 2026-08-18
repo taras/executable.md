@@ -27,7 +27,12 @@
 import { type Operation } from "effection";
 import { RepositoryComposition } from "../../composition/api.ts";
 import { GitComposition } from "../../composition/git-api.ts";
-import type { GitSwitchRequest, GitSwitchResult } from "../../composition/git-records.ts";
+import type {
+  GitAddRequest,
+  GitAddResult,
+  GitSwitchRequest,
+  GitSwitchResult,
+} from "../../composition/git-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -44,9 +49,11 @@ import {
 import { createWorktree, prepareWorktreeAttachment, worktreeDisagreement } from "./worktree.ts";
 
 import { createGitSwitch } from "./switch.ts";
+import { createGitAdd } from "./add.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
+export { WORKSPACE_GIT_ADD } from "./add.ts";
 
 /**
  * What a provider may observe about itself, for suites that count.
@@ -178,6 +185,11 @@ export function useGitComposition(
       *switchBranch([request]: [GitSwitchRequest]): Operation<GitSwitchResult> {
         observe.effect?.("git", "switch");
         return yield* createGitSwitch(database, host, request);
+      },
+
+      *addPaths([request]: [GitAddRequest]): Operation<GitAddResult> {
+        observe.effect?.("git", "add");
+        return yield* createGitAdd(database, host, request);
       },
     },
     { at: "min" },

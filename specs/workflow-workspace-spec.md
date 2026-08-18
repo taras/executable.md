@@ -813,6 +813,32 @@ files, modifications and deletions are staged. Omission never means all paths;
 `"."` is explicit. Add returns no value and initially has no `all`, `update`,
 `patch`, `force` or `intentToAdd` props.
 
+One string is the one-entry array, and an array is passed to Git as written:
+order, repetitions, spelling and Git's own pathspec magic all survive, because
+each of them changes what is staged. The whole array is one command and one
+effect. An empty string, an empty array and an empty entry are refused rather
+than read as "here" or as "everything".
+
+`paths` is a pathspec, not a way of choosing a checkout. Which checkout is
+staged is decided the way §7.1 decides it, and every pathspec is read relative to
+the working directory the element was written in — so `<Git.Add paths="." />`
+inside a `<Dir path="packages">` stages that directory rather than the checkout
+that contains it.
+
+Add renders nothing, binds nothing and takes no content. What it retains is
+evidence: the checkout it ran in, the pathspecs exactly as they were given, and
+the branch, commit, HEAD tree and index tree the checkout held before and after.
+Staging moves the index and nothing else, so a retained result whose branch,
+commit or HEAD tree changed describes a transition Add does not make, while its
+index tree may have moved or not — staging what is already staged changes
+nothing. What Git matched is not enumerated: naming files it discovered would put
+content beyond the document's own pathspecs into retained history.
+
+Failure follows §7.1. A native failure this provider has no word for — a
+pathspec that matched nothing, one the repository ignores, one outside the
+checkout, one whose magic is invalid — is infrastructure: the run fails, the
+index is untouched and no result is published.
+
 ### 7.3 Commit
 
 ```md
@@ -1310,7 +1336,7 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
-| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` built by #294, Deno provider only; `Git.Add` and `Git.Commit` defined here, unbuilt (#294) |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` and `Git.Add` built by #294, Deno provider only; `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |

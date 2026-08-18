@@ -15,6 +15,7 @@ import Repository, { props as repositoryProps } from "./components/Repository.ts
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import Dir, { props as dirProps } from "./components/Dir.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
+import GitAdd, { props as gitAddProps } from "./components/GitAdd.ts";
 
 const ORIGIN = "@executablemd/workflow/composition";
 
@@ -43,6 +44,12 @@ export function useCompositionComponents(): Operation<void> {
       origin: ORIGIN,
       props: gitSwitchProps,
       fn: GitSwitch,
+    },
+    {
+      name: "Git.Add",
+      origin: ORIGIN,
+      props: gitAddProps,
+      fn: GitAdd,
     },
   ]);
 }

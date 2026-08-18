@@ -12,10 +12,31 @@ export const CRASH_BRANCH = "release";
 export const MAIN_CONTENT = "main\n";
 export const RELEASE_CONTENT = "release\n";
 
+/** The pathspec the killed staging names, and the file it stages. */
+export const CRASH_PATH = "added.txt";
+
 export function crashDocument(locator: string): string {
   return [
     `<Repository name="project" url="${locator}">`,
     `<Git.Switch branch="${CRASH_BRANCH}" />`,
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * The staging half: a file this run wrote, and one command to stage it.
+ *
+ * The write commits in its own effect, so what the kill interrupts is the
+ * staging alone — and a recovered database must hold the file and an index that
+ * never saw it.
+ */
+export function addDocument(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<File path="${CRASH_PATH}">`,
+    "fresh",
+    "</File>",
+    `<Git.Add paths="${CRASH_PATH}" />`,
     "</Repository>",
   ].join("\n");
 }

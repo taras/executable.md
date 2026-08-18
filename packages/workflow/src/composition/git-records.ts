@@ -157,9 +157,38 @@ export function parseGitCheckoutState(
  * the request in is what turns reading into checking: the identity, the branch,
  * the base and the transition are all compared rather than accepted.
  */
-export interface GitSwitchExpectation {
+/**
+ * What every Git operation's request says about where it ran.
+ *
+ * The two observations a component makes, which every result is read against:
+ * the Repository record and the working directory inside it.
+ */
+export interface GitCheckoutExpectation {
   readonly repository: RepositoryRecord;
   readonly workingDirectory: string;
+}
+
+/**
+ * Whether this identity is the checkout that request selects.
+ *
+ * The repository it names has to be the observed one, the working directory has
+ * to be inside the checkout it names, and a Worktree and the primary checkout
+ * cannot be at one path. What it cannot decide is *where* a name is placed —
+ * that is the provider's own function, and the caller holds the identity to it.
+ */
+function selects(checkout: GitCheckoutIdentity, expected: GitCheckoutExpectation): boolean {
+  if (
+    checkout.repositoryName !== expected.repository.name ||
+    !beneath(checkout.checkoutPath, expected.workingDirectory)
+  ) {
+    return false;
+  }
+  return checkout.worktreeName === null
+    ? checkout.checkoutPath === expected.repository.checkoutPath
+    : checkout.checkoutPath !== expected.repository.checkoutPath;
+}
+
+export interface GitSwitchExpectation extends GitCheckoutExpectation {
   readonly branch: string;
   readonly base: string | undefined;
 }
@@ -207,13 +236,7 @@ export function parseGitSwitchResult(
     return undefined;
   }
 
-  if (
-    checkout.repositoryName !== expected.repository.name ||
-    !beneath(checkout.checkoutPath, expected.workingDirectory) ||
-    (checkout.worktreeName === null &&
-      checkout.checkoutPath !== expected.repository.checkoutPath) ||
-    (checkout.worktreeName !== null && checkout.checkoutPath === expected.repository.checkoutPath)
-  ) {
+  if (!selects(checkout, expected)) {
     return undefined;
   }
 
@@ -279,6 +302,126 @@ export function gitSwitchResultJson(result: GitSwitchResult): Json {
     resolvedBranch: result.resolvedBranch,
     requestedBase: result.requestedBase,
     resolvedBase: result.resolvedBase,
+    before: gitCheckoutStateJson(result.before),
+    after: gitCheckoutStateJson(result.after),
+  };
+}
+
+/**
+ * What a `<Git.Add>` invocation asks the provider to do.
+ *
+ * `paths` is what the document wrote, canonicalized to an array and otherwise
+ * untouched: order, duplicates, spelling and Git's own pathspec magic all
+ * survive, because each of them changes what Git stages. It is a pathspec, not
+ * a way of choosing a checkout — every entry is read by native Git relative to
+ * the working directory the element was written in.
+ */
+export interface GitAddRequest {
+  readonly repository: RepositoryRecord;
+  /** The logical working directory the component observed. */
+  readonly workingDirectory: string;
+  readonly paths: readonly string[];
+}
+
+/**
+ * What a completed `<Git.Add>` retained.
+ *
+ * The pathspecs exactly as they were given, and the checkout on both sides of
+ * the command. Staging moves the index and nothing else, so the branch, the
+ * commit and the HEAD tree are the same in both readings — retaining them is
+ * what makes that checkable rather than assumed — and the index tree is the one
+ * value the operation may have changed. What was staged is not enumerated:
+ * naming files Git discovered would put content beyond the document's own
+ * pathspecs into retained history.
+ */
+export interface GitAddResult {
+  readonly checkout: GitCheckoutIdentity;
+  readonly paths: readonly string[];
+  readonly before: GitCheckoutState;
+  readonly after: GitCheckoutState;
+}
+
+export interface GitAddExpectation extends GitCheckoutExpectation {
+  readonly paths: readonly string[];
+}
+
+const ADD_MEMBERS = ["checkout", "paths", "before", "after"] as const;
+
+/** The pathspec array this value is, once every entry is one. */
+function pathspecs(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of value) {
+    const pathspec = text(entry);
+    if (pathspec === undefined) {
+      return undefined;
+    }
+    entries.push(pathspec);
+  }
+  return Object.freeze(entries);
+}
+
+function samePaths(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+/**
+ * The add result this value describes for this request, or `undefined`.
+ *
+ * Exact about membership and closed about meaning, on the same terms as every
+ * other retained result. Beyond the shape it refuses a result whose checkout is
+ * not the one the request selects, whose pathspecs are not the ones it was
+ * given — in the same order, with the same repetitions — and whose two readings
+ * describe something other than staging: the branch, the commit and the HEAD
+ * tree a `git add` leaves exactly where it found them.
+ *
+ * The index tree may differ or not. Staging a path that is already staged, or
+ * one whose content matches the index, changes nothing, and a run that describes
+ * that is describing what happened.
+ */
+export function parseGitAddResult(
+  value: unknown,
+  expected: GitAddExpectation,
+): GitAddResult | undefined {
+  const record = members(value, ADD_MEMBERS);
+  if (record === undefined) {
+    return undefined;
+  }
+  const format = expected.repository.objectFormat;
+  const checkout = parseGitCheckoutIdentity(record.checkout);
+  const paths = pathspecs(record.paths);
+  const before = parseGitCheckoutState(record.before, format);
+  const after = parseGitCheckoutState(record.after, format);
+  if (
+    checkout === undefined ||
+    paths === undefined ||
+    before === undefined ||
+    after === undefined
+  ) {
+    return undefined;
+  }
+
+  if (!selects(checkout, expected) || !samePaths(paths, expected.paths)) {
+    return undefined;
+  }
+
+  if (
+    before.branch !== after.branch ||
+    before.commit !== after.commit ||
+    before.headTree !== after.headTree
+  ) {
+    return undefined;
+  }
+
+  return Object.freeze({ checkout, paths, before, after });
+}
+
+export function gitAddResultJson(result: GitAddResult): Json {
+  return {
+    checkout: gitCheckoutIdentityJson(result.checkout),
+    paths: [...result.paths],
     before: gitCheckoutStateJson(result.before),
     after: gitCheckoutStateJson(result.after),
   };

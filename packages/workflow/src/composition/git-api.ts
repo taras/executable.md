@@ -18,7 +18,12 @@
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import { GitCompositionProviderError } from "./errors.ts";
-import type { GitSwitchRequest, GitSwitchResult } from "./git-records.ts";
+import type {
+  GitAddRequest,
+  GitAddResult,
+  GitSwitchRequest,
+  GitSwitchResult,
+} from "./git-records.ts";
 
 export interface GitCompositionApi {
   /**
@@ -28,6 +33,15 @@ export interface GitCompositionApi {
    * spawns no Git.
    */
   switchBranch(request: GitSwitchRequest): Operation<GitSwitchResult>;
+
+  /**
+   * Stage exactly the pathspecs this request names, as one durable effect.
+   *
+   * One command for the whole array rather than one per entry: Git decides what
+   * a pathspec matches, and a per-entry loop would be several transitions where
+   * the document wrote one.
+   */
+  addPaths(request: GitAddRequest): Operation<GitAddResult>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -36,6 +50,10 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *switchBranch(_request: GitSwitchRequest): Operation<GitSwitchResult> {
       throw new GitCompositionProviderError("<Git.Switch>");
+    },
+    // deno-lint-ignore require-yield
+    *addPaths(_request: GitAddRequest): Operation<GitAddResult> {
+      throw new GitCompositionProviderError("<Git.Add>");
     },
   },
 );
