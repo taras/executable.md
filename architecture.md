@@ -1100,20 +1100,63 @@ Workspace.
 
 Generated XMD is untrusted input. The evaluator preflights the complete fragment
 before its first effect and admits only explicitly allowed, already-resolved
-component identities. It initially refuses eval and exec blocks, imports,
-native execution and arbitrary JavaScript expressions. It retains the exact
-filtered generated source for replay, history and deliberate training
-ingestion. Replay restores that source and expands it without invoking the Agent
-again.
+component identities. It refuses eval and exec blocks, imports, native
+execution, arbitrary JavaScript expressions, interpolation that reads a binding,
+and a result binding. It retains the exact filtered generated source for replay,
+history and deliberate training ingestion. Replay restores that source and
+expands it without invoking the Agent again.
+
+Read-only observation admission is built, and its ownership splits in two.
+**Core** owns the mechanics behind `@executablemd/core/host`: parsing the
+candidate fragment, walking all of it before the first effect, resolving each
+admitted name to the exact pinned definition the host supplied rather than to
+anything a component search path, a registration or a bundle would answer,
+recording one ordinary `generated_xmd` durable admission before the first
+observation, and replaying that admission and every committed observation
+without performing either again. It reuses the same witness a component bundle
+does — canonical execution issues one for the answer it produced and verifies it
+at the call site — so `Component.importComponent` middleware may observe or
+refuse a generated import and cannot answer, replace or mutate one.
+
+**The trusted host** owns the ceilings, as values it holds and passes: which
+retained Workspace roots exist and which one is selected, which pinned
+identities are on the allowlist, and which exact requests each may perform.
+Generated source receives none of those values, and nothing contextual carries
+them. A refusal names the construct class and echoes no part of the candidate —
+in its diagnostic and in what it retains alike, because the decision is recorded
+either way. That holds for a request the candidate malformed as much as for one
+outside the admitted set: the component reports a bad URL, header or timeout by
+quoting it, so a generated request is normalized behind a boundary that keeps
+the class and drops the diagnostic. The host's own ceilings are not generated
+text and are normalized before the admission, so a host that states a request it
+cannot mean is told which one. Admission is the line: before it nothing of the
+candidate is retained, and after it the exact source is retained on purpose.
+
+A retained admission is a grant under the ceilings it was granted with, and a
+resumed run is held to them. Durable replay matches an effect by its type and
+name, and what a description carries is stored rather than compared, so the
+normalized policy is retained in the admission's own result and a continuation
+compares it — whole and exactly — before one generated component is invoked or
+one request is performed. Changed roots, a changed pinned identity behind an
+unchanged name, and a widened request ceiling are each refused there. Deciding
+the fragment inside that durable effect is what makes this hold: a continuation
+restores what was admitted without consulting the current candidate at all, so
+what expands is the source this run admitted rather than whatever a later caller
+is holding.
 
 An XMD-mediated HTTP read is how a network-denied Agent is given external
 information: the authored document performs the read with `<Fetch>` and the
 retained response reaches the prompt as data. That does not raise the Agent's own
-ceiling, and it admits nothing on the generated side. Whether a generated
-fragment may name the pinned `Fetch` identity, and under what constraints on
-scheme, host, path, method and headers, is the evaluator's decision and is
-unbuilt; a repository component that takes the name `Fetch` is not that identity
-and acquires no admission from it.
+ceiling. A generated fragment may name the pinned `Fetch` identity only when the
+host admitted it, and then only for a request that normalizes — scheme, host,
+path, method, headers and effective timeout alike — to one the host stated
+exactly; anything else is refused before `API.Fetch` is reached. A repository
+component that takes the name `Fetch` is not that identity and acquires no
+admission from it.
+
+Mutation-proposal admission, the live Agent request/result loop,
+`<Agent.AddDir>` and workflow-bundled Markdown component admission remain
+unbuilt.
 
 ## Local Workspace topology
 
@@ -2255,7 +2298,7 @@ Status is measured against main.
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop, its scheduling, and generated-XMD admission remain unbuilt (#300, #369) |
+| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
@@ -2269,7 +2312,7 @@ Status is measured against main.
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
-| `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; generated-XMD admission of the pinned identity remains unbuilt (#369) |
+| `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
 | transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack |
@@ -2284,7 +2327,8 @@ Status is measured against main.
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
-| read-only workflow Agent / generated XMD | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt |
+| generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
+| read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |

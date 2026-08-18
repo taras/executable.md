@@ -36,14 +36,12 @@
  * different sources resolve their own and can observe neither.
  */
 
+import { CanonicalImports } from "./import-authority.ts";
+import type { ImportAuthority, ImportedDefinition, ImportRefusal } from "./import-authority.ts";
 import { CORE_COMPONENT_NAMES } from "./registry.ts";
 import { isComponentName } from "./registration.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
-import type {
-  ComponentDefinition,
-  ComponentRegistry,
-  FunctionComponentDefinition,
-} from "../types.ts";
+import type { ComponentRegistry } from "../types.ts";
 
 /**
  * One authored Markdown component, as the pinned tree holds it.
@@ -75,91 +73,19 @@ export class WorkflowBundleError extends Error {
   override name = "WorkflowBundleError";
 }
 
-/** What canonical execution kept of one definition it produced. */
-interface Witness {
-  readonly name: string;
-  /**
-   * Core's own copy of its own answer, taken before the public chain could see
-   * the definition and reachable from nowhere but here.
-   *
-   * This is what gets invoked. Verification below decides whether the answer
-   * that came back still describes it, but what a component expands is never
-   * the object middleware was holding.
-   */
-  readonly canonical: ComponentDefinition | FunctionComponentDefinition | undefined;
-}
-
-/**
- * Core's own copy of one definition.
- *
- * A structured clone of the data, with the implementation carried across by
- * reference so a function component is invoked as exactly the function core
- * selected. Definitions core produces hold parsed JSON and scanned segments,
- * both of which clone; anything that does not is a value core did not build, so
- * the copy is absent and authorization fails closed.
- */
-function retain(
-  definition: ComponentDefinition | FunctionComponentDefinition,
-): ComponentDefinition | FunctionComponentDefinition | undefined {
-  try {
-    if (definition.kind === "function") {
-      // Cloned without the implementation, because a function is not
-      // structured-cloneable and must not be copied anyway: `<Test>` is
-      // recognized by the identity of the function core registered.
-      const { fn, ...data } = definition;
-      return { ...structuredClone(data), fn };
-    }
-    return structuredClone(definition);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Whether `answer` still describes `canonical`, reading data and nothing else.
- *
- * Deliberately not a serialization. `JSON.stringify()` consults `toJSON()` and
- * invokes getters, so a definition can be mutated and then made to describe
- * itself as it was — a masking `toJSON()`, or an accessor that answers once for
- * the check and differently for the read. So this compares own property
- * descriptors: a member that computes its value is not a member core wrote, and
- * a definition holding one is refused rather than read twice.
- *
- * A function is compared by identity, and a prototype other than the one core's
- * copy carries is a different object however its members read.
- */
-function describesSame(canonical: unknown, answer: unknown): boolean {
-  if (typeof canonical === "function" || typeof answer === "function") {
-    return canonical === answer;
-  }
-  if (canonical === null || typeof canonical !== "object") {
-    return Object.is(canonical, answer);
-  }
-  if (answer === null || typeof answer !== "object") {
-    return false;
-  }
-  if (Array.isArray(canonical) !== Array.isArray(answer)) {
-    return false;
-  }
-  if (Object.getPrototypeOf(canonical) !== Object.getPrototypeOf(answer)) {
-    return false;
-  }
-  const keys = Reflect.ownKeys(canonical);
-  if (keys.length !== Reflect.ownKeys(answer).length) {
-    return false;
-  }
-  for (const key of keys) {
-    const described = Object.getOwnPropertyDescriptor(answer, key);
-    if (described === undefined || !("value" in described)) {
-      return false;
-    }
-    const own = Object.getOwnPropertyDescriptor(canonical, key);
-    if (own === undefined || !describesSame(own.value, described.value)) {
-      return false;
-    }
-  }
-  return true;
-}
+/** The fixed diagnostic each verification failure produces. */
+const REFUSED: Record<ImportRefusal, string> = {
+  unissued:
+    "Component.importComponent middleware answered an import with a definition canonical " +
+    "execution did not produce. A handler may observe, delegate or refuse an import in a " +
+    "workflow closed over a component bundle; only canonical execution answers one.",
+  "another-name":
+    "Component.importComponent middleware answered an import with the definition canonical " +
+    "execution produced for another component.",
+  changed:
+    "Component.importComponent middleware changed the definition canonical execution " +
+    "produced before it was invoked.",
+};
 
 /**
  * The authority one bundled execution imports through.
@@ -167,17 +93,9 @@ function describesSame(canonical: unknown, answer: unknown): boolean {
  * Held by canonical core and passed by value into core's own expansion, so no
  * document, component, or middleware can reach it, replace it, or add to it.
  */
-export class WorkflowImportAuthority {
+export class WorkflowImportAuthority implements ImportAuthority {
   readonly #components: ReadonlyMap<string, WorkflowBundleComponent>;
-  /**
-   * The definitions canonical execution produced, and what they were when it
-   * produced them.
-   *
-   * Weak, and keyed by the object itself: an answer that reaches the call site
-   * is authorized because it *is* the object the terminal minted, not because
-   * it resembles one.
-   */
-  readonly #issued = new WeakMap<object, Witness>();
+  readonly #imports = new CanonicalImports();
 
   constructor(components: ReadonlyMap<string, WorkflowBundleComponent>) {
     this.#components = components;
@@ -191,17 +109,9 @@ export class WorkflowImportAuthority {
   /**
    * Record that canonical execution produced this answer for this name, and
    * keep core's own copy of it.
-   *
-   * The copy is taken here, before the definition is handed to the public
-   * chain, so it is a copy of what core decided rather than of whatever the
-   * chain gave back.
    */
-  issue(
-    name: string,
-    definition: ComponentDefinition | FunctionComponentDefinition,
-  ): ComponentDefinition | FunctionComponentDefinition {
-    this.#issued.set(definition, { name, canonical: retain(definition) });
-    return definition;
+  issue(name: string, definition: ImportedDefinition): ImportedDefinition {
+    return this.#imports.issue(name, definition);
   }
 
   /**
@@ -218,47 +128,12 @@ export class WorkflowImportAuthority {
    * the chain. So the comparison decides whether this import is *refused*, and
    * nothing a handler still holds decides what is *invoked*.
    */
-  authorize(
-    name: string,
-    answer: ComponentDefinition | FunctionComponentDefinition,
-  ): ComponentDefinition | FunctionComponentDefinition {
-    const witness =
-      typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
-    if (witness === undefined) {
-      throw new WorkflowBundleError(
-        "Component.importComponent middleware answered an import with a definition canonical " +
-          "execution did not produce. A handler may observe, delegate or refuse an import in a " +
-          "workflow closed over a component bundle; only canonical execution answers one.",
-      );
-    }
-    if (witness.name !== name) {
-      throw new WorkflowBundleError(
-        "Component.importComponent middleware answered an import with the definition canonical " +
-          "execution produced for another component.",
-      );
-    }
-    const { canonical } = witness;
-    // Reading the answer runs whatever it is made of — a proxy's traps, an
-    // exotic object's own machinery — so a value that refuses to be compared is
-    // a value that failed the comparison.
-    const unchanged =
-      canonical !== undefined && read(() => describesSame(canonical, answer)) === true;
-    if (!unchanged) {
-      throw new WorkflowBundleError(
-        "Component.importComponent middleware changed the definition canonical execution " +
-          "produced before it was invoked.",
-      );
-    }
-    return canonical;
-  }
-}
-
-/** One read of a value the chain controls: its answer, or nothing. */
-function read<T>(inspect: () => T): T | undefined {
-  try {
-    return inspect();
-  } catch {
-    return undefined;
+  authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
+    return this.#imports.authorize(
+      name,
+      answer,
+      (refusal) => new WorkflowBundleError(REFUSED[refusal]),
+    );
   }
 }
 

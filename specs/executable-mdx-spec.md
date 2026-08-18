@@ -1845,6 +1845,8 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedComponent()`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam (workflow-workspace-spec §8.4) |
+| `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
@@ -6866,9 +6868,14 @@ Effection scope. Cancellation aborts them and teardown completes before the
 invocation closes; no detached promise, task, timer, response body or service
 survives it.
 
-Generated XMD cannot use `<Fetch>`. Admitting a pinned component identity and an
-exact bounded request to a generated fragment is #369's decision, and it is
-unbuilt: nothing in the authored component grants it.
+Generated XMD may use `<Fetch>` only where the trusted host admitted core's own
+pinned identity together with the exact requests it may perform
+(workflow-workspace-spec §8.4). A candidate element is normalized by these same
+rules and must equal one admitted request — scheme, host, path, method,
+normalized headers and effective timeout alike — or it is refused before
+`API.Fetch` is reached, with no request performed. Nothing in the authored
+component grants that admission, and a repository component that takes the name
+`Fetch` is not the pinned identity.
 
 
 ## 7. Entry point
@@ -7766,6 +7773,7 @@ trusted-host events may have no authored source.
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
+| Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | Retained roots, selected root, pinned identities and exact request policy in `description.input`; the admitted source and the identities the fragment named in the result (workflow-workspace-spec §8.4) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -9572,6 +9580,7 @@ perform, separately from the binding, the rendered output, and the journal.
 | FE18–FE20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
 | FE21–FE24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
 | FE25–FE28 | Authority | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
+| GX11–GX14 | Generated admission | The pinned identity performs the exact admitted request once; a scheme, host, path, method, header or timeout mismatch performs none; admitting `<Fetch>` with no stated request is refused outright |
 | FE29–FE31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
 | FE32–FE34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
 | FE35 | Independence | Cancelling one invocation tears down only its own request |

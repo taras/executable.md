@@ -1271,54 +1271,104 @@ path and may be discarded and recreated.
 
 ### 8.4 Generated XMD
 
-A Prompt may return an XMD fragment rather than an ad hoc file-operation schema:
+A Prompt may return an XMD fragment rather than an ad hoc file-operation schema.
+The fragment is untrusted input: it carries data, never authorization. Only the
+trusted workflow host installs the admission, and it does so by handing the
+evaluator values it holds — never through a context, a registration, a document
+prop or a component name.
 
-```md
-<Agent>
-  <Agent.AddDir path={repository_api} />
+#### Read-only observation admission
 
-  <Prompt as="changes">
-Inspect the repository and return only an Executable.md fragment that performs
-the required changes.
-  </Prompt>
-</Agent>
-
-<Expand
-  source={changes}
-  allow={["Dir", "File", "DeleteFile", "Git.Add"]}
-/>
-```
-
-The generated fragment is untrusted. Before its first effect, the evaluator:
+The host supplies the exact candidate source, the retained Workspace roots the
+run has and which one is selected, an immutable allowlist of pinned
+observation-only component identities, and the exact requests each of those may
+perform. Before the first effect, the evaluator:
 
 - parses the complete source;
-- resolves its allowlist to pinned component identities supplied by the trusted
-  parent definition;
-- refuses every component outside that set;
-- refuses eval/exec code blocks, imports, native execution and arbitrary
-  JavaScript expressions initially; and
-- applies normal Workspace path authorization.
+- walks every element and every element's content;
+- resolves each admitted name to the exact pinned definition the host supplied,
+  never to a component search path, a registration, or the workflow component
+  bundle;
+- refuses executable code blocks, expression props, interpolation that reads a
+  binding, a result binding, and every component the host did not admit; and
+- refuses a request that is malformed, or that does not normalize to one the
+  host stated exactly.
 
-The Prompt response and exact filtered generated source are retained. Admitted
-components then expand normally, each with its own effect identity and
-transaction. Replay restores the response and expands the same source without
-calling the Agent again.
+A refusal ends the whole fragment. Its diagnostic names the construct class, and
+so does what the run retains of it, so a rejected fragment publishes nothing —
+including a credential a rejected element carried. A malformed request is
+refused on the same terms as an unadmitted one: the ordinary component reports a
+bad URL, header or timeout by quoting it, and a generated request may not be
+quoted anywhere. The host's own ceilings are a different kind of value —
+normalized before the admission, and reported as themselves when the host
+states one it cannot mean.
+
+Admission is the line. Before it nothing of the candidate is retained; after it
+the exact source is retained deliberately, so an ordinary expansion diagnostic
+naming part of the fragment discloses nothing the journal does not already
+hold.
+
+One ordinary durable `generated_xmd` event records the decision. An admission
+carries the exact source, the retained roots and the selected one, the pinned
+identities the fragment named, and the normalized request policy it ran under; a
+refusal carries the construct class and nothing else. The whole event crosses
+the journal's secret filter like any other, and it commits before the first
+admitted observation. The observations themselves are retained by their ordinary
+effects — `fetch` for `<Fetch>` (§10.1) — so a partial continuation restores the
+admission and every committed observation rather than performing them again, and
+a completed replay restores the run's result without asking the Agent or a
+server anything.
+
+An interruption before an observation's own record commits retains no partial
+observation; a later continuation may perform that read once more under the same
+retained admission.
+
+#### A continuation is held to the ceilings it was admitted under
+
+A retained admission is a grant, and it resumes only under the ceilings it was
+granted with. Durable replay matches an effect by its type and name, and what a
+description carries is stored rather than compared, so the normalized policy is
+retained in the admission's own result. Before one generated component is
+invoked or one request is performed, a continuation compares the retained policy
+to the one the run now states — whole and exactly. Changed retained roots, a
+changed selected root, a changed pinned identity behind an unchanged name, and a
+widened or otherwise altered request ceiling are each refused, with a fixed
+diagnostic that names none of what it compared.
+
+The fragment is decided inside that durable effect rather than before it. So a
+continuation restores what was admitted without parsing the current candidate at
+all: a later caller holding different source changes nothing about what expands,
+and what expands is the source this run admitted.
+
+`Fetch` is admitted only as core's pinned identity, and only for an exact
+bounded request: the scheme, host, path, method, normalized headers and
+effective timeout must all equal one the host stated. Anything else is refused
+before `API.Fetch` is reached, with no request performed. A repository component
+that takes the name `Fetch` is not the pinned identity and satisfies no
+admission.
+
+Ownership splits at the same line everywhere else does. Core owns parsing,
+whole-fragment preflight, exact invocation, the durable admission record and
+replay. The trusted workflow host owns the ceilings — which roots exist, which
+identities are admitted, and which requests are allowed — because those are
+decisions about what this run is for.
+
+#### Mutation-proposal admission
+
+Mutation admission extends the same boundary with a separate allowlist of pinned
+mutation component identities, and is unbuilt. Admitted File, Git and Git-host
+effects then execute through their ordinary contextual providers and durability
+contracts; generated source receives no special mutation API. A mutation
+proposal may be subject to authored supervision before admission, and admission
+never implies unattended approval.
 
 The allowlist is authority, not prompting guidance. Generated source cannot
 grant itself Push, PullRequest, secrets or another external provider merely by
 naming a component. Trusted reusable Markdown components may be admitted
-explicitly.
+explicitly; generated XMD admits none of them yet.
 
-`Fetch` is not admitted. An authored document performs XMD-mediated HTTP reads
-with `<Fetch>` (executable-mdx-spec §6.18) and a workflow run retains each one as
-an ordinary `fetch` observation that a replay restores without repeating the
-request — which is how a read-only, network-denied Agent is given external
-information without being given a network. Admitting the pinned `Fetch` identity
-to a generated fragment is a separate decision: it requires the evaluator to
-authorize the exact bounded request — allowed scheme, host, path and method
-shape, and permitted headers — before the first generated effect, and to reject
-anything outside those constraints with no request. A repository component that
-takes the name `Fetch` is not the pinned identity and satisfies no admission.
+The live Agent request/result loop, `<Agent.AddDir>`, ACP `additionalDirectories`
+and workflow-bundled Markdown component admission are also unbuilt.
 
 ### 8.5 Agent session continuity
 
@@ -1800,7 +1850,8 @@ delegated without changing the document language.
 | workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |
-| generated-XMD constrained evaluator | behavior defined; public name/schema open |
+| generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
+| generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |
