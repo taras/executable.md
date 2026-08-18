@@ -145,6 +145,13 @@ jobs:
       - name: Smoke test metadata from a separately loaded core
         run: deno run --allow-all --frozen scripts/smoke-loaded-copy.ts
 
+      # `<Fetch>` resolves from core's registry, requests through the contextual
+      # Fetch adapter, and detaches the response before binding it. All three
+      # live in the module graph, so only the binary shows they survived
+      # `deno compile`. The script owns the server the request reaches.
+      - name: Smoke test a retained HTTP read with the compiled binary
+        run: deno run --allow-all --frozen scripts/smoke-fetch.ts
+
       # A built-in resolves from the module graph rather than a search path.
       # Only the compiled binary proves it survives `deno compile`. The
       # directory target discovers every colocated document beneath core's

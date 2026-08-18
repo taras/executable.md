@@ -60,6 +60,7 @@ Existing documents and code get aligned to this section retroactively.
 | attached service | a scoped host process that publishes its authenticated loopback endpoint through the XMD service handshake protocol and remains supervised for the lifetime of its service attachment |
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation |
+| XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is retained as an ordinary durable observation. It is distinct from an Agent's own network authority, which it does not grant, and from a reconciled mutating external effect, which it does not claim: an interruption before its record commits may repeat the read |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
@@ -1025,6 +1026,15 @@ filtered generated source for replay, history and deliberate training
 ingestion. Replay restores that source and expands it without invoking the Agent
 again.
 
+An XMD-mediated HTTP read is how a network-denied Agent is given external
+information: the authored document performs the read with `<Fetch>` and the
+retained response reaches the prompt as data. That does not raise the Agent's own
+ceiling, and it admits nothing on the generated side. Whether a generated
+fragment may name the pinned `Fetch` identity, and under what constraints on
+scheme, host, path, method and headers, is the evaluator's decision and is
+unbuilt; a repository component that takes the name `Fetch` is not that identity
+and acquires no admission from it.
+
 ## Local Workspace topology
 
 The local workflow host owns SQLite directly in Deno and reuses Cloudflare's
@@ -1778,7 +1788,9 @@ things, and each has exactly one consumer:
 - the **exec default** is what an exec block resolves and hands to the Process
   operation, and only exec blocks and the built-in `timeout` modifier read it;
   and
-- the **Fetch default** is what a Fetch resolves when its caller named none.
+- the **Fetch default** is what a Fetch resolves when its caller named none —
+  including `<Fetch>`, which resolves it when the element declares no `timeout`
+  and retains the effective milliseconds as part of the request it recorded.
 
 An absent value is no timeout rather than a number the runtime chose, and no
 operation falls back to a value another operation owns — an exec block never
@@ -2176,6 +2188,7 @@ Status is measured against main.
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
+| `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; generated-XMD admission of the pinned identity remains unbuilt (#369) |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
 | transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack |

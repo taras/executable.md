@@ -2702,6 +2702,14 @@ function* expandFunctionComponent(
             *hasContent(_args, _next) {
               return !selfClosing;
             },
+            // The engine's own answer about the engine's own prop: `as` was
+            // validated and stripped above, and this reports whether it was
+            // there. Nothing else about the binding crosses — not its name, not
+            // the environment it will be written to.
+            // deno-lint-ignore require-yield
+            *hasBinding(_args, _next) {
+              return asBinding !== undefined;
+            },
             // deno-lint-ignore require-yield
             *hasCapture([captureName], _next) {
               return captureName in literalCaptures || captureName in expressionCaptures;

@@ -110,6 +110,19 @@ export interface ComponentApi {
   /** Whether the invoking element was written with content rather than self-closed. */
   hasContent(): Operation<boolean>;
   /**
+   * Whether this invocation has an engine-owned result binding — whether the
+   * element was written with `as` (spec §6.10).
+   *
+   * A boolean and nothing more. `as` stays the engine's: it is validated and
+   * stripped before a component is called, the binding name is never handed
+   * over, and a component that asks this learns only whether what it returns
+   * will be captured. `<Fetch>` is what needs it — a captured response makes
+   * every status data, and an uncaptured one makes a failing status a failure —
+   * and answering it by parsing source again would be a second, disagreeing
+   * reading of the same prop.
+   */
+  hasBinding(): Operation<boolean>;
+  /**
    * Create a resource owned by the scope that invoked this component
    * (spec §4.4).
    *
@@ -230,6 +243,12 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
     );
   },
   // deno-lint-ignore require-yield
+  *hasBinding(): Operation<boolean> {
+    throw new Error(
+      "Component.hasBinding() has no provider: not inside a function component invocation.",
+    );
+  },
+  // deno-lint-ignore require-yield
   *retain<T>(_resource: () => Operation<T>): Operation<T> {
     throw new Error("Component.retain() has no provider: not inside a component invocation.");
   },
@@ -259,6 +278,7 @@ export const codeBlock: Operations<ComponentApi>["codeBlock"] = Component.operat
 export const persistent: Operations<ComponentApi>["persistent"] = Component.operations.persistent;
 export const content: Operations<ComponentApi>["content"] = Component.operations.content;
 export const hasContent: Operations<ComponentApi>["hasContent"] = Component.operations.hasContent;
+export const hasBinding: Operations<ComponentApi>["hasBinding"] = Component.operations.hasBinding;
 export const retain: Operations<ComponentApi>["retain"] = Component.operations.retain;
 export const registry: Operations<ComponentApi>["registry"] = Component.operations.registry;
 export const tryContent: Operations<ComponentApi>["tryContent"] = Component.operations.tryContent;
