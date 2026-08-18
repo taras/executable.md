@@ -404,14 +404,13 @@ function* gitHostPhase<T>(
     request: details.request,
   });
   const terminal = invocationTerminal(routing, details, subject, parse, settlement);
-  let returned: unknown;
   // Same stable name, so the shared middleware chain applies; own descriptor,
   // so the chain ends in this invocation's terminal rather than in the public
   // refusing default.
   const invocation = createApi<GitHostApi>(GIT_HOST_API, { route: terminal.route });
 
   try {
-    returned = yield* invocation.operations.route(routing);
+    yield* invocation.operations.route(routing);
   } catch (error) {
     // An answer already accepted is what this phase produced. A provider that
     // threw afterwards, or middleware that threw around it, is reporting on
@@ -423,10 +422,7 @@ function* gitHostPhase<T>(
     terminal.close();
   }
 
-  const answer = terminal.accepted() ??
-    (returned === undefined
-      ? undefined
-      : closedAnswer(details.phase, subject, parse, returned, settlement));
+  const answer = terminal.accepted();
   if (answer === undefined) {
     throw author(
       settlement,
