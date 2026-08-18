@@ -697,12 +697,17 @@ that already-filtered event by ID, so request text is never duplicated into
 lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
-execution-owned suspension controller. Context may select the workflow
-provider, but the controller accepts only the exact private capability for the
-current execution and suspension ID. With no delivered input, it reports the
-request to the workflow executor and remains pending while that executor
-initiates an
-orderly halt. The operation throws no ordinary error and produces no value; the
+execution-owned suspension controller. Context may select the workflow provider;
+it authorizes nothing. The authority to enter a wait is the retained request
+itself, checked against the run's own journal: it must be the most recent
+`suspension_request`, its retained request and response schema must match what
+is presented, and its identifier must be the one this run derives for the
+durable coroutine position it was published at. A caller cannot arrange for the
+journal to hold a request it did not publish through the ordinary durable path,
+and cannot choose the identifier that path derives, so publishing a request
+under a chosen name authorizes nothing. With no delivered input, the controller
+reports the request to the workflow executor and remains pending while that
+executor initiates an orderly halt. The operation throws no ordinary error and produces no value; the
 halt leaves the root without a Close. The executor observes the authenticated
 suspension notice as its separate settlement candidate, waits for complete
 scope teardown, then atomically finishes the document-execution record and

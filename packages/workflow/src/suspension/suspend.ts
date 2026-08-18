@@ -25,9 +25,13 @@
  * Yield means the request was retained. It does not mean the wait ended, and it
  * does not authorize anything.
  *
- * **Authority last.** The execution-owned controller is what may end the
- * execution, and it accepts only the capability its host issued for this exact
- * execution and suspension ID.
+ * **Authority last, and the publication is what carries it.** The
+ * execution-owned controller is what may end the execution, and what it accepts
+ * is the retained request: it reads the run's own journal and requires the most
+ * recent `suspension_request` to be this one — matching what is presented, and
+ * under the identifier this run derives for the position it was published at.
+ * Nothing is handed to the caller to present, because anything a caller could
+ * hold is something another caller could obtain.
  *
  * ## Why replay reaches the same wait
  *
