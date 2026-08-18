@@ -477,10 +477,12 @@ identity, number, URL, state, head SHA and base SHA. Reviews, comments and check
 results are *not* fields on it, because a creation result that pretended to stay
 fresh would be lying about a remote that keeps changing. They are separate reads.
 
-**Missing: that read.** No component or issue defines the forge observation that
-returns existing reviews, comments and check results for a pull request. The
-requirement is unchanged and worth stating exactly, because it is what makes the
-review adversarial rather than uninformed:
+**That read has a component now.** `<Fetch>` reads over HTTP from Markdown and
+retains what it read (#456, shipped), which is what a network-denied reviewer
+needs: the document fetches a pull request's existing reviews, comments and
+check results and renders them into the prompt, while the Agent itself stays
+denied the network. The requirement is unchanged and still worth stating
+exactly, because it is what makes the review adversarial rather than uninformed:
 
 - the reviewer must receive every existing review with its body, every comment,
   and every check result, iterated rather than stringified; and
@@ -488,9 +490,10 @@ review adversarial rather than uninformed:
   approving the change reads the original objections in their own words rather
   than the planner's summary of them.
 
-Until that read exists, this stage reviews the change it just made against the
-plan and the checkout, and an objection raised by anyone other than the planner
-does not reach either surface.
+This stage does not write those fetches yet, so today it reviews the change it
+just made against the plan and the checkout, and an objection raised by anyone
+other than the planner reaches neither surface. Admitting `<Fetch>` inside
+Agent-generated XMD is a separate question and stays #369's.
 
 The verdict names one head. The prompt reviews the change at `headSha` against
 `baseSha`, and a moved head requires a fresh review — the same rule #295 states
@@ -582,7 +585,7 @@ revision turn, or acceptance.
 | `<Issue>` | #296 | unbuilt |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
 | shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, not the components over it |
-| the forge read that returns reviews, comments and checks | — | unowned |
+| the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
 
 The agent, parsing, capture, and control-flow syntax runs today, and so do the
 local Git effects: `<Git.Add>` and `<Git.Commit>` are built. The loop body above

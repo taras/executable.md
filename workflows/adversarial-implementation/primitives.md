@@ -260,8 +260,9 @@ The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
 `<Agent.AddDir>` registration `Discovery` and `Planning` need to give their
 agents the checkout. `UserCheckpoint` registers nothing, because it assesses
 supplied material rather than a repository. `Implementation` has no such
-exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
-`<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
+exemption: its loop body invokes `<Expand>`, `<Git.Push>`, `<PullRequest>`, and
+`<Issue>`, which resolve to nothing. The `<Git.Add>` and `<Git.Commit>` beside
+them do resolve — under a workflow run, where the host registers them.
 
 Five names in this workflow resolve to nothing today, and each is owed by one
 issue:

@@ -299,10 +299,12 @@ passes the gate, so neither starts implementation or any later durable effect.
 Those two are reported differently, because they are different requests. A
 decline is finished: the user said no. Exhaustion is not — it is the workflow
 asking the user what to do after five rounds failed to converge (#290, settled).
-Under a composed workflow that request is where the run suspends durably for
-user direction (#367, shipped) and gives its executor lock back; here it is
-where the report asks. Neither exhaustion nor an unchanged verdict is ever read
-as approval, and nothing resumes the run on its own.
+Under a composed workflow that request is where the run should suspend durably
+for user direction. The substrate is shipped — `suspendFor()` waits and gives
+the executor lock back (#367), and a typed answer can be delivered (#300) — but
+it is an Api operation this document does not call, so here the report asks
+instead. Neither exhaustion nor an unchanged verdict is ever read as approval,
+and nothing resumes the run on its own.
 
 A checkpoint that found no material choice still produces an explicit
 `proceed: true` with its reason, so nothing advances because a decision was

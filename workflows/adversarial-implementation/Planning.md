@@ -301,14 +301,16 @@ later durable effect, and cannot be reported as convergence or success.
 What the caller does with it is ask the user. An exhausted planning loop returns
 to its caller for direction rather than terminating on its own account: five
 rounds of evidence did not converge, and only the user decides what happens
-next. Under a composed workflow that request becomes a durable suspension — the
-run records why it stopped and the material the user needs, releases its
-executor, and resumes only from explicit user direction, so neither exhaustion
-nor silence nor an unchanged verdict is ever read as approval. That lifecycle is
-shipped (#367): the run waits, gives its executor lock back, and continues when a
-typed answer is delivered and someone resumes it. Nothing schedules that, which
-is why this document still owns the boundary — and the boundary holds either
-way.
+next. Under a composed workflow that request is meant to become a durable
+suspension — the run recording why it stopped and the material the user needs,
+giving its executor lock back, and resuming only from explicit user direction.
+
+The substrate exists: `suspendFor()` suspends and releases the lock (#367), and
+a typed answer can be delivered to the waiting run (#300). It is an Api
+operation with no v1 Markdown element, and this stage calls nothing that
+suspends, so today the request is reported rather than waited on. Either way
+neither exhaustion nor silence nor an unchanged verdict is read as approval, and
+the boundary this document owns holds.
 
 Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
 is one durable operation, each `<Elicit>` answer is journaled against its

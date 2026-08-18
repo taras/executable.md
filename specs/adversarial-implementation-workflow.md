@@ -65,11 +65,12 @@ what makes exhaustion a distinct outcome without a separate label, which is what
 #290 settled: an exhausted loop is neither convergence nor ordinary successful
 completion, it starts no implementation and no later durable effect, and it asks
 the user for direction rather than answering on the stage's own account. A
-composed workflow turns that request into a durable suspension, which is shipped
-(#367): the run waits, gives its executor lock back, and continues when a typed
-answer is delivered and someone resumes it. Nothing schedules that resumption,
-and resume never reads exhaustion, silence, or an unchanged verdict as
-approval.
+a composed workflow is meant to turn that request into a durable suspension. The
+substrate for one is shipped — `suspendFor()` waits, gives the executor lock
+back, and a typed answer can be delivered to the waiting run (#367, #300) — but
+it is an Api operation, not something this Markdown calls: nothing here converts
+a checkpoint into a suspension. So exhaustion asks in the report today, and
+resume never reads exhaustion, silence, or an unchanged verdict as approval.
 
 `proceed: true` authorizes the exact transition and effects the checkpoint
 assessed, and nothing more. The rule binds the material as much as the decision:
@@ -88,17 +89,25 @@ after the checkpoint.
 A checkpoint that found no material choice produces an explicit `proceed: true`
 recording why, so a transition never advances because a decision was missing.
 
-Stopping *at* the boundary is a durable suspension rather than a construct. A
-checkpoint that reaches a person records its pending request and the Workspace
-frontier, releases the executor, and reports the run ID and stop reason;
-`xmd workflow resume` continues there once the answer is available. Neither the
-process nor the Agent sessions need to stay alive in between. `xmd workflow
-start` and `xmd workflow resume` are shipped (#366), and a resume continues from
-the retained frontier; `xmd workflow status` reports a stopped run's retained
-status and stop reason without advancing it (#460). The single-executor
-ownership and atomic lifecycle transitions that decide who may continue a run
-are shipped too, owned by the executor lock (#466). What is not built is the
-boundary itself — a checkpoint that releases the executor remains #367. `<Stage>` is not the answer: it was
+Stopping *at* the boundary is a durable suspension rather than a construct: a
+checkpoint that reaches a person should record its pending request and the
+Workspace frontier, give the executor lock back, and report the run ID and stop
+reason, so that neither the process nor the Agent sessions need to stay alive
+until `xmd workflow resume` continues there.
+
+Every piece of that is shipped. `start` and `resume` (#366); `status` reporting
+a stopped run's retained status and stop reason without advancing it (#460); the
+single-executor ownership and atomic transitions owned by the executor lock
+(#466); `suspendFor()`, which suspends a run durably and releases its lock
+(#367); and typed delivery of an answer to a waiting run (#300).
+
+What is missing is the join, not the parts. `suspendFor()` is an Api operation a
+host or component calls — there is no v1 Markdown element that spells it, and a
+suspension is a different thing from `<Elicit>`, which asks a question inside the
+execution that is already running. This workflow contains no component or
+middleware that turns its `<Elicit>` calls into `suspendFor()`, so its
+checkpoints do not release the executor today. Consuming that substrate belongs
+to #301's supervised composition. `<Stage>` is not the answer: it was
 rejected as architecture, because the root document is the workflow and a durable
 run may continue through several document executions without inventing
 subdivisions between them (#298, closed).
@@ -183,12 +192,15 @@ would have been used without detecting or prioritizing them.
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
-`xmd workflow` the same question becomes a durable suspension that releases the
-executor and resumes later. Both halves are shipped — the ownership that makes
-releasing one safe (#466) and the wait that gives the lock back (#367) — and a
-typed answer can be delivered to a suspended run (#300). Delivery does not
-execute anything: it records the answer, and a resume is still an explicit act
-that someone performs. Nothing schedules it.
+`xmd workflow` that same question is still `<Elicit>`, answered inside the
+execution that asked it. A durable suspension is a different mechanism, and its
+substrate is shipped: `suspendFor()` waits and gives the executor lock back
+(#367), the lock's ownership decides who may continue (#466), and a typed answer
+can be delivered to a waiting run (#300). None of that is reached from Markdown
+here — `suspendFor()` is an Api operation with no v1 element spelling it, and
+this workflow installs nothing that converts an `<Elicit>` into one. Delivery
+also executes nothing: it records the answer, and resuming stays an explicit act
+nobody schedules.
 
 ### Runtime intervention
 
@@ -278,11 +290,14 @@ review.
 identity, number, URL, state, head SHA and base SHA (#295). Existing reviews,
 comments and check results are separate reads rather than fields on a creation
 result that would otherwise claim to stay fresh against a remote that keeps
-changing. **That read is not defined by any open issue.** The requirement it must
-satisfy is unchanged: the reviewer receives every existing review with its body,
-every comment, and every check result, iterated rather than stringified — a
-review that cannot see a failing check or an existing objection is not
-adversarial, it is uninformed.
+changing. **That read is `<Fetch>`'s** (#456, shipped): a document reads over
+HTTP and retains what it read, so a network-denied reviewer can be handed a pull
+request's current state without the Agent ever reaching the network. The
+requirement it must satisfy is unchanged: the reviewer receives every existing
+review with its body, every comment, and every check result, iterated rather
+than stringified — a review that cannot see a failing check or an existing
+objection is not adversarial, it is uninformed. No stage writes those fetches
+yet, and admitting `<Fetch>` inside generated XMD remains #369's.
 
 The user's checkpoint carries the same evidence. An existing objection reaches
 the person approving the change in its own words, not only as the planner
@@ -951,9 +966,10 @@ The exercise must resolve enough of these to implement one vertical slice:
    rather than a second one — expansion identity alone cannot answer it, so the
    effect's natural key has to, and a head that deliberately advanced on the same
    branch must be distinguishable from a conflicting one (#295, #297)?
-5. Which forge read returns a pull request's existing reviews, comments, and
-   check results to a network-denied reviewer? `<PullRequest>`'s creation result
-   is deliberately minimal, and no open issue owns that read.
+5. Which fetches does a review actually write? `<PullRequest>`'s creation result
+   is deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer
+   is handed the rest — but no stage composes those reads yet, and admitting
+   `<Fetch>` inside generated XMD stays #369's.
 6. Which host mechanism closes the validate-then-use race for each supported
    runtime, now that a run-owned Workspace resolves a document path without
    producing a host path at all (#227)?

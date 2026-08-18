@@ -208,18 +208,20 @@ that already knows the answer — a test, a demo, a non-interactive region — w
 this component in an `<Answers>` region and supplies it with `<Answer>` matchers,
 which changes who answers without changing this file.
 
-Under `xmd workflow` the same question becomes a durable wait: the elicitation
-records its pending request and the Workspace frontier, the executor lock is
-given back, and `xmd workflow resume <run-id>` continues once the answer is
-available — the process, the Workspace attachment, and the agent processes need
-not stay alive in between. All of that is shipped: `start` and `resume` (#366),
-the ownership that decides who may continue a run (#466), the wait that releases
-the lock (#367), and typed delivery of an answer to a suspended run (#300). A
-resume restores this component's journaled answer rather than asking again.
+Under `xmd workflow` this stays an `<Elicit>`, answered inside the execution that
+asked it. A resume restores its journaled answer rather than asking again
+(#366).
 
-What is not shipped is anything that acts on a delivered answer: delivery
-executes nothing and no scheduler resumes a run, so continuing one stays an
-explicit act.
+The durable wait this checkpoint is eventually meant to become is a different
+mechanism, and its substrate is shipped: `suspendFor()` records a pending
+request, gives the executor lock back, and lets `xmd workflow resume <run-id>`
+continue once an answer is available (#367), with the ownership that decides who
+may continue (#466) and typed delivery of that answer (#300) alongside it.
+
+This component does not call it. `suspendFor()` is an Api operation with no v1
+Markdown element, and nothing here converts an `<Elicit>` into one — so no
+checkpoint releases the executor today, delivery executes nothing, and nothing
+schedules a resume. Consuming that substrate is #301's supervised composition.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
 repair turn explicitly. It absorbs JSON syntax and schema-validation failures
