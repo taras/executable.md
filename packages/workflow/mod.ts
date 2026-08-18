@@ -24,6 +24,29 @@
  * names no provider. The Deno host installs its own from
  * `@executablemd/workflow/deno`; nothing here imports it, and nothing here
  * imports SQLite, Deno or any other host.
+ *
+ * ## Git-host effects
+ *
+ * A **Git host** is an external service that owns remote Git repositories and
+ * associated collaboration objects such as branches, pull requests and issues.
+ * GitHub is one Git-host adapter; a Git host is not the local Git capability
+ * and not the trusted workflow host.
+ *
+ * A Git host owns state no local transaction can enclose, so pushing, opening a
+ * pull request and filing an issue all face the same question after an
+ * interruption: did the previous attempt already succeed?
+ * `reconcileGitHostEffect()` answers it once, for all three. A live attempt
+ * observes under an identity derived from the run and the expansion, then
+ * adopts a proven compatible completion, performs a proven absence exactly
+ * once, or refuses. Prompt is not one of these effects and keeps its Agent
+ * provider contract.
+ *
+ * `withGitHostProvider()` installs the provider that answers those phases. A
+ * provider need not implement every kind: a plain Git server may support
+ * `git-push` and refuse pull requests and issues. Routing is one contextual
+ * operation that carries no completion authority — middleware may inspect,
+ * narrow or refuse a request, and nothing it can hold or combine can answer
+ * one.
  */
 
 export {
@@ -96,6 +119,47 @@ export type {
   GitSwitchResult,
 } from "./src/composition/git-records.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
+
+export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
+export type {
+  GitHostApi,
+  GitHostCall,
+  GitHostPhase,
+  GitHostPhaseDetails,
+  GitHostProvider,
+  GitHostRoutingRequest,
+} from "./src/git-host/api.ts";
+export {
+  GitHostAmbiguousError,
+  GitHostConflictError,
+  GitHostProtocolError,
+  GitHostProviderError,
+  GitHostUnavailableError,
+} from "./src/git-host/errors.ts";
+export {
+  completeGitHostEffectRequestJson,
+  gitHostReconciliationRecordJson,
+  parseCompleteGitHostEffectRequest,
+  parseGitHostCompletion,
+  parseGitHostEffectIdentity,
+  parseGitHostObservation,
+  parseGitHostReconciliationRecord,
+  sameGitHostEffectRequest,
+} from "./src/git-host/records.ts";
+export type {
+  CompleteGitHostEffectRequest,
+  GitHostCompletion,
+  GitHostDecision,
+  GitHostEffectIdentity,
+  GitHostEffectRequest,
+  GitHostObservation,
+  GitHostReconciliationRecord,
+} from "./src/git-host/records.ts";
+export {
+  GIT_HOST_EFFECT,
+  reconcileGitHostEffect,
+  withGitHostProvider,
+} from "./src/git-host/effect.ts";
 
 export { WorkspaceCoordination, WorkspaceCoordinationProviderError } from "./src/workspace/api.ts";
 export type { WorkspaceCoordinationApi } from "./src/workspace/api.ts";
