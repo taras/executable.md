@@ -8762,22 +8762,22 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFH2 | One grammar | Every runtime renders the same `xmd workflow` help |
 | WFH4 | Unsupported delivery | Node and Bun refuse `answer` with the same sentence, write no delivery line and create no run store |
 
-### Tier WA — Delivering an answer to a durable wait
+### Tier WAD — Delivering an answer to a durable wait
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.5. Runs
 against the production Deno adapter, on real run files.
 
 | # | Test | Verify |
 |---|------|--------|
-| WA1 | Correlation | A value is retained only for the exact wait it names; a wait this run is not at, and a run that holds no such wait, are refused with nothing written |
-| WA2 | The retained schema judges | Every value the response schema refuses is refused before persistence, and a value it describes still goes in afterwards |
-| WA3 | The secret gate | A credential-shaped answer is refused with neither the value nor the match in the diagnostic; `--no-secret-detection` retains the same value |
-| WA4 | Delivery is not execution | Status, stop reason, document-execution records and retained history are byte-for-byte what the suspension left |
-| WA5 | No executor lock | A delivery succeeds while a live workflow executor holds the run's lock |
-| WA6/WA7/WA8 | Refusals | A duplicate, an answer already spent, a completed run, a cancelled run and a run nothing is stored for are each refused, and none of them writes |
-| WA9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
-| WA10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
-| WA11/WA12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
+| WAD1 | Correlation | A value is retained only for the exact wait it names; a wait this run is not at, and a run that holds no such wait, are refused with nothing written |
+| WAD2 | The retained schema judges | Every value the response schema refuses is refused before persistence, and a value it describes still goes in afterwards |
+| WAD3 | The secret gate | A credential-shaped answer is refused with neither the value nor the match in the diagnostic; `--no-secret-detection` retains the same value |
+| WAD4 | Delivery is not execution | Status, stop reason, document-execution records and retained history are byte-for-byte what the suspension left |
+| WAD5 | No executor lock | A delivery succeeds while a live workflow executor holds the run's lock |
+| WAD6/WAD7/WAD8 | Refusals | A duplicate, an answer already spent, a completed run, a cancelled run and a run nothing is stored for are each refused, and none of them writes |
+| WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
+| WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
+| WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
 ### Tier WFX — A killed run resumes from its frontier
 

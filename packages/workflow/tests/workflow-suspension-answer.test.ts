@@ -1,5 +1,5 @@
 /**
- * Tier WA — delivering one typed value to one durable wait, and spending it.
+ * Tier WAD — delivering one typed value to one durable wait, and spending it.
  *
  * Two operations that must not be confused, proved against a real run in a real
  * file. **Delivery** happens while nothing is running: it judges a value against
@@ -257,8 +257,8 @@ function eventsOfType(events: readonly DurableEvent[], type: string): DurableEve
   return events.filter((event) => event.type === "yield" && event.description.type === type);
 }
 
-describe("Tier WA — a delivered answer, and the resume that spends it", () => {
-  it("WA1: one value correlates to the exact wait it names", function* () {
+describe("Tier WAD — a delivered answer, and the resume that spends it", () => {
+  it("WAD1: one value correlates to the exact wait it names", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -283,7 +283,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(JSON.parse(String(rows[0]?.["answer"]))).toEqual(ANSWER);
   });
 
-  it("WA2: a value the retained schema refuses is not retained", function* () {
+  it("WAD2: a value the retained schema refuses is not retained", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -303,7 +303,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect((yield* deliver(root, { suspensionId: id })).ok).toBe(true);
   });
 
-  it("WA3: a credential-shaped answer crosses the gate, and only an explicit opt-out lets it past", function* () {
+  it("WAD3: a credential-shaped answer crosses the gate, and only an explicit opt-out lets it past", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
     const value: Json = { approved: true, note: CANARY };
@@ -321,7 +321,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(JSON.parse(String(answerRows(root)[0]?.["answer"]))).toEqual(value);
   });
 
-  it("WA4: delivery changes no status, no history and no execution record", function* () {
+  it("WAD4: delivery changes no status, no history and no execution record", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -336,7 +336,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect((yield* attemptEvents(root)).length).toBe(events);
   });
 
-  it("WA5: a run somebody else holds the executor lock for is still answerable", function* () {
+  it("WAD5: a run somebody else holds the executor lock for is still answerable", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -354,7 +354,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(answerRows(root)).toHaveLength(1);
   });
 
-  it("WA6: a duplicate, and an answer already spent, are both refused unchanged", function* () {
+  it("WAD6: a duplicate, and an answer already spent, are both refused unchanged", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
 
@@ -376,7 +376,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(!late.ok && late.error.message).toContain("only a suspended run is waiting");
   });
 
-  it("WA7: a run that is not waiting is refused, whatever state it is in", function* () {
+  it("WAD7: a run that is not waiting is refused, whatever state it is in", function* () {
     for (const terminal of ["completed", "cancelled"] as const) {
       const root = yield* useStorageRoot();
       const id = yield* suspendedRun(root);
@@ -400,14 +400,14 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     }
   });
 
-  it("WA8: a run nothing is stored for is reported rather than created", function* () {
+  it("WAD8: a run nothing is stored for is reported rather than created", function* () {
     const root = yield* useStorageRoot();
     const refused = yield* deliver(root, { runId: "never-started", suspensionId: "a".repeat(32) });
     expect(refused.ok).toBe(false);
     expect(!refused.ok && refused.error.name).toBe("WorkflowRunNotFoundError");
   });
 
-  it("WA9: the resume publishes one answer event, consumes the delivery, and returns the value", function* () {
+  it("WAD9: the resume publishes one answer event, consumes the delivery, and returns the value", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
     expect((yield* deliver(root, { suspensionId: id })).ok).toBe(true);
@@ -433,7 +433,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(rows[0]?.["consumed_at"]).toEqual(expect.any(String));
   });
 
-  it("WA10: a resume replays a published answer without publishing or consuming again", function* () {
+  it("WAD10: a resume replays a published answer without publishing or consuming again", function* () {
     const root = yield* useStorageRoot();
     const seen: unknown[] = [];
     const twoWaits = function* (): Operation<unknown> {
@@ -473,7 +473,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(answerRows(root)[0]?.["consumed_at"]).toEqual(consumedAt);
   });
 
-  it("WA11: a failure before the publication commits leaves the answer pending", function* () {
+  it("WAD11: a failure before the publication commits leaves the answer pending", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
     expect((yield* deliver(root, { suspensionId: id })).ok).toBe(true);
@@ -499,7 +499,7 @@ describe("Tier WA — a delivered answer, and the resume that spends it", () => 
     expect(answerRows(root)[0]?.["state"]).toBe("consumed");
   });
 
-  it("WA12: a consume that fails takes its publication back with it", function* () {
+  it("WAD12: a consume that fails takes its publication back with it", function* () {
     const root = yield* useStorageRoot();
     const id = yield* suspendedRun(root);
     expect((yield* deliver(root, { suspensionId: id })).ok).toBe(true);
