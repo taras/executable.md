@@ -151,9 +151,10 @@ the foreground process, and Ctrl-C tears the scope down in order, publishes
 management host acquires the lock and publishes `cancelled` inside the
 transaction that validates it.
 
-What is still missing is the wait itself: durable suspension, and releasing the
-executor at a checkpoint, remain #367 and unbuilt; forks and forkability remain
-#368.
+The wait is here too. A run suspends durably at an authored wait and gives its
+executor lock back (#367), and a typed answer can be delivered to it (#300).
+What is still missing is anything that *acts* on that: delivery executes
+nothing, no scheduler resumes a run, and forks and forkability remain #368.
 
 ## Cleanup follows the invocation
 
@@ -178,10 +179,12 @@ An automated iteration stops on the first applicable signal:
 
 Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
 question during execution, and under `xmd run` the WebForm provider answers it
-in a browser. Under `xmd workflow` the same question is to become a durable
-suspension, which waits on #367. Arbitration between signals is not implemented
-([#300](https://github.com/taras/executable.md/issues/300)), and premature
-watcher semantics are deliberately excluded from it.
+in a browser. Under `xmd workflow` the same question becomes a durable
+suspension (#367, shipped), and a typed answer can be delivered to the run that
+is waiting ([#300](https://github.com/taras/executable.md/issues/300), shipped).
+Delivery is non-executing and arbitration between signals is not implemented:
+nothing schedules a resumption, and premature watcher semantics are deliberately
+excluded.
 
 `<Loop>` already records part of this: it journals every iteration it enters and
 one terminal record whose outcome is `break`, `exhausted`, or `error`, and it
