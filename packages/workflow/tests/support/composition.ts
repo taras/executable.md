@@ -325,15 +325,17 @@ export function* stagedPaths(
     if (!exported.ok) {
       throw exported.error;
     }
+    // `-z` because Git quotes a path holding anything outside ASCII by default,
+    // and what a suite compares has to be the name the Workspace holds.
     const outcome = yield* host.git({
-      args: ["diff", "--cached", "--name-only"],
+      args: ["diff", "--cached", "--name-only", "-z"],
       cwd: exported.value,
       home: root,
     });
     if (outcome.code !== 0) {
       throw new Error(`git diff --cached exited ${outcome.code}: ${outcome.stderr}`);
     }
-    return outcome.stdout.split("\n").filter((line) => line !== "");
+    return outcome.stdout.split("\0").filter((name) => name !== "");
   });
 }
 

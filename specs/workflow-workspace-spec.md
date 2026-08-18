@@ -819,6 +819,16 @@ each of them changes what is staged. The whole array is one command and one
 effect. An empty string, an empty array and an empty entry are refused rather
 than read as "here" or as "everything".
 
+A pathspec must be well-formed text. A string is UTF-16 code units and need not
+be well-formed, but the way to Git is UTF-8, and an unpaired surrogate becomes
+U+FFFD in transit — so what Git received would differ from what the run
+retained. A pathspec holding one is refused as malformed input, before any effect
+exists and before Git runs, wherever the request enters: a document's element and
+a direct call on the composition Api are held to the same boundary. Nothing is
+normalized or respelled to make one fit, and every well-formed string — U+FFFD
+included, along with newlines, separators, repetitions and pathspec magic —
+reaches Git exactly as written.
+
 `paths` is a pathspec, not a way of choosing a checkout. Which checkout is
 staged is decided the way §7.1 decides it, and every pathspec is read relative to
 the working directory the element was written in — so `<Git.Add paths="." />`

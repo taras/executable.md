@@ -772,3 +772,135 @@ describe("workflow Git.Add refusals", () => {
     });
   });
 });
+
+/**
+ * A pathspec has to survive the way to Git unchanged.
+ *
+ * A JavaScript string is UTF-16 code units, and an unpaired surrogate is one a
+ * document can write. The way to Git is UTF-8 — a process argument list — and
+ * encoding an unpaired surrogate there replaces it with U+FFFD, so Git would
+ * receive a different string from the one the run retained. The checkout below
+ * really holds a U+FFFD-named file, which is what makes the substitution
+ * observable rather than theoretical: it would have been staged.
+ */
+describe("workflow Git.Add pathspec text", () => {
+  const REPLACEMENT = "\ufffd";
+
+  /** A checkout holding a file whose name is the character a surrogate becomes. */
+  function holding(locator: string, ...lines: string[]): string {
+    return document(
+      locator,
+      `<File path={${JSON.stringify(REPLACEMENT)}}>`,
+      "replacement",
+      "</File>",
+      ...lines,
+    );
+  }
+
+  for (const [name, surrogate] of [
+    ["a leading surrogate", "\ud800"],
+    ["a trailing surrogate", "\udc00"],
+  ] as const) {
+    it(`refuses a pathspec holding ${name}`, function* () {
+      const root = yield* useStorageRoot();
+      const remote = yield* useBareRemote(REMOTE);
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const counting = countingHost();
+        const failure = yield* raised(
+          runDocument(
+            database,
+            holding(remote.locator, `<Git.Add paths={${JSON.stringify(surrogate)}} />`),
+            countingOptions(counting),
+          ),
+        );
+
+        expect(causedBy(failure, isGitFailure)?.reason).toBe("invalid-invocation");
+        expect(String(causedBy(failure, isGitFailure))).toContain("unpaired surrogate");
+        // Nothing ran, nothing was recorded, and the file that would have been
+        // staged in its place is untouched.
+        expect(subcommands(counting.counters)).not.toContain("add");
+        expect(yield* gitEvents(database)).toHaveLength(0);
+        expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
+      });
+    });
+  }
+
+  it("refuses one reaching the Api directly, not only one a document wrote", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      let refused: unknown;
+
+      const output = yield* scoped(function* () {
+        return yield* withWorkflowWorkspace(
+          database,
+          scoped(function* () {
+            yield* registerComponents([
+              {
+                name: "Probe",
+                origin: "test",
+                props: { type: "object", additionalProperties: false },
+                *fn(): Operation<string> {
+                  const repository = yield* currentRepository();
+                  if (repository === undefined) {
+                    throw new Error("the probe was written outside a Repository");
+                  }
+                  refused = yield* raised(
+                    GitComposition.operations.addPaths({
+                      repository,
+                      workingDirectory: yield* cwd(),
+                      paths: ["\ud800"],
+                    }),
+                  );
+                  return "";
+                },
+              },
+            ]);
+            return yield* collect(
+              yield* execute({
+                ...inlineSource(holding(remote.locator, "<Probe />")),
+                stream: database.journal,
+              }),
+            );
+          }),
+          countingOptions(counting),
+        );
+      });
+
+      expect(String(output).trim()).toBe("");
+      expect(causedBy(refused, isGitFailure)?.reason).toBe("invalid-invocation");
+      expect(subcommands(counting.counters)).not.toContain("add");
+      expect(yield* gitEvents(database)).toHaveLength(0);
+      expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
+    });
+  });
+
+  it("stages the file a well-formed replacement character names", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // The positive control: U+FFFD is ordinary text, and the refusals above
+      // are about the string that would silently become it.
+      yield* runDocument(
+        database,
+        holding(remote.locator, `<Git.Add paths={${JSON.stringify(REPLACEMENT)}} />`),
+      );
+
+      expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([REPLACEMENT]);
+      const [outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const retained = parseGitAddResult(
+        outcome?.record,
+        yield* expectation(database, [REPLACEMENT]),
+      );
+      expect(retained?.paths).toEqual([REPLACEMENT]);
+    });
+  });
+});

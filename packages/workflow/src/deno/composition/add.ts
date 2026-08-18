@@ -23,7 +23,7 @@ import {
   type GitAddResult,
   type GitCheckoutState,
 } from "../../composition/git-records.ts";
-import { ADD } from "../../composition/components/GitAdd.ts";
+import { ADD, admitPathspecs } from "../../composition/components/GitAdd.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { addPaths } from "./git.ts";
 import type { RepositoryHost } from "./host.ts";
@@ -100,6 +100,11 @@ export function* createGitAdd(
   host: RepositoryHost,
   request: GitAddRequest,
 ): Operation<GitAddResult> {
+  // Before an identity is built and before anything is spawned: a pathspec this
+  // host cannot carry unchanged is malformed input, and a durable effect
+  // recording one would describe a command Git never received.
+  admitPathspecs(request.paths);
+
   const outcome = yield* settled(
     "git",
     ADD,

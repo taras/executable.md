@@ -41,6 +41,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { currentRepository } from "../context.ts";
 import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
+import { wellFormedText } from "../parse.ts";
 
 /** The component name, as a document writes it and as a failure names it. */
 export const ADD = "<Git.Add>";
@@ -74,7 +75,7 @@ function invalid(sentence: string): never {
  */
 export function canonicalPaths(value: Json | undefined): readonly string[] {
   if (typeof value === "string") {
-    return value === "" ? invalid("needs a non-empty pathspec.") : Object.freeze([value]);
+    return admitPathspecs([value]);
   }
   if (!Array.isArray(value)) {
     return invalid("needs a paths pathspec, as one string or an array of them.");
@@ -84,12 +85,44 @@ export function canonicalPaths(value: Json | undefined): readonly string[] {
   }
   const paths: string[] = [];
   for (const entry of value) {
-    if (typeof entry !== "string" || entry === "") {
+    if (typeof entry !== "string") {
       return invalid("needs every pathspec to be a non-empty string.");
     }
     paths.push(entry);
   }
-  return Object.freeze(paths);
+  return admitPathspecs(paths);
+}
+
+/**
+ * The pathspecs, once each is one a host can hand to Git unchanged.
+ *
+ * Every entry keeps its spelling — that is the whole contract — so an entry no
+ * boundary can carry without changing it is refused rather than sent. A string
+ * holding an unpaired surrogate is the case: a process argument list is UTF-8,
+ * and what Git would receive is U+FFFD while the run's history would still say
+ * what the document wrote. Nothing is normalized, respelled or dropped to make
+ * one fit.
+ *
+ * Applied wherever a request enters, not only where a document writes one: the
+ * Api is public, and a caller reaching it directly is subject to the same
+ * boundary.
+ */
+export function admitPathspecs(paths: readonly string[]): readonly string[] {
+  if (paths.length === 0) {
+    return invalid("needs at least one pathspec. Omitting paths never means every path.");
+  }
+  for (const path of paths) {
+    if (path === "") {
+      return invalid("needs every pathspec to be a non-empty string.");
+    }
+    if (!wellFormedText(path)) {
+      return invalid(
+        "needs every pathspec to be well-formed text. One of them holds an unpaired surrogate, " +
+          "which this host cannot hand to Git as written.",
+      );
+    }
+  }
+  return Object.freeze([...paths]);
 }
 
 export default function* GitAdd(props: Record<string, Json>): Operation<string> {
