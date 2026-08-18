@@ -112,6 +112,24 @@ export interface StatResult {
  */
 export interface ResponseHeaders {
   get(key: string): string | null;
+  /**
+   * Every header the response carries, as name/value pairs in the order the
+   * provider reports them.
+   *
+   * Optional, because a provider written against `get()` alone still satisfies
+   * this interface. A caller that must retain the whole set — `<Fetch>` — fails
+   * when it is absent rather than recording the part of a response `get()`
+   * happens to be asked for.
+   */
+  entries?(): Iterable<readonly [string, string]>;
+}
+
+/** What a request may say about itself, beyond where it is going. */
+export interface FetchInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeout?: number;
 }
 
 /**
@@ -125,6 +143,35 @@ export interface RuntimeFetchResponse {
   headers: ResponseHeaders;
   /** Read the response body as text. */
   text(): Operation<string>;
+}
+
+/**
+ * The headers of one response, detached from it.
+ *
+ * Taken while the live response is still in scope, so what a caller reads
+ * afterwards cannot depend on a response that has been disposed, and mutating
+ * the host's own `Headers` cannot change what was read. `get()` keeps the
+ * case-insensitive lookup callers already have, and joins repeated names in
+ * report order — the platform combines them before this sees them, so on the
+ * default adapter there is one entry per name to begin with.
+ */
+function headerPair([name, value]: readonly [string, string]): [string, string] {
+  return [name, value];
+}
+
+function detachHeaders(headers: Iterable<readonly [string, string]>): ResponseHeaders {
+  const entries: Array<[string, string]> = [];
+  for (const entry of headers) {
+    entries.push(headerPair(entry));
+  }
+  return {
+    get(key: string): string | null {
+      const wanted = key.toLowerCase();
+      const found = entries.filter(([name]) => name.toLowerCase() === wanted);
+      return found.length === 0 ? null : found.map(([, value]) => value).join(", ");
+    },
+    entries: () => entries.map(headerPair),
+  };
 }
 
 /**
@@ -418,15 +465,7 @@ interface FsHandler {
 }
 
 interface FetchHandler {
-  fetch(
-    input: string,
-    init?: {
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string;
-      timeout?: number;
-    },
-  ): Operation<RuntimeFetchResponse>;
+  fetch(input: string, init?: FetchInit): Operation<RuntimeFetchResponse>;
 }
 
 /**
@@ -556,15 +595,7 @@ export const API: {
    * Cancellation aborts the request via Effection scope teardown.
    */
   Fetch: createApi("runtime.fetch", {
-    *fetch(
-      input: string,
-      init?: {
-        method?: string;
-        headers?: Record<string, string>;
-        body?: string;
-        timeout?: number;
-      },
-    ): Operation<RuntimeFetchResponse> {
+    *fetch(input: string, init?: FetchInit): Operation<RuntimeFetchResponse> {
       const timeout = init?.timeout ?? (yield* contextualFetchTimeout);
       const response = yield* withTimeout(
         `fetch(${input})`,
@@ -576,13 +607,19 @@ export const API: {
         }),
       );
 
-      return {
+      // Read here, while the live response is still this scope's: a caller that
+      // keeps the value reads a snapshot rather than a handle on a response
+      // that has since been disposed.
+      const headers = detachHeaders(response.headers);
+
+      const settled: RuntimeFetchResponse = {
         status: response.status,
-        headers: response.headers,
+        headers,
         *text() {
           return yield* withTimeout(`fetch(${input}).text()`, timeout, response.text());
         },
-      } as RuntimeFetchResponse;
+      };
+      return settled;
     },
   }),
 
@@ -678,7 +715,63 @@ export const remove: typeof API.Fs.operations.remove = API.Fs.operations.remove;
 
 export const realpath: typeof API.Fs.operations.realpath = API.Fs.operations.realpath;
 
-export const fetch: typeof API.Fetch.operations.fetch = API.Fetch.operations.fetch;
+/**
+ * One HTTP request, ready to be yielded or chained.
+ *
+ * Yielding it gives the settled response, which is what every caller inside the
+ * engine wants. The chain is for authored eval code, whose calling shape
+ * predates this operation: `fetch(url).expect()` and
+ * `fetch(url, init).expect().json()` are what documents in this repository are
+ * written with, and they mean the same thing here — with the request now
+ * crossing `API.Fetch`, so a host that narrows destinations narrows theirs too.
+ */
+export interface FetchOperation extends Operation<RuntimeFetchResponse> {
+  /** The response body as text. */
+  text(): Operation<string>;
+  /** The response body parsed as JSON. */
+  json(): Operation<unknown>;
+  /** The same request, failing on any status outside 2xx. */
+  expect(): FetchOperation;
+}
+
+/** A status a response carrying data is allowed to have. */
+function isSuccess(status: number): boolean {
+  return status >= 200 && status <= 299;
+}
+
+function request(
+  input: string,
+  init: FetchInit | undefined,
+  expectSuccess: boolean,
+): Operation<RuntimeFetchResponse> {
+  return {
+    *[Symbol.iterator]() {
+      const response = yield* API.Fetch.operations.fetch(input, init);
+      if (expectSuccess && !isSuccess(response.status)) {
+        throw new Error(`fetch(${input}) responded with status ${response.status}`);
+      }
+      return response;
+    },
+  };
+}
+
+function chain(input: string, init: FetchInit | undefined, expectSuccess: boolean): FetchOperation {
+  const settled = () => request(input, init, expectSuccess);
+  return {
+    [Symbol.iterator]: () => settled()[Symbol.iterator](),
+    *text(): Operation<string> {
+      return yield* (yield* settled()).text();
+    },
+    *json(): Operation<unknown> {
+      return JSON.parse(yield* (yield* settled()).text());
+    },
+    expect: () => chain(input, init, true),
+  };
+}
+
+export function fetch(input: string, init?: FetchInit): FetchOperation {
+  return chain(input, init, false);
+}
 
 export const env: typeof API.Env.operations.env = API.Env.operations.env;
 

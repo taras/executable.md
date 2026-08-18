@@ -1084,6 +1084,17 @@ grant itself Push, PullRequest, secrets or another external provider merely by
 naming a component. Trusted reusable Markdown components may be admitted
 explicitly.
 
+`Fetch` is not admitted. An authored document performs XMD-mediated HTTP reads
+with `<Fetch>` (executable-mdx-spec §6.18) and a workflow run retains each one as
+an ordinary `fetch` observation that a replay restores without repeating the
+request — which is how a read-only, network-denied Agent is given external
+information without being given a network. Admitting the pinned `Fetch` identity
+to a generated fragment is a separate decision: it requires the evaluator to
+authorize the exact bounded request — allowed scheme, host, path and method
+shape, and permitted headers — before the first generated effect, and to reject
+anything outside those constraints with no request. A repository component that
+takes the name `Fetch` is not the pinned identity and satisfies no admission.
+
 ### 8.5 Agent session continuity
 
 The filtered workflow journal and provider-owned Agent session are separate

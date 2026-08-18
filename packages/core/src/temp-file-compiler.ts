@@ -22,7 +22,6 @@ import { API } from "@executablemd/runtime";
 // without these static anchors, `deno compile --exclude-unused-npm` prunes
 // the packages from the binary and every eval block using them fails.
 import "@effectionx/converge";
-import "@effectionx/fetch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -34,7 +33,7 @@ import { randomUUID } from "node:crypto";
 const STANDARD_IMPORTS = [
   'import { sleep, spawn, call, resource, useScope, createChannel, each, suspend, createSignal } from "effection";',
   'import { when } from "@effectionx/converge";',
-  'import { fetch } from "@effectionx/fetch";',
+  'import { fetch } from "@executablemd/runtime";',
   'import { Sample, Elicitation } from "@executablemd/core";',
 ];
 

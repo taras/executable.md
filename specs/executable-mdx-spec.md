@@ -1832,7 +1832,7 @@ run but are absent from the diagnostic trace.
 | File | Contents |
 |---|---|
 | `src/eval-transform.ts` | `transformBlock()`, `serializeExports()`, `isJson()`, `TransformResult` |
-| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`) — §5.5 |
+| `src/component-api.ts` | `Component` Api + `ComponentApi` interface and the direct operations (`importComponent`, `applyModifiers`, `applyBoundModifiers`, `raise`, `env`, `evalScope`, `codeBlock`, `persistent`, `content`, `hasBinding`) — §5.5 |
 | `src/eval-context.ts` | `compileBlock()` — delegates to `API.Env.compile` |
 | `src/data-uri-compiler.ts` | `useDataUriCompiler()` — data: URI compiler middleware for Deno/Bun; owns `STANDARD_IMPORTS` |
 | `src/temp-file-compiler.ts` | `useTempFileCompiler()` — temp-file compiler middleware for Node/Bun; owns `STANDARD_IMPORTS` |
@@ -1842,6 +1842,9 @@ run but are absent from the diagnostic trace.
 | `src/components/registration.ts` | `registerComponents()`, `ComponentRegistration`, `ComponentRegistrationError`, `mergeRegistry()` — scope-local registration (§5.3) |
 | `src/components/select.ts` | `selectComponent()`, `DEFAULT_COMPONENT_DIRS` — the resolver execution and inspection share (§5.3) |
 | `src/components/registry.ts` | `CORE_REGISTRY` — the components core supplies, as non-reserved defaults (§5.3) |
+| `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
+| `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
+| `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
@@ -2623,7 +2626,8 @@ nothing. A non-string is not an error — it is a value with no destination.
 #### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
-`<SafeParse>` (§6.12), `<File>` (§6.13), and `<Glob>` (§6.14). Each is already
+`<SafeParse>` (§6.12), `<File>` (§6.13), `<Glob>` (§6.14), and `<Fetch>`
+(§6.18). Each is already
 in the module graph, so it ships in the compiled binary and every published
 package without a search path or a bundling step, and a document invokes it with
 no `--component-dir`.
@@ -3549,6 +3553,7 @@ interface, and each operation is also exported directly:
 | `persistent` | Whether the current block runs with persistent lifetime (§4.4) | `false` |
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
+| `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -3580,6 +3585,16 @@ it renders: `<C>…</C>` and `<C></C>` both have content — content that render
 an empty string is still content — and only `<C />` does not. A component whose
 two forms mean different things branches on it without projecting, so asking
 the question never expands the invocation content.
+
+`hasBinding()` reports the other half of the invocation's shape, and reports a
+boolean only. `as` stays engine-owned: it is validated and stripped before the
+component is called, the binding name never crosses, and neither does the
+environment it will be written to. A component asks because *being captured*
+changes what its result means — `<Fetch>` (§6.18) makes every status data when
+it is captured and fails an uncaptured non-2xx — and reading the prop again
+would be a second, disagreeing reading of the same source. Each invocation
+answers for itself: a nested invocation is not told about its caller's binding,
+and two invocations that are live at once do not see each other's.
 
 **Providers are scope-local middleware.** Behavior is installed with
 `Component.around(middlewares, { at })` and lasts until the installing
@@ -6620,6 +6635,166 @@ component may use suspension to ask the host to retain and release an
 unavailable input instead. The host chooses no answer and the document chooses
 no transport.
 
+### 6.18 Reading over HTTP: `<Fetch>`
+
+A document that needs something from outside says where it is and what it will
+call the answer:
+
+```md
+<Fetch url="https://api.example.test/status" as="status" />
+```
+
+`<Fetch>` is core's own component (§5.3). It performs one HTTP read through the
+contextual `API.Fetch` provider, binds the response as JSON, and records that
+observation as one durable effect. It is how an Agent that has no network of its
+own is given external information: the document performs the read and the result
+reaches the prompt as data.
+
+#### The props
+
+| Prop | Required | Contract |
+| --- | --- | --- |
+| `url` | yes | An absolute `http:` or `https:` URL, sent exactly as written |
+| `method` | no | `GET` by default; `GET` and `HEAD` are the only admitted spellings |
+| `headers` | no | An object whose values are strings |
+| `timeout` | no | A duration in the grammar §Config uses, such as `30s` |
+| `as` | no | The ordinary engine-owned result binding |
+
+There is no request body prop, and an unknown prop is a schema failure. Both
+refusals happen before a request begins.
+
+The whole request is admitted before transport, and every refusal costs no
+request at all: a URL that is relative or not HTTP, a method outside `GET` and
+`HEAD` — including a lowercase `get`, because HTTP methods are case-sensitive —
+a non-string header value, two header names that become the same key, and a
+`timeout` the duration grammar rejects.
+
+Header names normalize to lowercase and the forwarded object is built in
+lexicographic name order, so the same document sends the same request wherever
+it runs. Values are forwarded byte for byte. Two authored spellings of one name
+are refused rather than folded: `Accept` and `accept` say two things about one
+header, and choosing either would discard the other.
+
+An explicit `timeout` outranks the contextual `Config.timeoutFetch` default; with
+neither, the request carries no bound of its own and the run's own deadline is
+what stops it.
+
+#### What is retained, and what is bound
+
+The normalized request is what the durable effect carries as its input:
+
+```json
+{
+  "url": "https://api.example.test/status",
+  "method": "GET",
+  "headers": { "accept": "application/json" },
+  "timeout": 30000
+}
+```
+
+It has exactly those fields, and `timeout` only when one was effective. No
+credential store, provider identity, live header object, response handle, or
+host metadata is part of it, and the authored timeout spelling is not retained
+beside the milliseconds it meant.
+
+A settled response is exactly:
+
+```json
+{
+  "status": 200,
+  "headers": { "content-type": "application/json" },
+  "body": "…"
+}
+```
+
+Header names are lowercase and the object is built in lexicographic name order.
+Values are strings; a provider that reports one name more than once has its
+values joined in report order with `, `, and the default runtime adapter
+combines them before the component sees them, so one name is one value. The body
+is UTF-8 text — parsing JSON is `<Parse>`'s job (§6.12), not this component's.
+
+Nothing live crosses that boundary. The status, the headers and the body are read
+while the response is still in scope and detached from it, so a binding never
+depends on a response that has been disposed and a journal never holds a handle.
+A provider that cannot enumerate its headers is refused rather than read through
+`get()`: retaining the headers somebody thought to ask for would record a
+response that was never received.
+
+A `HEAD` binds `body: ""` and never reads a body. A `GET` reads the complete text
+inside the same durable effect as the request, so a body that fails to arrive
+fails the observation rather than committing a response nobody has.
+
+#### `as` decides what a status means
+
+With `as`, every received status is data. A 404 binds the same shape as a 200 and
+the document carries on, which is how a document branches on what it found.
+
+Without `as`, a 2xx succeeds and a non-2xx fails — after the response has been
+recorded, so the history holds what happened either way. The failure is ordinary,
+so under §6.9's default the document stops and later executable work does not
+begin unless a printing boundary handles it.
+
+A successful uncaptured response is a non-string return and therefore renders
+nothing (§5.1.1). `<Fetch>` declares no `returns`: declaring one would make `as`
+mandatory (§6.10) and delete the uncaptured mode altogether. Core tells its own
+implementation whether the invocation has a binding through
+`Component.hasBinding()` (§5.5) — a boolean, and nothing else about the binding.
+
+A transport failure, a refused URL, a timeout, a cancellation, a body-read
+failure, or any failure before a complete response exists always fails and binds
+nothing. Binding never turns one of those into data.
+
+#### Who performs the request
+
+The live transport is contextual `API.Fetch`, and the component introduces no
+raw host fetch, runtime detection, credential path, or second network provider.
+A trusted host installs its provider below the component and may narrow which
+destinations are reachable; props, ordinary middleware, eval's standard `fetch`,
+generated source, and a repository component of the same name may narrow or
+refuse but cannot widen that ceiling. Middleware that answers with synthetic data
+performs no request, which is substitution rather than reach.
+
+`Fetch` is an ordinary default, so a repository `Fetch.md` shadows it like any
+other name (§5.3). That shadow is not core's identity: it acquires no authority
+from the name, and its own requests cross the same host ceiling.
+
+A header a document writes is retained data rather than an authentication
+mechanism. The component exposes no environment variable, host token, or
+credential storage, and a credential written into a header crosses the secret
+gate like everything else.
+
+#### Retention, replay, and interruption
+
+Retention is the host's, and binding does not ask for it. The durable effect's
+type is `fetch` and its name is the expansion's identity (§5.6, §10.1); the
+complete normalized request and the complete response cross the journal's secret
+filter as one event, so a credential in the URL, a request header, the status,
+a response header, or the body refuses the append and retains neither the event
+nor the matched material (§Secret detection).
+
+- `xmd run` performs the request live and persists nothing.
+- `xmd run --journal` retains the request and the response under the diagnostic
+  journal's policy.
+- `xmd workflow` retains the same event in the run's own journal, and a replay
+  restores the response without repeating the request.
+
+If cancellation or interruption wins before the event commits, there is no
+committed response and the same admitted read may run once more when execution
+continues. That is what confines the initial contract to `GET` and `HEAD`:
+repeating a read is safe in a way that repeating a write is not, and a mutating
+method needs a reconciliation contract this does not claim. There is no
+application retry policy here — no status-based retry, no pagination, no caching,
+and no rate-limit rule.
+
+The request, the timeout, the body read and the abort belong to the invocation's
+Effection scope. Cancellation aborts them and teardown completes before the
+invocation closes; no detached promise, task, timer, response body or service
+survives it.
+
+Generated XMD cannot use `<Fetch>`. Admitting a pinned component identity and an
+exact bounded request to a generated fragment is #369's decision, and it is
+unbuilt: nothing in the authored component grants it.
+
 
 ## 7. Entry point
 
@@ -7497,6 +7672,7 @@ trusted-host events may have no authored source.
 | Evaluate code block | `eval` | `eval:{blockId}` | language in description; serializable exports in result (§4.5) |
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
+| Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -9209,6 +9385,44 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 | VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |
+
+### Tier FR — The runtime Fetch adapter
+
+Runs against a loopback server, so what is asserted is what a real host reports.
+
+| # | Test | Verify |
+|---|------|--------|
+| FR1 | Detached enumeration | Every header is readable after the scope that owned the live response is gone |
+| FR2 | The existing seams | `headers.get()` stays case-insensitive and `text()` still reads the body |
+| FR3 | A repeated name | The platform combines it before the adapter sees it: one entry, and `get()` agrees |
+| FR4 | A snapshot | Changing what one enumeration returned does not change the next |
+| FR5–FR6 | Cancellation | Halting the owner aborts an unanswered request, and ends a body read with its teardown and no late work |
+| FR7–FR8 | Timeout | The request and the body read each fail with the bound that stopped them |
+| FR9–FR10 | The chainable shape | `text()`, `json()`, and `expect()` — the calling shape authored eval code uses |
+| FR11 | One transport | Every form of the call crosses `API.Fetch`, so a host refusal covers all of them |
+| FR12 | The contextual default | A call that names no timeout resolves `Config.timeoutFetch` |
+
+### Tier FE — `<Fetch>` (§6.18)
+
+Every case substitutes a provider at `API.Fetch` and counts what it was asked to
+perform, separately from the binding, the rendered output, and the journal.
+
+| # | Test | Verify |
+|---|------|--------|
+| FE1 | Refusal before transport | Mutating and unknown methods, a lowercase `get`, a relative or non-HTTP URL, a body, an unknown prop, a missing URL, a non-string header value, and two spellings of one name each refuse with request count zero |
+| FE2–FE4 | The normalized request | GET by default, HEAD verbatim, lowercase header names in lexicographic order with values untouched |
+| FE5–FE9 | The bound | Accepted spellings reach the provider as milliseconds; every rejected class costs no request; an explicit prop outranks `Config.timeoutFetch`; no bound at all is an absent field |
+| FE10–FE13 | The retained response | One canonical JSON value, identical in the binding and the journal; a provider that rewrites its headers afterwards changes neither; a provider that cannot enumerate them is refused |
+| FE14 | Bodies | GET reads once, HEAD not at all — including when a body read would fail |
+| FE15–FE17 | What a status means | A captured non-2xx is data and the document carries on; an uncaptured 2xx renders nothing; an uncaptured non-2xx records the response and stops later executable work |
+| FE18–FE20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
+| FE21–FE24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
+| FE25–FE28 | Authority | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
+| FE29–FE31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
+| FE32–FE34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
+| FE35 | Independence | Cancelling one invocation tears down only its own request |
+| FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
+| FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
 
 ---
 

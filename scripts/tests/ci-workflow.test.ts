@@ -163,6 +163,28 @@ describe("the CI smoke job", () => {
     // And that first source-CLI invocation is the documented build.
     expect(commands[sourceCli]).toContain("README.md#Build");
   });
+
+  /**
+   * Each of these proves something about the compiled binary that no source
+   * run can: a claim that only holds if `deno compile` kept what the claim is
+   * about. A script removed from the job is a proof silently withdrawn, so the
+   * job is held to naming them.
+   */
+  it("runs every compiled-binary smoke script", function* () {
+    const smoke = (yield* workflow()).smoke;
+    if (smoke === undefined) {
+      throw new Error("workflow.jobs.smoke is missing");
+    }
+
+    const commands = smoke.steps.map((step) => step.run ?? "").join("\n");
+    for (const script of [
+      "scripts/smoke-foreground.ts",
+      "scripts/smoke-loaded-copy.ts",
+      "scripts/smoke-fetch.ts",
+    ]) {
+      expect(commands).toContain(script);
+    }
+  });
 });
 
 describe("the CI workflow aggregate", () => {

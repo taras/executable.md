@@ -480,6 +480,15 @@ release workflow — and `ci.yml`'s smoke job serves a real form from the compil
 binary and reads the client asset back over HTTP, which is the only check that
 can tell an embedded bundle from a missing one.
 
+That job is where every claim about the *compiled* binary is proved, because
+each one depends on `deno compile` having kept something: `scripts/smoke-foreground.ts`
+for a foreground command's live output and exit status, `scripts/smoke-loaded-copy.ts`
+for a declaration crossing into the bundled engine, and `scripts/smoke-fetch.ts`
+for `<Fetch>` — a core component resolving from the module graph, requesting
+through the contextual Fetch adapter, and binding a detached response, against a
+loopback server the script owns. `scripts/tests/ci-workflow.test.ts` holds the
+job to naming them, so removing a script is not a proof silently withdrawn.
+
 A job that skipped the build fails with a module-not-found naming a path nobody
 chose, which is why `packages/web/src/assets.ts` reports the missing bundle by
 naming the command instead.

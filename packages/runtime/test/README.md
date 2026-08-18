@@ -162,6 +162,48 @@ yield *
   });
 ```
 
+### Substituting a Fetch provider
+
+A trusted host installs its Fetch provider at `{ at: "min" }`, and so does a
+test that stands in for one: the default position lets an outer install shadow a
+nested one, which is the opposite of what a provider is. Install on the scope
+that runs the execution, not inside a `resource()` body — middleware belongs to
+the scope that installed it.
+
+A response is `{ status, headers, text() }`. `headers.entries()` is what a
+caller that retains the whole response needs — `<Fetch>` refuses a provider
+without it rather than recording the headers it happened to ask for — so a
+substituted provider supplies both seams:
+
+```ts
+yield *
+  API.Fetch.around(
+    {
+      // deno-lint-ignore require-yield
+      *fetch([url, init]) {
+        const entries: Array<[string, string]> = [["content-type", "application/json"]];
+        return {
+          status: 200,
+          headers: {
+            get: (name: string) =>
+              entries.find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? null,
+            entries: () => entries.map(([name, value]) => [name, value]),
+          },
+          *text() {
+            return '{"ok":true}';
+          },
+        };
+      },
+    },
+    { at: "min" },
+  );
+```
+
+Count what the provider was asked to perform separately from what a document
+bound or a journal retained: those three can agree while the number of requests
+is wrong. Middleware that answers without delegating performs no request at all,
+which is substitution rather than reach.
+
 ## Guidelines
 
 - Prefer shared helpers for common happy-path tests

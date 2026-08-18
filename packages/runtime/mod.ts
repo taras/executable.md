@@ -41,7 +41,14 @@ export {
   compile,
   useQuietProcessOutput,
 } from "./apis.ts";
-export type { EvalBlock, ResponseHeaders, RuntimeFetchResponse, StatResult } from "./apis.ts";
+export type {
+  EvalBlock,
+  FetchInit,
+  FetchOperation,
+  ResponseHeaders,
+  RuntimeFetchResponse,
+  StatResult,
+} from "./apis.ts";
 export {
   Service,
   SERVICE_HOSTNAME,
