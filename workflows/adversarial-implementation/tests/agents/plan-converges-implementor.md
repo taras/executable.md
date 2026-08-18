@@ -1,6 +1,6 @@
 <WhenPrompt
   as="plan"
-  template="{?a}Root instructions: prefer evidence over assertion.{?b}Nested instructions: never edit a test to make it pass.{?c}HANDOFF{?d}Investigate the registered checkout.{?e}"
+  template="{?a}Root instructions: prefer evidence over assertion.{?b}Nested instructions: never edit a test to make it pass.{?c}HANDOFF{?d}amend the implementation theory against that material{?e}"
 />
 
 PLAN-V1
