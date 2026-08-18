@@ -24,11 +24,12 @@ props:
 Before the CI workflow can publish packages to npm, the package needs to be
 published manually once.
 
-CI authenticates with OIDC: GitHub Actions mints a short-lived identity token
-for the workflow run, and npm accepts it because the package lists this
-repository as a trusted publisher. Nothing is stored as a secret anywhere. The
-catch is that npm only lets you configure a trusted publisher on a package that
-already exists — so the first version can't come from CI.
+CI authenticates with OIDC: an npm token is not stored in GitHub Actions because
+GitHub Actions generates a short-lived identity token for the workflow run. npm
+accepts the generated token because the package lists this repository as a
+trusted publisher. A package must exist on npm before a trusted publisher can be
+configured. This means that we cannot create the package from CI — instead it
+has to be created locally first.
 
 Publishing by hand uses the other route: your npm login plus a one-time password
 (OTP), the six-digit code from your authenticator app. This document asks for
@@ -140,10 +141,15 @@ trusted publisher are skipped separately when they are already there, so a run
 interrupted partway finishes what is missing instead of starting over.
 
 The same answers stop you from bootstrapping a package that has already been set
-up. Real versions published, a `bootstrap` tag pointing at something else, or a
-trusted publisher configured differently all mean this is a live package — and
-treating a live package as a fresh one could break it for everyone installing
-it. Any of those stops the run here, before you are asked for a code and before
+up. Real versions published, or a `bootstrap` tag pointing at something else,
+mean this is a live package — and treating a live package as a fresh one could
+break it for everyone installing it. Either stops the run here, before you are
+asked for a code and before anything is written.
+
+What the package already trusts is the third answer, and it is read further
+down, after the code. npm makes the trusted publisher readable only to someone
+who could change it, so `npm trust list` needs a one-time password even to
+answer. That refusal comes later than these two, but it still comes before
 anything is written.
 
 npm answers a question about a package it does not carry by exiting non-zero, so
@@ -153,6 +159,15 @@ and a non-zero exit raises nothing. Here a 404 is an answer rather than a
 failure, and the comparison below is what decides which.
 
 ```ts eval
+/**
+ * npm's own diagnostics are what these detail lines carry, and they run to
+ * several lines. Indenting every one of them keeps a report readable as the
+ * block it is.
+ */
+function indent(text) {
+  return text.split("\n").map((line) => `  ${line}`).join("\n");
+}
+
 function permissionLabel(permission) {
   if (permission === "createPackage") {
     return "publish";
@@ -161,6 +176,34 @@ function permissionLabel(permission) {
     return "stage publish";
   }
   return permission;
+}
+
+/**
+ * What the publish settled to, which is what decides whether the name was
+ * reserved here or was already reserved — no read decides it.
+ *
+ * npm 11.17 asks the registry for the package's versions with `preferOnline`
+ * before it uploads anything, and refuses over one it already carries with an
+ * uncoded `Error` carrying this sentence (`lib/commands/publish.js`). A
+ * registry that answered that check staler than itself refuses the upload
+ * instead, and that one arrives as `EPUBLISHCONFLICT`. Both say the same
+ * thing: the reservation is there, and this run did not have to make it.
+ */
+function classifyPublish(publishResult, version) {
+  if (publishResult.exitCode === 0) {
+    return { state: "reserved", detail: "" };
+  }
+  const said = `${publishResult.stderr}\n${publishResult.stdout}`;
+  if (
+    said.includes(`You cannot publish over the previously published versions: ${version}`) ||
+    /EPUBLISHCONFLICT/.test(said)
+  ) {
+    return { state: "already", detail: "" };
+  }
+  return {
+    state: "failed",
+    detail: publishResult.stderr.trim() || publishResult.stdout.trim(),
+  };
 }
 
 function classifyReservation(versionsResult, distTagsResult, version) {
@@ -271,17 +314,12 @@ npm view {packageName} versions --json --registry {registry}
 npm view {packageName} dist-tags --json --registry {registry}
 ```
 
-```bash exec as="trustList"
-npm trust list {packageName} --json --registry {registry}
-```
-
 ```ts eval
 const reservation = classifyReservation(versions, distTags, bootstrapVersion);
-const trust = classifyTrust(trustList, expectedTrust, reservation.state === "absent");
-const needsWrite = reservation.state === "absent" || trust.state === "absent";
+const reservationDetail = indent(reservation.detail);
 ```
 
-<If condition={reservation.state === "conflicting" || reservation.state === "unreadable"}>
+<If condition={reservation.state === "conflicting"}>
 
 `{packageName}` is already a live package on npm — {reservation.detail}.
 
@@ -294,26 +332,25 @@ throw new Error(`${packageName} is already published; refusing to bootstrap it`)
 
 </If>
 
-<If condition={trust.state === "conflicting" || trust.state === "unreadable"}>
+<If condition={reservation.state === "unreadable"}>
 
-`{packageName}` already trusts a publisher this document did not set up:
+npm did not answer what `{packageName}` has published:
 
-  {trust.summary}
+{reservationDetail}
 
-Nothing was changed. npm holds one trusted publisher per package and refuses a
-second, so replacing this one means revoking it deliberately first:
-
-  npm trust revoke {packageName} --id {trust.id}
+Nothing has been published and no code was requested. This is npm failing to
+answer rather than an answer this document refuses, so running it again once npm
+responds starts from the same place.
 
 ```ts eval
-throw new Error(`${packageName} already has a trusted publisher; refusing to replace it`);
+throw new Error(`${packageName}: ${reservation.detail}`);
 ```
 
 </If>
 
 <If condition={reservation.state === "reserved"}>
 
-  {packageName} is already reserved at {bootstrapVersion} — the publish will be skipped
+  {packageName} already carries {bootstrapVersion} — the publish below will say so
 
 </If>
 
@@ -323,23 +360,7 @@ throw new Error(`${packageName} already has a trusted publisher; refusing to rep
 
 </If>
 
-<If condition={trust.state === "expected"}>
-
-  Its trusted publisher already matches — it will be left alone
-
-</If>
-
-<If condition={trust.state === "absent"}>
-
-  It has no trusted publisher — one will be created for {repository}
-
-</If>
-
-<If condition={needsWrite}>
-
 <TempDir>
-
-<If condition={reservation.state === "absent"}>
 
 ## Previewing the artifact
 
@@ -418,15 +439,17 @@ const packDisplay = (() => {
 
 {packDisplay}
 
-</If>
-
 ## Authenticating
 
-Everything up to now has only read. The steps below write to npm, and both of
-them need your one-time password.
+Everything up to now has only read, and nothing below it has written yet. The
+code comes here because the last question this document asks the registry needs
+it as much as the two writes do: npm answers `npm trust list` only to someone
+who could change what it reports.
 
 Enter a fresh code. Codes expire after about thirty seconds, so one generated a
-minute ago may not survive both steps.
+minute ago may not survive the steps below. A code that expires partway leaves
+whatever landed before it in place, and running the document again finishes the
+rest.
 
 <Capture as="otpSchema" select="code[lang=json]">
 
@@ -447,18 +470,81 @@ minute ago may not survive both steps.
 </Capture>
 
 <Elicit schema={otpSchema} as="otp">
-Enter a fresh six-digit npm one-time password. It authorizes both the
-placeholder publish and the trusted-publisher configuration, so generate it now
-rather than reusing one from a moment ago.
+Enter a fresh six-digit npm one-time password. It authorizes reading what the
+package already trusts, the placeholder publish, and the trusted-publisher
+configuration, so generate it now rather than reusing one from a moment ago.
 </Elicit>
 
-<If condition={reservation.state === "absent"}>
+## Reading the trusted publisher
+
+This is the answer the reads above could not get. npm holds one trusted
+publisher per package and refuses a second, so a configuration that is not the
+one in this document's table means the package has been set up by someone else —
+and that stops the run here, before the placeholder is published. A refusal
+leaves npm exactly as it was.
+
+```bash exec as="trustList"
+npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
+```
+
+```ts eval
+const trust = classifyTrust(
+  trustList,
+  expectedTrust,
+  reservation.state === "absent",
+);
+const trustDetail = indent(trust.detail);
+```
+
+<If condition={trust.state === "conflicting"}>
+
+`{packageName}` already trusts a publisher this document did not set up:
+
+  {trust.summary}
+
+Nothing was published and nothing was changed. npm refuses a second
+configuration, so replacing this one means revoking it deliberately first:
+
+  npm trust revoke {packageName} --id {trust.id}
+
+```ts eval
+throw new Error(`${packageName} already has a trusted publisher; refusing to replace it`);
+```
+
+</If>
+
+<If condition={trust.state === "unreadable"}>
+
+npm did not answer what `{packageName}` trusts:
+
+{trustDetail}
+
+Nothing was published and nothing was changed. An expired code reads this way
+too, so if that is what happened, generate a fresh one and run this again.
+
+```ts eval
+throw new Error(`${packageName}: ${trust.detail}`);
+```
+
+</If>
+
+<If condition={trust.state === "expected"}>
+
+  Its trusted publisher already matches — it will be left alone
+
+</If>
+
+<If condition={trust.state === "absent"}>
+
+  It has no trusted publisher — one will be created for {repository}
+
+</If>
 
 ## Reserving the name
 
-The registry is read once more rather than trusting what it said before the
-prompt. You have been away with your authenticator, and the package may have
-gained a version in the meantime.
+The registry is read once more, but only to refuse: you have been away with your
+authenticator, and a package that gained real versions in the meantime is not
+one to publish a placeholder into.
 
 ```bash exec as="versionsAfter"
 npm view {packageName} versions --json --registry {registry}
@@ -488,117 +574,137 @@ throw new Error(`${packageName} changed during the prompt; refusing to publish o
 
 </If>
 
-<If condition={reservationNow.state === "reserved"}>
+Nothing above decides whether to publish. A read is a claim about a moment that
+has passed, and npm's package reads lag its writes — a reservation this document
+found missing may have been made since, and one it found may not be visible yet.
+So the publish is attempted either way, and what npm answers is what settles it:
+npm asks the registry for the package's versions before it uploads anything, and
+refuses over one it already carries. That refusal is the same answer a read
+would have given, from the party that decides it.
 
-  Someone else reserved {packageName}@{bootstrapVersion} while you were answering — skipping the publish
+`exec as="…"` keeps a successful publish quiet without discarding what npm said,
+so each of the three answers is reported in npm's own terms.
+
+```bash exec as="publishResult"
+npm_config_otp={otp.code} npm publish --access public --tag bootstrap --registry {registry}
+```
+
+```ts eval
+const publication = classifyPublish(publishResult, bootstrapVersion);
+const publishDetail = indent(publication.detail);
+```
+
+<If condition={publication.state === "failed"}>
+
+npm refused to publish `{packageName}@{bootstrapVersion}`:
+
+{publishDetail}
+
+An expired code reads this way. Nothing was configured.
+
+```ts eval
+throw new Error(`${packageName}@${bootstrapVersion} was not published: ${publication.detail}`);
+```
 
 </If>
 
-<If condition={reservationNow.state === "absent"}>
-
-```bash silent exec
-npm_config_otp={otp.code} npm publish --access public --tag bootstrap --registry {registry}
-```
+<If condition={publication.state === "reserved"}>
 
   Reserved {packageName}@{bootstrapVersion} under the bootstrap dist-tag
 
 </If>
 
+<If condition={publication.state === "already"}>
+
+  {packageName}@{bootstrapVersion} was already reserved — npm refused a second copy, so the reservation stands
+
 </If>
 
 ## Granting this repository publish rights
 
-npm holds one trusted publisher per package, so this is read again after your
-code rather than assumed from earlier. If something was configured while you
-were away, the run stops instead of replacing it.
+The read above already happened after your code, and the only write since was
+the placeholder, so it still describes what npm holds — there is no away-time to
+re-read for. If a publisher is configured in the seconds between, npm refuses
+the second one and the command below fails: the placeholder stands, and running
+the document again reports what it found.
 
-```bash exec as="trustAfter"
-npm trust list {packageName} --json --registry {registry}
-```
-
-```ts eval
-const trustNow = classifyTrust(trustAfter, expectedTrust, false);
-```
-
-<If condition={trustNow.state === "conflicting" || trustNow.state === "unreadable"}>
-
-`{packageName}` gained a trusted publisher this document did not set up:
-
-  {trustNow.summary}
-
-Nothing was revoked or replaced. The placeholder stands, so revoking this one
-and running the document again finishes the remaining half:
-
-  npm trust revoke {packageName} --id {trustNow.id}
-
-```ts eval
-throw new Error(`${packageName} gained a trusted publisher during the prompt; refusing to replace it`);
-```
-
-</If>
-
-<If condition={trustNow.state === "expected"}>
+<If condition={trust.state === "expected"}>
 
   {packageName} already trusts this repository — leaving it alone
 
 </If>
 
-<If condition={trustNow.state === "absent"}>
+<If condition={trust.state === "absent"}>
 
-```bash silent exec
+```bash exec as="trustResult"
 npm_config_otp={otp.code} npm trust github {packageName} --file {workflowFile} --repository {repository} --environment {environment} --allow-publish --registry {registry} --yes
 ```
+
+```ts eval
+const trustResultDetail = indent(
+  trustResult.stderr.trim() || trustResult.stdout.trim(),
+);
+```
+
+<If condition={trustResult.exitCode !== 0}>
+
+npm refused to trust {repository} with `{packageName}`:
+
+{trustResultDetail}
+
+A publisher configured in the seconds since the read above reads this way, and
+so does an expired code. The placeholder stands, so running the document again
+picks up the half that is missing.
+
+```ts eval
+throw new Error(`${packageName} did not gain a trusted publisher: ${trustResult.stderr.trim()}`);
+```
+
+</If>
 
   Trusted {repository} via {workflowFile} in {environment}, publish only
 
 </If>
 
-</TempDir>
-
-</If>
-
 ## Confirming
 
-Read back from npm after the writes, so what follows is what the registry says
-rather than what this document did.
+Both writes have answered, and each answer came from the party that decides it:
+npm settled the reservation by accepting the publish or refusing it over a
+version it already carries, and settled the trust by creating it. Neither needs
+a package read to confirm it, and a package read is the one thing here that can
+disagree with what just happened — npm accepts a write before its reads report
+it.
 
-```bash exec as="finalVersions"
-npm view {packageName} versions --json --registry {registry}
-```
-
-```bash exec as="finalDistTags"
-npm view {packageName} dist-tags --json --registry {registry}
-```
+So what is read back is the trusted publisher, which is not served from that
+cache and answered truthfully throughout: it carries the id that revokes this
+configuration, which is worth printing while you are here.
 
 ```bash exec as="finalTrustList"
-npm trust list {packageName} --json --registry {registry}
+npm_config_otp={otp.code} npm trust list {packageName} --json --registry {registry}
 ```
 
 ```ts eval
-const finalReservation = classifyReservation(
-  finalVersions,
-  finalDistTags,
-  bootstrapVersion,
-);
-if (finalReservation.state !== "reserved") {
-  throw new Error(
-    `${packageName} is not reserved at ${bootstrapVersion} under the bootstrap dist-tag: ${
-      finalReservation.detail || finalReservation.state
-    }`,
-  );
-}
 const finalTrust = classifyTrust(finalTrustList, expectedTrust, false);
-if (finalTrust.state !== "expected") {
-  throw new Error(
-    `${packageName} does not carry the expected trusted publisher: ${
-      finalTrust.detail || finalTrust.state
-    }`,
-  );
-}
+const finalTrustDetail = indent(finalTrust.detail);
 ```
 
-  {bootstrapVersion} is the only published version
-  bootstrap → {bootstrapVersion} is the only dist-tag
+<If condition={finalTrust.state !== "expected"}>
+
+npm does not report the trusted publisher this run left behind:
+
+{finalTrustDetail}
+
+```ts eval
+throw new Error(
+  `${packageName} does not carry the expected trusted publisher: ${
+    finalTrust.detail || finalTrust.state
+  }`,
+);
+```
+
+</If>
+
+  {bootstrapVersion} is reserved under the bootstrap dist-tag
   {finalTrust.summary}
 
 If you ever need to undo the trust configuration — the workflow moves, the
@@ -606,6 +712,8 @@ environment is renamed, the package changes hands — revoke it by id and run th
 document again:
 
   npm trust revoke {packageName} --id {finalTrust.id}
+
+</TempDir>
 
 ## Afterwards
 

@@ -308,24 +308,57 @@ one-time code is requested.
 The reservation artifact is written as Markdown rather than assembled by a
 shell: `<File>` writes the `package.json` and `README.md` into a temporary
 working directory, and `npm pack --dry-run` previews that exact directory before
-anything is published from it. Every registry read is an `exec as="…"` block, so
-what the command settled to — exit code and both channels — is bound as a value:
-npm reports a package it does not carry by exiting non-zero, and here that is an
-answer rather than a failure. The comparison happens in the document and `<If>`
-selects what happens next, so what the document decided is readable in what it
-rendered.
+anything is published from it. Every registry command — both reads and both
+writes — is an `exec as="…"` block, so what it settled to, exit code and both
+channels, is bound as a value: npm reports a package it does not carry by
+exiting non-zero, and here that is an answer rather than a failure. The
+comparison happens in the document and `<If>` selects what happens next, so what
+the document decided is readable in what it rendered. That covers a refused
+write as much as a 404: a publish npm rejects is reported in npm's own words,
+where `silent` would have hidden both channels and left an exit code with the
+reason discarded.
 
-The one-time password is requested only when something will be written, and only
-after the preview succeeds. A run that refuses asks for nothing, and a re-run
-against a package that is already reserved and already trusted asks for nothing
-either — it reads the registry, reports the end state, and stops. A package that
-needs only one of the two halves is asked for a code but builds no artifact,
-since there is nothing to publish for a preview to show.
+No read decides whether to publish. A read is a claim about a moment that has
+passed, and npm accepts a write before its package reads report it — so a
+reservation a read finds missing may have been made since, and one it makes may
+not be visible yet. Both failure modes were observed bootstrapping
+`@executablemd/workflow`: a completed run reported as failed because the read
+back still answered 404, and the re-run that followed planning a publish for a
+version that already existed. The placeholder is therefore always offered, and
+npm's answer settles it. npm 11.17 asks the registry for the package's versions
+with `preferOnline` before uploading anything and refuses over one it already
+carries with an uncoded error carrying `You cannot publish over the previously
+published versions: <version>` (`lib/commands/publish.js`); a registry that
+answered that check staler than itself refuses the upload instead, as
+`EPUBLISHCONFLICT`. Either is the answer "already reserved", from the party that
+decides it. Any other refusal is a failure and is reported as one.
+
+The reads that remain are guards, not decisions. A package carrying real
+versions is not one to offer a placeholder to — a mistyped `--props-package` is
+how that happens — so the versions and dist-tags are read before the code is
+requested and again after it, and either read refuses. Neither selects what
+happens next.
+
+The one-time password is requested after the preview succeeds and before the
+trusted publisher is read. `npm trust list` needs a code to answer at all: npm
+makes a package's trusted publisher readable only to someone who could change
+it, so what a package already trusts cannot be established without one. Every
+run that gets past the version reads is therefore asked for a code — including a
+re-run against a package that is already reserved and already trusted, which
+reads, reports the end state, and writes nothing. The artifact is built on every run, because
+every run offers it — the preview shows what will actually be attempted.
+
+Nothing reads the package back to confirm it. Each write already answered, and
+that answer came from the party that decides it, so a package read could only
+disagree with what just happened. What is read back is the trusted publisher,
+which npm serves from an authenticated path rather than the packument cache and
+which answered truthfully while the package reads were still behind — it carries
+the id that revokes the configuration, which the document prints.
 
 Re-running is safe, and the two halves are skipped independently:
 
-- a package already at `0.0.0-bootstrap.0` under the `bootstrap` dist-tag is not
-  published again;
+- a package already at `0.0.0-bootstrap.0` is offered the placeholder again and
+  npm refuses it, which is how the run learns the reservation stands;
 - a trusted publisher already matching §4's table exactly — GitHub Actions,
   `taras/executable.md`, `publish-packages.yml`, `npm-publish`, and publish as
   its only permission — is not created again.
@@ -336,11 +369,19 @@ exists, it will result in an error" (`npm help trust`, npm 11.17), so a
 configuration that differs from §4's table stops the document, which reports
 what it found and revokes nothing; replacing one is a deliberate
 `npm trust revoke` by a scope owner, and the document prints that command with
-the trust id it read. A version other than `0.0.0-bootstrap.0`,
-or a `bootstrap` dist-tag pointing elsewhere, stops it the same way. Both
-refusals happen before the code is requested, and the registry state is checked
-again afterwards, because the operator is away generating a code while it can
-change.
+the trust id it read. A version other than `0.0.0-bootstrap.0`, or a `bootstrap`
+dist-tag pointing elsewhere, stops it the same way.
+
+The version refusal happens before the code is requested; the trust refusal
+happens after it, because the answer it turns on cannot be read without one.
+Neither writes: the trusted publisher is read before the placeholder is
+published, so a refusal leaves the registry exactly as it was. The versions are
+read a second time after the prompt, because the operator is away generating a
+code while they can change. The trusted publisher is not — its one read already
+happened after the code, with only this document's own placeholder written
+since, so a second read would have no away-time to cover. A publisher configured
+in that gap makes `npm trust github` fail, which the run reports rather than
+replaces.
 
 ## 7. Recovery
 

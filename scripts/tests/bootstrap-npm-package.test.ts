@@ -101,7 +101,7 @@ npm() {
       ;;
     view)
       state="$(cat "$NPM_STATE_FILE")"
-      if [ "$state" = "missing" ]; then
+      if [ "\${NPM_VIEW_ALWAYS_MISSING-}" = "1" ] || [ "$state" = "missing" ]; then
         echo "npm error code E404" >&2
         return 1
       fi
@@ -131,11 +131,21 @@ npm() {
     publish)
       echo 'npm notice publishing bootstrap artifact'
       if [ "\${NPM_PUBLISH_FAILS-}" = "1" ]; then return 1; fi
+      if [ "$(cat "$NPM_STATE_FILE")" != "missing" ]; then
+        echo "npm error You cannot publish over the previously published versions: ${BOOTSTRAP_VERSION}." >&2
+        return 1
+      fi
       printf 'bootstrap' > "$NPM_STATE_FILE"
       ;;
     trust)
       case "$2" in
         list)
+          if [ "\${NPM_TRUST_LIST_FAILS-}" = "1" ]; then
+            echo '{"error":{"code":"EOTP","summary":"This operation requires a one-time password."}}'
+            echo "npm error code EOTP" >&2
+            echo "npm error This operation requires a one-time password." >&2
+            return 1
+          fi
           if [ "$(cat "$NPM_STATE_FILE")" = "missing" ]; then
             echo "npm error code E404" >&2
             return 1
@@ -241,6 +251,10 @@ interface RunOptions {
   packFails?: boolean;
   publishFails?: boolean;
   trustFails?: boolean;
+  /** Makes `npm trust list` fail for a reason that is not a missing package. */
+  trustListFails?: boolean;
+  /** Makes `npm view` report nothing published however the registry answers. */
+  viewAlwaysMissing?: boolean;
   /** How the provider behaves: answer correctly, fail, or break its schema. */
   elicit?: "answer" | "throw" | "invalid";
   /** Overrides the `package` prop, for the input-validation cases. */
@@ -330,6 +344,8 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
             NPM_PACK_FAILS: options.packFails ? "1" : "",
             NPM_PUBLISH_FAILS: options.publishFails ? "1" : "",
             NPM_TRUST_FAILS: options.trustFails ? "1" : "",
+            NPM_TRUST_LIST_FAILS: options.trustListFails ? "1" : "",
+            NPM_VIEW_ALWAYS_MISSING: options.viewAlwaysMissing ? "1" : "",
           },
         });
       },
@@ -476,28 +492,27 @@ describe("bootstrap an npm package", () => {
       expect(trustAt).toBeGreaterThan(publishAt);
     });
 
-    it("skips the publish for an existing reservation and installs the missing trust", function* () {
+    it("installs the missing trust on a reservation that is already there", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "bootstrap", trust: "" });
 
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
       expect(result.output).toContain(
-        "@executablemd/fixture is already reserved at 0.0.0-bootstrap.0 — the publish will be skipped",
+        "@executablemd/fixture already carries 0.0.0-bootstrap.0 — the publish below will say so",
       );
     });
 
-    it("asks for a code but builds no artifact when only the trust is missing", function* () {
+    it("previews the artifact it will attempt, whatever the read said", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "bootstrap", trust: "" });
 
       expect(result.ok).toBe(true);
-      // There is something to write, so it asks.
       expect(result.requests.length).toBe(1);
-      // But nothing to publish, so it previews no artifact that will not ship.
-      expect(called(result, "pack")).toBe(false);
-      expect(called(result, "publish")).toBe(false);
+      // The publish is attempted either way, so the preview always shows the
+      // artifact that will be offered — there is no plan for it to disagree with.
+      expect(called(result, "pack")).toBe(true);
+      expect(called(result, "publish")).toBe(true);
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
     });
 
@@ -507,14 +522,16 @@ describe("bootstrap an npm package", () => {
 
       expect(result.failure).toBe("");
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
+      // The publish is offered and refused, so nothing is written by it; the
+      // trust is not offered at all, because the read said it is already ours.
+      expect(result.output).toContain("was already reserved — npm refused a second copy");
       expect(called(result, "trust github")).toBe(false);
       expect(result.output).toContain("Its trusted publisher already matches");
-      // Nothing to write, so nothing is asked for and no artifact is built.
-      expect(result.requests.length).toBe(0);
-      expect(called(result, "pack")).toBe(false);
-      // It still reads the registry back and reports the end state.
-      expect(result.output).toContain("is the only published version");
+      // It still asks: npm answers `trust list` only with a code, so a run
+      // cannot establish that there is nothing to do without one.
+      expect(result.requests.length).toBe(1);
+      // It still reports the end state it read back.
+      expect(result.output).toContain("is reserved under the bootstrap dist-tag");
     });
   });
 
@@ -594,7 +611,9 @@ describe("bootstrap an npm package", () => {
       expect(result.requests.length).toBe(0);
       expectNoRegistryMutation(result);
     });
+  });
 
+  describe("refusing after the question, before the registry", () => {
     for (const [description, foreign] of Object.entries(FOREIGN_TRUST)) {
       it(`refuses a trusted publisher with ${description}, and revokes nothing`, function* () {
         const fixture = yield* useFixture();
@@ -606,15 +625,40 @@ describe("bootstrap an npm package", () => {
         expect(result.output).toContain(
           "npm trust revoke @executablemd/fixture --id a2479f35-0000-4000-8000-000000000000",
         );
-        expect(result.requests.length).toBe(0);
+        // The code buys the answer this refusal turns on, and buys nothing
+        // else: it is spent reading, and the run stops before either write.
+        expect(result.requests.length).toBe(1);
         expectNoRegistryMutation(result);
         // Whatever was there is still there.
         expect(yield* readTextFile(fixture.trustFile)).toBe(foreign);
       });
     }
-  });
 
-  describe("refusing after the question, before the registry", () => {
+    it("reports npm's own error when it will not say what the package trusts", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, {
+        state: "bootstrap",
+        trust: EXPECTED_TRUST,
+        trustListFails: true,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("npm did not answer what `@executablemd/fixture` trusts");
+      // npm's diagnostic reaches both the page and the failure, rather than
+      // being replaced by a guess about what it meant.
+      expect(result.output).toContain("This operation requires a one-time password");
+      expect(result.failure).toContain("EOTP");
+      // A read that failed is not a publisher that conflicts. Reporting one
+      // sends the operator to revoke a configuration by an id nobody read —
+      // and here, to revoke the very configuration this document installs.
+      expect(result.output).not.toContain(
+        "already trusts a publisher this document did not set up",
+      );
+      expect(result.output).not.toContain("trust revoke");
+      expect(result.requests.length).toBe(1);
+      expectNoRegistryMutation(result);
+    });
+
     it("stops when the provider cannot reach anyone", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { elicit: "throw" });
@@ -684,7 +728,7 @@ describe("bootstrap an npm package", () => {
       expect(yield* readTextFile(fixture.trustFile)).toBe(foreign);
     });
 
-    it("adopts a reservation somebody else completed, without publishing again", function* () {
+    it("adopts a reservation somebody else completed while you answered", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, {
         state: "missing",
@@ -693,7 +737,9 @@ describe("bootstrap an npm package", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(called(result, "publish")).toBe(false);
+      // npm refuses the publish it was offered, which is how the document
+      // learns the reservation arrived while the operator was away.
+      expect(result.output).toContain("was already reserved — npm refused a second copy");
       expect(called(result, "trust github @executablemd/fixture")).toBe(true);
     });
   });
@@ -724,21 +770,87 @@ describe("bootstrap an npm package", () => {
 
       expect(again.failure).toBe("");
       expect(again.ok).toBe(true);
-      expect(called(again, "publish")).toBe(false);
+      expect(again.output).toContain("was already reserved — npm refused a second copy");
       expect(called(again, "trust github @executablemd/fixture")).toBe(true);
       expect(yield* readTextFile(fixture.trustFile)).toBe(EXPECTED_TRUST);
     });
   });
 
-  describe("what the document guarantees about its own shape", () => {
-    it("carries one code to the two authenticated commands and nowhere else", function* () {
+  describe("letting the write settle the reservation", () => {
+    it("reserves the name when npm accepts the publish", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "missing", trust: "" });
 
+      expect(result.ok).toBe(true);
+      expect(result.output).toContain(
+        "Reserved @executablemd/fixture@0.0.0-bootstrap.0 under the bootstrap dist-tag",
+      );
+    });
+
+    it("takes npm's refusal over an existing version as the reservation", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "bootstrap", trust: "" });
+
+      // The run that broke: a stale read planned a publish for a version that
+      // was already there. npm refusing it is the answer, not a failure.
+      expect(result.failure).toBe("");
+      expect(result.ok).toBe(true);
+      expect(called(result, "publish --access public --tag bootstrap")).toBe(true);
+      expect(result.output).toContain(
+        "@executablemd/fixture@0.0.0-bootstrap.0 was already reserved — npm refused a second copy",
+      );
+      expect(called(result, "trust github @executablemd/fixture")).toBe(true);
+    });
+
+    it("confirms a publish it made without reading the package back", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, {
+        state: "missing",
+        trust: "",
+        viewAlwaysMissing: true,
+      });
+
+      // The other run that broke: `npm view` never reports the package, which
+      // is what a registry lagging its own writes looks like. Nothing reads it
+      // back, so nothing contradicts the publish that succeeded.
+      expect(result.failure).toBe("");
+      expect(result.ok).toBe(true);
+
+      // Structural, not incidental: no package read happens after the write.
+      const publishAt = result.calls.findIndex((call) => call.args.startsWith("publish"));
+      expect(publishAt).toBeGreaterThanOrEqual(0);
+      const readBack = result.calls.findIndex(
+        (call, index) => index > publishAt && call.args.startsWith("view"),
+      );
+      expect(readBack).toBe(-1);
+    });
+
+    it("reports a publish npm refused for some other reason", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "missing", trust: "", publishFails: true });
+
+      expect(result.ok).toBe(false);
+      // A refusal that is not a conflict is a failure, and says so in npm's
+      // words rather than being read as "already reserved".
+      expect(result.output).toContain("npm refused to publish");
+      expect(result.output).not.toContain("was already reserved");
+      expect(called(result, "trust github")).toBe(false);
+    });
+  });
+
+  describe("what the document guarantees about its own shape", () => {
+    it("carries one code to the authenticated commands and nowhere else", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "missing", trust: "" });
+
+      // Three commands need it, and one answer covers all three: the two
+      // writes, and the read npm will not answer without it.
+      expect(callTo(result, "trust list")?.otp).toBe(CODE);
       expect(callTo(result, "publish")?.otp).toBe(CODE);
       expect(callTo(result, "trust github")?.otp).toBe(CODE);
+      const authenticated = ["publish", "trust github", "trust list"];
       const unauthenticated = result.calls.filter(
-        (call) => !call.args.startsWith("publish") && !call.args.startsWith("trust github"),
+        (call) => !authenticated.some((prefix) => call.args.startsWith(prefix)),
       );
       expect(unauthenticated.length).toBeGreaterThan(0);
       expect(unauthenticated.every((call) => call.otp === "")).toBe(true);

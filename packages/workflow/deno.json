@@ -1,6 +1,7 @@
 {
   "name": "@executablemd/workflow",
   "version": "0.8.0",
+  "license": "MIT",
   "exports": {
     ".": "./mod.ts",
     "./deno": "./deno.ts"
