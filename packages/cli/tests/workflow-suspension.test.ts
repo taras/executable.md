@@ -22,9 +22,9 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { collect, inlineSource, registerComponents } from "@executablemd/core";
+import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { durableCall } from "@executablemd/durable-streams";
+import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
 import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
@@ -62,7 +62,14 @@ function useRunStore(): Operation<string> {
   });
 }
 
-function host(root: string): WorkflowHost {
+/**
+ * A host whose attachment is a real scoped resource.
+ *
+ * "No attachment remains" is only observable if something was actually
+ * attached, so this opens and closes for real and records both. A no-op wrapper
+ * could not tell a released attachment from one still holding the execution.
+ */
+function host(root: string, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
@@ -71,7 +78,13 @@ function host(root: string): WorkflowHost {
       return useWorkflowLifecycle({ root });
     },
     attach<T>(_database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
-      return operation;
+      return scoped(function* () {
+        events.push("attached");
+        yield* ensure(function* () {
+          events.push("released");
+        });
+        return yield* operation;
+      });
     },
   };
 }
@@ -284,12 +297,13 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
 
     const runId = yield* createRun(root, fixture);
     const performed: string[] = [];
+    const attachments: string[] = [];
     yield* useWaitingDocument(performed);
 
     const first = yield* runWorkflow(
       { ...REQUEST, action: "resume", target: runId },
       undefined,
-      host(root),
+      host(root, attachments),
       body(),
     );
 
@@ -335,7 +349,7 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       const resumed = yield* runWorkflow(
         { ...REQUEST, action: "resume", target: runId },
         undefined,
-        host(root),
+        host(root, attachments),
         body(),
       );
       expect(resumed.exitCode).toBe(2);
@@ -358,10 +372,109 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
       );
     }
 
+    // Every attachment this run opened was released before its settlement: an
+    // attached/released pair per execution, and nothing left open.
+    expect(attachments).toEqual([
+      "attached",
+      "released",
+      "attached",
+      "released",
+      "attached",
+      "released",
+    ]);
+
     // Three executions reached the wait and none continued past it, and the
     // prior effect was performed exactly once — the resumes restored it.
     expect(performed.filter((step) => step === "performed-prior-effect")).toHaveLength(1);
     expect(performed.filter((step) => step === "reached-the-wait")).toHaveLength(3);
     expect(performed).not.toContain("continued-past-the-wait");
+  });
+
+  it("WFS2: a run that never waits is unchanged by the suspension controller", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useFixture();
+    yield* useGit(fixture);
+
+    const runId = yield* createRun(root, fixture);
+    const attachments: string[] = [];
+    yield* registerComponents([
+      {
+        name: "Wait",
+        origin: "tier-wfs",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          yield* durableCall("prior", function* () {
+            return "done";
+          });
+          return "";
+        },
+      },
+    ]);
+
+    // The controller is installed for this execution exactly as it is for one
+    // that waits. A document that never suspends must not notice.
+    const completed = yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      host(root, attachments),
+      body(),
+    );
+
+    expect(completed.exitCode).toBe(0);
+    const path = workflowRunPath(root, runId);
+    const after = retained(path);
+    expect(after.status).toBe("completed");
+    expect(after.requests).toHaveLength(0);
+    expect(after.rootCloses).toBe(1);
+    expect(attachments).toEqual(["attached", "released"]);
+
+    // And replaying that completed run stays a replay: no second effect, no
+    // request, and the same terminal outcome.
+    const replayed = yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      host(root, attachments),
+      body(),
+    );
+    expect(replayed.exitCode).toBe(0);
+    const afterReplay = retained(path);
+    expect(afterReplay.status).toBe("completed");
+    expect(afterReplay.priorEffects).toBe(after.priorEffects);
+    expect(afterReplay.requests).toHaveLength(0);
+  });
+
+  it("WFS3: an ordinary execution outside a workflow run is unaffected", function* () {
+    // No workflow host, no run, no controller: `suspendFor()` has no run to
+    // derive an identity from, so it refuses rather than reaching for one.
+    const stream = new InMemoryStream();
+    yield* registerComponents([
+      {
+        name: "Wait",
+        origin: "tier-wfs",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+          return "";
+        },
+      },
+    ]);
+
+    let thrown: unknown;
+    try {
+      yield* collect(yield* execute({ ...inlineSource("<Wait />\n"), stream }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(String(thrown)).toContain("workflow run");
+
+    // Nothing was published: an ordinary run's journal is untouched by a
+    // suspension it could not have.
+    const events = yield* stream.readAll();
+    expect(
+      events.filter(
+        (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
+      ),
+    ).toHaveLength(0);
   });
 });

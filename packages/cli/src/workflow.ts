@@ -47,7 +47,7 @@
  * command cannot answer exits 1.
  */
 
-import { call, Err, Ok, ensure, race, scoped, spawn } from "effection";
+import { Err, Ok, ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
@@ -548,7 +548,7 @@ export interface WorkflowStart {
  * behavior to prove, not the document's to choose.
  */
 export interface RunWorkflowOptions {
-  readonly suspension?: SuspensionControllerOptions;
+  readonly suspension?: Omit<SuspensionControllerOptions, "database">;
 }
 
 export function runWorkflow(
@@ -621,7 +621,10 @@ export function runWorkflow(
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
-    const suspension = createSuspensionController(options.suspension ?? {});
+    const suspension = createSuspensionController({
+      database,
+      ...(options.suspension ?? {}),
+    });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
@@ -685,37 +688,17 @@ export function runWorkflow(
     // one: whichever settles first halts the other, and a suspension winning
     // halts the execution — which is the structured teardown this run's
     // settlement is evidence of, not work done after the outcome was decided.
-    const settlement = yield* scoped(function* (): Operation<Settlement> {
-      const running = yield* spawn(function* (): Operation<Result<void>> {
-        return yield* attempt(documentExecution, execute);
-      });
-      const observed = yield* race([
-        call(function* (): Operation<Settlement> {
-          return { kind: "document", result: yield* running };
-        }),
-        call(function* (): Operation<Settlement> {
-          return { kind: "suspension", notice: yield* suspension.notice };
-        }),
-      ]);
-      if (observed.kind === "document") {
-        return observed;
-      }
-      // The halt is observed rather than left to a scope exit, because its
-      // outcome is what the run settles on. Teardown is settlement evidence: an
-      // execution whose finalizers raised did not reach a durable wait, and
-      // claiming `suspended` for it would retain a run nothing can resume.
-      yield* running.halt();
-
-      // Asked rather than caught: a halt reports success whether or not a
-      // finalizer raised, so the failure has to come from the scope that ran
-      // them. An execution whose teardown failed did not reach a durable wait,
-      // and claiming `suspended` for it would retain a run nothing can resume.
-      const failure = suspension.teardownFailure();
-      if (failure !== undefined) {
-        return { kind: "document", result: Err(failure) };
-      }
-      return observed;
-    });
+    // One outcome, from one place. The suspension controller ends a waiting
+    // execution from inside the execution's own scope, so whatever a finalizer
+    // raises on the way out — the Workspace attachment's, an Agent's, any
+    // descendant's — arrives here as this attempt's failure rather than being
+    // swallowed by a halt. An execution whose teardown failed did not reach a
+    // durable wait, and `suspended` is never claimed for one.
+    const attempted = yield* attempt(documentExecution, execute);
+    const waiting = suspension.reported() && !attempted.ok && suspension.entered(attempted.error);
+    const settlement: Settlement = waiting
+      ? { kind: "suspension", notice: yield* suspension.notice }
+      : { kind: "document", result: attempted };
 
     // The document is over, whatever storage does next — so teardown must not
     // relabel this run interrupted, even if what follows refuses.

@@ -22,21 +22,37 @@
  * suspension request. Remaining pending is what makes the halt the only way out
  * of the wait, and the halt is what leaves the root without a Close.
  *
- * ## Authority is the capability, not the shape
+ * ## Authority is the retained request
  *
- * `enter` accepts only a capability this controller issued, checked by object
- * identity in a `WeakSet` inside its own closure. Contextual selection decides
- * which controller answers; it never decides whether a caller may suspend. A
- * value shaped like a capability moves nothing.
+ * `enter` accepts a suspension only when the run's own journal already holds the
+ * request for it — as the most recent one, describing exactly what is being
+ * presented, and under the identifier this run derives for the position that
+ * request was published at. Every part of that comes from retained history and
+ * the run record, both established before any document code ran.
+ *
+ * There is deliberately nothing to hold and nothing to present. A capability
+ * object has to be reachable to be used, and in this runtime anything reachable
+ * by name is reachable by anyone who knows the name — which is selection, not
+ * authority. A caller cannot arrange for the journal to hold a request it did
+ * not publish through the ordinary durable path, and cannot choose the
+ * identifier that path derives, so there is nothing to forge.
  */
 
-import { ensure, type Operation, scoped, suspend, withResolvers } from "effection";
 import {
-  type SuspensionCapability,
-  WorkflowSuspension,
-  type WorkflowSuspensionRequest,
-} from "../suspension/api.ts";
-import { CurrentSuspensionAuthority } from "../suspension/private.ts";
+  call,
+  ensure,
+  type Operation,
+  race,
+  scoped,
+  spawn,
+  suspend,
+  withResolvers,
+} from "effection";
+import { canonicalFingerprint } from "@executablemd/core";
+import type { EffectDescription } from "@executablemd/durable-streams";
+import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
+import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
+import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 
 /** What one execution reported it is waiting for. */
@@ -46,6 +62,8 @@ export interface SuspensionNotice {
 }
 
 export interface SuspensionControllerOptions {
+  /** The run whose retained history decides whether a wait may be entered. */
+  readonly database: WorkflowRunDatabase;
   /**
    * Run while this execution is tearing down, for observing what a caller sees
    * mid-settlement.
@@ -76,31 +94,93 @@ export interface SuspensionController {
   own<T>(operation: Operation<T>): Operation<T>;
   /** Settles once this execution reports a durable wait. */
   readonly notice: Operation<SuspensionNotice>;
+  /** Whether this execution reported a durable wait. */
+  reported(): boolean;
   /**
-   * What this execution's teardown raised, if it raised anything.
+   * Whether this is the marker that ends a waiting execution.
    *
-   * Reported rather than thrown, because the owner ends a suspended execution
-   * by halting it and a halt succeeds whether or not a destructor failed —
-   * Effection treats halting as always effective, so a raise during teardown
-   * unwinds the scope without reaching whoever asked for the halt. An owner
-   * that must not claim `suspended` for an execution whose finalizers failed
-   * therefore has to ask.
+   * The marker leaves through the same path any other failure would, so a
+   * finalizer that raises on the way out replaces it — which is exactly the
+   * precedence a suspension needs. An execution that reported a wait and left
+   * carrying something else did not reach that wait cleanly.
    */
-  teardownFailure(): Error | undefined;
+  entered(error: unknown): boolean;
+}
+
+/**
+ * The request this run retained for `suspensionId`, if it retained one there.
+ *
+ * Three things are checked and each closes a different door. It must be the
+ * most recent request, so an old wait cannot be re-entered. Its description must
+ * match what is being presented, so a published request cannot be used to enter
+ * a different wait. And its identifier must be the one this run derives for the
+ * position it was published at, so publishing a request under a chosen name
+ * proves nothing — the name has to be the one the position gives.
+ */
+function* publishedRequest(
+  database: WorkflowRunDatabase,
+  suspension: string,
+  request: WorkflowSuspensionRequest,
+): Operation<boolean> {
+  const entries = yield* database.readJournalEntries();
+  if (!entries.ok) {
+    return false;
+  }
+
+  const counts = new Map<string, number>();
+  let found: { coroutineId: string; index: number; description: EffectDescription } | undefined;
+  for (const entry of entries.value) {
+    if (entry.event.type !== "yield") {
+      continue;
+    }
+    const coroutineId = entry.event.coroutineId;
+    const index = counts.get(coroutineId) ?? 0;
+    counts.set(coroutineId, index + 1);
+    if (entry.event.description.type === SUSPENSION_REQUEST) {
+      found = { coroutineId, index, description: entry.event.description };
+    }
+  }
+  if (found === undefined || found.description.name !== suspension) {
+    return false;
+  }
+  if (
+    canonicalFingerprint({
+      request: request.request,
+      responseSchema: request.responseSchema,
+    }) !==
+    canonicalFingerprint({
+      request: found.description.request ?? null,
+      responseSchema: found.description.responseSchema ?? null,
+    })
+  ) {
+    return false;
+  }
+  return (
+    suspensionId(database.record.runId, {
+      coroutineId: found.coroutineId,
+      index: found.index,
+    }) === suspension
+  );
 }
 
 export function createSuspensionController(
-  options: SuspensionControllerOptions = {},
+  options: SuspensionControllerOptions,
 ): SuspensionController {
   const reported = withResolvers<SuspensionNotice>();
-  const issued = new WeakSet<SuspensionCapability>();
-  let failed: Error | undefined;
+  // Private and one per controller: identity is what makes it this execution's
+  // marker rather than a value anything else could produce.
+  const marker = new Error("this execution is waiting durably");
+  let seen: SuspensionNotice | undefined;
 
   return {
     notice: reported.operation,
 
-    teardownFailure(): Error | undefined {
-      return failed;
+    reported(): boolean {
+      return seen !== undefined;
+    },
+
+    entered(error: unknown): boolean {
+      return error === marker;
     },
 
     own<T>(operation: Operation<T>): Operation<T> {
@@ -108,9 +188,7 @@ export function createSuspensionController(
         const failTeardown = options.failTeardown;
         if (failTeardown !== undefined) {
           yield* ensure(function* () {
-            const error = failTeardown();
-            failed = error;
-            throw error;
+            throw failTeardown();
           });
         }
 
@@ -122,30 +200,21 @@ export function createSuspensionController(
           yield* ensure(duringTeardown);
         }
 
-        yield* CurrentSuspensionAuthority.set({
-          capability(suspensionId: string): SuspensionCapability {
-            const capability = Object.freeze({ suspensionId });
-            issued.add(capability);
-            return capability;
-          },
-        });
-
         yield* WorkflowSuspension.around(
           {
-            *enter([capability, request]): Operation<never> {
-              if (
-                typeof capability !== "object" ||
-                capability === null ||
-                !issued.has(capability)
-              ) {
+            *enter([suspension, request]): Operation<never> {
+              if (!(yield* publishedRequest(options.database, suspension, request))) {
                 throw new WorkflowRequestError(
-                  "the suspension capability is foreign or fabricated: only the capability this " +
-                    "execution was issued may suspend it.",
+                  "this run retains no suspension request under that identity, so there is no " +
+                    "durable wait to enter. A wait is entered by publishing its request, and " +
+                    "the identity is the one this run derives for where the request was made.",
                 );
               }
-              reported.resolve({ suspensionId: capability.suspensionId, request });
-              // The wait is the operation. Whoever holds the executor lock ends
-              // the execution around it.
+              seen = { suspensionId: suspension, request };
+              reported.resolve(seen);
+              // The wait is the operation. The scope around it ends the
+              // execution; nothing here returns or raises, so a document cannot
+              // catch its own suspension and continue past it.
               yield* suspend();
               throw new WorkflowRequestError("a suspended execution resumed itself.");
             },
@@ -153,7 +222,27 @@ export function createSuspensionController(
           { at: "min" },
         );
 
-        return yield* operation;
+        // Spawned rather than delegated, so the wait can be ended by halting
+        // *the document* while this scope goes on to exit normally. That
+        // distinction is the whole point: a halted scope swallows what its
+        // finalizers raise, and a scope that exits normally does not — so every
+        // finalizer out to the Workspace attachment reports its own failure to
+        // whoever is deciding what this execution settled.
+        const running = yield* spawn(() => operation);
+        const outcome = yield* race([
+          call(function* (): Operation<{ done: true; value: T } | { done: false }> {
+            return { done: true, value: yield* running };
+          }),
+          call(function* (): Operation<{ done: true; value: T } | { done: false }> {
+            yield* reported.operation;
+            return { done: false };
+          }),
+        ]);
+        if (outcome.done) {
+          return outcome.value;
+        }
+        yield* running.halt();
+        throw marker;
       });
     },
   };

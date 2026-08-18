@@ -47,10 +47,8 @@ import { getWorkflowRun } from "../run.ts";
 import {
   parseSuspensionRequest,
   WorkflowSuspension,
-  WorkflowSuspensionRequestError,
   type WorkflowSuspensionRequest,
 } from "./api.ts";
-import { CurrentSuspensionAuthority } from "./private.ts";
 
 /** The effect type one durable wait's request is retained under. */
 export const SUSPENSION_REQUEST = "suspension_request";
@@ -110,18 +108,10 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
   const position = yield* durablePosition();
   const id = suspensionId(run.runId, position);
 
-  // Refused before publication rather than after: a request retained for an
-  // execution that cannot suspend would be a wait with nothing behind it, and
-  // the next resume would restore it and refuse again.
-  const authority = yield* CurrentSuspensionAuthority.get();
-  if (authority === undefined) {
-    throw new WorkflowSuspensionRequestError(
-      "this execution cannot suspend: no workflow host issued it the authority to release its " +
-        "executor lock. A durable wait belongs to a run a workflow host owns.",
-    );
-  }
-
+  // Published before the wait is entered, and in that order for a reason: the
+  // retained request is what authorizes the wait, so a controller asked to
+  // suspend an execution that published nothing has nothing to accept.
   yield* publishRequest(id, parsed);
 
-  return yield* WorkflowSuspension.operations.enter(authority.capability(id), parsed);
+  return yield* WorkflowSuspension.operations.enter(id, parsed);
 }

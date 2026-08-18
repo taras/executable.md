@@ -241,7 +241,24 @@ function useDefinitionGit(fixture: Fixture, objectId: string): Operation<void> {
   );
 }
 
-function liveHost(root: string): WorkflowHost {
+/** What one attachment did, so a test can say whether it is still alive. */
+interface Attachment {
+  readonly events: string[];
+  /** Fail this attachment's teardown, as a real finalizer of the execution. */
+  readonly failOnRelease?: boolean;
+}
+
+/**
+ * A host whose attachment is a real scoped resource.
+ *
+ * The Workspace attachment is where an execution's longest-lived structure
+ * lives, so a suite that wrapped it in a no-op could not tell an attachment that
+ * was released from one that is still open — nor prove what happens when
+ * releasing one fails. This attaches for real: it records when it opened and
+ * when it was released, and it can fail on release, which is an ordinary
+ * finalizer of the execution and nothing to do with the suspension controller.
+ */
+function liveHost(root: string, attachment: Attachment): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
@@ -250,7 +267,16 @@ function liveHost(root: string): WorkflowHost {
       return useWorkflowLifecycle({ root });
     },
     attach<T>(_database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
-      return operation;
+      return scoped(function* () {
+        attachment.events.push("attached");
+        yield* ensure(function* () {
+          attachment.events.push("released");
+          if (attachment.failOnRelease === true) {
+            throw new Error("PLANTED-ATTACHMENT-RELEASE-FAILURE");
+          }
+        });
+        return yield* operation;
+      });
     },
   };
 }
@@ -360,11 +386,12 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
 
         let refusal: Result<unknown> | undefined;
         let duringRows: { status: string; executions: string[] } | undefined;
+        const attachment: Attachment = { events: [] };
 
         const outcome = yield* runWorkflow(
           { ...CONTROL_REQUEST, action: "resume", target: runId },
           undefined,
-          liveHost(root),
+          liveHost(root, attachment),
           waitingBody(),
           {
             suspension: {
@@ -399,11 +426,15 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
         expect(after.status).toBe("suspended");
         expect(after.executions.filter((status) => status === "suspended")).toHaveLength(1);
         expect(after.executions).not.toContain("cancelled");
+
+        // Nothing of the execution outlived its settlement: the attachment was
+        // opened and released, in that order, before this returned.
+        expect(attachment.events).toEqual(["attached", "released"]);
       });
     });
   });
 
-  it("WFC3-2: a teardown that fails settles failed and never claims suspended", function* () {
+  it("WFC3-2: an attachment that fails to release settles failed, never suspended", function* () {
     yield* useFixture(function* (fixture) {
       yield* scoped(function* () {
         const root = fixture.runs;
@@ -415,17 +446,21 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
         const path = workflowRunPath(root, runId);
         const published: string[] = [];
 
+        // The failure is the Workspace attachment's own release — an ordinary
+        // finalizer of the execution, outside the suspension controller
+        // entirely. Nothing here uses a controller hook to produce it.
+        const attachment: Attachment = { events: [], failOnRelease: true };
+
         const outcome = yield* runWorkflow(
           { ...CONTROL_REQUEST, action: "resume", target: runId },
           undefined,
-          liveHost(root),
+          liveHost(root, attachment),
           waitingBody(),
           {
             suspension: {
               *duringTeardown(): Operation<void> {
                 published.push(lifecycleRows(path).status);
               },
-              failTeardown: () => new Error("PLANTED-TEARDOWN-FAILURE"),
             },
           },
         );
@@ -438,6 +473,10 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
         expect(after.status).toBe("failed");
         expect(after.executions).not.toContain("suspended");
         expect(published).not.toContain("suspended");
+
+        // The attachment really was released — it raised while releasing, which
+        // is what a teardown failure is.
+        expect(attachment.events).toEqual(["attached", "released"]);
       });
     });
   });

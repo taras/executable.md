@@ -17,14 +17,19 @@
  * different waits from receiving each other's input. A caller that could name
  * its own would be a caller that could claim another wait's answer.
  *
- * ## The controller is the authority
+ * ## Publication is the authority
  *
- * Publication and authority are separate. Publishing the request is an ordinary
- * durable Yield and proves only that the request was retained. Ending the
- * execution is a lifecycle act, and only the execution-owned controller may
- * begin it. Context selects which provider answers; it authorizes nothing. The
- * controller accepts one exact private capability, issued for one execution and
- * one suspension ID, so a value shaped like a suspension notice moves nothing.
+ * Ending an execution is a lifecycle act, so entering a wait has to be earned
+ * rather than asked for. What earns it is the journal: the controller accepts a
+ * suspension only when the run already retains the request for it, under the
+ * exact identifier that this run and that position derive.
+ *
+ * Nothing is handed to the caller to present. An object would have to be
+ * reachable to be used, and anything reachable by name — a context, an API — is
+ * reachable by whatever else knows the name, which is not authority. Retained
+ * history is not like that: a caller cannot arrange for the journal to hold a
+ * request it did not publish through the ordinary durable path, and cannot
+ * choose the identifier that path derives.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
@@ -36,18 +41,6 @@ import { WorkflowStorageError } from "../storage/errors.ts";
 export interface WorkflowSuspensionRequest {
   readonly request: Json;
   readonly responseSchema: JsonObject;
-}
-
-/**
- * The private capability one execution holds for one suspension.
- *
- * Deliberately opaque and deliberately not constructible outside the host that
- * issues it: authority here is object identity, exactly as the executor lock's
- * is. The suspension ID travels beside it rather than inside it, so a
- * capability cannot be presented for a wait it was not issued for.
- */
-export interface SuspensionCapability {
-  readonly suspensionId: string;
 }
 
 /** A request whose shape this run will not retain. */
@@ -75,7 +68,7 @@ export interface WorkflowSuspensionApi {
    * return at all: the wait is what the operation is, and the owner ends the
    * execution around it.
    */
-  enter(capability: SuspensionCapability, request: WorkflowSuspensionRequest): Operation<Json>;
+  enter(suspensionId: string, request: WorkflowSuspensionRequest): Operation<Json>;
 }
 
 export const WorkflowSuspension: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(

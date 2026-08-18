@@ -140,8 +140,4 @@ export {
   WorkflowSuspensionProviderError,
   WorkflowSuspensionRequestError,
 } from "./src/suspension/api.ts";
-export type {
-  SuspensionCapability,
-  WorkflowSuspensionApi,
-  WorkflowSuspensionRequest,
-} from "./src/suspension/api.ts";
+export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";
