@@ -43,7 +43,7 @@
  * procedure sit at different positions and cannot receive each other's answer.
  */
 
-import { type Operation } from "effection";
+import { type Operation, suspend } from "effection";
 import { canonicalFingerprint, type Json } from "@executablemd/core";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
@@ -121,14 +121,15 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
 
   yield* WorkflowSuspension.operations.enter(id, parsed);
 
-  // Reaching this line means the route answered. Nothing may: this slice
+  // Reaching this line means the route answered, and nothing may: this slice
   // delivers no answers, so the controller that accepts a wait never returns
-  // from it, and any value here came from a handler standing between this
-  // operation and that controller. A suppressed route is a wait that cannot be
-  // entered — it is not an answer, and the document does not continue past it.
-  throw new WorkflowSuspensionRequestError(
-    "the durable wait was answered by something other than this run's suspension controller. " +
-      "No answer delivery exists yet, so a value here is a handler standing in the way of the " +
-      "wait rather than the end of it.",
-  );
+  // from one. A value here came from a handler standing between this operation
+  // and that controller.
+  //
+  // The wait therefore goes unentered, and this operation does what an unentered
+  // wait is — it stops. Raising would not do: an ordinary error is something the
+  // document can catch, and a caught suspension is a document continuing past a
+  // wait it asked for and did not get. Nothing catches this.
+  yield* suspend();
+  throw new WorkflowSuspensionRequestError("a suspended execution resumed itself.");
 }

@@ -16,7 +16,16 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, ensure, type Operation, race, resource, scoped, until } from "effection";
+import {
+  call,
+  ensure,
+  type Operation,
+  race,
+  resource,
+  scoped,
+  until,
+  withResolvers,
+} from "effection";
 import { cp, mkdtemp, symlink } from "node:fs/promises";
 import { rm } from "@effectionx/fs";
 import { join } from "node:path";
@@ -90,6 +99,7 @@ function requests(events: DurableEvent[]): DurableEvent[] {
 function attempt(
   database: WorkflowRunDatabase,
   body: () => Operation<unknown>,
+  parked?: Operation<void>,
 ): Operation<Attempt> {
   return scoped(function* () {
     const suspension = createSuspensionController({ database });
@@ -128,6 +138,16 @@ function attempt(
       call(function* (): Operation<void> {
         notice = yield* suspension.notice;
       }),
+      // A document that parks on an unentered wait settles neither of the
+      // above, so a suite proving it parked needs a signal of its own — the
+      // document's own last durable effect, not a sleep.
+      ...(parked === undefined
+        ? []
+        : [
+            call(function* (): Operation<void> {
+              yield* parked;
+            }),
+          ]),
     ]);
 
     return { notice, events: yield* stream.readAll(), thrown };
@@ -465,52 +485,75 @@ describe("Tier WS — a durable wait's request and identity", () => {
     });
   });
 
-  it("WS8: public middleware cannot answer a wait on the operation's behalf", function* () {
+  it("WS8: middleware may suppress a wait, and cannot answer or be caught past it", function* () {
     yield* withRun(function* (database) {
-      const continued: string[] = [];
+      const performed: string[] = [];
+      const reached = withResolvers<void>();
       let returned: unknown;
 
-      const attempted = yield* attempt(database, function* () {
-        // Document-side middleware on the public provider, answering without
-        // delegating — the ordinary way a composable API is replaced.
-        yield* WorkflowSuspension.around({
-          // deno-lint-ignore require-yield
-          *enter(): Operation<Json> {
-            return { bypassed: true };
-          },
-        });
+      const attempted = yield* attempt(
+        database,
+        function* () {
+          // Document-side middleware on the public provider, answering without
+          // delegating — the ordinary way a composable API is replaced.
+          yield* WorkflowSuspension.around({
+            // deno-lint-ignore require-yield
+            *enter(): Operation<Json> {
+              // Reached only after the request has been published, which is what
+              // makes it the barrier this suite waits on rather than a sleep.
+              reached.resolve();
+              return { bypassed: true };
+            },
+          });
 
-        returned = yield* suspendFor({
-          request: { kind: "approval" },
-          responseSchema: SCHEMA,
-        });
-        continued.push("continued-past-the-wait");
-      });
+          yield* durableCall("before-the-wait", function* () {
+            performed.push("before-the-wait");
+            return "done";
+          });
 
-      // Middleware may refuse the route for its descendants, so the controller
-      // may never hear of this wait — that is composition. What it may not do is
-      // answer: the value it returned is not a suspension answer, so the
-      // operation does not return it and the document does not run on.
-      expect(returned).toBeUndefined();
-      expect(continued).toEqual([]);
+          try {
+            returned = yield* suspendFor({
+              request: { kind: "approval" },
+              responseSchema: SCHEMA,
+            });
+          } catch {
+            performed.push("caught-the-wait");
+          }
 
-      // Nor did it synthesize a wait for anyone to settle, and the operation
-      // said why rather than passing the value on.
-      expect(attempted.notice).toBeUndefined();
-      expect(String(attempted.thrown)).toContain("other than this run's suspension controller");
-
-      // The request the document published is still exactly one.
-      expect(requests(attempted.events)).toHaveLength(1);
-
-      // The run did not complete. A suppressed route is a wait that could not be
-      // entered, so the document fails there rather than finishing as though it
-      // had been answered.
-      const closes = attempted.events.filter(
-        (event) => event.type === "close" && event.coroutineId === "root",
+          // Nothing below may happen: the wait was never answered.
+          yield* durableCall("after-the-wait", function* () {
+            performed.push("after-the-wait");
+            return "done";
+          });
+        },
+        reached.operation,
       );
-      for (const close of closes) {
-        expect(close.type === "close" && close.result.status).not.toBe("ok");
+
+      // The route was suppressed, so the controller never heard of the wait —
+      // that is composition, and it is allowed.
+      expect(attempted.notice).toBeUndefined();
+
+      // What is not allowed is any of this. The middleware's value is not an
+      // answer, so the operation neither returned it nor raised something the
+      // document could catch and carry on from.
+      expect(returned).toBeUndefined();
+      expect(performed).toEqual(["before-the-wait"]);
+
+      // No effect after the wait, and no successful outcome for a document that
+      // never got what it asked for.
+      expect(
+        attempted.events.filter(
+          (event) => event.type === "yield" && event.description.name === "after-the-wait",
+        ),
+      ).toHaveLength(0);
+      for (const close of attempted.events) {
+        if (close.type === "close" && close.coroutineId === "root") {
+          expect(close.result.status).not.toBe("ok");
+        }
       }
+
+      // And the request it did publish is still exactly one.
+      expect(requests(attempted.events)).toHaveLength(1);
     });
   });
 

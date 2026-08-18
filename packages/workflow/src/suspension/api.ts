@@ -17,25 +17,29 @@
  * different waits from receiving each other's input. A caller that could name
  * its own would be a caller that could claim another wait's answer.
  *
- * ## Only the operation that reached the wait may enter it
+ * ## The route composes; the request at this position admits
  *
- * Ending an execution is a lifecycle act, so entering a wait has to be earned
- * rather than asked for, and three different things could be mistaken for
- * earning it. Holding an identifier is not enough — a resumed run's own history
- * spells one out. Reaching the right durable position is not enough either — any
- * durable operation of the same type and name replays the retained request and
- * lands there, because that pair is all replay identity compares. And a retained
- * request proves publication, which is not the same as arrival.
+ * The controller is reached through a stable contextual name. That name is how a
+ * component carrying its own loaded copy of this package finds the controller
+ * the running binary installed, so the route is composition and behaves like it:
+ * middleware may refuse or suppress it for its descendants.
  *
- * So the controller accepts a wait only from `suspendFor()` itself, at the
- * position it just published from, with the retained request at that position
- * describing what is presented. The operation says it is running through a slot
- * no other module can reach; the rest is read from the run.
+ * What it may not do is end a wait. No value arriving through the route is an
+ * answer — this slice delivers none — so a suppressed route leaves the wait
+ * unentered, and an unentered wait is where the operation stops. It does not
+ * return, and it does not raise: an ordinary error is something a document can
+ * catch, and a caught suspension would be a document continuing past a wait it
+ * asked for and did not get.
  *
- * Nothing is handed to the caller to present. An object would have to be
- * reachable to be used, and anything reachable by name — a context, an API — is
- * reachable by whatever else knows the name, which is selection rather than
- * authority.
+ * Admission is the retained request at the caller's exact current durable
+ * position. The identifier presented must be the one this run derives for the
+ * position immediately behind the caller, and the yield there must be that
+ * request, describing what is presented. An identifier from elsewhere in the
+ * journal, a reconstructed contextual name, or a matching row without the
+ * position each admit nothing. Another durable operation may reproduce the
+ * request and arrive at that position — replay identity is a type and a name,
+ * both public — and when it does it is standing at the same validated wait,
+ * which is what a wait is identified by.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
