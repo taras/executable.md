@@ -271,7 +271,7 @@ function* judgeAnswer(
     return Err(
       new WorkflowAnswerDeliveryError(
         `the response schema retained for ${suspensionId} cannot judge an answer: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
+          (error instanceof Error ? error.message : String(error)),
       ),
     );
   }
@@ -323,8 +323,8 @@ function* scanDelivery(
     } catch (error) {
       return Err(
         new WorkflowAnswerDeliveryError(
-          `secret detection could not scan this answer, so it was not retained: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
+          "secret detection could not scan this answer, so it was not retained: " +
+            (error instanceof Error ? error.message : String(error)),
         ),
       );
     }
