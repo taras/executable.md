@@ -47,6 +47,15 @@ const AGENT = ["AgentProvider", "Agent", "Session", "Prompt", "ApproveAll", "Ask
 const TESTING = [
   "Testing",
   "AssertThrows",
+  // The nested-execution harness. `<Execution>` and `<WorkflowRun>` are
+  // registered here as the definitions that refuse: the ones that can run a
+  // child are registered inside a canonical `<Test>` invocation by the
+  // installer its host attached, and shadow these for that test's body alone.
+  "Execution",
+  "WorkflowRun",
+  "DiagnosticJournal",
+  "CollectOutput",
+  "CollectJournal",
   // The fourteen entries of the assertion table, each registered from it.
   "Assert",
   "AssertFalse",
