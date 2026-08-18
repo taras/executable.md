@@ -200,7 +200,6 @@ export {
 } from "./src/storage/definition.ts";
 export type {
   GitWorkflowDefinitionV1,
-  GitWorkflowDefinitionV2,
   WorkflowComponentEntry,
   WorkflowDefinition,
 } from "./src/storage/definition.ts";

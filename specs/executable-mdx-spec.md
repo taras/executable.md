@@ -2666,12 +2666,23 @@ observe an import, delegate it, refuse it by throwing, and — ordinarily — an
 it with a definition of its own.
 
 While a component bundle is installed, it may still do the first three and no
-longer the fourth. The definition a document expands is the one canonical
-execution produced: core issues a private witness for the answer it made and
-verifies that witness at the invocation site, so a handler that returns without
-delegating, replaces what came back, changes it afterwards, or answers a name the
-bundle does not declare fails the import before the component runs. A refusal is
-still a refusal, and observation and delegation are unchanged.
+longer the fourth. A handler that returns without delegating, replaces what came
+back, changes it afterwards, or answers a name the bundle does not declare fails
+the import before the component runs. A refusal is still a refusal, and
+observation and delegation are unchanged.
+
+Two things hold that together, and the second is what makes the first safe.
+Canonical core keeps its own copy of the definition it produced, taken before
+the public chain saw it, and **that copy is what a document expands** — so
+nothing a handler still holds decides what is invoked. The answer that comes
+back is then compared against that copy to decide whether the import is
+*refused*, and the comparison reads own property descriptors rather than a
+serialization: a member that computes its own value is not a member core wrote,
+so an accessor answering once for the check and differently for the read is
+refused for being an accessor, and a `toJSON()` describing a mutated definition
+as it used to be describes nothing this comparison consults. A function
+component's implementation crosses into the copy by reference, so what runs is
+exactly the function core selected.
 
 The bundle reaches core as plain immutable data on an `ExecutionInstallation`,
 captured by value before any installation, middleware or document code exists —
@@ -8595,6 +8606,7 @@ Provider-neutral, and portable across every runtime. Defined in §5.3 and §8.1.
 | WB7/WB8 | One bundle | Two installations supplying a bundle are refused, and a refusal appends nothing |
 | WB9/WB10 | Middleware | Observation and delegation are unchanged, and a handler's refusal is still a refusal |
 | WB11/WB12/WB13 | Only canonical answers | A synthetic answer, a replacement, a mutation after delegation, another component's answer, and an undeclared-name answer each fail before invocation |
+| WB19/WB20 | Masked mutation | A mutation hidden behind its own `toJSON()`, and a member that computes its own value, are each refused before invocation and before anything written after the element renders |
 | WB14 | Isolation | Two concurrent bundles declaring one name with different sources resolve their own |
 | WB15 | Ordinary execution | `execute()` installs no authority: a handler still answers an import |
 | WB16/WB17/WB18 | Journal shape | One selection per import holding exactly `kind`, `path`, `sourceHash` and `content`; an exact replay reconstructs from the record and resolves nothing; an unreadable record is one fixed diagnostic |
@@ -8686,12 +8698,12 @@ Provider-neutral, and portable across every runtime. Defined in
 | WD13 | Canonical values | Key order does not change what a value is named |
 | WD14/WD15/WD16 | Compatible reuse | Every immutable field is compared and named when it differs; status, stop reason and timestamps take no part |
 | WD17 | No provider | `create` and `lookup` refuse rather than answering with an empty store |
-| WD25/WD26 | Bundle round trip | Version 1 writes no `components` member; version 2 round-trips a sorted five-entry bundle unchanged |
+| WD25/WD26 | Bundle round trip | A descriptor closed over no bundle writes no `components` member; a bundled one round-trips a sorted five-entry array unchanged |
 | WD27 | Bundle hashes | A source hash is held to the length and case the descriptor's own object format requires |
 | WD28/WD29 | Canonical bundle | Sorted by name, one entry per name, non-empty; each entry closed and naming a repository-relative POSIX Markdown path |
-| WD30 | Versions are not mixed | A version 1 descriptor carrying a bundle and a version 2 descriptor missing one are each refused |
+| WD30 | Retained descriptors still read | A descriptor stored before the member existed parses, means "closed over no components", and serializes back byte for byte; a written member naming no bundle is refused |
 | WD31 | No echo | A refusal never quotes a component's name, path or hash |
-| WD32/WD33/WD34/WD35 | Bundle identity | The same bundle is the same run; a changed name, path, hash or set conflicts as `definition`; version 1 and version 2 are never one run; what a run accumulates still takes no part |
+| WD32/WD33/WD34/WD35 | Bundle identity | The same bundle is the same run; a changed name, path, hash or set conflicts as `definition`; a run closed over a bundle is never one closed over none; what a run accumulates still takes no part |
 
 ### Tier WS — Retained workflow runs
 

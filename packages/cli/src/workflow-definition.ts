@@ -171,20 +171,22 @@ export function* establishDefinition(
       }
 
       const definition = parseWorkflowDefinition({
+        version: 1,
+        kind: "git",
+        objectFormat,
+        objectId: pinnedCommit.toLowerCase(),
+        rootDocumentPath: rootDocumentPath.value,
+        // Written only when the root declared one, so a document with no
+        // bundle stores the descriptor it always stored.
         ...(components.value.length === 0
-          ? { version: 1 }
+          ? {}
           : {
-              version: 2,
               components: components.value.map((component) => ({
                 name: component.name,
                 path: component.path,
                 sourceHash: component.sourceHash,
               })),
             }),
-        kind: "git",
-        objectFormat,
-        objectId: pinnedCommit.toLowerCase(),
-        rootDocumentPath: rootDocumentPath.value,
       });
       if (!definition.ok) {
         return definition;

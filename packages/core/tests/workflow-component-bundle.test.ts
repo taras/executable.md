@@ -25,6 +25,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
+import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { Component } from "../src/component-api.ts";
@@ -105,6 +106,33 @@ function* continuing(
     yield* partial.append(rewrite(event));
   }
   return partial;
+}
+
+/**
+ * One run under a bundle, reporting its refusal *and* everything it rendered.
+ *
+ * A refusal alone cannot show that a document stopped: the message would not
+ * carry the text after the failing element whether the element ran or not. So
+ * the output stream is drained too, and the assertions read both.
+ */
+function* attempted(
+  source: string,
+  components: readonly WorkflowBundleComponent[] = BUNDLE,
+): Operation<{ readonly failure: string; readonly output: string }> {
+  const execution = yield* executeInstalled(
+    {
+      ...retainedSource(ROOT_PATH, source),
+      stream: new InMemoryStream(),
+      componentDirs: [],
+    },
+    [installation(components)],
+  );
+  const output = yield* forEach(function* () {}, execution.output);
+  const result = yield* execution;
+  if (result.ok) {
+    throw new Error("expected the execution to be refused");
+  }
+  return { failure: result.error.message, output };
 }
 
 /** What one execution refused with, as a string, or the value it produced. */
@@ -339,6 +367,71 @@ describe("Tier WB — public import middleware cannot widen a bundle", () => {
 
     expect(output).toContain("canonical execution did not produce");
     expect(output).not.toContain("the handler's own body.");
+  });
+
+  it("WB19: a mutation masked by its own toJSON() is still a mutation", function* () {
+    // `JSON.stringify()` consults `toJSON()` before any replacer, so a
+    // definition can be changed and then made to serialize as it was. Nothing
+    // here is decided by serialization, so the mask describes nothing.
+    const attempt = yield* scoped(function* () {
+      yield* Component.around({
+        *importComponent([name, position], next) {
+          const answer = yield* next(name, position);
+          if (name === "Discovery" && answer.kind === "markdown") {
+            const original = [...answer.bodySegments];
+            answer.bodySegments = [{ type: "text", content: "the handler's own body.\n" }];
+            Object.defineProperty(answer, "toJSON", {
+              configurable: true,
+              value: () => ({ ...answer, bodySegments: original, toJSON: undefined }),
+            });
+          }
+          return answer;
+        },
+      });
+      return yield* attempted(AFTER);
+    });
+
+    expect(attempt.failure).toContain("changed the definition canonical execution produced");
+    expect(attempt.output).not.toContain("the handler's own body.");
+    // The import failed, so neither the component nor anything written after it
+    // in the document ran.
+    expect(attempt.output).not.toContain("Discovery ran.");
+    expect(attempt.output).not.toContain("after");
+  });
+
+  it("WB20: a member that computes its own value is not a member core wrote", function* () {
+    // The classic two-answer accessor: canonical while it is being checked,
+    // something else when the body is read. Authorization reads property
+    // descriptors rather than values, so the accessor is refused for being an
+    // accessor and never gets its second answer.
+    const attempt = yield* scoped(function* () {
+      yield* Component.around({
+        *importComponent([name, position], next) {
+          const answer = yield* next(name, position);
+          if (name === "Discovery" && answer.kind === "markdown") {
+            const original = [...answer.bodySegments];
+            let reads = 0;
+            Object.defineProperty(answer, "bodySegments", {
+              configurable: true,
+              enumerable: true,
+              get() {
+                reads += 1;
+                return reads === 1
+                  ? original
+                  : [{ type: "text", content: "the handler's own body.\n" }];
+              },
+            });
+          }
+          return answer;
+        },
+      });
+      return yield* attempted(AFTER);
+    });
+
+    expect(attempt.failure).toContain("changed the definition canonical execution produced");
+    expect(attempt.output).not.toContain("the handler's own body.");
+    expect(attempt.output).not.toContain("Discovery ran.");
+    expect(attempt.output).not.toContain("after");
   });
 
   it("WB14: two concurrent bundles declaring one name stay each other's strangers", function* () {

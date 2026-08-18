@@ -45,6 +45,17 @@ export interface GitWorkflowDefinitionV1 {
   readonly rootDocumentPath: string;
   /** One exact canonical document target, without a leading `#`. */
   readonly targetPath?: string;
+  /**
+   * The authored components this definition is closed over, when it is closed
+   * over any.
+   *
+   * Absent identifies a run with no bundle. That is what every definition
+   * retained before bundles existed is, and what a root declaring none still
+   * writes — so the member is added to the descriptor rather than the
+   * descriptor being versioned past it. An empty array is not a second
+   * spelling of absence and is refused.
+   */
+  readonly components?: readonly WorkflowComponentEntry[];
 }
 
 /**
@@ -62,31 +73,8 @@ export interface WorkflowComponentEntry {
   readonly sourceHash: string;
 }
 
-/**
- * A definition that is closed over a bundle of authored components.
- *
- * Everything V1 identifies, plus the exact set of components the root may
- * resolve. The array is the durable identity view of that bundle: sorted by
- * component name, so one bundle has one spelling, and compared whole, so a
- * changed name, path, or source is a different definition rather than the same
- * one running different code.
- *
- * V1 is not this descriptor with an empty array. A run with no bundle is a V1
- * run and stays byte-for-byte what it always was.
- */
-export interface GitWorkflowDefinitionV2 {
-  readonly version: 2;
-  readonly kind: "git";
-  readonly objectFormat: "sha1" | "sha256";
-  readonly objectId: string;
-  readonly rootDocumentPath: string;
-  /** One exact canonical document target, without a leading `#`. */
-  readonly targetPath?: string;
-  readonly components: readonly WorkflowComponentEntry[];
-}
-
 /** Every descriptor this build understands. */
-export type WorkflowDefinition = GitWorkflowDefinitionV1 | GitWorkflowDefinitionV2;
+export type WorkflowDefinition = GitWorkflowDefinitionV1;
 
 /** Hexadecimal digits per object id, by the format that names them. */
 const OBJECT_ID_LENGTHS: Readonly<Record<GitWorkflowDefinitionV1["objectFormat"], number>> = {
@@ -101,9 +89,8 @@ const MEMBER_NAMES = [
   "objectId",
   "rootDocumentPath",
   "targetPath",
+  "components",
 ];
-
-const V2_MEMBER_NAMES = [...MEMBER_NAMES, "components"];
 
 const COMPONENT_MEMBER_NAMES = ["name", "path", "sourceHash"];
 
@@ -131,15 +118,12 @@ export function parseWorkflowDefinition(value: unknown): Result<WorkflowDefiniti
 
 function parseDefinition(value: unknown): WorkflowDefinition {
   const members = parseMembers(value, "$", fail);
+  requireMemberNames(members, MEMBER_NAMES, "$", fail);
 
   const version = members.get("version");
-  if (version !== 1 && version !== 2) {
-    throw fail("expected version 1 or 2", "$.version");
+  if (version !== 1) {
+    throw fail("expected version 1", "$.version");
   }
-  // Each version declares its own members. A V1 descriptor carrying a bundle
-  // and a V2 descriptor missing one are both refused here rather than being
-  // read as the other version with a field dropped or defaulted.
-  requireMemberNames(members, version === 1 ? MEMBER_NAMES : V2_MEMBER_NAMES, "$", fail);
 
   const kind = parseStringMember(members, "kind", "$", fail);
   if (kind !== "git") {
@@ -148,7 +132,10 @@ function parseDefinition(value: unknown): WorkflowDefinition {
 
   const objectFormat = parseObjectFormat(members.get("objectFormat"));
   const targetPath = parseTargetPath(members);
-  const common = {
+  const components = parseComponents(members, objectFormat);
+
+  return {
+    version: 1,
     kind: "git",
     objectFormat,
     objectId: parseObjectId(parseStringMember(members, "objectId", "$", fail), objectFormat),
@@ -156,20 +143,19 @@ function parseDefinition(value: unknown): WorkflowDefinition {
       parseStringMember(members, "rootDocumentPath", "$", fail),
     ),
     ...(targetPath === undefined ? {} : { targetPath }),
-  } as const;
-
-  if (version === 1) {
-    return { version: 1, ...common };
-  }
-  return {
-    version: 2,
-    ...common,
-    components: parseComponents(members.get("components"), objectFormat),
+    ...(components === undefined ? {} : { components }),
   };
 }
 
 /**
- * The bundle a V2 descriptor is closed over.
+ * The bundle this descriptor is closed over, or nothing when it is closed over
+ * none.
+ *
+ * Presence is the member being written at all, exactly as it is for the exact
+ * target beside it. A descriptor that never wrote `components` identifies a run
+ * with no bundle — which is what a definition retained before bundles existed
+ * is, and why one still parses. A descriptor that wrote the member asked for a
+ * bundle, and every way of failing to name one is a refusal.
  *
  * Canonical rather than merely valid: exactly one entry per name, in
  * lexicographic order by name. A descriptor that lists the same bundle twice
@@ -177,9 +163,13 @@ function parseDefinition(value: unknown): WorkflowDefinition {
  * compares this array whole.
  */
 function parseComponents(
-  value: unknown,
-  format: GitWorkflowDefinitionV2["objectFormat"],
-): readonly WorkflowComponentEntry[] {
+  members: Members,
+  format: GitWorkflowDefinitionV1["objectFormat"],
+): readonly WorkflowComponentEntry[] | undefined {
+  if (!members.has("components")) {
+    return undefined;
+  }
+  const value = members.get("components");
   const path = "$.components";
   if (!Array.isArray(value)) {
     throw fail(`expected an array, found ${describe(value)}`, path);
@@ -209,7 +199,7 @@ function parseComponents(
 function parseComponent(
   value: unknown,
   path: string,
-  format: GitWorkflowDefinitionV2["objectFormat"],
+  format: GitWorkflowDefinitionV1["objectFormat"],
 ): WorkflowComponentEntry {
   const members = parseMembers(value, path, fail);
   requireMemberNames(members, COMPONENT_MEMBER_NAMES, path, fail);
@@ -292,18 +282,18 @@ export function definitionToJson(definition: WorkflowDefinition): Json {
     // explicit absence would parse back as a descriptor that asked for a target
     // and failed to name it.
     ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
-    // Same rule for the bundle: a V1 descriptor writes no `components` member
-    // at all, so what a no-bundle run stored before this version existed is
-    // byte for byte what it stores now.
-    ...(definition.version === 2
-      ? {
+    // Same rule for the bundle: a definition closed over none writes no
+    // `components` member at all, so what a run stored before bundles existed
+    // is byte for byte what it stores now.
+    ...(definition.components === undefined
+      ? {}
+      : {
           components: definition.components.map((component) => ({
             name: component.name,
             path: component.path,
             sourceHash: component.sourceHash,
           })),
-        }
-      : {}),
+        }),
   };
 }
 
@@ -311,7 +301,7 @@ export function definitionToJson(definition: WorkflowDefinition): Json {
 export function definitionComponents(
   definition: WorkflowDefinition,
 ): readonly WorkflowComponentEntry[] {
-  return definition.version === 2 ? definition.components : [];
+  return definition.components ?? [];
 }
 
 function parseObjectFormat(value: unknown): GitWorkflowDefinitionV1["objectFormat"] {

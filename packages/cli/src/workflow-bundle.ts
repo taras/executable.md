@@ -75,7 +75,7 @@ export interface DeclaredComponent {
  * The bundle a root document declares, normalized, or the refusal saying why it
  * declares none this command can run.
  *
- * An absent `workflow` member is a root with no bundle, which is the V1
+ * An absent `workflow` member is a root with no bundle, which is an ordinary
  * definition and not an error. An empty map is refused: a workflow closed over
  * nothing is a workflow with no bundle, and admitting a second spelling of that
  * would make one run two identities.

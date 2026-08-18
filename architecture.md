@@ -397,9 +397,11 @@ frontmatter — `workflow.components`, a non-empty mapping from a component name
 to a relative POSIX Markdown path beside the root. `start` normalizes that
 declaration against the root's own directory, reads every member from the same
 pinned commit through `git cat-file`, takes each blob's own object ID as its
-source hash, parses each component before the run exists, and stores version 2
-of the descriptor: everything version 1 holds plus a `components` array sorted
-by name. A root that declares nothing keeps version 1 exactly as it was; an
+source hash, parses each component before the run exists, and stores the bundle
+on the definition as a `components` array sorted by name. The bundle is a member
+of the one descriptor rather than a version past it: a root that declares
+nothing writes no `components` member at all, so a definition retained before
+bundles existed still reads and still means "closed over no components". An
 explicitly empty declaration is refused rather than becoming a second spelling
 of no bundle. A declaration may not claim structural syntax, a component the
 engine supplies, or a name the host reserved, and the refusal names a component
@@ -407,7 +409,8 @@ only once the name has passed the grammar a document writes.
 
 The bundle is identity, so compatible reuse compares the whole array: a changed
 name, canonical path, source hash, or component set conflicts as `definition`,
-and version 1 and version 2 never describe one run. `resume` reconstructs the
+and a run closed over a bundle is never the same run as one closed over none.
+`resume` reconstructs the
 bundle under the executor lock, from the retained commit, verifying every blob
 against the retained hash before the lifecycle advances — so a component that
 changed, went missing, or became unreachable leaves the run's records exactly as
@@ -424,9 +427,11 @@ content }`, and the installation contributes a journal admission that holds ever
 retained component import to that exact bundle before public document policy or
 the root import. While a bundle is installed, `Component.importComponent`
 middleware may observe, delegate, and refuse an import but cannot answer one:
-canonical core issues a witness for the definition it produced and verifies it at
-the call site, so a synthetic answer, a replacement, and a mutation each fail
-before the component is invoked.
+canonical core keeps its own copy of the definition it produced and invokes that
+copy, then compares the returned answer against it by own property descriptor —
+never by serialization — so a synthetic answer, a replacement, and a mutation
+each fail before the component is invoked, including one masked by a `toJSON()`
+or by an accessor that answers twice.
 
 Every actual execution opens or creates the run's database, begins a
 document-execution record, installs the exact retained WorkflowRun, installs the

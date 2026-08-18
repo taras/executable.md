@@ -530,8 +530,8 @@ answer` is built by #300; scheduling is not, so a wait ends when somebody
 resumes the run rather than on its own. Fork is designed above and unbuilt.
 
 The component bundle is built: a root declares one, `start` establishes it from
-the pinned commit, the version 2 descriptor retains it, and `resume` and
-completed replay reconstruct it. The adversarial implementation loop those five
+the pinned commit, the definition retains it, and `resume` and completed replay
+reconstruct it. The adversarial implementation loop those five
 stage names describe is not — its scheduling and unattended continuation belong
 to the durable-suspension stack, and generated-XMD admission (§8.4) is unbuilt.
 
@@ -657,13 +657,14 @@ the current status and its stop reason; one document-execution record per start
 and per resume; replaceable retrieval metadata; and the filtered journal.
 
 The immutable definition is a versioned descriptor naming an object format, an
-object ID and the repository-relative root document path. Version 2 adds the
-component bundle: an array sorted by component name, each entry holding that
-name, its canonical repository-relative path inside the pinned commit, and the
-blob's object ID under the descriptor's own object format. Version 1 is the
-no-bundle descriptor and stays exactly what it was — it is not version 2 with an
-empty array, and neither version is read as the other. A repository locator
-is not part of either. Where the definition can be fetched from, and where it is
+object ID and the repository-relative root document path. It also carries the
+component bundle when the root declares one: an array sorted by component name,
+each entry holding that name, its canonical repository-relative path inside the
+pinned commit, and the blob's object ID under the descriptor's own object
+format. The bundle is a member of that descriptor rather than a version past it,
+so a definition retained before bundles existed parses unchanged and identifies
+a run closed over no components; an empty array is not a second spelling of that
+and is refused. A repository locator is not part of it. Where the definition can be fetched from, and where it is
 checked out on one machine, are retrieval metadata: replaceable, free of
 credentials, reauthorized by the host before use, and excluded from the
 comparison that decides whether a reused run ID addresses the same run.

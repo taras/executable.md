@@ -20,7 +20,6 @@ import {
   definitionComponents,
   definitionToJson,
   type GitWorkflowDefinitionV1,
-  type GitWorkflowDefinitionV2,
   parseStopReasonInput,
   parseWorkflowDefinition,
   WORKFLOW_RUN_STATUSES,
@@ -53,9 +52,6 @@ function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDe
   if (!result.ok) {
     throw result.error;
   }
-  if (result.value.version !== 1) {
-    throw new Error("expected a version 1 descriptor");
-  }
   return result.value;
 }
 
@@ -74,16 +70,13 @@ function blob(nth: number): string {
 }
 
 function bundled(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { ...definition(), version: 2, components: BUNDLE, ...overrides };
+  return { ...definition(), components: BUNDLE, ...overrides };
 }
 
-function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV2 {
+function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV1 {
   const result = parseWorkflowDefinition(bundled(overrides));
   if (!result.ok) {
     throw result.error;
-  }
-  if (result.value.version !== 2) {
-    throw new Error("expected a version 2 descriptor");
   }
   return result.value;
 }
@@ -142,9 +135,8 @@ describe("Tier WD — workflow definition descriptors", () => {
     expect(refusal("git").message).toContain("found string");
   });
 
-  it("WD4: admits only the versions it defines, and only the git kind", function* () {
-    expect(refusal(definition({ version: 3 })).path).toBe("$.version");
-    expect(refusal(definition({ version: 0 })).path).toBe("$.version");
+  it("WD4: admits only version 1 and only the git kind", function* () {
+    expect(refusal(definition({ version: 2 })).path).toBe("$.version");
     expect(refusal(definition({ kind: "svn" })).path).toBe("$.kind");
   });
 
@@ -490,14 +482,15 @@ describe("Tier WD — a definition's exact document target", () => {
 /**
  * Tier WD — the component bundle a definition is closed over.
  *
- * A V2 descriptor is a V1 descriptor plus the exact set of authored components
- * the root may resolve. The array is identity, so it is canonical: one entry
- * per name, sorted by name, each holding the blob's own object id under the
- * descriptor's own format. Everything here is about what makes two descriptors
- * the same run and what makes them different ones.
+ * The bundle is a member of the one descriptor rather than a version past it.
+ * Absent, it identifies a run closed over no components — which is what every
+ * definition retained before bundles existed is. Present, it is the exact set
+ * the root may resolve, and it is identity: canonical, one entry per name,
+ * sorted by name, each holding the blob's own object id under the descriptor's
+ * own format.
  */
 describe("Tier WD — the component bundle a definition is closed over", () => {
-  it("WD25: a V1 descriptor keeps its exact shape and writes no bundle member", function* () {
+  it("WD25: a descriptor closed over no bundle writes no bundle member", function* () {
     const first = parsed();
 
     expect("components" in first).toBe(false);
@@ -511,10 +504,10 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     expect(definitionComponents(first)).toEqual([]);
   });
 
-  it("WD26: a V2 descriptor round-trips its whole bundle unchanged", function* () {
+  it("WD26: a bundled descriptor round-trips its whole bundle unchanged", function* () {
     const bundle = parsedBundle();
 
-    expect(bundle.version).toBe(2);
+    expect(bundle.version).toBe(1);
     expect(bundle.components).toEqual(BUNDLE);
     expect(definitionComponents(bundle)).toEqual(BUNDLE);
 
@@ -532,13 +525,13 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
       objectId: SHA256,
       components: [{ name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 }],
     });
-    expect(sha256.components).toEqual([
+    expect(definitionComponents(sha256)).toEqual([
       { name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 },
     ]);
 
     // The same entry under sha1 is the wrong length, and the sha1 bundle is the
     // wrong length under sha256: neither is a hash this descriptor could hold.
-    expect(refusal(bundled({ components: [sha256.components[0]] })).path).toBe(
+    expect(refusal(bundled({ components: definitionComponents(sha256) })).path).toBe(
       "$.components[0].sourceHash",
     );
     expect(refusal(bundled({ objectFormat: "sha256", objectId: SHA256 })).path).toBe(
@@ -590,12 +583,27 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
     }
   });
 
-  it("WD30: neither version may be read as the other", function* () {
-    // A V1 descriptor carrying a bundle declares a member V1 does not have.
-    expect(refusal({ ...definition(), components: BUNDLE }).path).toBe("$");
-    // A V2 descriptor without one is missing the member that makes it V2.
-    expect(refusal({ ...definition(), version: 2 }).path).toBe("$.components");
-    expect(refusal(bundled({ version: 3 })).path).toBe("$.version");
+  it("WD30: a descriptor retained before bundles existed still reads", function* () {
+    // The exact JSON a run stored before the member existed. It parses, it
+    // means "closed over no components", and it serializes back byte for byte
+    // — which is what keeps the bundle a member rather than a second version.
+    const retained = {
+      version: 1,
+      kind: "git",
+      objectFormat: "sha1",
+      objectId: SHA1,
+      rootDocumentPath: "workflows/release.md",
+    };
+    const again = parseWorkflowDefinition(retained);
+
+    expect(again.ok).toBe(true);
+    expect(again.ok && definitionComponents(again.value)).toEqual([]);
+    expect(again.ok && definitionToJson(again.value)).toEqual(retained);
+
+    // Presence is the member being written at all: a descriptor that wrote it
+    // and named no bundle asked for one and failed to say which.
+    expect(refusal({ ...retained, components: undefined }).path).toBe("$.components");
+    expect(refusal({ ...retained, components: null }).path).toBe("$.components");
   });
 
   it("WD31: a refusal never repeats the bundle it refused", function* () {
