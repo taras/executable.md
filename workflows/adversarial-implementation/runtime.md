@@ -79,21 +79,21 @@ prop that grants an Agent write access. Earlier drafts of this document declared
 readable roots, writable roots, environment, process, and network policy as
 markup; that authority moved to the host, where a document cannot widen it.
 
-Directory access is explicit:
+There is no directory access at all. A workflow Agent receives no Workspace
+checkout and no read-only materialization of one, no Workspace or host path as
+its working directory, no `additionalDirectories` over ACP, and no component
+that registers a directory with its session. Lexical `<Dir>` establishes cwd for
+XMD's own file effects and tells an Agent nothing.
 
-<Agent name={props.planner}>
-  <Agent.AddDir path={props.worktree} />
-  <Prompt>Review the change.</Prompt>
-</Agent>
-
-Registrations are ordered, may occur between prompts, and have no special first
-directory. Lexical `<Dir>` does not register anything with an Agent.
-
-Native Agent processes inspect disposable read-only materializations of the
-current logical Workspace root. Those views have no write-back path and may be
-discarded and recreated. An Agent proposes changes by returning XMD, which a
-constrained evaluator preflights and expands as ordinary durable effects
-against the authoritative Workspace (#369).
+What an Agent reasons over is what a prompt renders into it. Repository
+observation, when it exists, is the bounded request/result loop #302 and #369
+still owe: an Agent asks in the source it returns, XMD performs the read as its
+own effect, and the result comes back as data. Until then a stage that needs
+evidence is handed it as a value — `InstructionFiles` is the shipped example,
+carrying exact repository-relative paths and contents that host-authored file
+effects produced. An Agent still proposes changes by returning XMD, which a
+constrained evaluator preflights and expands as ordinary durable effects against
+the authoritative Workspace (#369).
 
 The engine keeps the same shape underneath. A workflow run reaches core as a
 trusted host installation: an admission core applies inside its own journal
