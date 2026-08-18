@@ -23,6 +23,21 @@
  *
  * `GIT_TERMINAL_PROMPT=0` is the other half: a locator that needs a credential
  * fails instead of blocking a run on a prompt nobody is there to answer.
+ *
+ * ## Why the configuration is fixed as well
+ *
+ * A checkout carries its own `.git/config`, and that file is inside the
+ * Workspace this run retains — so a document can write one, and a replay
+ * restores whatever is there. Several ordinary settings in it name a *program*
+ * for Git to run, and one of them running would put work outside the effect's
+ * transaction: a hook that survives a rollback, a signing helper that changes
+ * the object this run verified, a file-system monitor consulted whenever the
+ * index is refreshed.
+ *
+ * So the settings that name programs are fixed on the command line, where they
+ * outrank every configuration file, for every command this host runs. This is
+ * not `--no-verify`: that flag skips the hooks that can refuse a commit and
+ * leaves the ones that run after it.
  */
 
 import { ensure, type Operation, resource, until, withResolvers } from "effection";
@@ -67,6 +82,23 @@ export interface RepositoryHost {
   /** A host directory owned by the acquiring scope, removed when it ends. */
   useDirectory(): Operation<string>;
 }
+
+/**
+ * The settings a workflow run's Git may not take from a repository.
+ *
+ * Each one names a program. `/dev/null` is a hook directory nothing can be found
+ * in, which is what makes every hook absent rather than merely skipped.
+ */
+const CONFIGURATION: readonly string[] = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "commit.gpgSign=false",
+  "-c",
+  "tag.gpgSign=false",
+];
 
 /** Who a workflow run's Git state is written by, on every host. */
 const IDENTITY_NAME = "Executable.md workflow";
@@ -118,8 +150,14 @@ export function denoRepositoryHost(): RepositoryHost {
       const options = { cwd, env: environment(home, committedAt) };
       const child =
         input === undefined
-          ? spawnChild("git", [...args], { ...options, stdio: ["ignore", "pipe", "pipe"] })
-          : spawnChild("git", [...args], { ...options, stdio: ["pipe", "pipe", "pipe"] });
+          ? spawnChild("git", [...CONFIGURATION, ...args], {
+              ...options,
+              stdio: ["ignore", "pipe", "pipe"],
+            })
+          : spawnChild("git", [...CONFIGURATION, ...args], {
+              ...options,
+              stdio: ["pipe", "pipe", "pipe"],
+            });
 
       // Registered with no suspension point between spawning and registering,
       // so a halt cannot land between the two and leave a Git process running

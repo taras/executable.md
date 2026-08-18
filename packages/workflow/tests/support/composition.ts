@@ -366,6 +366,8 @@ export interface CheckoutCommit {
   /** The seconds-and-offset field of the author line, verbatim. */
   readonly authorTime: string;
   readonly committerTime: string;
+  /** Whether the object carries a signature header. */
+  readonly signed: boolean;
   /** The message bytes the object holds. */
   readonly message: string;
 }
@@ -397,6 +399,7 @@ export function* headCommit(
         .map((header) => header.slice("parent ".length)),
       authorTime: stamp(field("author")),
       committerTime: stamp(field("committer")),
+      signed: headers.some((header) => header.startsWith("gpgsig")),
       message: raw.slice(separator + 2),
     };
   });
@@ -546,5 +549,31 @@ export function* removeWorkspacePath(database: WorkflowRunDatabase, path: string
   });
   if (!removed.ok) {
     throw removed.error;
+  }
+}
+
+/**
+ * Put one file into a retained checkout, with the mode a host would see.
+ *
+ * The retained-checkout surface a document reaches through `<File>`, plus the
+ * one thing that component does not write: an executable bit. A hook is a
+ * program only when it has one, so a suite that wants to prove a hook cannot run
+ * has to be able to install one that could.
+ */
+export function* writeCheckoutFile(
+  database: WorkflowRunDatabase,
+  path: string,
+  content: string,
+  mode: number,
+): Operation<void> {
+  const written = yield* transactWorkspaceRoots(database, function* (workspace) {
+    const parent = path.slice(0, path.lastIndexOf("/"));
+    yield* workspace.filesystem.mkdir(parent, { recursive: true });
+    yield* workspace.filesystem.writeFile(path, content, mode);
+    const captured = yield* workspace.capture();
+    yield* workspace.publish(captured.rootId);
+  });
+  if (!written.ok) {
+    throw written.error;
   }
 }

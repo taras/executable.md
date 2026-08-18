@@ -14,8 +14,11 @@ import { collect, execute, inlineSource, registerComponents } from "@executablem
 import type { ComponentRegistration } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { scoped, sleep } from "effection";
+import { scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { lstat, writeTextFile } from "@effectionx/fs";
+import { chmod } from "node:fs/promises";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { cwd } from "@executablemd/runtime";
 import {
   GitCompositionProviderError,
@@ -44,7 +47,7 @@ import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
-import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
+import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
 import {
   causedBy,
@@ -60,7 +63,10 @@ import {
   runDocument,
   stagedPaths,
   subcommands,
+  workspaceText,
+  writeCheckoutFile,
 } from "./support/composition.ts";
+import { dropRootClose } from "./support/replay.ts";
 
 /** One tracked file at the root and one in a subdirectory. */
 const REMOTE = {
@@ -1190,6 +1196,223 @@ describe("workflow Git.Commit request ownership", () => {
       );
       expect(retained?.commit).toBe(object.commit);
       expect(retained?.checkout.repositoryName).toBe("project");
+    });
+  });
+});
+
+/**
+ * A checkout's own configuration is a file this run retains, not an instruction.
+ *
+ * `.git/config` lives inside the Workspace, so a document can write one and a
+ * replay restores whatever is there. Several ordinary settings in it name a
+ * program: a hook, a signing helper, a file-system monitor. One of them running
+ * would put work outside the effect's transaction — a `post-commit` hook is the
+ * sharp case, because it runs after the commit succeeds and is not one
+ * `--no-verify` skips, so every live verification this provider makes would pass
+ * with the hook's work already done.
+ *
+ * The hook is installed the way a checkout carries one: an executable file in
+ * the checkout, and a `.git/config` naming its directory. What proves it did not
+ * run is a sentinel outside the materialization, which is also outside anything
+ * a rollback could take back.
+ */
+describe("workflow Git.Commit repository configuration", () => {
+  /** Whether this path exists, without deciding anything about what it holds. */
+  function* left(path: string): Operation<boolean> {
+    try {
+      yield* lstat(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** A program that records having been run, and nothing else. */
+  function program(mark: string): string {
+    return `#!/bin/sh\nprintf 'ran' > ${mark}\n`;
+  }
+
+  /**
+   * Stop one run inside its commit.
+   *
+   * What that leaves is the state a configured checkout has to be reached from:
+   * the Repository, the file and the staging are committed effects, the index
+   * holds something to commit, and the run has not finished — so the same
+   * document reaches the commit again once the checkout has been configured.
+   */
+  function* stopped(database: WorkflowRunDatabase, written: string): Operation<void> {
+    const inner = denoRepositoryHost();
+    const blocked = withResolvers<void>();
+    const held = {
+      *git(invocation: GitInvocation): Operation<GitOutcome> {
+        if (invocation.args[0] === "commit") {
+          blocked.resolve();
+          yield* suspend();
+        }
+        return yield* inner.git(invocation);
+      },
+      useDirectory: inner.useDirectory,
+    };
+    yield* scoped(function* () {
+      const task = yield* spawn(() =>
+        runDocument(database, written, { composition: { host: held } }),
+      );
+      yield* blocked.operation;
+      yield* task.halt();
+    });
+  }
+
+  /** Add these lines to the retained checkout's own configuration. */
+  function* configure(
+    database: WorkflowRunDatabase,
+    checkoutPath: string,
+    lines: readonly string[],
+  ): Operation<void> {
+    yield* writeCheckoutFile(
+      database,
+      `${checkoutPath}/.git/config`,
+      [yield* workspaceText(database, `${checkoutPath}/.git/config`), ...lines, ""].join("\n"),
+      0o644,
+    );
+  }
+
+  /**
+   * The one the finding names.
+   *
+   * `post-commit` is the sharp case: it runs after the commit has succeeded, so
+   * every check this provider makes about the object would pass with the hook's
+   * work already done — and it is not a hook `--no-verify` skips. The sentinel
+   * is outside the materialization, which is also outside anything a rollback
+   * could take back.
+   */
+  it("runs no hook a retained .git/config activates", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const outside = yield* useTempDirectory("xmd-commit-hooks-");
+    const marks = { pre: `${outside}/pre-commit`, post: `${outside}/post-commit` };
+    const written = staging(remote.locator, "configured commit");
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* stopped(database, written);
+
+      const checkoutPath = yield* checkout(database);
+      expect(yield* stagedPaths(database, checkoutPath)).toEqual(["added.txt"]);
+
+      for (const [hook, mark] of [
+        ["pre-commit", marks.pre],
+        ["post-commit", marks.post],
+      ]) {
+        yield* writeCheckoutFile(
+          database,
+          `${checkoutPath}/.githooks/${hook}`,
+          program(String(mark)),
+          0o755,
+        );
+      }
+      yield* configure(database, checkoutPath, ["[core]", "\thooksPath = .githooks"]);
+
+      const counting = countingHost();
+      const output = yield* runDocument(database, written, countingOptions(counting));
+
+      // Neither hook ran, and the commit they were installed around is the
+      // ordinary one. Both are reported together, because `post-commit` is the
+      // one that would otherwise run behind a commit this provider had already
+      // verified.
+      expect({
+        pre: yield* left(marks.pre),
+        post: yield* left(marks.post),
+      }).toEqual({ pre: false, post: false });
+
+      const object = yield* headCommit(database, checkoutPath);
+      expect(object.message).toBe("configured commit\n");
+      expect(object.parents).toHaveLength(1);
+      expect(object.signed).toBe(false);
+      expect(String(output)).toContain(`sha: ${object.commit}`);
+      expect(subcommands(counting.counters)).toContain("commit");
+
+      const [, outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const retained = parseGitCommitResult(
+        outcome?.record,
+        yield* expectation(database, "configured commit\n", "prop"),
+      );
+      expect(retained?.commit).toBe(object.commit);
+      expect(retained?.tree).toBe(object.tree);
+      expect(retained?.parent).toBe(object.parents[0]);
+
+      // Replaying a run whose checkout is configured this way runs no Git, so
+      // there is no second chance for a hook either.
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const replayed = countingHost();
+      const again = yield* runDocument(database, written, countingOptions(replayed));
+      expect(String(again)).toContain(`sha: ${object.commit}`);
+      expect(subcommands(replayed.counters)).not.toContain("commit");
+      expect(yield* gitEvents(database)).toHaveLength(2);
+      expect(yield* left(marks.post)).toBe(false);
+    });
+  });
+
+  /**
+   * The other two settings that name a program.
+   *
+   * A signing helper would run and would write a header this run never decided
+   * on; a file-system monitor is consulted whenever the index is refreshed.
+   * Neither is skipped by a flag — both are configuration, and configuration is
+   * what a checkout carries.
+   */
+  it("runs no signing or monitor program a retained .git/config names", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const outside = yield* useTempDirectory("xmd-commit-programs-");
+    const marks = { signer: `${outside}/signer`, monitor: `${outside}/monitor` };
+    const signer = `${outside}/gpg`;
+    const monitor = `${outside}/fsmonitor`;
+    const written = staging(remote.locator, "configured commit");
+
+    yield* writeTextFile(signer, program(marks.signer));
+    yield* until(chmod(signer, 0o755));
+    yield* writeTextFile(monitor, program(marks.monitor));
+    yield* until(chmod(monitor, 0o755));
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* stopped(database, written);
+
+      const checkoutPath = yield* checkout(database);
+      yield* configure(database, checkoutPath, [
+        "[commit]",
+        "\tgpgsign = true",
+        "[gpg]",
+        `\tprogram = ${signer}`,
+        "[core]",
+        `\tfsmonitor = ${monitor}`,
+      ]);
+
+      const counting = countingHost();
+      const output = yield* runDocument(database, written, countingOptions(counting));
+
+      expect({
+        signer: yield* left(marks.signer),
+        monitor: yield* left(marks.monitor),
+      }).toEqual({ signer: false, monitor: false });
+
+      // The object carries no signature header, so nothing wrote one.
+      const object = yield* headCommit(database, checkoutPath);
+      expect(object.signed).toBe(false);
+      expect(object.message).toBe("configured commit\n");
+      expect(String(output)).toContain(`sha: ${object.commit}`);
+
+      const [, outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const retained = parseGitCommitResult(
+        outcome?.record,
+        yield* expectation(database, "configured commit\n", "prop"),
+      );
+      expect(retained?.commit).toBe(object.commit);
     });
   });
 });

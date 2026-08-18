@@ -606,6 +606,11 @@ export function* commonDirectory(
  * `committedAt` is the provider's own second, bound to both author and
  * committer time, so what a commit records is an instant this run captured
  * rather than whatever the clock said by the time Git got around to reading it.
+ *
+ * `--no-gpg-sign` says at the command what the host's fixed configuration
+ * already says: the object is what the admitted message, the index, the parent
+ * and this run's own identity make it, and a signature would be a program run
+ * and a header written that nothing here decided.
  */
 export interface IndexCommit {
   /** The component this is performed for, as a document writes it. */
@@ -627,7 +632,7 @@ export interface IndexCommit {
  */
 export function* commitIndex(git: GitSession, request: IndexCommit): Operation<void> {
   const outcome = yield* git.run(
-    ["commit", "--cleanup=verbatim", "--file", "-"],
+    ["commit", "--cleanup=verbatim", "--no-gpg-sign", "--file", "-"],
     request.workingDirectory,
     { input: request.message, committedAt: request.committedAt },
   );

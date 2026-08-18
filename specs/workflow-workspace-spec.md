@@ -765,6 +765,18 @@ cwd merely because its invocation appears inside a later Dir.
 Git operations require a contextual Repository or Worktree checkout. They use
 the transactional Workspace Git implementation, not an implicit host command.
 
+A checkout's own configuration is a file the run retains, not an instruction to
+it. Several ordinary Git settings name a *program* — a hook directory, a signing
+helper, a file-system monitor — and a `.git/config` inside the Workspace is
+something a document can write and a replay restores. Any of them running would
+put work outside the effect's transaction: a `post-commit` hook in particular
+runs after a commit has succeeded, so every check made about the object would
+pass with the hook's work already done, and it is not one `--no-verify` skips. So
+those settings are fixed by the provider for every command it runs, where they
+outrank the repository's own configuration, and a commit is unsigned. What
+decides a Git object is the operation's admitted input, the checkout's state and
+the run's own identity and time — never what the checkout asks for.
+
 ### 7.1 Switch
 
 ```md
