@@ -22,20 +22,19 @@
  * suspension request. Remaining pending is what makes the halt the only way out
  * of the wait, and the halt is what leaves the root without a Close.
  *
- * ## Authority is the retained request
+ * ## Authority is where this execution is
  *
- * `enter` accepts a suspension only when the run's own journal already holds the
- * request for it — as the most recent one, describing exactly what is being
- * presented, and under the identifier this run derives for the position that
- * request was published at. Every part of that comes from retained history and
- * the run record, both established before any document code ran.
+ * `enter` accepts a suspension only from the execution that has just published
+ * its request, standing at the position it published it from. Retained history
+ * is evidence, not authority: on a resume the previous execution's request is
+ * already in the journal, so a caller running before replay reaches it could
+ * otherwise present that identifier and be believed.
  *
  * There is deliberately nothing to hold and nothing to present. A capability
  * object has to be reachable to be used, and in this runtime anything reachable
  * by name is reachable by anyone who knows the name — which is selection, not
- * authority. A caller cannot arrange for the journal to hold a request it did
- * not publish through the ordinary durable path, and cannot choose the
- * identifier that path derives, so there is nothing to forge.
+ * authority. Position is not like that: a caller cannot stand somewhere it is
+ * not.
  */
 
 import {
@@ -51,6 +50,7 @@ import {
 import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
 import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
+import { durablePosition } from "@executablemd/durable-streams";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
@@ -108,27 +108,48 @@ export interface SuspensionController {
 }
 
 /**
- * The request this run retained for `suspensionId`, if it retained one there.
+ * Whether this execution is, right now, at the wait it says it is.
  *
- * Three things are checked and each closes a different door. It must be the
- * most recent request, so an old wait cannot be re-entered. Its description must
- * match what is being presented, so a published request cannot be used to enter
- * a different wait. And its identifier must be the one this run derives for the
- * position it was published at, so publishing a request under a chosen name
- * proves nothing — the name has to be the one the position gives.
+ * Authority is the *current* execution reaching its own request, not the
+ * existence of a matching row. Retained history alone cannot decide this: on a
+ * resume the request from the previous execution is already in the journal, so
+ * a caller that ran before replay reached it could present its identifier and be
+ * believed. What separates the real wait from that is where the execution is.
+ *
+ * `suspendFor()` publishes its request and then enters, so by the time it gets
+ * here the coroutine has settled exactly one more durable yield than it had when
+ * the request was made — the request's own. The identifier is therefore the one
+ * this run derives for the position immediately behind this one, and a caller
+ * standing anywhere else derives a different identifier and is refused.
+ *
+ * The journal is then read to confirm that the yield at that exact position is
+ * this request, describing what is being presented. That is publication
+ * evidence, and it is checked at one position rather than searched for.
  */
-function* publishedRequest(
+function* atOwnRequest(
   database: WorkflowRunDatabase,
   suspension: string,
   request: WorkflowSuspensionRequest,
 ): Operation<boolean> {
+  const position = yield* durablePosition();
+  if (position.index === 0) {
+    return false;
+  }
+  const published = {
+    coroutineId: position.coroutineId,
+    index: position.index - 1,
+  };
+  if (suspensionId(database.record.runId, published) !== suspension) {
+    return false;
+  }
+
   const entries = yield* database.readJournalEntries();
   if (!entries.ok) {
     return false;
   }
 
   const counts = new Map<string, number>();
-  let found: { coroutineId: string; index: number; description: EffectDescription } | undefined;
+  let found: EffectDescription | undefined;
   for (const entry of entries.value) {
     if (entry.event.type !== "yield") {
       continue;
@@ -136,30 +157,22 @@ function* publishedRequest(
     const coroutineId = entry.event.coroutineId;
     const index = counts.get(coroutineId) ?? 0;
     counts.set(coroutineId, index + 1);
-    if (entry.event.description.type === SUSPENSION_REQUEST) {
-      found = { coroutineId, index, description: entry.event.description };
+    if (coroutineId === published.coroutineId && index === published.index) {
+      found = entry.event.description;
     }
   }
-  if (found === undefined || found.description.name !== suspension) {
-    return false;
-  }
-  if (
-    canonicalFingerprint({
-      request: request.request,
-      responseSchema: request.responseSchema,
-    }) !==
-    canonicalFingerprint({
-      request: found.description.request ?? null,
-      responseSchema: found.description.responseSchema ?? null,
-    })
-  ) {
+  if (found === undefined || found.type !== SUSPENSION_REQUEST || found.name !== suspension) {
     return false;
   }
   return (
-    suspensionId(database.record.runId, {
-      coroutineId: found.coroutineId,
-      index: found.index,
-    }) === suspension
+    canonicalFingerprint({
+      request: request.request,
+      responseSchema: request.responseSchema,
+    }) ===
+    canonicalFingerprint({
+      request: found.request ?? null,
+      responseSchema: found.responseSchema ?? null,
+    })
   );
 }
 
@@ -203,11 +216,11 @@ export function createSuspensionController(
         yield* WorkflowSuspension.around(
           {
             *enter([suspension, request]): Operation<never> {
-              if (!(yield* publishedRequest(options.database, suspension, request))) {
+              if (!(yield* atOwnRequest(options.database, suspension, request))) {
                 throw new WorkflowRequestError(
-                  "this run retains no suspension request under that identity, so there is no " +
-                    "durable wait to enter. A wait is entered by publishing its request, and " +
-                    "the identity is the one this run derives for where the request was made.",
+                  "this execution is not at that durable wait. A wait is entered by the execution " +
+                    "that has just published its request, at the position that request was made — " +
+                    "not by presenting an identifier a run retains somewhere else.",
                 );
               }
               seen = { suspensionId: suspension, request };

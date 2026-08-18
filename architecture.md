@@ -698,14 +698,19 @@ lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
 execution-owned suspension controller. Context may select the workflow provider;
-it authorizes nothing. The authority to enter a wait is the retained request
-itself, checked against the run's own journal: it must be the most recent
-`suspension_request`, its retained request and response schema must match what
-is presented, and its identifier must be the one this run derives for the
-durable coroutine position it was published at. A caller cannot arrange for the
-journal to hold a request it did not publish through the ordinary durable path,
-and cannot choose the identifier that path derives, so publishing a request
-under a chosen name authorizes nothing. With no delivered input, the controller
+it authorizes nothing. The authority to enter a wait is the current execution
+being at it: only the execution that has just published its request, standing at
+the durable coroutine position it published from, may report that wait. The
+controller derives the identifier for the position immediately behind the
+caller's own and requires the presented one to equal it, then confirms that the
+retained yield at that exact position is this request and describes what is
+presented.
+
+Retained history is evidence, never authority on its own. A resumed run already
+holds the previous execution's request, so a caller running before replay reaches
+it would otherwise present that identifier and be believed. Possessing or
+deriving an identifier, reconstructing the provider's public name, and a matching
+row earlier or later in the journal each authorize nothing. With no delivered input, the controller
 reports the request to the workflow executor and remains pending while that
 executor initiates an orderly halt. The operation throws no ordinary error and produces no value; the
 halt leaves the root without a Close. The executor observes the authenticated

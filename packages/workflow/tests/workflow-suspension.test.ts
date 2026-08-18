@@ -245,11 +245,82 @@ describe("Tier WS — a durable wait's request and identity", () => {
       });
 
       // Naming the provider reaches it. It refuses anyway, because what
-      // authorizes a wait is the request this run retained for it — and this
-      // caller published none.
-      expect(String(attempted.thrown)).toContain("retains no suspension request");
+      // authorizes a wait is the execution being at it — and this caller
+      // published nothing and stands nowhere near one.
+      expect(String(attempted.thrown)).toContain("not at that durable wait");
       expect(attempted.notice).toBeUndefined();
       expect(requests(attempted.events)).toHaveLength(0);
+    });
+  });
+
+  it("WS6: a retained request does not authorize a caller standing before it", function* () {
+    yield* withRun(function* (database) {
+      const refusals: string[] = [];
+      const reached: string[] = [];
+
+      // Document-side code that knows the provider's name and the identifier the
+      // wait ahead of it will have — on a resume it could read that identifier
+      // straight out of the run's own retained history.
+      function early(id: string): Operation<void> {
+        return call(function* () {
+          const Same: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
+            "executablemd.workflow.suspension",
+            {
+              // deno-lint-ignore require-yield
+              *enter(): Operation<Json> {
+                throw new Error("unreachable");
+              },
+            },
+          );
+          try {
+            yield* Same.operations.enter(id, {
+              request: { kind: "approval" },
+              responseSchema: SCHEMA,
+            });
+            refusals.push("accepted");
+          } catch (error) {
+            refusals.push(String(error).includes("not at that durable wait") ? "refused" : "other");
+          }
+        });
+      }
+
+      function procedure(id: string): () => Operation<unknown> {
+        return function* () {
+          // Attempted before the prior effect, so this call stands at a
+          // position the wait ahead of it does not belong to.
+          yield* early(id);
+          yield* durableCall("prior", function* () {
+            reached.push("performed-prior-effect");
+            return "done";
+          });
+          yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+        };
+      }
+
+      // First execution: the identifier is not retained yet, and the early call
+      // is refused for standing in the wrong place rather than for guessing.
+      const first = yield* attempt(database, procedure("an-identifier-not-yet-retained"));
+      const id = first.notice?.suspensionId ?? "";
+      expect(id).not.toBe("");
+      expect(refusals).toEqual(["refused"]);
+
+      // Resume: the request is retained now, and its exact identifier is what
+      // the early call presents. It must still be refused — the row exists, but
+      // this caller has not reached it.
+      const resumed = yield* attempt(database, procedure(id));
+
+      expect(refusals).toEqual(["refused", "refused"]);
+
+      // Replay passed through the prior effect and the request, and the wait was
+      // reported by the real `suspendFor()` with the same stable identity.
+      expect(resumed.notice?.suspensionId).toBe(id);
+
+      // Nothing was duplicated and nothing closed the root.
+      expect(requests(resumed.events)).toHaveLength(1);
+      expect(
+        resumed.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toHaveLength(0);
+      expect(reached).toEqual(["performed-prior-effect"]);
     });
   });
 });

@@ -25,11 +25,11 @@
  * Yield means the request was retained. It does not mean the wait ended, and it
  * does not authorize anything.
  *
- * **Authority last, and the publication is what carries it.** The
- * execution-owned controller is what may end the execution, and what it accepts
- * is the retained request: it reads the run's own journal and requires the most
- * recent `suspension_request` to be this one — matching what is presented, and
- * under the identifier this run derives for the position it was published at.
+ * **Authority last, and it is where this execution stands.** The
+ * execution-owned controller is what may end the execution, and it accepts the
+ * wait only from the execution that has just published its request, at the
+ * position it published from. A retained request proves publication; it does not
+ * prove that the caller has reached it, which on a resume are different facts.
  * Nothing is handed to the caller to present, because anything a caller could
  * hold is something another caller could obtain.
  *
