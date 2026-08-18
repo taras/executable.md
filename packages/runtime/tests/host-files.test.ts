@@ -861,4 +861,21 @@ describe("Tier HF — host Files provider", () => {
     expect(parseFileWriteFailure(failed(written))?.reason).toBe("resolved-escape");
     expect(yield* entries(fixture.outside)).toEqual([]);
   });
+
+  // HF17: where a minted directory lives is the caller's to choose. The host's
+  // shared temporary root holds every process's directories, so a caller that
+  // censuses the minted namespace supplies a root it owns — and the directory
+  // still lives and dies with its acquiring scope there.
+  it("HF17: a temporary directory is minted under the configured root", function* () {
+    const { root } = yield* useFixture();
+    const files = hostFilesHandler({ temporaryRoot: root });
+
+    let acquired = "";
+    yield* scoped(function* () {
+      acquired = value(yield* files.temporaryDirectory());
+      expect(acquired.startsWith(join(root, "xmd-tempdir-"))).toBe(true);
+      expect(yield* exists(acquired)).toBe(true);
+    });
+    expect(yield* exists(acquired)).toBe(false);
+  });
 });
