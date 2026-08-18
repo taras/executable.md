@@ -607,16 +607,20 @@ describe("Tier WD — the component bundle a definition is closed over", () => {
   });
 
   it("WD31: a refusal never repeats the bundle it refused", function* () {
-    const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+    // A distinctive string rather than a credential-shaped one: what is proved
+    // is that no part of a refused entry is echoed, and a value that is not a
+    // token proves it just as well. WD9 keeps the token-shaped canary for the
+    // descriptor's own members, where nothing this suite adds changes it.
+    const canary = "never-printed-canary-b7a1e9";
 
     for (const error of [
-      refusal(bundled({ components: [{ ...BUNDLE[0], path: `/${secret}.md` }] })),
-      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: secret }] })),
-      refusal(bundled({ components: [{ ...BUNDLE[0], name: secret }] })),
-      refusal(bundled({ components: [{ ...BUNDLE[0], [secret]: 1 }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], path: `/${canary}.md` }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: canary }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], name: canary }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], [canary]: 1 }] })),
     ]) {
-      expect(error.message).not.toContain(secret);
-      expect(error.path).not.toContain(secret);
+      expect(error.message).not.toContain(canary);
+      expect(error.path).not.toContain(canary);
     }
   });
 });
