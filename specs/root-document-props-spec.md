@@ -311,14 +311,14 @@ const inline = yield* inspectDocument(inlineSource("---\nprops:\n  name: { type:
 ```
 
 The same result describes what the document addresses. `targets` is the
-canonical identity surface, and the additive `targetCatalog` carries the same
+canonical identity surface, and the additive `targetInfo` carries the same
 fragments, in the same order and with the same duplicates, each as a
 `DocumentTargetInfo` — its `target`, and its `description` when the section
 states one:
 
 ```typescript
-const { targets, targetCatalog } = yield* inspectDocument({ path: "hello.md" });
-targetCatalog.map(({ target }) => target); // exactly `targets`
+const { targets, targetInfo } = yield* inspectDocument({ path: "hello.md" });
+targetInfo.map(({ target }) => target); // exactly `targets`
 ```
 
 Inspection resolves relative paths against the contextual working directory.

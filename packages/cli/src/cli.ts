@@ -1020,7 +1020,7 @@ interface PropsPhase {
    * Carried from the one inspection this phase already performs — help never
    * reads the document a second time.
    */
-  targetCatalog?: readonly DocumentTargetInfo[];
+  targetInfo?: readonly DocumentTargetInfo[];
   error?: string;
   /**
    * The immutable definition a `workflow start` established, when it did.
@@ -1121,7 +1121,7 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
     const extraction = extractPropsArgs(args, bindings);
-    const addressable = root.source === undefined && document.targetCatalog.length > 0;
+    const addressable = root.source === undefined && document.targetInfo.length > 0;
     return {
       args: extraction.rest,
       root: exactRoot(root, document.target),
@@ -1129,7 +1129,7 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
       extraction,
       propsSchema: document.props,
       declared: declaredProperties(document.props),
-      ...(addressable ? { targetCatalog: document.targetCatalog } : {}),
+      ...(addressable ? { targetInfo: document.targetInfo } : {}),
     };
   } catch (error) {
     return {
@@ -1396,10 +1396,10 @@ function renderHelp(phase: PropsPhase): string {
   const withProperties = phase.declared?.length
     ? `${withSource}\n\n${formatProperties(documentPath, phase.bindings)}`
     : withSource;
-  if (phase.targetCatalog === undefined) {
+  if (phase.targetInfo === undefined) {
     return withProperties;
   }
-  return `${withProperties}\n\n${formatTargets(documentPath, phase.targetCatalog)}`;
+  return `${withProperties}\n\n${formatTargets(documentPath, phase.targetInfo)}`;
 }
 
 /**
@@ -1410,8 +1410,8 @@ function renderHelp(phase: PropsPhase): string {
  * than one a selector resolves arbitrarily. A section that states no
  * description is listed all the same: it is still selectable.
  */
-function formatTargets(documentPath: string, catalog: readonly DocumentTargetInfo[]): string {
-  const entries = catalog.map((entry) => {
+function formatTargets(documentPath: string, targets: readonly DocumentTargetInfo[]): string {
+  const entries = targets.map((entry) => {
     const reference = `  ${formatDocumentReference(documentPath, entry.target)}`;
     return entry.description === undefined ? reference : `${reference}\n      ${entry.description}`;
   });

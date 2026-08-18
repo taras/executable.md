@@ -6746,7 +6746,7 @@ what it declares — without executing the document or creating a journal:
 - `targets` — every document target the root addresses, as canonical encoded
   fragments without the document path or a leading `#`, in document order,
   duplicates retained (§5.4).
-- `targetCatalog` — the same targets, in the same order and with the same
+- `targetInfo` — the same targets, in the same order and with the same
   duplicates, each as a `DocumentTargetInfo` carrying its `target` and, when the
   section states one, its `description` (§5.4). Informational and additive:
   `targets` remains the identity surface, and mapping this array to its `target`
@@ -8549,7 +8549,7 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
 | DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
 | DT67–DT78 | Descriptions | The first direct static paragraph describes its section, past blank lines and comment-only HTML, kept whole with formatting reduced and whitespace collapsed; a fence, component, list, quote or child heading first leaves no description and later prose is not reached; an interpolation or an inline component omits the paragraph whole rather than as a static prefix |
-| DT79/DT80 | Structured catalog | `targetCatalog` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
+| DT79/DT80 | Structured catalog | `targetInfo` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
 | DT52/DT53 | Recognition | A failure from a separately loaded copy, and one built here, are read on the same terms |
 | DT54–DT56 | Reconstruction | The result is a fresh local error, never the candidate; a mutable nested list is copied and later mutation changes nothing; a revoked Proxy cannot reach through a result already built |
 | DT57 | Closed data | Enumerable, non-enumerable and symbol-keyed extras are refused |

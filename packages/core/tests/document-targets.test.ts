@@ -764,22 +764,22 @@ describe("Tier DT — inspection", () => {
   it("DT79: the structured catalog carries the same targets, in order, with duplicates", function* (): Operation<void> {
     const info = yield* inspectDocument(inlineSource(DESCRIBED_DUPLICATES));
     expect(info.targets).toEqual(["Same", "Same", "Plain"]);
-    expect(info.targetCatalog).toEqual([
+    expect(info.targetInfo).toEqual([
       { target: "Same", description: "The first section under this canonical path." },
       { target: "Same", description: "The second section under the very same path." },
       { target: "Plain" },
     ]);
     // The identity surface is derived from the same entries, so the described
     // catalog cannot address anything the canonical array does not.
-    expect(info.targetCatalog.map(({ target }) => target)).toEqual(info.targets);
+    expect(info.targetInfo.map(({ target }) => target)).toEqual(info.targets);
   });
 
   it("DT80: a selected inspection reports the exact target and the whole catalog", function* (): Operation<void> {
     const info = yield* inspectDocument(inlineSource(DESCRIBED_DUPLICATES, { target: "Pl*" }));
     expect(info.target).toBe("Plain");
     expect(info.targets).toEqual(["Same", "Same", "Plain"]);
-    expect(info.targetCatalog.map(({ target }) => target)).toEqual(info.targets);
-    expect(info.targetCatalog[0]).toEqual({
+    expect(info.targetInfo.map(({ target }) => target)).toEqual(info.targets);
+    expect(info.targetInfo[0]).toEqual({
       target: "Same",
       description: "The first section under this canonical path.",
     });
@@ -821,7 +821,7 @@ const DESCRIBED_DUPLICATES = [
 
 /** The description a section states, or `undefined` when it states none. */
 function description(body: string, target: string): string | undefined {
-  const entry = outline(body).catalog.find((candidate) => candidate.target === target);
+  const entry = outline(body).targetInfo.find((candidate) => candidate.target === target);
   if (entry === undefined) {
     throw new Error(`${target} is not addressed by this document`);
   }

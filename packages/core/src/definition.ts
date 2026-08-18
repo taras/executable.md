@@ -139,7 +139,7 @@ export interface ParsedRootDocument {
   /** Canonical encoded target fragments in document order, duplicates kept. */
   targets: readonly string[];
   /** The same fragments, in the same order, each with its own description. */
-  targetCatalog: readonly DocumentTargetInfo[];
+  targetInfo: readonly DocumentTargetInfo[];
   /** The exact canonical target selected, when one was requested. */
   target?: string;
 }
@@ -182,7 +182,7 @@ export function* parseRootMarkdownDefinition(
     return {
       definition: buildDefinition(name, path, frontmatter, bodySegments),
       targets: outline.targets,
-      targetCatalog: outline.catalog,
+      targetInfo: outline.targetInfo,
     };
   }
 
@@ -202,7 +202,7 @@ export function* parseRootMarkdownDefinition(
   return {
     definition: buildDefinition(name, path, frontmatter, bodySegments),
     targets: outline.targets,
-    targetCatalog: outline.catalog,
+    targetInfo: outline.targetInfo,
     target: entry.target,
   };
 }

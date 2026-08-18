@@ -62,7 +62,7 @@ export interface DocumentInfo {
    * array back to its `target` members reproduces it exactly. A description
    * decides nothing about selection, projection, execution, or replay.
    */
-  readonly targetCatalog: readonly DocumentTargetInfo[];
+  readonly targetInfo: readonly DocumentTargetInfo[];
 
   /**
    * The exact canonical target the requested selector resolved to. Present only
@@ -103,7 +103,7 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
     returns: definition.returns ?? TEXT_RETURN_SCHEMA,
     returnMode: definition.returns === undefined ? "text" : "value",
     targets: parsed.targets,
-    targetCatalog: parsed.targetCatalog,
+    targetInfo: parsed.targetInfo,
     ...(parsed.target === undefined ? {} : { target: parsed.target }),
   };
 }

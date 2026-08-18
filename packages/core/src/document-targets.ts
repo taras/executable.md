@@ -75,7 +75,7 @@ export interface DocumentOutline {
   /** Canonical encoded fragments in source order, duplicates retained. */
   readonly targets: readonly string[];
   /** The same entries, in the same order, each with its own description. */
-  readonly catalog: readonly DocumentTargetInfo[];
+  readonly targetInfo: readonly DocumentTargetInfo[];
   /** Where the preamble ends: the first root-flow heading, or the body end. */
   readonly preambleEnd: number;
   readonly bodyLength: number;
@@ -958,7 +958,7 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
       headings: [],
       entries: [],
       targets: [],
-      catalog: [],
+      targetInfo: [],
       preambleEnd: body.length,
       bodyLength: body.length,
     };
@@ -1011,7 +1011,7 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
     targets: entries.map((entry) => entry.target),
     // Derived from the same ordered entries as `targets`, so the two cannot
     // disagree about what the document addresses or in which order.
-    catalog: entries.map(({ target, description }) =>
+    targetInfo: entries.map(({ target, description }) =>
       description === undefined ? { target } : { target, description },
     ),
     // The first heading in the root flow, whatever its depth. The preamble is
