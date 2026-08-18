@@ -37,6 +37,7 @@ import type { GitSwitchExpectation } from "../src/composition/git-records.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
+import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import type { RepositoryRecord } from "../src/composition/records.ts";
@@ -61,7 +62,7 @@ import {
   workspaceText,
 } from "./support/composition.ts";
 import type { LoadedGitApi } from "./support/composition.ts";
-import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
+import { committedRoot, dropRootClose, latestRoot, publishedRoots } from "./support/replay.ts";
 
 /**
  * Two branches whose content differs, plus one file that does not.
@@ -946,3 +947,177 @@ function probe(
     },
   };
 }
+
+/** The same members a request declares, as a caller is free to hold them. */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] };
+
+interface MutableSwitchRequest {
+  repository: Mutable<RepositoryRecord>;
+  workingDirectory: string;
+  branch: string;
+  base: string | undefined;
+}
+
+/**
+ * Admission takes a snapshot, and the snapshot is what runs.
+ *
+ * A caller's request is the caller's object: `switchBranch()` is public, a
+ * mutable object satisfies a readonly interface, and the record inside it is
+ * mutable too. Between naming itself and spawning Git this operation suspends
+ * several times, so a step that read that object again instead of what
+ * admission returned could identify one branch change, perform a second, retain
+ * a third and read the result back against a fourth — against a Repository
+ * record the run never authenticated.
+ *
+ * The mutation lands at a real point in the operation rather than at a guessed
+ * moment: the injected host performs it when the effect acquires its
+ * materialization directory, which is inside the transaction, after the durable
+ * identity exists and before any Git command is given.
+ */
+describe("workflow Git.Switch request ownership", () => {
+  it("switches the branch it admitted, not what the caller changed it to", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    let caller: MutableSwitchRequest | undefined;
+    let armed = false;
+    let synchronized = false;
+
+    const asked: ComponentRegistration = {
+      name: "Probe",
+      origin: "test",
+      props: { type: "object", additionalProperties: false },
+      *fn(): Operation<string> {
+        const repository = yield* currentRepository();
+        if (repository === undefined) {
+          throw new Error("the probe was written outside a Repository");
+        }
+        const request: MutableSwitchRequest = {
+          repository: { ...repository },
+          workingDirectory: yield* cwd(),
+          branch: "release",
+          base: undefined,
+        };
+        caller = request;
+        armed = true;
+        yield* GitComposition.operations.switchBranch(request);
+        return "";
+      },
+    };
+
+    const source = document(
+      remote.locator,
+      "<Probe />",
+      `<File path="which.txt" as="which" />`,
+      "",
+      "after: {which}",
+    );
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const perform = (options: WorkflowWorkspaceOptions): Operation<Json> =>
+        scoped(function* () {
+          return yield* withWorkflowWorkspace(
+            database,
+            scoped(function* () {
+              yield* registerComponents([asked]);
+              return yield* collect(
+                yield* execute({ ...inlineSource(source), stream: database.journal }),
+              );
+            }),
+            options,
+          );
+        });
+
+      const inner = denoRepositoryHost();
+      const counting = countingHost({
+        git: (invocation: GitInvocation): Operation<GitOutcome> => inner.git(invocation),
+        *useDirectory(): Operation<string> {
+          const directory = yield* inner.useDirectory();
+          if (armed && !synchronized) {
+            synchronized = true;
+            const request = caller;
+            if (request === undefined) {
+              throw new Error("a directory was acquired before the probe asked for anything");
+            }
+            request.branch = "feature/mutated";
+            request.base = remote.heads.get("main");
+            request.repository.name = "ghost";
+          }
+          return directory;
+        },
+      });
+
+      const output = yield* perform(countingOptions(counting));
+
+      // The premise: the caller's request really changed, at a point the
+      // operation really reached.
+      expect(synchronized).toBe(true);
+      expect(caller?.branch).toBe("feature/mutated");
+      expect(caller?.base).toBe(remote.heads.get("main"));
+      expect(caller?.repository.name).toBe("ghost");
+
+      // Git was given the branch that was admitted, as the only switch, and was
+      // never asked to create one from the base that appeared afterwards.
+      expect(counting.counters.commands.filter((command) => command[0] === "switch")).toEqual([
+        ["switch", "release", "--"],
+      ]);
+      expect(String(output)).toContain("after: release");
+      expect(counting.counters.effects).toEqual(["repository:project", "git:switch"]);
+
+      // What it retained says the same thing, and is read back for the request
+      // that was admitted rather than for the one the caller holds.
+      const [outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const retained = parseGitSwitchResult(
+        outcome?.record,
+        yield* expectation(database, "release"),
+      );
+      expect(retained?.checkout.repositoryName).toBe("project");
+      expect(retained?.checkout.worktreeName).toBe(null);
+      expect(retained?.requestedBranch).toBe("release");
+      expect(retained?.requestedBase).toBe(null);
+      expect(retained?.resolvedBranch).toBe("release");
+      expect(retained?.resolvedBase).toBe(null);
+      expect(retained?.after.commit).toBe(remote.heads.get("release"));
+
+      // And so does the effect's own durable identity, which is the admitted
+      // Repository record and the admitted branch, digested.
+      const [repository] = yield* retainedRepositories(database);
+      const record = repository?.record;
+      if (record === undefined) {
+        throw new Error("the run retained no repository");
+      }
+      const [event] = yield* gitEvents(database);
+      expect(event?.type === "yield" ? event.description.configuration : undefined).toBe(
+        gitOperationFingerprint([
+          record.name,
+          record.locatorFingerprint,
+          record.requestedBase,
+          record.creationCommit,
+          record.primaryBranch,
+          record.objectFormat,
+          record.checkoutPath,
+          record.checkoutPath,
+          "release",
+          null,
+        ]),
+      );
+
+      // Replaying the original invocation is that invocation: it builds the
+      // identity the admitted values produced, so the recorded result answers
+      // it with no Git and no second transition.
+      const published = publishedRoots(path);
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const replayed = countingHost();
+      const again = yield* perform(countingOptions(replayed));
+
+      expect(String(again)).toContain("after: release");
+      expect(subcommands(replayed.counters)).not.toContain("switch");
+      expect(yield* gitEvents(database)).toHaveLength(1);
+      expect(publishedRoots(path)).toBe(published);
+    });
+  });
+});
