@@ -195,10 +195,11 @@ deterministically and passes required content into agent prompts explicitly.
 `<File>` and `<Glob>` already perform such operations, and the command already
 supplies the run around them: `xmd workflow start` creates a workflow run with
 one retained Workspace and `xmd workflow resume` continues it from the retained
-journal (#366, shipped). What that run still lacks is the composition and the
-effects inside it — named `<Repository>` and `<Worktree>` (#293), deterministic
+journal (#366, shipped). The composition inside that run is there too: named
+`<Repository>`, `<Worktree>` and lexical `<Dir>` are registered by the workflow
+host (#293, shipped). What it still lacks are the durable effects — deterministic
 local Git effects (#294), explicit `<Git.Push>` (#370), `<PullRequest>` (#295),
-and `<Issue>` (#296). None of those is built. Together they cover the work that
+and `<Issue>` (#296) — none of which is built. Together they cover the work that
 should not depend on model judgment:
 
 - retain each handoff, plan, review, and decision as a filtered journal event
