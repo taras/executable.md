@@ -457,16 +457,25 @@ const IGNORED_ADVISORY = "The following paths are ignored by one of your .gitign
  * text it likes inside the frame; it cannot make one condition's diagnostic take
  * another condition's shape around its own text.
  *
+ * A diagnostic is not a line. A pathspec is any non-empty string, newlines
+ * included, and Git embeds it verbatim — so `paths={"missing\nfile"}` produces a
+ * two-line diagnostic that is still one message. The whole of what Git wrote is
+ * compared, less the newline it ends with, which is what keeps a pathspec's own
+ * spelling from deciding where the message stops.
+ *
  * The exit status is part of the match, and a diagnostic that fits no frame is
  * not given a word: it is infrastructure.
  */
 function addFailure(outcome: GitOutcome, paths: readonly string[]): GitFailureReason | undefined {
-  // One condition, one line. Git reports these before doing anything else, so
-  // what matters is the line it led with.
-  const reported = outcome.stderr.split("\n")[0] ?? "";
+  // Exactly the newline Git ends its message with, and nothing else: trimming
+  // further would take characters a pathspec is allowed to end with.
+  const reported = outcome.stderr.endsWith("\n") ? outcome.stderr.slice(0, -1) : outcome.stderr;
 
   if (outcome.code === 1) {
-    return reported === IGNORED_ADVISORY ? "ignored-pathspec" : undefined;
+    // The advisory leads, and the paths Git found follow it. That first line is
+    // the whole of what is matched here, because nothing else in the message is
+    // Git's own words.
+    return reported.startsWith(`${IGNORED_ADVISORY}\n`) ? "ignored-pathspec" : undefined;
   }
   if (outcome.code !== 128) {
     return undefined;

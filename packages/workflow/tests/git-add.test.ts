@@ -691,6 +691,15 @@ describe("workflow Git.Add refusals", () => {
       reason: "invalid-pathspec-magic",
       sentence: "invalid Git pathspec magic",
     },
+    // A pathspec is any non-empty string, newlines included, and Git embeds it
+    // verbatim — so this one's diagnostic spans two lines and is still one
+    // message. Nothing about the component rejects or respells it.
+    {
+      name: "a pathspec that matched nothing and holds a newline",
+      written: `<Git.Add paths={${JSON.stringify("missing\nfile")}} />`,
+      reason: "unmatched-pathspec",
+      sentence: "matched no files",
+    },
   ];
 
   for (const { name, written, reason, sentence } of REFUSALS) {
