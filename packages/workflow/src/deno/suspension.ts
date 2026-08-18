@@ -22,13 +22,14 @@
  * suspension request. Remaining pending is what makes the halt the only way out
  * of the wait, and the halt is what leaves the root without a Close.
  *
- * ## Authority is where this execution is
+ * ## Authority is the operation, then the position
  *
- * `enter` accepts a suspension only from the execution that has just published
- * its request, standing at the position it published it from. Retained history
- * is evidence, not authority: on a resume the previous execution's request is
- * already in the journal, so a caller running before replay reaches it could
- * otherwise present that identifier and be believed.
+ * `enter` accepts a suspension only from `suspendFor()` itself — which says so
+ * through a slot no other module can reach — and only at the position that
+ * operation just published from. Both are required. Retained history is evidence
+ * of publication rather than of arrival, and a position is reachable by any
+ * durable operation of the same type and name, since that pair is all replay
+ * identity compares.
  *
  * There is deliberately nothing to hold and nothing to present. A capability
  * object has to be reachable to be used, and in this runtime anything reachable
@@ -51,6 +52,7 @@ import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
 import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
 import { durablePosition } from "@executablemd/durable-streams";
+import { takeSuspensionEntry } from "../suspension/entry.ts";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
@@ -216,11 +218,23 @@ export function createSuspensionController(
         yield* WorkflowSuspension.around(
           {
             *enter([suspension, request]): Operation<never> {
+              // Taken unconditionally, so one arming admits one entry however
+              // this call goes: an attempt refused below must leave nothing
+              // behind for a later caller to use.
+              const armedFor = takeSuspensionEntry();
+
               if (!(yield* atOwnRequest(options.database, suspension, request))) {
                 throw new WorkflowRequestError(
                   "this execution is not at that durable wait. A wait is entered by the execution " +
                     "that has just published its request, at the position that request was made — " +
                     "not by presenting an identifier a run retains somewhere else.",
+                );
+              }
+              if (armedFor !== suspension) {
+                throw new WorkflowRequestError(
+                  "only this run's own suspendFor() may enter a durable wait. A durable " +
+                    "operation that reproduces a retained request reaches the same position " +
+                    "without being the operation that request belongs to.",
                 );
               }
               seen = { suspensionId: suspension, request };

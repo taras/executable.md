@@ -25,13 +25,13 @@
  * Yield means the request was retained. It does not mean the wait ended, and it
  * does not authorize anything.
  *
- * **Authority last, and it is where this execution stands.** The
- * execution-owned controller is what may end the execution, and it accepts the
- * wait only from the execution that has just published its request, at the
- * position it published from. A retained request proves publication; it does not
- * prove that the caller has reached it, which on a resume are different facts.
- * Nothing is handed to the caller to present, because anything a caller could
- * hold is something another caller could obtain.
+ * **Authority last, and it is this operation running.** The execution-owned
+ * controller accepts the wait only from this operation, at the position it just
+ * published from. Neither half is sufficient alone: a retained request proves
+ * publication rather than arrival, and a position can be reached by any durable
+ * operation of the same shape. Nothing is handed to the caller to present,
+ * because anything a caller could hold is something another caller could
+ * obtain.
  *
  * ## Why replay reaches the same wait
  *
@@ -48,6 +48,7 @@ import { canonicalFingerprint, type Json } from "@executablemd/core";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
 import { getWorkflowRun } from "../run.ts";
+import { armSuspensionEntry } from "./entry.ts";
 import {
   parseSuspensionRequest,
   WorkflowSuspension,
@@ -113,9 +114,14 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
   const id = suspensionId(run.runId, position);
 
   // Published before the wait is entered, and in that order for a reason: the
-  // retained request is what authorizes the wait, so a controller asked to
-  // suspend an execution that published nothing has nothing to accept.
+  // controller reads the request back from the position this operation is about
+  // to stand at, so a wait entered before its request exists has nothing behind
+  // it to check.
   yield* publishRequest(id, parsed);
 
+  // Armed immediately before entering, and taken by the controller: the wait is
+  // entered by the operation that is running, not by whatever reached this
+  // position.
+  armSuspensionEntry(id);
   return yield* WorkflowSuspension.operations.enter(id, parsed);
 }

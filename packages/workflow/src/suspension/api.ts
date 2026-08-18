@@ -17,19 +17,25 @@
  * different waits from receiving each other's input. A caller that could name
  * its own would be a caller that could claim another wait's answer.
  *
- * ## Publication is the authority
+ * ## Only the operation that reached the wait may enter it
  *
  * Ending an execution is a lifecycle act, so entering a wait has to be earned
- * rather than asked for. What earns it is the journal: the controller accepts a
- * suspension only when the run already retains the request for it, under the
- * exact identifier that this run and that position derive.
+ * rather than asked for, and three different things could be mistaken for
+ * earning it. Holding an identifier is not enough — a resumed run's own history
+ * spells one out. Reaching the right durable position is not enough either — any
+ * durable operation of the same type and name replays the retained request and
+ * lands there, because that pair is all replay identity compares. And a retained
+ * request proves publication, which is not the same as arrival.
+ *
+ * So the controller accepts a wait only from `suspendFor()` itself, at the
+ * position it just published from, with the retained request at that position
+ * describing what is presented. The operation says it is running through a slot
+ * no other module can reach; the rest is read from the run.
  *
  * Nothing is handed to the caller to present. An object would have to be
  * reachable to be used, and anything reachable by name — a context, an API — is
- * reachable by whatever else knows the name, which is not authority. Retained
- * history is not like that: a caller cannot arrange for the journal to hold a
- * request it did not publish through the ordinary durable path, and cannot
- * choose the identifier that path derives.
+ * reachable by whatever else knows the name, which is selection rather than
+ * authority.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";

@@ -18,7 +18,13 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { call, type Operation, race, scoped } from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
-import { type DurableEvent, durableCall, type Json } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  type DurableEvent,
+  durableCall,
+  type Json,
+  type Workflow,
+} from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../src/run.ts";
@@ -119,6 +125,22 @@ function attempt(
 
     return { notice, events: yield* stream.readAll(), thrown };
   });
+}
+
+/**
+ * A durable operation built to look like a published suspension request.
+ *
+ * Exactly what document-side code can reach: the public effect type and the
+ * public factory. Yielded where the real request sits, it replays that retained
+ * row, because replay identity compares a type and a name and nothing else.
+ */
+function* forgedRequest(id: string): Workflow<void> {
+  yield createDurableOperation<string>(
+    { type: SUSPENSION_REQUEST, name: id, suspensionId: id },
+    function* () {
+      return id;
+    },
+  );
 }
 
 describe("Tier WS — a durable wait's request and identity", () => {
@@ -320,6 +342,79 @@ describe("Tier WS — a durable wait's request and identity", () => {
       expect(
         resumed.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
       ).toHaveLength(0);
+      expect(reached).toEqual(["performed-prior-effect"]);
+    });
+  });
+
+  it("WS7: a durable operation wearing the request's shape does not enter its wait", function* () {
+    yield* withRun(function* (database) {
+      const reached: string[] = [];
+
+      function* prior(): Operation<void> {
+        yield* durableCall("prior", function* () {
+          reached.push("performed-prior-effect");
+          return "done";
+        });
+      }
+
+      // The real wait, published by the real operation.
+      const first = yield* attempt(database, function* () {
+        yield* prior();
+        yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+      });
+      const id = first.notice?.suspensionId ?? "";
+      expect(id).not.toBe("");
+
+      // A clean resume first: the prior effect replays, the retained request
+      // replays, and the real operation reports the same wait.
+      const clean = yield* attempt(database, function* () {
+        yield* prior();
+        yield* suspendFor({ request: { kind: "approval" }, responseSchema: SCHEMA });
+      });
+      expect(clean.notice?.suspensionId).toBe(id);
+      expect(requests(clean.events)).toHaveLength(1);
+      expect(
+        clean.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toHaveLength(0);
+
+      // Now a resume that never calls `suspendFor()`. It replays the prior
+      // effect, then replays the retained request with an operation it built
+      // itself — replay identity is a type and a name, so this lands on exactly
+      // the position the real wait occupies — and enters through the provider's
+      // public name.
+      let refusal = "";
+      const forged = yield* attempt(database, function* () {
+        yield* prior();
+        yield* forgedRequest(id);
+        const Same: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
+          "executablemd.workflow.suspension",
+          {
+            // deno-lint-ignore require-yield
+            *enter(): Operation<Json> {
+              throw new Error("unreachable");
+            },
+          },
+        );
+        try {
+          yield* Same.operations.enter(id, {
+            request: { kind: "approval" },
+            responseSchema: SCHEMA,
+          });
+          refusal = "accepted";
+        } catch (error) {
+          refusal = String(error);
+        }
+      });
+
+      // Standing in the right place is not being the right operation.
+      expect(refusal).toContain("only this run's own suspendFor()");
+      expect(forged.notice).toBeUndefined();
+
+      // It settled no wait and published nothing: the request it replayed is
+      // still the one the real operation made.
+      expect(requests(forged.events)).toHaveLength(1);
+
+      // And the prior effect was performed once, by the first execution.
       expect(reached).toEqual(["performed-prior-effect"]);
     });
   });
