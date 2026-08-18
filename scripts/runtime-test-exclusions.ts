@@ -217,6 +217,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
+    path: "packages/workflow/tests/workflow-suspension.test.ts",
+    reason:
+      "publishes and replays durable suspension requests against a real node:sqlite run database through the Deno lifecycle adapter; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/workflow-suspension.test.ts",
+    reason:
+      "suspends and resumes a real run store through `runWorkflow()`, reading the node:sqlite database it settles; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/cli/tests/workflow-lifecycle-control.test.ts",
     reason:
       "drives `xmd workflow cancel` and `delete` against a real node:sqlite run store, which only the Deno entrypoints open; under Node and Bun the command refuses, and workflow-host.test.ts asserts that refusal on every runtime",
