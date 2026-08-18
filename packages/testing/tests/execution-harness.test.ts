@@ -10,14 +10,17 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, withResolvers } from "effection";
+import { createContext, scoped, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute, registerComponents } from "@executablemd/core";
+import { execute, TestBehavior } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
+import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
 import type { ExecutionHostRequest } from "../src/execution-host.ts";
 import type { TestResult } from "../src/test-api.ts";
@@ -54,7 +57,11 @@ function* runHarness(
     if (options.around) {
       yield* options.around();
     }
-    const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
+    // The harness authority is a delivery the host attaches, so these tests are
+    // the host: without this, `<Execution>` is recognized and refused.
+    const execution = yield* executeInstalled({ path: "README.md", stream: new InMemoryStream() }, [
+      testHarnessInstallation(),
+    ]);
     const chunks: string[] = [];
     const output = yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -551,26 +558,114 @@ describe("authority", () => {
   });
 });
 
-describe("without a trusted host", () => {
-  it("refuses before the child's root is imported", function* () {
-    const run = yield* scoped(function* () {
-      const files = {
-        "README.md": doc(
-          '<Test name="no-host">',
-          '<Execution host="run" target="child.md" as="child" />',
-          "</Test>",
-        ),
-        "child.md": doc("child"),
-      };
+describe("the authority path", () => {
+  const DOC = {
+    "README.md": doc(
+      '<Test name="no-authority">',
+      '<Execution host="run" target="child.md" />',
+      "</Test>",
+    ),
+    "child.md": doc("child"),
+  };
+
+  /** One run, with the host attaching exactly what the case is about. */
+  function* runWith(
+    files: Record<string, string>,
+    installations: readonly ExecutionInstallation[],
+    around?: () => Operation<void>,
+  ): Operation<{ results: readonly TestResult[]; failure: string }> {
+    return yield* scoped(function* () {
       yield* useStubFs(files);
+      // Installed ahead of the session, so a handler this case composes onto a
+      // behavior hook is the outermost one and actually observes the call.
+      if (around) {
+        yield* around();
+      }
       const tests = yield* useTesting();
-      yield* registerComponents([]);
-      const execution = yield* execute({ path: "README.md", stream: new InMemoryStream() });
-      const output = yield* forEach(function* () {}, execution.output);
+      yield* useStubExecutionHost({ files });
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: new InMemoryStream() },
+        installations,
+      );
+      yield* forEach(function* () {}, execution.output);
       const completion = yield* execution;
-      return { output, chunks: [], completion, results: yield* tests.results, log: undefined };
+      return {
+        results: yield* tests.results,
+        failure: completion.ok ? "" : completion.error.message,
+      };
     });
+  }
+
+  it("refuses inside a real <Test> when the host attached no installer", function* () {
+    // The capability exists only as the argument of a delivery, so a host that
+    // attached no receiver leaves every test without one — including this one,
+    // which is a canonical <Test> in every other respect.
+    const run = yield* runWith(DOC, []);
     expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.message).toContain("canonical <Test>");
+  });
+
+  it("refuses when a harness exists but no trusted host profile does", function* () {
+    const run = yield* scoped(function* () {
+      yield* useStubFs(DOC);
+      const tests = yield* useTesting();
+      const execution = yield* executeInstalled(
+        { path: "README.md", stream: new InMemoryStream() },
+        [testHarnessInstallation()],
+      );
+      yield* forEach(function* () {}, execution.output);
+      yield* execution;
+      return { results: yield* tests.results, failure: "" };
+    });
     expect(run.results[0]?.error?.message).toContain("trusted host profile");
+  });
+
+  it("hands nothing to installers planted under the context's name", function* () {
+    const stolen: unknown[] = [];
+    // The name is public — it is in the source. What is not public is the value:
+    // canonical execution publishes one this module built, and a look-alike is
+    // refused rather than delivered to.
+    const Planted = createContext<unknown>("core.test.harness-installers", undefined);
+    const run = yield* runWith(DOC, [testHarnessInstallation()], function* () {
+      yield* Planted.set({
+        installers: [
+          function* (harness: unknown) {
+            stolen.push(harness);
+          },
+        ],
+      });
+    });
+    // Two facts, and the second is why the first is not an accident. The
+    // planted installer is handed nothing; and the delivery it tried to stand in
+    // for is unaffected, because canonical execution publishes its own holder
+    // inside the invocation — nearer than anything a caller set outside it — and
+    // would refuse an unbranded value even if one were nearer.
+    expect(stolen).toEqual([]);
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  it("does not carry the capability in what <Test>'s behavior is called with", function* () {
+    const arguments_: unknown[][] = [];
+    const run = yield* runWith(
+      {
+        "README.md": doc('<Test name="behavior">', "body", "</Test>"),
+      },
+      [testHarnessInstallation()],
+      function* () {
+        // Public middleware on the behavior hook. It sees what a test was
+        // written with and nothing else: no argument carries authority, so a
+        // second loaded copy composing here acquires none either.
+        yield* TestBehavior.around({
+          *test(args, next) {
+            arguments_.push([...args]);
+            return yield* next(...args);
+          },
+        });
+      },
+    );
+    expect(run.results[0]?.status).toBe("pass");
+    expect(arguments_.length).toBe(1);
+    expect(arguments_[0]?.length).toBe(1);
+    expect(arguments_[0]?.[0]).toEqual({ name: "behavior" });
   });
 });

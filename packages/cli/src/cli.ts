@@ -71,7 +71,12 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { DocumentTargetInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
+import {
+  installTestingComponents,
+  TestFailureError,
+  testHarnessInstallation,
+  useTesting,
+} from "@executablemd/testing";
 import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
@@ -692,7 +697,10 @@ function* runDocument(
       // commands' output to the reader and accumulates none of it.
       retainProcessOutput,
     },
-    mode.installations ?? [],
+    // The harness installer is this command's, not the document's: canonical
+    // `<Test>` hands each invocation's authority to whoever the host attached,
+    // and this is where `xmd` says that is the testing package.
+    [...(mode.installations ?? []), testHarnessInstallation()],
   );
 
   // Consume the output stream with forEach.

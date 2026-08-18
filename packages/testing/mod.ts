@@ -31,6 +31,10 @@ export { useTesting } from "./src/use-testing.ts";
 // the request-only host-profile surface; the trusted answer is the CLI's, and
 // it is installed with `installExecutionHost`.
 export { ExecutionHost, ExecutionHostError, installExecutionHost } from "./src/execution-host.ts";
+// The authority path. A trusted host attaches this to `executeInstalled()`, and
+// canonical `<Test>` calls it with each invocation's harness; a document run
+// without it recognizes `<Execution>` and refuses it.
+export { testHarnessInstallation } from "./src/execution-harness.ts";
 export type {
   ChildInvocation,
   ChildSettlement,

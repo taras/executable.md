@@ -2143,6 +2143,27 @@ construct one, and it expires when the invocation is dismantled, so nothing can
 keep one. Each nested execution spends a single-use authorization derived from
 it; a second spend, and a spend after the test has finished, are refusals.
 
+**The harness is delivered, never published.** There is no reader, no exported
+accessor, and no context holding one: an authority reachable by name is an
+authority every same-name context, every loaded copy and every component running
+inside a test can take, and contextual surfaces here are policy and composition
+only. A trusted host attaches a **test harness installer** to the execution — a
+plain function it holds and passes, beside its admissions and preparations — and
+canonical `<Test>` calls it, inside the invocation, with that invocation's
+harness. What the receiver does with the capability is close over it: the
+definitions that can run a child are the ones that were created with it in
+scope, registered in the invocation's own frame where they shadow a refusing
+default for exactly that test's body. Nothing asks for the capability, so
+nothing is refused a request for it; a document whose host attached no installer
+has no nested-execution authority anywhere in it.
+
+The installers reach `<Test>` through a context, because a component function is
+reached through the engine and there is no other way down. That context carries
+no authority — it holds the host's functions, and calling one requires a harness
+only canonical core mints — and it is branded, so a value planted under the same
+name is refused rather than delivered to. A shadowing attempt therefore ends
+with no harness installed, which is the safe direction.
+
 The harness asks a **host profile** for its child through a request, and for the
 reason every other capability-backed surface here does: a handler given the
 child could answer without delegating, and its invented answer would *be* the

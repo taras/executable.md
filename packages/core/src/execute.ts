@@ -127,6 +127,8 @@ import { useEvalScope } from "@effectionx/scope-eval";
 import { declaredRouting, FOREGROUND, route, withRouting } from "./foreground.ts";
 import type { ForegroundRouting } from "./foreground.ts";
 import { checkedFailureLedger } from "./component-failures.ts";
+import { provideTestHarnessInstallers } from "./test-harness.ts";
+import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import { useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
@@ -2200,6 +2202,17 @@ export interface ExecutionInstallation {
    * the run before it exists.
    */
   readonly prepare?: DurablePreparation;
+  /**
+   * Who receives the harness canonical `<Test>` mints for each of its
+   * invocations.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * for the same reason: what a test may deliver its authority to is fixed
+   * before anything can observe or replace it. Nothing is published — the
+   * capability exists only as the argument of this call — so a document run by
+   * a host that attaches none has no nested-execution authority anywhere in it.
+   */
+  readonly testHarness?: TestHarnessInstaller;
   install?(): Operation<void>;
 }
 
@@ -2497,6 +2510,18 @@ function* invoke(
           ];
     }),
   );
+
+  // Read once and frozen, like the preparations above, and published before any
+  // installation runs: a property that answered differently the second time
+  // would otherwise let a host be tested for one receiver and deliver to
+  // another.
+  const harnessInstallers = Object.freeze(
+    installations.flatMap((installation) => {
+      const testHarness = installation.testHarness;
+      return testHarness === undefined ? [] : [testHarness];
+    }),
+  );
+  yield* provideTestHarnessInstallers(harnessInstallers);
 
   for (const installation of installations) {
     if (installation.install) {

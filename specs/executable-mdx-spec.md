@@ -1160,9 +1160,10 @@ root. A Markdown test writes `<Execution host="run" …>` to execute a reference
 document, one selected target inside it, or inline source, under the trusted
 host's production assembly — its own root import, journal, output stream, scope
 and teardown, in a scope that does not descend from the document that ran it.
-The authority is minted by canonical `<Test>` and expires with that invocation,
-so a repository `Test` selected ahead of core's default confers none of it here
-either. The authored surface, the declarations that configure a child, and the
+The authority is minted by canonical `<Test>`, expires with that invocation, and
+is delivered to a receiver the trusted host attached rather than published
+anywhere — so a repository `Test` selected ahead of core's default confers none
+of it, and neither does a name, a context, a prop or any middleware. The authored surface, the declarations that configure a child, and the
 outcome it publishes are specified in `specs/testing-spec.md`.
 
 `<PrintErrors>`'s authority is
@@ -9603,7 +9604,8 @@ timed.
 | NEX6–NEX8 | Failure | With `as`, a settled `Err` is assertable; without `as`, it fails the owning test; the output rendered before the failure survives |
 | NEX9–NEX11 | Display and collection | The second chunk is produced only after the first reached this document's consumer; a child nothing collects is still displayed; `<Capture>` around `<Execution>` holds lexical content and never the child's stream |
 | NEX12–NEX15 | Journal | A transient run retains nothing; `<CollectJournal>` without a selected journal fails before the root import; `<DiagnosticJournal>` retains and is collectable; every declaration is settled before the host is first asked for a child |
-| NEX16–NEX22 | Authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
+| NEX16–NEX22 | Host-profile authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host profile each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
+| NEX23–NEX26 | Harness authority | A canonical `<Test>` whose host attached no installer refuses; installers planted under the delivery context's name are handed nothing and displace no real delivery; the `<Test>` behavior hook is called with the test's props alone, so middleware and a second loaded copy composing there acquire nothing |
 | NEXH1–NEXH4 | Production assembly | Under `xmd test`, a child resolves `./dir/kebab-name.md` and `file.md#Target`, runs a foreground command through the entrypoint's own adapter, collects a diagnostic journal, leaves no file behind for inline source, and refuses `<WorkflowRun>` on a host with no workflow profile |
 
 

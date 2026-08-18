@@ -16,17 +16,27 @@
  * and a lifetime bounded by the invocation that minted it, so nothing can keep
  * one.
  *
- * ## What this is not
+ * ## Where it goes, and how
  *
- * It is not a transport that hides. It is published on a context, and a context
- * is keyed by name, so a `.ts` component running inside a test could name the
- * same context and read the same value. That is not the boundary. The boundary
- * is that holding a harness is worth nothing on its own: spending one is
- * `@executablemd/testing`'s private path, and running the child at all needs a
- * trusted host profile the CLI installs. What this rules out is the thing a
- * name-keyed context cannot rule out for itself — a *forged* harness, and a
- * *real* harness used after the test that owned it is over. Both are refused
- * here, by identity and by lifetime, rather than by asking the value what it is.
+ * Nowhere anybody can ask for it. There is no reader, no exported accessor and
+ * no context holding a harness: an authority published on a name is an
+ * authority every same-name context, every loaded copy and every component
+ * running inside a test can take, and this architecture keeps contextual
+ * surfaces for policy and composition only.
+ *
+ * So the capability is *delivered*, not published. A trusted host attaches a
+ * `TestHarnessInstaller` to the execution — a plain function the host holds and
+ * passes, the same way it attaches an admission or a preparation — and
+ * canonical `<Test>` calls it, inside the invocation, with that invocation's
+ * harness. What the installer does with it is close over it. Nothing that did
+ * not receive the call has it, and there is nowhere to go and read it.
+ *
+ * The installers reach `<Test>` through a context, because a component function
+ * is reached through the engine and there is no other way down. That context
+ * carries no authority: it holds the host's functions, and calling one requires
+ * a harness that only this module mints. It is also branded, so a value planted
+ * under the same name is refused rather than handed a capability — a shadowing
+ * attempt ends with no harness installed, which is the safe direction.
  *
  * ## Single use
  *
@@ -138,41 +148,91 @@ export class TestHarness {
 }
 
 /**
- * The harness of the `<Test>` invocation currently expanding, if there is one.
+ * What a trusted host attaches in order to receive one test's harness.
  *
- * Named, like every Effection context, so a second loaded copy of this module
- * reads what the copy that is expanding the document published. What the name
- * does not buy anybody is a harness: a value planted here that this module did
- * not build is refused by `useTestHarness()`.
+ * Called once per canonical `<Test>` invocation, inside that invocation, before
+ * its body expands. The harness it is handed is that invocation's and expires
+ * with it, so an installer that keeps one keeps something already dead.
  */
-const CurrentHarness: Context<unknown> = createContext<unknown>("core.test.harness", undefined);
+export type TestHarnessInstaller = (harness: TestHarness) => Operation<void>;
 
 /**
- * Mint this invocation's harness and publish it for the body it is about to
- * expand.
+ * The installers this execution runs, as a value only this module builds.
+ *
+ * Branded on purpose, and against the ordinary rule that a context value must
+ * cross loaded copies unbranded. Nothing here is meant to cross: these are the
+ * functions one execution's own host attached, read by the same copy of core
+ * that is expanding the document. What branding buys is that a value somebody
+ * planted under this name is not mistaken for the host's — the harness is never
+ * handed to it, and `<Test>` proceeds with no harness at all.
+ */
+class Attached {
+  readonly #installers: readonly TestHarnessInstaller[];
+
+  constructor(installers: readonly TestHarnessInstaller[]) {
+    this.#installers = Object.freeze([...installers]);
+  }
+
+  /** The functions this execution's host attached, in attachment order. */
+  get installers(): readonly TestHarnessInstaller[] {
+    return this.#installers;
+  }
+
+  /** Whether this class built `value`, answered without trusting it. */
+  static own(value: unknown): value is Attached {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    try {
+      return #installers in value;
+    } catch {
+      return false;
+    }
+  }
+}
+
+const AttachedInstallers: Context<unknown> = createContext<unknown>(
+  "core.test.harness-installers",
+  undefined,
+);
+
+/**
+ * Publish what this execution's host attached.
+ *
+ * Called by canonical execution before the document runs, with the functions it
+ * captured by value from the installations — so what a `<Test>` can deliver to
+ * is fixed before any installation, middleware or document code exists.
+ */
+export function* provideTestHarnessInstallers(
+  installers: readonly TestHarnessInstaller[],
+): Operation<void> {
+  yield* AttachedInstallers.set(new Attached(installers));
+}
+
+/**
+ * Mint this invocation's harness and deliver it to whoever the host attached.
  *
  * Called from canonical core's own `<Test>`, in the invocation's own frame, so
- * the harness is reachable from everything the test expands and from nothing
- * after it. Expiry is registered before the value is published: a harness that
- * outlives its test would be a test's authority held by whatever kept it.
+ * an installer's registrations land where the test's body will see them and are
+ * removed with the test. Expiry is registered before the capability exists: a
+ * harness that outlived its test would be a test's authority held by whatever
+ * kept it.
+ *
+ * With nothing attached this mints nothing and does nothing. A document run by
+ * a host that never attached an installer therefore has no nested-execution
+ * authority anywhere in it, which is the default.
  */
-export function* provideTestHarness(): Operation<void> {
+export function* installTestHarness(): Operation<void> {
+  const attached = yield* AttachedInstallers.get();
+  if (!Attached.own(attached) || attached.installers.length === 0) {
+    return;
+  }
   const invocation = new Invocation();
   yield* ensure(() => {
     invocation.live = false;
   });
-  yield* CurrentHarness.set(new TestHarness(invocation));
-}
-
-/**
- * The harness this scope may spend, or `undefined` outside a canonical test.
- *
- * `undefined` rather than a throw, because "there is no harness here" is the
- * ordinary answer for every document that is not a test, and the caller has a
- * better sentence to say about it than this module does. A value that is not
- * one of ours is the same answer: it says nothing about who planted it.
- */
-export function* useTestHarness(): Operation<TestHarness | undefined> {
-  const published = yield* CurrentHarness.get();
-  return TestHarness.own(published) ? published : undefined;
+  const harness = new TestHarness(invocation);
+  for (const install of attached.installers) {
+    yield* install(harness);
+  }
 }
