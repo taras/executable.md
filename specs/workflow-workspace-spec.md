@@ -1106,7 +1106,16 @@ link anywhere under `objects/` redirects a read before Git reports anything abou
 it — both are files inside the Workspace, so both are things a document can
 write. Everything Git may traverse is therefore proven to resolve inside the
 object database this run authenticated, before the first remote observation and
-after every local authority check. A graph that leaves it is rejected rather than
+after every local authority check.
+
+That chain is read the way Git reads it, spelling included. An entry beginning
+with `"` is a C-style quoted path Git unquotes before resolving anything, so the
+same bytes name an external database to Git and a relative path with quote
+characters in its name to anything comparing spellings — and a directory of that
+literal name, planted inside the authenticated database, would answer for a
+traversal that never goes there. Quoting Git itself rejects is ordinary text to
+Git and to this proof alike. An entry whose exact path cannot be named is
+refused rather than approximated. A graph that leaves it is rejected rather than
 repaired: deleting an authored alternate would publish from a database the run
 edited on the author's behalf, and ignoring one would publish from a database
 that is not the one it verified. The refusal is a boundary failure — nothing is

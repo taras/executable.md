@@ -125,19 +125,195 @@ function* containedTree(directory: string, operation: string): Operation<void> {
 }
 
 /**
- * The object directories one alternates file names, as Git would read them.
+ * What one alternates entry turns out to be.
  *
- * One path per line. A blank line is nothing and a `#` line is a comment, which
- * is what Git's own reader does with them; every other line is a path, absolute
- * or relative to the object directory that named it.
+ * `ignored` is a comment or an empty entry, which Git skips. `path` is an
+ * object directory Git will traverse. `undecidable` is an entry this reading
+ * cannot say the exact path of — and an entry whose path cannot be named
+ * exactly cannot be held to containment, so it is refused rather than guessed.
  */
-function alternatePaths(content: string, from: string): string[] {
-  const paths: string[] = [];
-  for (const line of content.split("\n")) {
-    if (line === "" || line.startsWith("#")) {
+type AlternateEntry =
+  | { readonly kind: "ignored" }
+  | { readonly kind: "path"; readonly value: string }
+  | { readonly kind: "undecidable" };
+
+/** The one-character escapes Git's C-style unquoting understands. */
+const ESCAPES: ReadonlyMap<string, number> = new Map([
+  ["a", 0x07],
+  ["b", 0x08],
+  ["f", 0x0c],
+  ["n", 0x0a],
+  ["r", 0x0d],
+  ["t", 0x09],
+  ["v", 0x0b],
+  ["\\", 0x5c],
+  ['"', 0x22],
+]);
+
+const OCTAL = /^[0-7]$/;
+
+type Unquoted =
+  /** The path the quoting names, and where the closing quote left off. */
+  | { readonly kind: "path"; readonly value: string; readonly end: number }
+  /** Quoting Git's own reader rejects, which it then reads as ordinary text. */
+  | { readonly kind: "literal" }
+  /** Bytes this host cannot name a path with, so the exact path is unknown. */
+  | { readonly kind: "undecidable" };
+
+/** The path these bytes name, or `undefined` when they name none. */
+function decodePath(bytes: readonly number[]): string | undefined {
+  if (bytes.includes(0)) {
+    return undefined;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read a C-style quoted alternates entry the way Git's own unquoting reads one.
+ *
+ * Bytes rather than characters, because that is what Git unquotes into and what
+ * it hands the operating system: an octal escape names one byte, and three of
+ * them can name one character. Assembling bytes and decoding once is what keeps
+ * the path this produces the path Git would open.
+ *
+ * Quoting Git rejects — an unterminated string, an escape it does not know, a
+ * short octal escape — is not an error here either. Git falls back to reading
+ * the line as ordinary text, so this says `literal` and the caller does the
+ * same, which is what keeps a broken-looking line safely classified rather than
+ * quietly resolved as something it is not.
+ */
+function unquoteCStyle(text: string): Unquoted {
+  const encoder = new TextEncoder();
+  const bytes: number[] = [];
+  let index = 1;
+
+  for (;;) {
+    let plain = index;
+    while (plain < text.length && text[plain] !== '"' && text[plain] !== "\\") {
+      plain += 1;
+    }
+    for (const byte of encoder.encode(text.slice(index, plain))) {
+      bytes.push(byte);
+    }
+    index = plain;
+    if (index >= text.length) {
+      return { kind: "literal" };
+    }
+
+    const delimiter = text[index];
+    index += 1;
+    if (delimiter === '"') {
+      const value = decodePath(bytes);
+      return value === undefined ? { kind: "undecidable" } : { kind: "path", value, end: index };
+    }
+
+    const escape = text[index];
+    index += 1;
+    if (escape === undefined) {
+      return { kind: "literal" };
+    }
+    const simple = ESCAPES.get(escape);
+    if (simple !== undefined) {
+      bytes.push(simple);
       continue;
     }
-    paths.push(line.startsWith("/") ? line : `${from}/${line}`);
+    const second = text[index];
+    const third = text[index + 1];
+    if (
+      !OCTAL.test(escape) ||
+      second === undefined ||
+      third === undefined ||
+      !OCTAL.test(second) ||
+      !OCTAL.test(third)
+    ) {
+      return { kind: "literal" };
+    }
+    index += 2;
+    bytes.push((Number(escape) << 6) | (Number(second) << 3) | Number(third));
+  }
+}
+
+/**
+ * The next entry an alternates file holds, and what is left after it.
+ *
+ * This is Git's `parse_alt_odb_entry`, and being Git's is the whole point. A
+ * line is not the unit: a `#` line is a comment, a line beginning with `"` is a
+ * **quoted** path that Git unquotes before it resolves anything — and a quoted
+ * string may contain the separator, so where an entry ends is decided by the
+ * quoting rather than by the next newline. Everything else is ordinary text.
+ *
+ * Reading a quoted entry literally is what a validator must not do. The two
+ * spellings resolve to different places on purpose: `"/elsewhere/objects"` is
+ * an external database to Git and a relative path with quote characters in its
+ * name to anything comparing strings, so a directory of that literal name sits
+ * inside the authenticated database and answers for a traversal that never goes
+ * there.
+ *
+ * A closing quote with more text after it on its line is the one shape this
+ * refuses. Git consumes it in a way no containment check can restate as a
+ * single path, and an entry whose exact path cannot be named cannot be proven
+ * contained.
+ */
+function nextAlternateEntry(text: string): { entry: AlternateEntry; rest: string } {
+  const separator = text.indexOf("\n");
+  const line = separator < 0 ? text.length : separator;
+  const after = (end: number): string => (end < text.length ? text.slice(end + 1) : "");
+
+  if (text.startsWith("#")) {
+    return { entry: { kind: "ignored" }, rest: after(line) };
+  }
+
+  if (text.startsWith('"')) {
+    const unquoted = unquoteCStyle(text);
+    if (unquoted.kind === "undecidable") {
+      return { entry: { kind: "undecidable" }, rest: "" };
+    }
+    if (unquoted.kind === "path") {
+      const trailing = text[unquoted.end];
+      if (trailing !== undefined && trailing !== "\n") {
+        return { entry: { kind: "undecidable" }, rest: "" };
+      }
+      return { entry: { kind: "path", value: unquoted.value }, rest: after(unquoted.end) };
+    }
+    // Broken quoting. Git reads the line as ordinary text, and so does this.
+  }
+
+  const literal = text.slice(0, line);
+  return {
+    entry: literal === "" ? { kind: "ignored" } : { kind: "path", value: literal },
+    rest: after(line),
+  };
+}
+
+/**
+ * Every object directory one alternates file names, resolved as Git resolves it.
+ *
+ * A relative entry is relative to the object directory that named it, which is
+ * what Git's own `relative_base` makes it.
+ */
+function alternatePaths(content: string, from: string, operation: string): string[] {
+  const paths: string[] = [];
+  let rest = content;
+  while (rest !== "") {
+    const scanned = nextAlternateEntry(rest);
+    rest = scanned.rest;
+    const entry = scanned.entry;
+    if (entry.kind === "undecidable") {
+      uncontained(
+        operation,
+        "its object database holds an alternates entry whose object directory this run " +
+          "cannot name exactly, so it cannot be proven to stay inside the database this run " +
+          "authenticated",
+      );
+    }
+    if (entry.kind === "ignored") {
+      continue;
+    }
+    paths.push(entry.value.startsWith("/") ? entry.value : `${from}/${entry.value}`);
   }
   return paths;
 }
@@ -169,7 +345,7 @@ function* containedAlternates(
   if ((yield* entry(file))?.isFile() !== true) {
     return;
   }
-  for (const named of alternatePaths(yield* readTextFile(file), directory)) {
+  for (const named of alternatePaths(yield* readTextFile(file), directory, operation)) {
     let resolved: string;
     try {
       resolved = yield* until(realpath(named));

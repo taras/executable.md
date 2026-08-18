@@ -1040,7 +1040,11 @@ address it.
 What an attachment grants access to is authenticated separately from where it
 came from, because local state can name further local state: a Git object
 database names further ones through its alternates chain, and a symbolic link
-under it redirects a read before Git reports anything about it. The graph a
+under it redirects a read before Git reports anything about it. Such a graph is
+read in the consuming tool's own grammar rather than as text: Git unquotes a
+C-style quoted alternates entry before resolving it, so a containment proof that
+compared spellings could be satisfied by a decoy of that literal name while the
+traversal went elsewhere. The graph a
 provider could traverse is therefore proven contained on the live provider's
 first use of the attachment — before any external observation, and on no other
 path, so a completed replay reaches no provider and performs no such proof. A

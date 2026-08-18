@@ -992,6 +992,94 @@ describe("workflow Git.Push object-source containment", () => {
   });
 
   /**
+   * The same escape, spelled the way Git reads it rather than the way a string
+   * comparison does.
+   *
+   * `objects/info/alternates` is not a list of literal lines. An entry
+   * beginning with `"` is a C-style quoted path, and Git unquotes it before it
+   * resolves anything — so `"/elsewhere/objects"` is an external database to
+   * Git and a *relative* path whose first segment is a quote character to
+   * anything that compares the spelling. A validator reading it literally is
+   * answered by a directory of that literal name planted inside the
+   * authenticated database, and the traversal it thinks it described goes
+   * somewhere else entirely.
+   *
+   * Both halves are planted here: the quoted entry Git will follow, and the
+   * literal decoy that makes a literal reading accept it.
+   */
+  it("refuses a quoted alternates entry whose literal spelling has an inside decoy", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    const foreign = yield* useBareRemote({
+      commits: [{ message: "foreign", entries: [{ path: "foreign.txt", content: "foreign\n" }] }],
+    });
+    const foreignCommit = foreign.heads.get("main") ?? "";
+    const foreignObjects = `${foreign.locator}/objects`;
+    // Valid C-style quoting: the path holds no quote or backslash of its own.
+    const quoted = `"${foreignObjects}"`;
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          document(
+            remote.locator,
+            `<Git.Switch branch="${BRANCH}" />`,
+            `<Plant />`,
+            `<Git.Push />`,
+          ),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([
+                plantObjectGraph(database, function* (workspace, checkout) {
+                  const objects = `${checkout}/.git/objects`;
+                  yield* workspace.filesystem.mkdir(`${objects}/info`, { recursive: true });
+                  yield* workspace.filesystem.writeFile(
+                    `${objects}/info/alternates`,
+                    `${quoted}\n`,
+                  );
+                  // The decoy: a real directory inside the authenticated
+                  // database whose name is the entry's literal spelling, so a
+                  // literal reading resolves it and is satisfied.
+                  yield* workspace.filesystem.mkdir(`${objects}/${quoted}`, { recursive: true });
+                }),
+              ]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      // One fixed, cause-free boundary failure, repeating no path an author
+      // wrote and no spelling they chose.
+      expect(String(failure)).toContain("executed and published nothing");
+      expect(String(failure)).not.toContain(foreignObjects);
+      expect(String(failure)).not.toContain(quoted);
+
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(yield* gitHostEvents(database)).toHaveLength(0);
+      expect(publishedRoots(path)).toBe(3);
+      expect(committedRoot(path)).toBe(latestRoot(path));
+      expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
+
+      // The escape really was reachable, and reachable through the *quoted*
+      // entry: ordinary Git in the same export unquotes it, links the foreign
+      // database and resolves a commit this run never held. The decoy is a
+      // directory with no objects in it, so nothing but the unquoting explains
+      // this answer.
+      const reached = yield* inCheckout(database, yield* checkoutPath(database), function* (run) {
+        const top = (yield* run(["rev-parse", "--show-toplevel"])).trim();
+        return nativeGit(["cat-file", "-t", foreignCommit], top, top);
+      });
+      expect(reached).toBe("commit");
+    });
+  });
+
+  /**
    * The link an author can write, which needs no chain at all.
    *
    * The operating system resolves a symbolic link before Git reports anything
