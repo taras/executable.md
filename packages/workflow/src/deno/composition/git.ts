@@ -426,7 +426,7 @@ export function* addPaths(
 ): Operation<void> {
   const outcome = yield* git.run(["add", "--", ...request.paths], request.workingDirectory);
   if (outcome.code !== 0) {
-    const refusal = addFailure(outcome);
+    const refusal = addFailure(outcome, request.paths);
     if (refusal === undefined) {
       throw new GitOperationInfrastructureError(
         request.operation,
@@ -437,29 +437,60 @@ export function* addPaths(
   }
 }
 
+/** The one line Git prints when a path a command named is ignored. */
+const IGNORED_ADVISORY = "The following paths are ignored by one of your .gitignore files:";
+
 /**
  * Which condition a refused `add` reported, or `undefined` for none of them.
  *
- * The exit status and the message together, because each of these conditions is
- * reported with both and matching one alone would let a later Git version's
- * unrelated failure wear a word this run does not mean. `LC_ALL=C` is what makes
- * the message stable; it selects a word and is then discarded.
+ * Git puts the pathspec it is complaining about *inside* its own diagnostic, so
+ * a document's own text appears in the message this reads. Searching that
+ * message for a phrase therefore lets the text answer the question: a pathspec
+ * written `../did not match any files` produces an outside-repository
+ * diagnostic that contains the unmatched phrase, and one written
+ * `:(did not match any files)x` produces an invalid-magic diagnostic that
+ * contains it too.
+ *
+ * So nothing here searches. Each condition has a fixed frame Git builds around
+ * the pathspec, and the pathspecs are what this provider just sent — so the
+ * frame is reconstructed for each of them and compared. A document can put any
+ * text it likes inside the frame; it cannot make one condition's diagnostic take
+ * another condition's shape around its own text.
+ *
+ * The exit status is part of the match, and a diagnostic that fits no frame is
+ * not given a word: it is infrastructure.
  */
-function addFailure(outcome: GitOutcome): GitFailureReason | undefined {
-  if (outcome.code === 1 && /^The following paths are ignored by/m.test(outcome.stderr)) {
-    return "ignored-pathspec";
+function addFailure(outcome: GitOutcome, paths: readonly string[]): GitFailureReason | undefined {
+  // One condition, one line. Git reports these before doing anything else, so
+  // what matters is the line it led with.
+  const reported = outcome.stderr.split("\n")[0] ?? "";
+
+  if (outcome.code === 1) {
+    return reported === IGNORED_ADVISORY ? "ignored-pathspec" : undefined;
   }
   if (outcome.code !== 128) {
     return undefined;
   }
-  if (/did not match any files/.test(outcome.stderr)) {
-    return "unmatched-pathspec";
-  }
-  if (/is outside repository/.test(outcome.stderr)) {
-    return "outside-checkout-pathspec";
-  }
-  if (/Invalid pathspec magic/.test(outcome.stderr)) {
-    return "invalid-pathspec-magic";
+
+  for (const path of paths) {
+    if (reported === `fatal: pathspec '${path}' did not match any files`) {
+      return "unmatched-pathspec";
+    }
+    // The repository root Git names is its own; what is pinned here is the
+    // pathspec, which it prints twice before saying where the repository is.
+    if (
+      reported.startsWith(`fatal: ${path}: '${path}' is outside repository at '`) &&
+      reported.endsWith("'")
+    ) {
+      return "outside-checkout-pathspec";
+    }
+    // The magic word is Git's; the pathspec closes the line.
+    if (
+      reported.startsWith("fatal: Invalid pathspec magic '") &&
+      reported.endsWith(` in '${path}'`)
+    ) {
+      return "invalid-pathspec-magic";
+    }
   }
   return undefined;
 }

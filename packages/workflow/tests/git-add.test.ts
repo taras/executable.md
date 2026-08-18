@@ -676,6 +676,21 @@ describe("workflow Git.Add refusals", () => {
       reason: "invalid-pathspec-magic",
       sentence: "invalid Git pathspec magic",
     },
+    // Git prints the pathspec inside its own diagnostic, so a document can write
+    // one condition's wording into another condition's message. What the run
+    // reports is the condition that happened, not the text that was written.
+    {
+      name: "a pathspec outside the checkout that reads like another condition",
+      written: `<Git.Add paths="../did not match any files" />`,
+      reason: "outside-checkout-pathspec",
+      sentence: "leave the checkout",
+    },
+    {
+      name: "invalid magic that reads like another condition",
+      written: `<Git.Add paths=":(did not match any files)which.txt" />`,
+      reason: "invalid-pathspec-magic",
+      sentence: "invalid Git pathspec magic",
+    },
   ];
 
   for (const { name, written, reason, sentence } of REFUSALS) {
