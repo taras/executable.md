@@ -2059,7 +2059,7 @@ Status is measured against main.
 | `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure | built on main |
 | `Expansion` / `getExpansion()` | describes the current logical element expansion | built on main |
 | document targets | catalogs a root document's addressable static headings, resolves one selector to one exact target, and projects the document to it before expansion | built on the #412 stack |
-| `xmd targets` | prints one document's catalog as full document references, by inspection alone | built on the #412 stack |
+| document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |

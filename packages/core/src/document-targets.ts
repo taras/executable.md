@@ -35,10 +35,23 @@ export interface SourceRange {
   readonly end: number;
 }
 
-/** One catalog entry: an addressable heading and the path that reaches it. */
-export interface DocumentTarget {
+/**
+ * One catalog entry as a caller reads it: what to select, and what selecting it
+ * does.
+ *
+ * The description is prose the document already carries, so it is absent
+ * whenever the section opens with anything else. It describes; it never
+ * identifies. Nothing selects, matches, projects, journals or replays by it.
+ */
+export interface DocumentTargetInfo {
   /** The canonical encoded target fragment, without a leading `#`. */
   readonly target: string;
+  /** The section's first static paragraph as visible text, when it has one. */
+  readonly description?: string;
+}
+
+/** One catalog entry: an addressable heading and the path that reaches it. */
+export interface DocumentTarget extends DocumentTargetInfo {
   /** The decoded, normalized labels the fragment encodes. */
   readonly labels: readonly string[];
   /** Which heading in the outline this entry addresses. */
@@ -52,6 +65,7 @@ interface OutlineHeading {
   readonly parent: number | undefined;
   readonly addressable: boolean;
   readonly label: string;
+  readonly description?: string;
 }
 
 /** The static heading structure of one document body, and what it addresses. */
@@ -60,6 +74,8 @@ export interface DocumentOutline {
   readonly entries: readonly DocumentTarget[];
   /** Canonical encoded fragments in source order, duplicates retained. */
   readonly targets: readonly string[];
+  /** The same entries, in the same order, each with its own description. */
+  readonly catalog: readonly DocumentTargetInfo[];
   /** Where the preamble ends: the first root-flow heading, or the body end. */
   readonly preambleEnd: number;
   readonly bodyLength: number;
@@ -813,16 +829,28 @@ function maskComponents(body: string, spans: readonly ComponentSpan[]): string {
   return masked + body.slice(cursor);
 }
 
+type RootChild = ReturnType<ReturnType<typeof remark>["parse"]>["children"][number];
+type ParagraphChild = Extract<RootChild, { type: "paragraph" }>["children"][number];
+
 interface RawHeading {
   readonly depth: number;
   readonly start: number;
   readonly end: number;
   readonly text: string;
+  /** Which root child this heading is, so the blocks after it can be read. */
+  readonly child: number;
 }
 
-function rootHeadings(masked: string): RawHeading[] {
+/** One parse of the masked body: its root blocks, and the headings among them. */
+interface RootFlow {
+  readonly children: readonly RootChild[];
+  readonly headings: readonly RawHeading[];
+}
+
+function rootFlow(masked: string): RootFlow {
+  const children = remark().parse(masked).children;
   const headings: RawHeading[] = [];
-  for (const child of remark().parse(masked).children) {
+  for (const [index, child] of children.entries()) {
     if (child.type !== "heading") {
       continue;
     }
@@ -839,9 +867,72 @@ function rootHeadings(masked: string): RawHeading[] {
       // that does not overlap a component span — and one that does is refused
       // below, so no label is ever built from blanked source.
       text: mdastToString(child, { includeHtml: false, includeImageAlt: true }),
+      child: index,
     });
   }
-  return headings;
+  return { children, headings };
+}
+
+/** A root HTML block that renders nothing: comments and whitespace only. */
+function isCommentOnly(child: RootChild): boolean {
+  return child.type === "html" && child.value.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
+}
+
+/** Whether any phrasing content here is raw HTML rather than Markdown. */
+function hasRawHtml(nodes: readonly ParagraphChild[]): boolean {
+  return nodes.some(
+    (node) => node.type === "html" || ("children" in node && hasRawHtml(node.children)),
+  );
+}
+
+/**
+ * A section's description: the visible text of its first block, when that block
+ * is a paragraph the document states rather than computes.
+ *
+ * The search stops at the first block that renders, so prose only describes a
+ * section it opens. A component, a fence, a list, a quote, or the next heading
+ * ends it with no description at all — later prose is never reached, because a
+ * paragraph below machinery describes that machinery, not the section.
+ *
+ * Staticness is decided over the whole window from the heading to the end of
+ * that paragraph, in original offsets. A masked component collapses to spaces
+ * the parse cannot see, so a paragraph that begins after one would otherwise
+ * come back as a static prefix of dynamic prose; a span anywhere in the window
+ * refuses the description instead.
+ */
+function headingDescription(
+  flow: RootFlow,
+  index: number,
+  body: string,
+  spans: readonly ComponentSpan[],
+): string | undefined {
+  const heading = flow.headings[index]!;
+  const limit = flow.headings[index + 1]?.child ?? flow.children.length;
+  for (let position = heading.child + 1; position < limit; position++) {
+    const child = flow.children[position]!;
+    if (isCommentOnly(child)) {
+      continue;
+    }
+    if (child.type !== "paragraph") {
+      return undefined;
+    }
+    const start = child.position?.start.offset;
+    const end = child.position?.end.offset;
+    if (start === undefined || end === undefined) {
+      return undefined;
+    }
+    if (spans.some((span) => span.start < end && heading.end < span.end)) {
+      return undefined;
+    }
+    if (hasUnescapedInterpolation(body.slice(start, end)) || hasRawHtml(child.children)) {
+      return undefined;
+    }
+    const text = mdastToString(child, { includeHtml: false, includeImageAlt: true })
+      .replace(/\s+/g, " ")
+      .trim();
+    return text.length === 0 ? undefined : text;
+  }
+  return undefined;
 }
 
 function overlapsComponent(heading: RawHeading, spans: readonly ComponentSpan[]): boolean {
@@ -860,12 +951,14 @@ function overlapsComponent(heading: RawHeading, spans: readonly ComponentSpan[])
  * with one title still addresses its sections by their own names.
  */
 export function outlineDocument(body: string, spans: readonly ComponentSpan[]): DocumentOutline {
-  const raw = rootHeadings(maskComponents(body, spans));
+  const flow = rootFlow(maskComponents(body, spans));
+  const raw = flow.headings;
   if (raw.length === 0) {
     return {
       headings: [],
       entries: [],
       targets: [],
+      catalog: [],
       preambleEnd: body.length,
       bodyLength: body.length,
     };
@@ -882,6 +975,7 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
       stack.pop();
     }
     const label = normalizeLabel(heading.text);
+    const description = headingDescription(flow, index, body, spans);
     headings.push({
       depth: heading.depth,
       start: heading.start,
@@ -892,6 +986,7 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
         !overlapsComponent(heading, spans) &&
         !hasUnescapedInterpolation(body.slice(heading.start, heading.end)),
       label,
+      ...(description === undefined ? {} : { description }),
     });
     stack.push(index);
   }
@@ -900,10 +995,12 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
   for (let index = 0; index < headings.length; index++) {
     const labels = pathLabels(headings, index, titleIndex);
     if (labels !== undefined) {
+      const { description } = headings[index]!;
       entries.push({
         target: labels.map(encodeTargetLabel).join("/"),
         labels,
         heading: index,
+        ...(description === undefined ? {} : { description }),
       });
     }
   }
@@ -912,6 +1009,11 @@ export function outlineDocument(body: string, spans: readonly ComponentSpan[]): 
     headings,
     entries,
     targets: entries.map((entry) => entry.target),
+    // Derived from the same ordered entries as `targets`, so the two cannot
+    // disagree about what the document addresses or in which order.
+    catalog: entries.map(({ target, description }) =>
+      description === undefined ? { target } : { target, description },
+    ),
     // The first heading in the root flow, whatever its depth. The preamble is
     // what precedes the outline, and a document may open at a deeper level than
     // the one that supplies its title — anchoring here to the shallowest

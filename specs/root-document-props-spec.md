@@ -183,6 +183,25 @@ Help reports accepted sources, descriptions, requiredness, defaults, and value
 forms without printing current command-line or environment values. A document
 with no declared properties has no document-property section.
 
+A file-backed document is described in one response: the run help and source
+grammar, then the property section when it has one, then the sections it
+addresses (Executable MDX §5.4). The property section keeps its position, and a
+required property with no value supplied is still only described — help resolves
+no value and checks no requirement.
+
+```text
+Targets in hello.md
+
+  hello.md#Greeting
+      Greet the person this run names, once.
+
+  hello.md#Farewell
+```
+
+An inline document is not a selectable document reference, so it has no target
+section however many headings its text holds. Neither has a file that addresses
+nothing.
+
 Generating help loads and validates the document's declarative metadata. It
 does not expand the document, execute code blocks, import body components,
 start agents, or create a journal.
@@ -291,6 +310,17 @@ const schema = description.props;
 const inline = yield* inspectDocument(inlineSource("---\nprops:\n  name: { type: string }\n---\n"));
 ```
 
+The same result describes what the document addresses. `targets` is the
+canonical identity surface, and the additive `targetCatalog` carries the same
+fragments, in the same order and with the same duplicates, each as a
+`DocumentTargetInfo` — its `target`, and its `description` when the section
+states one:
+
+```typescript
+const { targets, targetCatalog } = yield* inspectDocument({ path: "hello.md" });
+targetCatalog.map(({ target }) => target); // exactly `targets`
+```
+
 Inspection resolves relative paths against the contextual working directory.
 It performs the same frontmatter and schema validation as execution, but does
 not create a journal or enter the component expansion lifecycle.
@@ -360,4 +390,6 @@ CLI acceptance tests prove the individual and aggregate sources, precedence,
 boolean and array forms, invalid-source failure, document-specific help without
 execution, the document-first ordering rule, and unchanged behavior for a
 document without props. They also prove that a projected root keeps the whole
-document's declared properties, its property help, and its requirements.
+document's declared properties, its property help, and its requirements, and
+that every documented argument position answers with the property section and
+the full target section together, resolving no value.

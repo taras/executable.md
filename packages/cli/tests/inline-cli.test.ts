@@ -273,10 +273,19 @@ describe(
       expect(stderr).toContain("exclusive to xmd run");
     });
 
-    it("IE22: xmd targets takes no inline document either", function* () {
-      const { code, stderr } = yield* runCli(["targets", "-e", "# Hello"]).join();
-      expect(code).toBe(1);
-      expect(stderr).toContain("exclusive to xmd run");
+    /**
+     * An inline root is not a selectable document reference — there is no path
+     * to write a `#` after — so its help describes what it declares and offers
+     * no section to select, however many headings the text holds.
+     */
+    it("IE22: inline help describes properties and offers no target section", function* () {
+      const document = [PROPS_DOC, "", "## Section", "", "What this section does."].join("\n");
+      const { code, stdout } = yield* runCli(["-e", document, "--help"]).expect();
+      expect(code).toBe(0);
+      expect(stdout).toContain("Properties declared by <eval>");
+      expect(stdout).toContain("--props-name <string>");
+      expect(stdout).not.toContain("Targets in");
+      expect(stdout).not.toContain("What this section does.");
     });
 
     /**

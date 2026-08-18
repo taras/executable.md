@@ -208,14 +208,4 @@ describe("Tier TF — run timeout options", () => {
       expect(prepared.stderr).toContain("props schema");
     });
   });
-
-  it("TF12: the timeout options are exclusive to xmd run", function* () {
-    yield* useDocument("# Doc\n\n## Section\n", function* (dir) {
-      const { code, stderr } = yield* runCli(["targets", "doc.md", "--timeout=30s"], {
-        cwd: dir,
-      }).join();
-      expect(code).toBe(1);
-      expect(stderr).toContain("timeout options are exclusive to xmd run");
-    });
-  });
 });

@@ -1,11 +1,13 @@
 /**
  * Tier CT — CLI document targets (spec §5.4, §9.6).
  *
- * `xmd targets` lists what a document addresses, and both `xmd run` forms
- * select one section of it. Suites shell out with captured stdio so exit
- * status, stdout bytes, and diagnostics are asserted the way a caller observes
- * them; the one exception is the inspection/execution replacement seam, which
- * needs a stateful filesystem the command line cannot express.
+ * `xmd run <document> --help` describes what a document addresses, and both
+ * `xmd run` forms select one section of it. Discovery is part of help, so the
+ * catalog is read out of the same response that describes the command and the
+ * document's properties. Suites shell out with captured stdio so exit status,
+ * stdout bytes, and diagnostics are asserted the way a caller observes them;
+ * the exceptions are the inspection/execution replacement seam and the
+ * installer, which need state the command line cannot express.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -78,6 +80,30 @@ const DUPLICATE = [
   "",
 ].join("\n");
 
+/**
+ * One document holding every shape the catalog has to render: a described
+ * section, a second section whose canonical path is identical but whose prose
+ * is its own, and one that describes nothing at all.
+ */
+const CATALOG = [
+  "# Catalog",
+  "",
+  "## Same",
+  "",
+  "The first section under this canonical path.",
+  "",
+  "## Same",
+  "",
+  "The second section under the very same path.",
+  "",
+  "## Quiet",
+  "",
+  "```bash",
+  "echo nothing",
+  "```",
+  "",
+].join("\n");
+
 /** One heading per character class the canonical encoder has to escape. */
 const EXOTIC = [
   "# Exotic",
@@ -111,12 +137,15 @@ const EXOTIC = [
 /**
  * Everything discovery must not do: an unresolvable component, an executable
  * block, and an authored write. Expanding any one of them is observable — the
- * first fails the run, and the other two leave a file behind.
+ * first fails the run, and the other two leave a file behind. Its one section
+ * opens with prose, so the catalog it describes is not empty either.
  */
 const EFFECTFUL = [
   "# Effects",
   "",
   "## Work",
+  "",
+  "Describes the work without performing any of it.",
   "",
   "<NoSuchComponentAtAll />",
   "",
@@ -163,146 +192,118 @@ function* eachRuns(dir: string, expected: readonly [string, string][]): Operatio
   }
 }
 
-/**
- * Every invocation here fails with a diagnostic and no catalog.
- *
- * Split across several cases rather than one table because each row is a
- * subprocess and one case has to stay inside the shortest per-test budget of
- * the three runtimes — Bun's fixed 5s. Three invocations per case leaves the
- * margin a loaded runner needs.
- */
-function* eachRejected(dir: string, invocations: readonly string[][]): Operation<void> {
-  for (const args of invocations) {
-    const { code, stdout, stderr } = yield* runCli(["targets", ...args], { cwd: dir }).join();
-    expect({ args, code, stdout }).toEqual({ args, code: 1, stdout: "" });
-    expect(stderr.length).toBeGreaterThan(0);
-  }
+/** The target section of one help response, or "" when it has none. */
+function targetSection(stdout: string): string {
+  const at = stdout.indexOf("Targets in ");
+  return at === -1 ? "" : stdout.slice(at).trimEnd();
 }
 
 describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResources: false }, () => {
-  it("CT1: xmd targets prints full canonical references in source order", function* () {
+  it("CT1: help lists full canonical references in source order", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      const { code, stdout } = yield* runCli(["targets", "doc.md"], { cwd: dir }).join();
+      const { code, stdout } = yield* runCli(["run", "doc.md", "--help"], { cwd: dir }).join();
       expect(code).toBe(0);
-      expect(stdout).toBe(
-        ["doc.md#Alpha", "doc.md#Beta", "doc.md#Beta/Nested", "doc.md#Gamma", ""].join("\n"),
+      // Every reference the document offers, once each, in the order it
+      // declares them — and no unqualified whole-document row beside them.
+      expect(targetSection(stdout)).toBe(
+        [
+          "Targets in doc.md",
+          "",
+          "  doc.md#Alpha",
+          "      ALPHA_MARKER",
+          "",
+          "  doc.md#Beta",
+          "      BETA_MARKER",
+          "",
+          "  doc.md#Beta/Nested",
+          "      NESTED_MARKER",
+          "",
+          "  doc.md#Gamma",
+          "      GAMMA_MARKER",
+        ].join("\n"),
       );
     });
   });
 
-  it("CT2: two sections with one canonical path print two lines", function* () {
-    yield* useFixture({ "doc.md": DUPLICATE }, function* (dir) {
-      const { code, stdout } = yield* runCli(["targets", "doc.md"], { cwd: dir }).join();
+  it("CT2: two sections with one canonical path are two rows, described apart", function* () {
+    yield* useFixture({ "doc.md": CATALOG }, function* (dir) {
+      const { code, stdout } = yield* runCli(["run", "doc.md", "--help"], { cwd: dir }).join();
       expect(code).toBe(0);
-      expect(stdout).toBe(["doc.md#Same", "doc.md#Same", ""].join("\n"));
+      // The ambiguity stays visible, and each row states its own prose: a
+      // catalog deduplicated by canonical path would print one of these.
+      expect(targetSection(stdout)).toBe(
+        [
+          "Targets in doc.md",
+          "",
+          "  doc.md#Same",
+          "      The first section under this canonical path.",
+          "",
+          "  doc.md#Same",
+          "      The second section under the very same path.",
+          "",
+          "  doc.md#Quiet",
+        ].join("\n"),
+      );
     });
   });
 
-  it("CT3: a document with no targets succeeds and writes no bytes", function* () {
+  it("CT3: a document with no targets has no target section at all", function* () {
     yield* useFixture({ "doc.md": "just a paragraph\n" }, function* (dir) {
-      const { code, stdout } = yield* runCli(["targets", "doc.md"], { cwd: dir }).join();
+      const { code, stdout } = yield* runCli(["run", "doc.md", "--help"], { cwd: dir }).join();
       expect(code).toBe(0);
-      expect(stdout).toBe("");
+      expect(stdout).not.toContain("Targets in");
+      // The rest of run help is unaffected by having nothing to add to it.
+      expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
     });
   });
 
-  it("CT4: discovery runs no component, block, authored write, or service", function* () {
+  it("CT4: help runs no component, block, authored write, or service", function* () {
     yield* useFixture({ "doc.md": EFFECTFUL }, function* (dir) {
-      const { code, stdout, stderr } = yield* runCli(["targets", "doc.md"], { cwd: dir }).join();
+      const { code, stdout, stderr } = yield* runCli(["run", "doc.md", "--help"], {
+        cwd: dir,
+      }).join();
       expect(code).toBe(0);
-      // Exactly the catalog: an expanded `<NoSuchComponentAtAll />` renders a
-      // positioned diagnostic, which this byte comparison would catch.
-      expect(stdout).toBe("doc.md#Work\n");
+      expect(targetSection(stdout)).toBe(
+        [
+          "Targets in doc.md",
+          "",
+          "  doc.md#Work",
+          "      Describes the work without performing any of it.",
+        ].join("\n"),
+      );
+      // An expanded `<NoSuchComponentAtAll />` renders a positioned diagnostic,
+      // and the eval block would compile into a file of its own.
+      expect(stdout).not.toContain("NoSuchComponentAtAll");
+      expect(stdout).not.toContain("EVAL_RAN");
       expect(stderr).toBe("");
       expect(yield* exists(path.join(dir, "written.txt"))).toBe(false);
       expect(yield* exists(path.join(dir, ".xmd-eval"))).toBe(false);
     });
   });
 
-  it("CT5: xmd targets refuses a fragment of its own", function* () {
+  it("CT5b: an unreadable reference and a missing file fail help too", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [[], ["doc.md#Alpha"], ["doc.md#"]]);
-    });
-  });
-
-  it("CT5b2: xmd targets refuses a second argument and a separator", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [
-        ["doc.md", "second.md"],
-        ["doc.md", "--"],
-      ]);
-    });
-  });
-
-  it("CT5c: xmd targets refuses journal and output options", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [
-        ["doc.md", "--journal", "trace.jsonl"],
-        ["doc.md", "--verbose"],
-        ["doc.md", "--raw"],
-      ]);
-      // Rejected before inspection, so the trace it named was never created.
-      expect(yield* exists(path.join(dir, "trace.jsonl"))).toBe(false);
-    });
-  });
-
-  it("CT5c2: xmd targets refuses resolution and test options", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [
-        ["doc.md", "--component-dir", "components"],
-        ["doc.md", "--no-secret-detection"],
-        ["doc.md", "--pattern", "**/*.test.md"],
-      ]);
-    });
-  });
-
-  it("CT5d: xmd targets refuses inline documents and properties", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [
-        ["-e", "# Inline"],
-        ["doc.md", "--props-who", "ada"],
-        ["doc.md", "--props", '{"who":"ada"}'],
-      ]);
-    });
-  });
-
-  it("CT5d2: xmd targets refuses agent options and unknown options", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      yield* eachRejected(dir, [
-        ["doc.md", "--approve-all"],
-        ["doc.md", "--timeout", "5"],
-        ["doc.md", "--frobnicate"],
-      ]);
-    });
-  });
-
-  it("CT5a: the missing reference and fragment diagnostics say what to write", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      const missing = yield* runCli(["targets"], { cwd: dir }).join();
-      expect(missing.stderr).toContain(
-        "xmd targets requires a document reference — `xmd targets <document.md>`",
-      );
-      const fragment = yield* runCli(["targets", "doc.md#Alpha"], { cwd: dir }).join();
-      expect(fragment.stderr).toContain(
-        "xmd targets accepts a document reference without a target selector",
-      );
-      const empty = yield* runCli(["targets", "doc.md#"], { cwd: dir }).join();
-      expect(empty.stderr).toContain(
-        "xmd targets accepts a document reference without a target selector",
-      );
-    });
-  });
-
-  it("CT5b: an unreadable reference and a missing file both fail", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      const malformed = yield* runCli(["targets", "%zz.md"], { cwd: dir }).join();
+      const malformed = yield* runCli(["run", "%zz.md", "--help"], { cwd: dir }).join();
       expect(malformed.code).toBe(1);
       expect(malformed.stderr).toContain("Invalid document reference");
       expect(malformed.stdout).toBe("");
 
-      const absent = yield* runCli(["targets", "absent.md"], { cwd: dir }).join();
+      const absent = yield* runCli(["run", "absent.md", "--help"], { cwd: dir }).join();
       expect(absent.code).toBe(1);
       expect(absent.stdout).toBe("");
+    });
+  });
+
+  it("CT5e: a schema-invalid document fails help and describes nothing", function* () {
+    yield* useFixture({ "doc.md": BROKEN_SCHEMA }, function* (dir) {
+      const { code, stdout, stderr } = yield* runCli(["run", "doc.md", "--help"], {
+        cwd: dir,
+      }).join();
+      expect(code).toBe(1);
+      expect(stderr).toContain("invalid props schema");
+      expect(stdout).toBe("");
+      // The refusal is an inspection failure, so the body it holds never ran.
+      expect(yield* exists(path.join(dir, "schema-effect.txt"))).toBe(false);
     });
   });
 
@@ -311,15 +312,19 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     // reference is refused rather than read as the literal filename.
     const doc = ["# Percent", "", "## Alpha", "", "RAW_PCT_MARKER", ""].join("\n");
     yield* useFixture({ "pct%zz.md": doc }, function* (dir) {
-      const encoded = yield* runCli(["targets", "pct%25zz.md"], { cwd: dir }).join();
+      const encoded = yield* runCli(["run", "pct%25zz.md", "--help"], { cwd: dir }).join();
       expect(encoded.code).toBe(0);
-      expect(encoded.stdout).toBe("pct%25zz.md#Alpha\n");
+      // The heading names the file, exactly as the property section above it
+      // does; every row is a reference, so every row is encoded.
+      expect(targetSection(encoded.stdout)).toBe(
+        ["Targets in pct%zz.md", "", "  pct%25zz.md#Alpha", "      RAW_PCT_MARKER"].join("\n"),
+      );
 
       const ran = yield* runCli(["run", "pct%25zz.md#Alpha", "--raw"], { cwd: dir }).join();
       expect(ran.code).toBe(0);
       expect(ran.stdout).toContain("RAW_PCT_MARKER");
 
-      const raw = yield* runCli(["targets", "pct%zz.md"], { cwd: dir }).join();
+      const raw = yield* runCli(["run", "pct%zz.md", "--help"], { cwd: dir }).join();
       expect(raw.code).toBe(1);
       expect(raw.stderr).toContain("Invalid document reference");
       expect(raw.stdout).toBe("");
@@ -334,13 +339,13 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     const hashed = ["# Hashed", "", "## Sec", "", "HASH_FILE_MARKER", ""].join("\n");
     const percent = ["# Percent", "", "## Sec", "", "PCT_FILE_MARKER", ""].join("\n");
     yield* useFixture({ "we#ird.md": hashed, "pct%25.md": percent }, function* (dir) {
-      const hash = yield* runCli(["targets", "we%23ird.md"], { cwd: dir }).join();
+      const hash = yield* runCli(["run", "we%23ird.md", "--help"], { cwd: dir }).join();
       expect(hash.code).toBe(0);
-      expect(hash.stdout).toBe("we%23ird.md#Sec\n");
+      expect(targetSection(hash.stdout)).toContain("  we%23ird.md#Sec");
 
-      const pct = yield* runCli(["targets", "pct%2525.md"], { cwd: dir }).join();
+      const pct = yield* runCli(["run", "pct%2525.md", "--help"], { cwd: dir }).join();
       expect(pct.code).toBe(0);
-      expect(pct.stdout).toBe("pct%2525.md#Sec\n");
+      expect(targetSection(pct.stdout)).toContain("  pct%2525.md#Sec");
 
       const ran = yield* runCli(["run", "we%23ird.md#Sec", "--raw"], { cwd: dir }).join();
       expect(ran.code).toBe(0);
@@ -443,11 +448,53 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
 
   it("CT13: exotic headings are listed as canonical references", function* () {
     yield* useFixture({ "doc.md": EXOTIC }, function* (dir) {
-      const listed = yield* runCli(["targets", "doc.md"], { cwd: dir }).join();
+      const listed = yield* runCli(["run", "doc.md", "--help"], { cwd: dir }).join();
       expect(listed.code).toBe(0);
-      expect(listed.stdout).toBe(
-        [...EXOTIC_REFERENCES.map(([reference]) => reference), ""].join("\n"),
+      expect(targetSection(listed.stdout)).toBe(
+        [
+          "Targets in doc.md",
+          "",
+          ...EXOTIC_REFERENCES.flatMap(([reference, marker]) => [
+            `  ${reference}`,
+            `      ${marker}`,
+            "",
+          ]),
+        ]
+          .join("\n")
+          .trimEnd(),
       );
+    });
+  });
+
+  /**
+   * A targeted reference is still a reference to the whole document, so its
+   * help validates the selector and then describes the source document —
+   * every section of it, not the one the selector named.
+   */
+  it("CT17: a valid exact or glob selector reports the whole catalog", function* () {
+    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
+      for (const reference of ["doc.md#Beta", "doc.md#**/Nested"]) {
+        const { code, stdout } = yield* runCli(["run", reference, "--help"], { cwd: dir }).join();
+        expect({ reference, code }).toEqual({ reference, code: 0 });
+        expect(targetSection(stdout)).toContain("  doc.md#Alpha");
+        expect(targetSection(stdout)).toContain("  doc.md#Gamma");
+        expect(stdout).not.toContain("ALPHA_MARKER\nBETA");
+      }
+    });
+  });
+
+  it("CT18: an unmatched or ambiguous selector fails help and describes nothing", function* () {
+    yield* useFixture({ "doc.md": REPORT, "dup.md": DUPLICATE }, function* (dir) {
+      const absent = yield* runCli(["run", "doc.md#Delta", "--help"], { cwd: dir }).join();
+      expect(absent.code).toBe(1);
+      expect(absent.stdout).toBe("");
+      expect(absent.stderr).toContain('"Delta" matches no document target.');
+
+      const ambiguous = yield* runCli(["run", "dup.md#Same", "--help"], { cwd: dir }).join();
+      expect(ambiguous.code).toBe(1);
+      expect(ambiguous.stdout).toBe("");
+      expect(ambiguous.stderr).toContain('"Same" matches more than one document target.');
+      expect(ambiguous.stderr).not.toContain("Targets in");
     });
   });
 
@@ -675,3 +722,83 @@ describe(
     });
   },
 );
+
+/**
+ * Help is inspection, and inspection installs nothing.
+ *
+ * A subprocess can show that no artifact was left behind; it cannot show that
+ * the host's provider installer was never invoked, because that is a call
+ * inside the process. This drives `runXmd` directly for exactly that, with a
+ * document whose every block is observable if it runs.
+ */
+describe(
+  "Tier CT — contextual help installs nothing",
+  { sanitizeOps: false, sanitizeResources: false },
+  () => {
+    it("CT19: file help exits zero, describes the catalog, and never installs", function* () {
+      yield* useFixture({ "doc.md": EFFECTFUL }, function* (dir) {
+        const run = yield* helpRun(["run", path.join(dir, "doc.md"), "--help"], dir);
+
+        expect(run.status).toBe(0);
+        expect(run.stdout).toContain("Targets in ");
+        expect(run.stdout).toContain("Describes the work without performing any of it.");
+        expect(run.stderr).toBe("");
+
+        // The whole point: a provider was never wired in, so nothing could
+        // have asked it for a service.
+        expect(run.serviceInstalled).toBe(false);
+        expect(yield* exists(path.join(dir, "written.txt"))).toBe(false);
+        expect(yield* exists(path.join(dir, ".xmd-eval"))).toBe(false);
+        expect(yield* exists(path.join(dir, "trace.jsonl"))).toBe(false);
+      });
+    });
+  },
+);
+
+interface HelpRun {
+  status: number;
+  stdout: string;
+  stderr: string;
+  /** Whether the host's provider installer ran. */
+  serviceInstalled: boolean;
+}
+
+/** Drive `runXmd` in this process, capturing what it wrote and what it wired. */
+function* helpRun(args: string[], cwd: string): Operation<HelpRun> {
+  let status = 0;
+  let stdout = "";
+  let stderr = "";
+  let serviceInstalled = false;
+
+  const logged = console.log;
+  const written = console.error;
+  return yield* scoped(function* () {
+    yield* ensure(() => {
+      console.log = logged;
+      console.error = written;
+    });
+    console.log = (...parts: unknown[]) => {
+      stdout += `${parts.map((part) => String(part)).join(" ")}\n`;
+    };
+    console.error = (...parts: unknown[]) => {
+      stderr += `${parts.map((part) => String(part)).join(" ")}\n`;
+    };
+
+    yield* ExitContext.set(function* (result) {
+      status = result.status;
+    });
+
+    yield* API.Env.around({
+      *cwd() {
+        return cwd;
+      },
+    });
+    yield* useHostFiles();
+
+    yield* runXmd(args, function* () {
+      serviceInstalled = true;
+    });
+
+    return { status, stdout, stderr, serviceInstalled };
+  });
+}
