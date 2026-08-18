@@ -93,10 +93,10 @@ frontier, releases the executor, and reports the run ID and stop reason;
 process nor the Agent sessions need to stay alive in between. `xmd workflow
 start` and `xmd workflow resume` are shipped (#366), and a resume continues from
 the retained frontier; `xmd workflow status` reports a stopped run's retained
-status and stop reason without advancing it (#460). What is not built is the
-boundary itself — a checkpoint that releases the executor, and the
-single-executor ownership and atomic lifecycle transitions that decide who may
-continue a run, remain #367. `<Stage>` is not the answer: it was
+status and stop reason without advancing it (#460). The single-executor
+ownership and atomic lifecycle transitions that decide who may continue a run
+are shipped too, owned by the executor lock (#466). What is not built is the
+boundary itself — a checkpoint that releases the executor remains #367. `<Stage>` is not the answer: it was
 rejected as architecture, because the root document is the workflow and a durable
 run may continue through several document executions without inventing
 subdivisions between them (#298, closed).
@@ -183,9 +183,10 @@ Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
 `xmd workflow` the same question is to become a durable suspension that releases
-the executor and resumes later; the executor ownership that makes releasing one
-safe is #367 and is unbuilt, so today the question is answered inside the
-document execution that asked it, under whichever command started it.
+the executor and resumes later. The executor ownership that makes releasing one
+safe is shipped (#466); the release itself is not, so today the question is
+answered inside the document execution that asked it, under whichever command
+started it.
 
 ### Runtime intervention
 
@@ -445,8 +446,9 @@ shipped:
   path, no write handle. It is used for source changes, explicit exports, or
   external tools that require a path, not as the default agent handoff.
 
-The rest are not implemented, and they are explicit composition rather than one
-implicit workspace:
+The composition components are built and registered by the workflow host
+(#293, shipped); the durable Git and forge effects below them are not. Both are
+explicit composition rather than one implicit workspace:
 
 - `<Repository>` authorizes a Git locator, resolves an optional base once, pins
   that commit, and creates the named primary checkout inside the run's Workspace.
@@ -465,9 +467,12 @@ implicit workspace:
 - `<Dir>` is lexical cwd and nothing else: it establishes a bound path as cwd for
   its children, renders them normally, and restores the enclosing cwd when it
   closes. Making a directory readable by an Agent is `<Agent.AddDir>` (#302), a
-  separate operation on purpose, and cwd never implies it. `<Dir>` is unbuilt,
-  and #293 owns the boundary this composition consumes unless an earlier issue
-  supplies it first.
+  separate operation on purpose, and cwd never implies it. All three —
+  `<Repository>`, `<Worktree>` and `<Dir>` — are registered by
+  `@executablemd/workflow/composition`, so they resolve under a workflow run and
+  under no other host: plain `xmd run` composes no workflow and reports them
+  unresolved, which says which host ran the document rather than whether the
+  component exists.
 - `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` operate on the
   contextual checkout as Workspace-local durable effects (#294). `<Git.Push>` is
   explicit and separate (#370), and `<PullRequest>` requires that pushed head
@@ -596,7 +601,11 @@ reports is descriptive evidence about an event rather than identity.
 
 The rest of the lifecycle is not built. Durable suspension and releasing the
 executor at a checkpoint, the single-executor ownership and atomic lifecycle
-transitions around them, and cancellation and deletion remain #367; versioned
+transitions around them, and cancellation and deletion are shipped as #367's
+second slice (#466): the executor lock owns every transition, and a cancellation
+that meets a live executor refuses without mutation and directs the caller to
+interrupt the foreground process rather than signalling it. Durable suspension
+and releasing the executor at a checkpoint remain #367; versioned
 history checkpoints, compatible forks, `history --forkable`, and forkability
 reasons remain #368.
 
