@@ -263,23 +263,27 @@ supplied material rather than a repository. `Implementation` has no such
 exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
 `<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
 
-Ten names in this workflow resolve to nothing today, and each is owed by one
+Seven names in this workflow resolve to nothing today, and each is owed by one
 issue:
 
 | Name | Owed by |
 | --- | --- |
 | `<Agent.AddDir>` | #302 |
-| `<Dir>` | #293 |
 | `<Expand>` | #369 |
 | `<Git.Add>` | #294 |
 | `<Git.Commit>` | #294 |
 | `<Git.Push>` | #370 |
 | `<Issue>` | #296 |
 | `<PullRequest>` | #295 |
-| `<Repository>` | #293 |
-| `<Worktree>` | #293 |
 
-`<Dir>` joined that list with the composition #293 settled. A generic component
+`<Repository>`, `<Worktree>` and `<Dir>` have left that list:
+`@executablemd/workflow/composition` registers all three (#293, shipped), which
+is what makes the composition below executable under a workflow run. Because
+registration is scope-local and the workflow host installs it, plain `xmd run`
+resolves none of them — evidence about the host a document ran under, never
+about whether a component is built.
+
+The composition itself is unchanged, and it is why the two forms exist. A generic component
 invocation written with `as=` is an ordinary private capture — it binds its
 result and contributes nothing at the call site — and `<Repository>` and
 `<Worktree>` receive no exception to it. So a lexical
@@ -315,7 +319,8 @@ whose dependency order this workflow consumes in the same sequence.
 | commit a Workspace mutation, its logical root, and the journal result atomically | #365 | shipped |
 | foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | shipped |
 | read-only `status`, `list` and `history` over immutable lifecycle snapshots | #367 slice 1, delivered by #460 | shipped |
-| durable suspension, releasing the executor at a checkpoint, single-executor ownership, atomic lifecycle transitions, cancellation, deletion | #367 | open |
+| single-executor ownership, atomic begin/settle, cancellation, deletion, all owned by the executor lock | #367 slice 2, delivered by #466 | shipped |
+| durable suspension, and releasing the executor at a checkpoint | #367 | open |
 | versioned history checkpoints, compatible forks, `history --forkable` and forkability reasons | #368 | open |
 
 `xmd workflow start` is what makes this document a workflow rather than a script,
@@ -352,7 +357,7 @@ component search path is introduced for workflow execution. The mechanism is
 
 | Capability | Issue | Status |
 | --- | --- | --- |
-| `<Repository>` and self-closing `<Worktree>` as named Workspace composition, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | open |
+| `<Repository>`, self-closing `<Worktree>`, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | shipped — registered by the workflow host |
 | `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | open |
 | shared external forge-effect reconciliation | #297 | open |
 | explicit `<Git.Push>` | #370 | open |

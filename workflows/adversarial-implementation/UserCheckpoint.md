@@ -214,9 +214,10 @@ is released, and `xmd workflow resume <run-id>` continues once the answer is
 available — the process, the Workspace attachment, and the agent processes need
 not stay alive in between. `start` and `resume` are shipped (#366) and a resume
 already restores this component's journaled answer rather than asking again;
-releasing the executor at the question, and the ownership that decides who may
-continue the run, are #367 and unbuilt. So today the question is answered inside
-the document execution that asked it, under either command.
+the ownership that decides who may continue the run is shipped (#466);
+releasing the executor at the question is #367 and unbuilt. So today the
+question is answered inside the document execution that asked it, under either
+command.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
 repair turn explicitly. It absorbs JSON syntax and schema-validation failures

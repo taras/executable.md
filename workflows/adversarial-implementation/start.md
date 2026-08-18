@@ -428,14 +428,18 @@ checkpoint in an `<Answers>` region instead of reaching a person.
 `Planning` each name `<Agent.AddDir>`, which does not exist, so their bodies run
 only once that registration is supplied or removed.
 
-**Not expressible.** Every component that composes the Workspace or performs a
-durable environmental effect. These ten names resolve to nothing today:
+**Composed by the workflow host.** `<Repository>`, `<Worktree>` and `<Dir>` are
+built and registered by `@executablemd/workflow/composition` (#293, shipped),
+which is what makes the composition above executable under a workflow run.
+Registration is scope-local and the workflow host is what installs it, so plain
+`xmd run` — which composes no workflow — reports all three unresolved. That is
+where a document ran, not whether a component exists.
+
+**Not expressible.** Every component that performs a durable environmental
+effect. These seven names resolve to nothing under either host:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Repository>` | #293 | unbuilt |
-| `<Worktree>` | #293 | unbuilt |
-| `<Dir>` | #293 | unbuilt — the lexical cwd boundary this composition consumes, unless an earlier issue supplies it first |
 | `<Agent.AddDir>` and the read-only Agent ceiling | #302 | unbuilt |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
 | `<Git.Add>` | #294 | unbuilt |
@@ -444,9 +448,8 @@ durable environmental effect. These ten names resolve to nothing today:
 | `<PullRequest>` | #295 | unbuilt |
 | `<Issue>` | #296 | unbuilt |
 
-So the complete flow is non-executable at two levels: the named checkouts the
-Workspace is composed from, and the implementation stage's durable Git and forge
-effects. What can be exercised today is discovery through plan convergence and
+So what remains non-executable is the implementation stage's durable Git and
+forge effects; the named checkouts the Workspace is composed from are here. What can be exercised today is discovery through plan convergence and
 the user gates around them, running in one document execution and one existing
 working directory, with commits, pushes, pull requests, and issues performed as
 explicit user-run steps between manual stages. Proving that shipped subset is
@@ -465,15 +468,19 @@ WorkflowRuns and filtered journals are stored and looked up by public run ID
 Workspace mutation, its logical root, and its journal result publish in a single
 transaction ([#365](https://github.com/taras/executable.md/issues/365), shipped).
 
-Two things still keep *this* document from being started that way, and neither
-is durability. The run's Workspace holds no repository until `<Repository>`,
-`<Worktree>`, and the `<Dir>` boundary that consumes the bound checkout path
-exist (#293), so the `<Glob>` above would search an empty filesystem. And a run pins its definition to one committed Git object and passes
-no repository component search path, so the stages beside it —
+The composition above is no longer what keeps *this* document from being started
+that way: `<Repository>`, the self-closing `<Worktree>` and the lexical `<Dir>`
+are registered by the workflow host (#293, shipped), so the run's Workspace does
+get its checkout and the `<Glob>` above has a filesystem to search.
+
+What remains is reachability. A run pins its definition to one committed Git
+object and passes no repository component search path, so the stages beside it —
 `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, `Implementation` —
 resolve to nothing under `xmd workflow start` and `xmd workflow resume`. Under
 `xmd run` they resolve as ordinary repository components on its search path,
-which is where the shipped subset is exercised.
+which is where the shipped subset is exercised — and where `<Repository>`,
+`<Worktree>` and `<Dir>` do *not* resolve, because plain `xmd run` composes no
+workflow.
 
 Making `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, and
 `Implementation` reachable under `xmd workflow start` and `xmd workflow resume`

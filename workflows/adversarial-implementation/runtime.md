@@ -135,9 +135,18 @@ a completed run replays it in full. Reading a run back is shipped too —
 snapshots, taking no executor lease, advancing nothing, attaching no Workspace,
 and appending nothing (#367's first slice, delivered by #460).
 
-Suspension is not. Releasing the executor at a checkpoint, the single-executor
-ownership that decides who may continue a run, atomic lifecycle transitions, and
-`cancel` and `delete` remain #367 and unbuilt; forks and forkability remain
+Lifecycle authority is here too. The executor lock owns the transitions, so
+single-executor ownership, atomic begin and settle, `cancel` and `delete` are
+shipped (#367's second slice, delivered by #466). Cancellation never reaches
+into a live document execution: when the lock reports a live workflow executor,
+`xmd workflow cancel` refuses without mutation and tells the caller to interrupt
+the foreground process, and Ctrl-C tears the scope down in order, publishes
+`interrupted` and leaves the run resumable. Without a live executor the
+management host acquires the lock and publishes `cancelled` inside the
+transaction that validates it.
+
+What is still missing is the wait itself: durable suspension, and releasing the
+executor at a checkpoint, remain #367 and unbuilt; forks and forkability remain
 #368.
 
 ## Cleanup follows the invocation
