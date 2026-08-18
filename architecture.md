@@ -43,6 +43,9 @@ Existing documents and code get aligned to this section retroactively.
 | blocker | execution needs input (auth, a human answer); not a failure |
 | suspension | a durable wait: a crash restarts into the same wait |
 | suspension ID | an opaque stable identifier derived by the trusted workflow execution for one logical suspension request; replay preserves it and only equality and input correlation are public |
+| delivery | retaining one externally supplied value for an exact durable suspension request, without executing the workflow run or advancing its lifecycle: it takes no executor lock, begins no document execution, appends no journal event and changes no run status. It is distinct from resume, which is the execution that later reaches the wait; from answer publication, which is what that execution appends; and from answer consumption, which is what spends the retained value |
+| answer publication | appending the durable answer event that records what ended one durable wait; performed by the resuming document execution, never by a delivery |
+| answer consumption | marking a retained delivery spent; it commits in the same transaction as the answer publication it belongs to, so neither can be observed without the other |
 | workflow executor | the live host invocation that advances or settles one workflow run |
 | executor lock | the scope-owned, non-blocking exclusive host lock that permits at most one workflow executor for a run |
 | stale execution | an unfinished retained document execution found after acquiring the executor lock proves its previous workflow executor is gone |
