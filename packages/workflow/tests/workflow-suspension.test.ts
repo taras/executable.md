@@ -39,6 +39,7 @@ import {
   type Json,
   type Workflow,
 } from "@executablemd/durable-streams";
+import { durablePosition } from "@executablemd/durable-streams";
 import { collect, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../src/run.ts";
@@ -49,7 +50,7 @@ import { WorkflowSuspension } from "../src/suspension/api.ts";
 import type { WorkflowSuspensionRequest } from "../src/suspension/api.ts";
 import type { WorkflowSuspensionApi } from "../src/suspension/api.ts";
 import { parseSuspensionRequest, WorkflowSuspensionRequestError } from "../src/suspension/api.ts";
-import { SUSPENSION_REQUEST, suspendFor } from "../src/suspension/suspend.ts";
+import { SUSPENSION_REQUEST, suspendFor, suspensionId } from "../src/suspension/suspend.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 
@@ -203,6 +204,28 @@ function useLoadedCopy(): Operation<LoadedCopy> {
     }
     yield* provide({ suspendFor });
   });
+}
+
+/**
+ * A `suspension_request` carrying something no suspension could have published.
+ *
+ * The schema is an array, which describes no answer. Everything else about the
+ * row is right, so what refuses it can only be reading it rather than trusting
+ * where it sits.
+ */
+function* malformedRequest(id: string): Workflow<void> {
+  yield createDurableOperation<string>(
+    {
+      type: SUSPENSION_REQUEST,
+      name: id,
+      suspensionId: id,
+      request: { kind: "approval" },
+      responseSchema: [],
+    },
+    function* () {
+      return id;
+    },
+  );
 }
 
 describe("Tier WS — a durable wait's request and identity", () => {
@@ -587,6 +610,48 @@ describe("Tier WS — a durable wait's request and identity", () => {
       });
       expect(resumed.notice?.suspensionId).toBe(attempted.notice?.suspensionId);
       expect(requests(resumed.events)).toHaveLength(1);
+    });
+  });
+
+  it("WS10: a malformed retained request admits no wait", function* () {
+    yield* withRun(function* (database) {
+      let refusal = "";
+
+      const attempted = yield* attempt(database, function* () {
+        // Published through the public durable factory, at this position, under
+        // the identifier this position derives — everything the controller reads
+        // agrees. What it carries could not have come from `suspendFor()`: a
+        // response schema that is an array describes no answer at all.
+        const position = yield* durablePosition();
+        const id = suspensionId(RUN.runId, position);
+        yield* malformedRequest(id);
+
+        const Same: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
+          "executablemd.workflow.suspension",
+          {
+            // deno-lint-ignore require-yield
+            *enter(): Operation<Json> {
+              throw new Error("unreachable");
+            },
+          },
+        );
+        try {
+          yield* Same.operations.enter(id, {
+            request: { kind: "approval" },
+            responseSchema: SCHEMA,
+          });
+        } catch (error) {
+          refusal = String(error);
+        }
+      });
+
+      // Refused for what the retained row is, not for where the caller stands.
+      expect(refusal).toContain("not one a durable wait can be entered for");
+      expect(attempted.notice).toBeUndefined();
+
+      // The malformed event stays in history — it happened — and it settled
+      // nothing.
+      expect(requests(attempted.events)).toHaveLength(1);
     });
   });
 });

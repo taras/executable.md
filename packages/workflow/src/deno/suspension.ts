@@ -53,7 +53,11 @@ import {
 } from "effection";
 import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
-import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
+import {
+  parseSuspensionRequest,
+  WorkflowSuspension,
+  type WorkflowSuspensionRequest,
+} from "../suspension/api.ts";
 import { durablePosition } from "@executablemd/durable-streams";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
@@ -74,29 +78,6 @@ export interface SuspensionControllerOptions {
    * caller's own, and the yield there has to be that request.
    */
   readonly database: WorkflowRunDatabase;
-  /**
-   * Run while this execution is tearing down, for observing what a caller sees
-   * mid-settlement.
-   *
-   * The barrier a live-suspension test needs is a moment, not a duration: the
-   * notice has been reported, the halt is under way, the executor lock is still
-   * held and no status has been published. That moment is exactly a finalizer,
-   * so this is one — no sleep, no polling, and nothing that has to guess when
-   * settlement is in flight. Provider-private, and it decides nothing: whatever
-   * it observes, the settlement that follows is the ordinary one.
-   */
-  readonly duringTeardown?: () => Operation<void>;
-  /**
-   * Fail this execution's teardown, for proving what a failed teardown settles.
-   *
-   * Registered as an ordinary finalizer inside the execution scope, so the halt
-   * that ends a suspension runs it exactly as it runs every other finalizer:
-   * real structured teardown, failing where teardown actually happens. It is an
-   * option on a provider-private constructor, absent from the workflow API and
-   * unreachable from a document, and it grants nothing — a failing finalizer
-   * cannot settle a run, publish a status or take a lock.
-   */
-  readonly failTeardown?: () => Error;
 }
 
 export interface SuspensionController {
@@ -140,22 +121,22 @@ function* atOwnRequest(
   database: WorkflowRunDatabase,
   suspension: string,
   request: WorkflowSuspensionRequest,
-): Operation<boolean> {
+): Operation<string | undefined> {
   const position = yield* durablePosition();
   if (position.index === 0) {
-    return false;
+    return NOT_AT_A_WAIT;
   }
   const published = {
     coroutineId: position.coroutineId,
     index: position.index - 1,
   };
   if (suspensionId(database.record.runId, published) !== suspension) {
-    return false;
+    return NOT_AT_A_WAIT;
   }
 
   const entries = yield* database.readJournalEntries();
   if (!entries.ok) {
-    return false;
+    return NOT_AT_A_WAIT;
   }
 
   const counts = new Map<string, number>();
@@ -172,19 +153,43 @@ function* atOwnRequest(
     }
   }
   if (found === undefined || found.type !== SUSPENSION_REQUEST || found.name !== suspension) {
-    return false;
+    return NOT_AT_A_WAIT;
   }
-  return (
+  // Parsed, not merely read. A retained description is journal data, and this
+  // one is reached through a public durable operation any document can publish,
+  // so what it holds is a claim about a request rather than a request. Comparing
+  // raw fields would let a row that could never have come from `suspendFor()` —
+  // a `responseSchema` that is an array, say — admit a wait whose schema nothing
+  // could later validate an answer against.
+  let retained: WorkflowSuspensionRequest;
+  try {
+    retained = parseSuspensionRequest({
+      request: found.request,
+      responseSchema: found.responseSchema,
+    });
+  } catch (error) {
+    return (
+      "the request retained at this position is not one a durable wait can be entered " +
+      `for: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const same =
     canonicalFingerprint({
       request: request.request,
       responseSchema: request.responseSchema,
     }) ===
     canonicalFingerprint({
-      request: found.request ?? null,
-      responseSchema: found.responseSchema ?? null,
-    })
-  );
+      request: retained.request,
+      responseSchema: retained.responseSchema,
+    });
+  return same ? undefined : NOT_AT_A_WAIT;
 }
+
+const NOT_AT_A_WAIT =
+  "this execution is not at that durable wait. A wait is entered by the execution that has " +
+  "just published its request, at the position that request was made — not by presenting an " +
+  "identifier a run retains somewhere else.";
 
 export function createSuspensionController(
   options: SuspensionControllerOptions,
@@ -208,20 +213,10 @@ export function createSuspensionController(
 
     own<T>(operation: Operation<T>): Operation<T> {
       return scoped(function* () {
-        const failTeardown = options.failTeardown;
-        if (failTeardown !== undefined) {
-          yield* ensure(function* () {
-            throw failTeardown();
-          });
-        }
-
         function* accept(suspension: string, request: WorkflowSuspensionRequest): Operation<never> {
-          if (!(yield* atOwnRequest(options.database, suspension, request))) {
-            throw new WorkflowRequestError(
-              "this execution is not at that durable wait. A wait is entered by the execution " +
-                "that has just published its request, at the position that request was made — " +
-                "not by presenting an identifier a run retains somewhere else.",
-            );
+          const refused = yield* atOwnRequest(options.database, suspension, request);
+          if (refused !== undefined) {
+            throw new WorkflowRequestError(refused);
           }
           seen = { suspensionId: suspension, request };
           reported.resolve(seen);
@@ -230,14 +225,6 @@ export function createSuspensionController(
           // suspension and continue past it.
           yield* suspend();
           throw new WorkflowRequestError("a suspended execution resumed itself.");
-        }
-
-        // Registered after the failing finalizer so it runs before it: an
-        // observation of a teardown in flight must happen while the teardown is
-        // still capable of succeeding.
-        const duringTeardown = options.duringTeardown;
-        if (duringTeardown !== undefined) {
-          yield* ensure(duringTeardown);
         }
 
         yield* WorkflowSuspension.around(

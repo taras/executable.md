@@ -244,7 +244,9 @@ function useDefinitionGit(fixture: Fixture, objectId: string): Operation<void> {
 /** What one attachment did, so a test can say whether it is still alive. */
 interface Attachment {
   readonly events: string[];
-  /** Fail this attachment's teardown, as a real finalizer of the execution. */
+  /** Run while this attachment is being released, which is mid-settlement. */
+  readonly onRelease?: () => Operation<void>;
+  /** Fail this attachment's release, which is a real teardown failure. */
   readonly failOnRelease?: boolean;
 }
 
@@ -271,6 +273,9 @@ function liveHost(root: string, attachment: Attachment): WorkflowHost {
         attachment.events.push("attached");
         yield* ensure(function* () {
           attachment.events.push("released");
+          if (attachment.onRelease !== undefined) {
+            yield* attachment.onRelease();
+          }
           if (attachment.failOnRelease === true) {
             throw new Error("PLANTED-ATTACHMENT-RELEASE-FAILURE");
           }
@@ -386,26 +391,27 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
 
         let refusal: Result<unknown> | undefined;
         let duringRows: { status: string; executions: string[] } | undefined;
-        const attachment: Attachment = { events: [] };
+        // The barrier is the execution attachment being released, which is the
+        // lifecycle boundary this claim is about: the wait has been reported,
+        // teardown is running, the executor lock is still this execution's and
+        // no status has been published. No suspension-controller hook and no
+        // sleep — just the finalizer production already runs here.
+        const attachment: Attachment = {
+          events: [],
+          *onRelease(): Operation<void> {
+            yield* scoped(function* () {
+              yield* useWorkflowLifecycle({ root });
+              refusal = yield* WorkflowLifecycle.operations.cancel(runId);
+            });
+            duringRows = lifecycleRows(path);
+          },
+        };
 
         const outcome = yield* runWorkflow(
           { ...CONTROL_REQUEST, action: "resume", target: runId },
           undefined,
           liveHost(root, attachment),
           waitingBody(),
-          {
-            suspension: {
-              *duringTeardown(): Operation<void> {
-                // Mid-settlement: the wait was reported, teardown is running,
-                // the lock is still this execution's and no status is published.
-                yield* scoped(function* () {
-                  yield* useWorkflowLifecycle({ root });
-                  refusal = yield* WorkflowLifecycle.operations.cancel(runId);
-                });
-                duringRows = lifecycleRows(path);
-              },
-            },
-          },
         );
 
         // The refusal observed a live executor rather than acquiring anything.
@@ -449,20 +455,19 @@ describe("Tier WFC3 — cancelling a run that is settling into a suspension", ()
         // The failure is the Workspace attachment's own release — an ordinary
         // finalizer of the execution, outside the suspension controller
         // entirely. Nothing here uses a controller hook to produce it.
-        const attachment: Attachment = { events: [], failOnRelease: true };
+        const attachment: Attachment = {
+          events: [],
+          failOnRelease: true,
+          *onRelease(): Operation<void> {
+            published.push(lifecycleRows(path).status);
+          },
+        };
 
         const outcome = yield* runWorkflow(
           { ...CONTROL_REQUEST, action: "resume", target: runId },
           undefined,
           liveHost(root, attachment),
           waitingBody(),
-          {
-            suspension: {
-              *duringTeardown(): Operation<void> {
-                published.push(lifecycleRows(path).status);
-              },
-            },
-          },
         );
 
         // Teardown is settlement evidence, not work after the outcome: a

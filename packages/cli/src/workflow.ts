@@ -536,23 +536,11 @@ export interface WorkflowStart {
  * installations that belong inside the execution scope, and the attachment that
  * wraps it.
  */
-/**
- * What a caller owning this process may arrange about one run.
- *
- * Not part of the workflow API and not reachable from a document: a document
- * asks to wait, and what a failing teardown then settles is the host's
- * behavior to prove, not the document's to choose.
- */
-export interface RunWorkflowOptions {
-  readonly suspension?: Omit<SuspensionControllerOptions, "database">;
-}
-
 export function runWorkflow(
   request: WorkflowRequest,
   start: WorkflowStart | undefined,
   host: WorkflowHost,
   execute: (execution: WorkflowExecution) => Operation<Result<void>>,
-  options: RunWorkflowOptions = {},
 ): Operation<WorkflowOutcome> {
   return scoped(function* () {
     const transitions = yield* host.useRunHost();
@@ -623,10 +611,7 @@ export function runWorkflow(
     // standard error the moment it loads. A run that opens no workflow storage
     // should not be announcing that it might have.
     const { createSuspensionController } = yield* until(import("@executablemd/workflow/deno"));
-    const suspension = createSuspensionController({
-      database,
-      ...(options.suspension ?? {}),
-    });
+    const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
