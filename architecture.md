@@ -1084,6 +1084,12 @@ the inherited prefix under a compatible modified definition and appends new
 history under a new run ID. It never rewinds external branches, pushes, pull
 requests or provider state.
 
+A fork inherits the source's normalized props as its baseline; explicit
+generated arguments add to or override them, and the merged set is validated
+against the candidate definition before anything is created. Those props are
+what the compatibility replay runs under, what the run retains, and one of the
+terms a reused fork ID is compared on.
+
 A fork writes two records for itself and inherits the rest. Its own
 `workflow_run` record is what its journal is held to, and its own root import is
 what makes the run a run of the definition the caller named — that record holds

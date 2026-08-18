@@ -449,7 +449,7 @@ the two control actions:
 ```sh
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
 xmd workflow resume <run-id>
-xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] [--props-*=…] <definition>
+xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
 xmd workflow status <run-id> [--json]
 xmd workflow list [--status=<status>] [--json]
 xmd workflow history <run-id> [--forkable] [--json]
@@ -499,8 +499,8 @@ retained failure, and that does not make the run eligible for `resume`.
   rather than ignored.
 - `fork` takes the run it continues, the committed event it continues from and
   the definition it continues with, and every one of the three is required. Its
-  generated `--props-*` arguments are the candidate definition's, and `--at`
-  belongs to it alone (§11).
+  generated `--props-*` arguments are the candidate definition's and merge over
+  the props the source retained, and `--at` belongs to it alone (§11).
 - The document filesystem (§10.1) and Repository/Worktree/Dir composition (§6)
   are the capabilities a run has. Git operations, Agent, Worker Shell and native
   services are not: an inherited `API.Service` provider is refused rather than
@@ -1756,24 +1756,35 @@ new run:
 xmd workflow fork release-42 \
   --at=E17 \
   --id=release-42-corrected \
-  --props-release-channel=stable \
-  flows/release.md
+  flows/release.md \
+  --props-release-channel=stable
 ```
 
 The source run and `--at` select an inherited journal prefix and Workspace root.
-The document supplies the new immutable definition. The new run inherits source
-props by default; generated `--props-*` arguments may add or override values,
-and the result is validated against the candidate definition. Fork generates a
-new run ID unless `--id` is supplied, executes the new run in the foreground and
-follows ordinary exit semantics. Every option that applies to `start` and
-`resume` applies to `fork`; read-only commands accept neither props nor `--at`.
+The document supplies the new immutable definition. Generated `--props-*`
+arguments follow the positionals, as they do for `start`: they are declared by
+the document rather than by the command, so option parsing stops at the first
+one and a positional written after it would not be read.
+
+The new run inherits the source's retained normalized props by default. Explicit
+generated `--props-*` arguments add or override values, property by property,
+and the merged result is validated against the candidate definition before
+anything is created — a property the source retained and the candidate does not
+declare is refused here rather than reported later as divergence. Those merged
+props are what the preflight replays under, what the fork is admitted with, what
+the run retains, and one of the terms a reused fork ID is compared on.
+
+Fork generates a new run ID unless `--id` is supplied, executes the new run in
+the foreground and follows ordinary exit semantics. Every option that applies to
+`start` and `resume` applies to `fork`; read-only commands accept neither props
+nor `--at`.
 
 ### 11.1 What a fork retains
 
 A fork is a new immutable WorkflowRun identity. It holds a new run ID, the
 supplied definition with its base, pinned commit and complete component bundle,
-the normalized props, its lineage, and a journal made of two records it writes
-for itself followed by everything it inherited.
+the merged normalized props, its lineage, and a journal made of two records it
+writes for itself followed by everything it inherited.
 
 The two records are its own `workflow_run` and its own root import. The first is
 what its journal is held to: a history carrying two run records describes two

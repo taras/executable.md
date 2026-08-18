@@ -13,7 +13,7 @@
  * ```sh
  * xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
  * xmd workflow resume <run-id>
- * xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] [--props-*=…] <definition>
+ * xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
  * xmd workflow answer [--no-secret-detection] <run-id> <suspension-id> <json>
  * xmd workflow status <run-id> [--json]
  * xmd workflow list [--status=<status>] [--json]
@@ -30,7 +30,10 @@
  * `fork` names both: the run it continues and the document it continues with.
  * It is the one action that changes a definition without abandoning history —
  * a new immutable run identity whose journal begins as somebody else's, and
- * whose first live effect happens at the checkpoint the caller selected.
+ * whose first live effect happens at the checkpoint the caller selected. Its
+ * props begin as the source's, because a corrected definition is still a run of
+ * the same procedure and restating every property would make forking a
+ * transcription exercise.
  *
  * `start` names a document; every other action names a run. That asymmetry is
  * the whole lifecycle rule: a document path locates a definition and never
@@ -64,7 +67,8 @@ import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
 import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
-import { retainedSource } from "@executablemd/core";
+import { retainedSource, validateProps } from "@executablemd/core";
+import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
   definitionComponents,
@@ -87,6 +91,7 @@ import type {
 } from "@executablemd/workflow/deno";
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
+import { describeError } from "./props.ts";
 import { preflightFork } from "./workflow-fork.ts";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
@@ -194,7 +199,7 @@ const EXECUTION_OPTIONS = [
   "--no-secret-detection",
 ];
 
-/** What each action accepts, beyond `start`'s generated `--props-*` arguments. */
+/** What each action accepts, beyond the generated `--props-*` arguments. */
 const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.freeze({
   start: [...EXECUTION_OPTIONS, "--id"],
   resume: EXECUTION_OPTIONS,
@@ -711,10 +716,20 @@ function optionRefusal(action: string, args: readonly string[]): string | undefi
   return undefined;
 }
 
-/** What the props phase already established for a `start`. */
+/** What the props phase already established for a `start` or a `fork`. */
 export interface WorkflowStart {
   readonly established: EstablishedDefinition;
+  /**
+   * The properties this invocation supplied, and only those.
+   *
+   * A value a schema default would have filled in is not one of them: core
+   * applies defaults when it validates, and a run retains what it was asked
+   * for. That distinction is what lets a fork inherit a source's property
+   * without a default quietly overwriting it.
+   */
   readonly props: Record<string, Json>;
+  /** What the candidate document declares, for validating merged properties. */
+  readonly propsSchema: PropsSchema;
 }
 
 /**
@@ -744,7 +759,17 @@ export function runWorkflow(
     // executor lock — and a generated one is this invocation's own run.
     const runId = request.action === "resume" ? request.target : (request.id ?? generatedRunId());
 
-    const creation = yield* startCreation(request, start);
+    // A fork begins from the properties the source retained, so the merged set
+    // is decided before the creation that carries it — and therefore before
+    // preflight replays under it, before it is admitted, and before it becomes
+    // the identity a reused fork id is compared against.
+    const inherited = yield* inheritedProps(request);
+    if (!inherited.ok) {
+      report(inherited.error.message);
+      return { exitCode: 1 };
+    }
+
+    const creation = yield* startCreation(request, start, inherited.value);
     if (!creation.ok) {
       report(creation.error.message);
       return { exitCode: 1 };
@@ -1072,6 +1097,7 @@ function* forkInheritance(
 function* startCreation(
   request: WorkflowRequest,
   start: WorkflowStart | undefined,
+  inherited: Record<string, Json> | undefined,
 ): Operation<Result<WorkflowRunCreation | undefined>> {
   if (request.action === "resume") {
     return Ok(undefined);
@@ -1083,14 +1109,80 @@ function* startCreation(
   if (!supported.ok) {
     return supported;
   }
+  const props = yield* forkProps(start, inherited);
+  if (!props.ok) {
+    return props;
+  }
   return Ok({
     definition: start.established.definition,
     base: start.established.base,
-    props: start.props,
+    props: props.value,
     ...(start.established.retrieval === undefined
       ? {}
       : { retrieval: start.established.retrieval }),
   });
+}
+
+/**
+ * The properties this run is created with.
+ *
+ * A `start` supplies its own and nothing else. A fork begins from what the
+ * source retained: a corrected definition is still a run of the same procedure,
+ * and restating every property the original was started with would make
+ * forking a transcription exercise. Whatever the fork command wrote itself
+ * takes precedence, property by property — that is what "add or override"
+ * means — and a property the source retained under a name the fork also wrote
+ * is the fork's.
+ *
+ * The result is held to the *candidate* document, because that is the document
+ * that will run: a property the source declared and this one does not is a
+ * property this run cannot carry, and saying so here is better than letting the
+ * compatibility replay report it as divergence.
+ */
+function* forkProps(
+  start: WorkflowStart,
+  inherited: Record<string, Json> | undefined,
+): Operation<Result<Record<string, Json>>> {
+  if (inherited === undefined) {
+    return Ok(start.props);
+  }
+  const merged = { ...inherited, ...start.props };
+  try {
+    // Validated, not replaced: `validateProps` answers with a copy core has
+    // filled defaults into, and a run retains what it was asked for. A `start`
+    // retains no default either.
+    yield* validateProps("__root__", merged, start.propsSchema);
+    return Ok(merged);
+  } catch (error) {
+    return Err(
+      new Error(
+        "the properties this fork inherits do not satisfy the definition it runs: " +
+          `${describeError(error)}. Supply the differing properties with --props-* arguments, ` +
+          "or fork a definition that declares them.",
+      ),
+    );
+  }
+}
+
+/**
+ * What the source run retained, for a fork to begin from.
+ *
+ * Read through the ordinary read-only inspection surface, before the fork's
+ * executor lock and before anything of the fork exists. Every other action
+ * answers with nothing: a `start` has no source, and a `resume` already has the
+ * properties its own run retained.
+ */
+function* inheritedProps(
+  request: WorkflowRequest,
+): Operation<Result<Record<string, Json> | undefined>> {
+  if (request.action !== "fork") {
+    return Ok(undefined);
+  }
+  const snapshot = yield* WorkflowLifecycle.operations.inspect(request.target);
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+  return Ok(snapshot.value.record.props);
 }
 
 /**

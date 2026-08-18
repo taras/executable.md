@@ -84,6 +84,33 @@ const DIVERGENT = [
   "",
 ].join("\n");
 
+/**
+ * A document that declares a property and writes it, so what a fork inherited
+ * is visible in what it did rather than only in what it retained.
+ */
+const PROPPED = [
+  "---",
+  "props:",
+  "  type: object",
+  "  properties:",
+  "    channel: { type: string }",
+  "  required: [channel]",
+  "  additionalProperties: false",
+  "---",
+  "",
+  "# Release",
+  "",
+  '<File path="notes.md">first</File>',
+  "",
+  "```bash exec",
+  "echo original",
+  "```",
+  "",
+].join("\n");
+
+/** The same document, edited only after the checkpoint. */
+const PROPPED_CORRECTED = PROPPED.replace("echo original", "echo corrected");
+
 /** Compatible through the checkpoint, and slow enough after it to be killed. */
 const SLOW = [
   "# Release",
@@ -167,6 +194,21 @@ interface HistoryRow {
     readonly blockers: readonly { readonly code: string; readonly eventId: string }[];
   };
   readonly inherited?: { readonly sourceRunId: string; readonly sourceEventId: string };
+}
+
+function* snapshot(fixture: Fixture, runId: string): Operation<Record<string, unknown>> {
+  const answered = yield* xmd(fixture, ["workflow", "status", runId, "--json"]).join();
+  expect(answered.code).toBe(0);
+  return JSON.parse(answered.stdout);
+}
+
+/** The normalized properties one run retains. */
+function props(snapshot: Record<string, unknown>): unknown {
+  return (snapshot["record"] as Record<string, unknown>)["props"];
+}
+
+function status(snapshot: Record<string, unknown>): unknown {
+  return (snapshot["record"] as Record<string, unknown>)["status"];
 }
 
 function* history(fixture: Fixture, runId: string): Operation<HistoryRow[]> {
@@ -518,6 +560,84 @@ describe("Tier WFF — xmd workflow fork", () => {
 
         expect(yield* history(fixture, "fork-1")).toEqual(first);
       }
+    });
+  });
+
+  it("WFF9: a fork inherits the source's props, and an explicit one overrides", function* () {
+    yield* useFixture({ [DEFINITION]: PROPPED }, function* (fixture) {
+      // The generated property arguments follow the positionals: configliere
+      // stops at the first option it does not define, so a `--props-*` written
+      // ahead of a positional hides it.
+      yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=source-1",
+        DEFINITION,
+        "--props-channel=stable",
+      ]).expect();
+      const source = yield* history(fixture, "source-1");
+      const checkpoint = at(source, "workspace_file");
+
+      yield* commit(fixture, { [DEFINITION]: PROPPED_CORRECTED }, "corrected");
+
+      // The property is not restated. A corrected definition is still a run of
+      // the same procedure, and the source retained what it was started with.
+      const inheriting = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${checkpoint.eventId}`,
+        "--id=fork-inherited",
+        DEFINITION,
+      ]).join();
+      expect(inheriting.code).toBe(0);
+      expect(props(yield* snapshot(fixture, "fork-inherited"))).toEqual({ channel: "stable" });
+
+      // And the run used it: the document declares `channel` as required, so a
+      // fork that inherited nothing would have been refused before it ran.
+      expect(status(yield* snapshot(fixture, "fork-inherited"))).toBe("completed");
+
+      // An explicit argument overrides, property by property.
+      const overriding = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${checkpoint.eventId}`,
+        "--id=fork-overridden",
+        DEFINITION,
+        "--props-channel=beta",
+      ]).join();
+      expect(overriding.code).toBe(0);
+      expect(props(yield* snapshot(fixture, "fork-overridden"))).toEqual({ channel: "beta" });
+
+      // The merged props are the fork's identity, so they are a term of
+      // compatible reuse: the same id with a different value is refused, and
+      // the same id with the same value is the same fork again.
+      const conflicting = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${checkpoint.eventId}`,
+        "--id=fork-overridden",
+        DEFINITION,
+        "--props-channel=nightly",
+      ]).join();
+      expect(conflicting.code).toBe(1);
+      expect(conflicting.stderr).toContain("props");
+      // The value that conflicts is retained history and is not repeated back.
+      expect(conflicting.stderr).not.toContain("nightly");
+      expect(props(yield* snapshot(fixture, "fork-overridden"))).toEqual({ channel: "beta" });
+
+      const again = yield* xmd(fixture, [
+        "workflow",
+        "fork",
+        "source-1",
+        `--at=${checkpoint.eventId}`,
+        "--id=fork-overridden",
+        DEFINITION,
+        "--props-channel=beta",
+      ]).join();
+      expect(again.code).toBe(0);
     });
   });
 

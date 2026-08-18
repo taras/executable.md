@@ -68,7 +68,12 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { DocumentTargetInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
+import type {
+  DocumentTargetInfo,
+  FileRootDocument,
+  PropsSchema,
+  RootDocumentSource,
+} from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
@@ -1019,7 +1024,7 @@ interface PropsPhase {
   root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
-  propsSchema?: unknown;
+  propsSchema?: PropsSchema;
   declared?: string[];
   /**
    * What the inspected document addresses, described.
@@ -1172,9 +1177,11 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
  * `start` reads what the pinned definition declares, so its generated
  * `--props-*` arguments are exactly `xmd run`'s for that document. A `fork`
  * reads the same way, from the definition it names as its third argument: the
- * fork is a run of that document, so its props are that document's. `resume`
- * declares nothing at all: its props are the ones the run retained, and any
- * spelling that would supply new ones is refused rather than ignored.
+ * fork is a run of that document, so its props are that document's — merged
+ * over what the source retained, which happens later, once the run store can be
+ * read. `resume` declares nothing at all: its props are the ones the run
+ * retained, and any spelling that would supply new ones is refused rather than
+ * ignored.
  */
 function* prepareWorkflowProps(
   rawArgs: string[],
@@ -1696,7 +1703,14 @@ function* dispatch(
       const start: WorkflowStart | undefined =
         propsPhase.established === undefined
           ? undefined
-          : { established: propsPhase.established, props: props.value ?? {} };
+          : {
+              established: propsPhase.established,
+              props: props.value ?? {},
+              // What the *candidate* declares. A fork merges the properties its
+              // source retained under its own, and the result is held to the
+              // document that is about to run.
+              propsSchema: propsPhase.propsSchema ?? {},
+            };
       announceSecretDetection(config.secretDetection);
       const outcome = yield* runWorkflow(request, start, workflowHost, (execution) =>
         execution.around(
