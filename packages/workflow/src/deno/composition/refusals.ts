@@ -50,6 +50,7 @@ const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
   ["ignored-pathspec", "ignored-pathspec"],
   ["outside-checkout-pathspec", "outside-checkout-pathspec"],
   ["invalid-pathspec-magic", "invalid-pathspec-magic"],
+  ["empty-index", "empty-index"],
 ] as const);
 
 const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
@@ -78,6 +79,11 @@ const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
   ],
   ["outside-checkout-pathspec", "one or more of its pathspecs leave the checkout it ran in."],
   ["invalid-pathspec-magic", "one or more of its pathspecs use invalid Git pathspec magic."],
+  [
+    "empty-index",
+    "nothing is staged in the checkout it ran in, so there is no commit to make. Nothing was " +
+      "staged for it: that component commits the index and never fills one.",
+  ],
 ]);
 
 const REPOSITORY_SENTENCES: ReadonlyMap<RepositoryFailureReason, string> = new Map([

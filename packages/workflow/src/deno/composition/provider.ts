@@ -30,6 +30,8 @@ import { GitComposition } from "../../composition/git-api.ts";
 import type {
   GitAddRequest,
   GitAddResult,
+  GitCommitRequest,
+  GitCommitResult,
   GitSwitchRequest,
   GitSwitchResult,
 } from "../../composition/git-records.ts";
@@ -50,10 +52,12 @@ import { createWorktree, prepareWorktreeAttachment, worktreeDisagreement } from 
 
 import { createGitSwitch } from "./switch.ts";
 import { createGitAdd } from "./add.ts";
+import { createGitCommit } from "./commit.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
 export { WORKSPACE_GIT_ADD } from "./add.ts";
+export { WORKSPACE_GIT_COMMIT } from "./commit.ts";
 
 /**
  * What a provider may observe about itself, for suites that count.
@@ -190,6 +194,11 @@ export function useGitComposition(
       *addPaths([request]: [GitAddRequest]): Operation<GitAddResult> {
         observe.effect?.("git", "add");
         return yield* createGitAdd(database, host, request);
+      },
+
+      *commitIndex([request]: [GitCommitRequest]): Operation<GitCommitResult> {
+        observe.effect?.("git", "commit");
+        return yield* createGitCommit(database, host, request);
       },
     },
     { at: "min" },

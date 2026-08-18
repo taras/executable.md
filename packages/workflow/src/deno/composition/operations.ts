@@ -263,7 +263,7 @@ function select(
  * asked for. It is infrastructure, and publishing it as an outcome would record
  * a transition nobody can describe.
  */
-function* checkoutState(
+export function* checkoutState(
   git: GitSession,
   directory: string,
   operation: string,

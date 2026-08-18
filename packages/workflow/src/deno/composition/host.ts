@@ -23,6 +23,21 @@
  *
  * `GIT_TERMINAL_PROMPT=0` is the other half: a locator that needs a credential
  * fails instead of blocking a run on a prompt nobody is there to answer.
+ *
+ * ## Why the configuration is fixed as well
+ *
+ * A checkout carries its own `.git/config`, and that file is inside the
+ * Workspace this run retains — so a document can write one, and a replay
+ * restores whatever is there. Several ordinary settings in it name a *program*
+ * for Git to run, and one of them running would put work outside the effect's
+ * transaction: a hook that survives a rollback, a signing helper that changes
+ * the object this run verified, a file-system monitor consulted whenever the
+ * index is refreshed.
+ *
+ * So the settings that name programs are fixed on the command line, where they
+ * outrank every configuration file, for every command this host runs. This is
+ * not `--no-verify`: that flag skips the hooks that can refuse a commit and
+ * leaves the ones that run after it.
  */
 
 import { ensure, type Operation, resource, until, withResolvers } from "effection";
@@ -45,6 +60,21 @@ export interface GitInvocation {
   readonly cwd: string;
   /** The materialization root, which is also what Git sees as `HOME`. */
   readonly home: string;
+  /**
+   * Bytes handed to the command on standard input, or none.
+   *
+   * A commit message is authored text of any length, and an argument list is
+   * neither the place to put one nor a boundary that carries one unchanged.
+   */
+  readonly input?: string;
+  /**
+   * The whole Unix second a commit is authored and committed at.
+   *
+   * Two named variables rather than an environment a caller may fill: what a
+   * run's Git state is written by is fixed, and the one thing an operation
+   * decides for itself is when. Absent for every command that writes no object.
+   */
+  readonly committedAt?: number;
 }
 
 export interface RepositoryHost {
@@ -53,14 +83,39 @@ export interface RepositoryHost {
   useDirectory(): Operation<string>;
 }
 
+/**
+ * The settings a workflow run's Git may not take from a repository.
+ *
+ * Each one names a program. `/dev/null` is a hook directory nothing can be found
+ * in, which is what makes every hook absent rather than merely skipped.
+ */
+const CONFIGURATION: readonly string[] = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "commit.gpgSign=false",
+  "-c",
+  "tag.gpgSign=false",
+];
+
 /** Who a workflow run's Git state is written by, on every host. */
 const IDENTITY_NAME = "Executable.md workflow";
 const IDENTITY_EMAIL = "workflow@executable.md.invalid";
 
 /** The variables Git may see, and nothing else. */
-function environment(home: string): Record<string, string> {
+function environment(home: string, committedAt: number | undefined): Record<string, string> {
   const path = process.env.PATH;
   return {
+    // A fixed offset beside the second, so the instant a commit records is the
+    // instant that was captured wherever the host happens to be standing.
+    ...(committedAt === undefined
+      ? {}
+      : {
+          GIT_AUTHOR_DATE: `${committedAt} +0000`,
+          GIT_COMMITTER_DATE: `${committedAt} +0000`,
+        }),
     ...(path === undefined ? {} : { PATH: path }),
     HOME: home,
     // A config file that exists and holds nothing, so Git neither reads a
@@ -87,16 +142,22 @@ function environment(home: string): Record<string, string> {
 
 export function denoRepositoryHost(): RepositoryHost {
   return {
-    *git({ args, cwd, home }: GitInvocation): Operation<GitOutcome> {
+    *git({ args, cwd, home, input, committedAt }: GitInvocation): Operation<GitOutcome> {
       // `node:child_process` rather than the runtime's own global: this adapter
       // is selected by the host, not written against one, and `spawn` replaces
       // the child's environment outright when `env` is given — which is the
       // whole point of building one above rather than inheriting it.
-      const child = spawnChild("git", [...args], {
-        cwd,
-        env: environment(home),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const options = { cwd, env: environment(home, committedAt) };
+      const child =
+        input === undefined
+          ? spawnChild("git", [...CONFIGURATION, ...args], {
+              ...options,
+              stdio: ["ignore", "pipe", "pipe"],
+            })
+          : spawnChild("git", [...CONFIGURATION, ...args], {
+              ...options,
+              stdio: ["pipe", "pipe", "pipe"],
+            });
 
       // Registered with no suspension point between spawning and registering,
       // so a halt cannot land between the two and leave a Git process running
@@ -122,6 +183,17 @@ export function denoRepositoryHost(): RepositoryHost {
       });
 
       const outcome = withResolvers<GitOutcome>();
+      if (input !== undefined && child.stdin !== null) {
+        // A pipe the command stops reading is the command's answer, and its
+        // exit status is what says so — but the write still fails, and an
+        // unhandled stream error would take the process down rather than this
+        // operation. Reporting it here lets `close` settle first when there is
+        // an exit to report.
+        child.stdin.on("error", (error: Error) => {
+          outcome.reject(error);
+        });
+        child.stdin.end(input, "utf8");
+      }
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8");

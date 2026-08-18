@@ -806,6 +806,18 @@ cwd merely because its invocation appears inside a later Dir.
 Git operations require a contextual Repository or Worktree checkout. They use
 the transactional Workspace Git implementation, not an implicit host command.
 
+A checkout's own configuration is a file the run retains, not an instruction to
+it. Several ordinary Git settings name a *program* — a hook directory, a signing
+helper, a file-system monitor — and a `.git/config` inside the Workspace is
+something a document can write and a replay restores. Any of them running would
+put work outside the effect's transaction: a `post-commit` hook in particular
+runs after a commit has succeeded, so every check made about the object would
+pass with the hook's work already done, and it is not one `--no-verify` skips. So
+those settings are fixed by the provider for every command it runs, where they
+outrank the repository's own configuration, and a commit is unsigned. What
+decides a Git object is the operation's admitted input, the checkout's state and
+the run's own identity and time — never what the checkout asks for.
+
 ### 7.1 Switch
 
 ```md
@@ -919,17 +931,64 @@ Generated from validated release metadata.
 </Git.Commit>
 ```
 
-Commit expands its children before beginning its own effect, allowing nested
-operations to prepare and stage state. With only `message`, that string is the
-complete message. With only children, their rendered text is the message. With
-both, `message` is the first paragraph and non-empty rendered child text follows
-after one blank line. The combined message must be non-empty.
+Commit expands its content completely before describing an effect of its own, so
+a nested operation is its own expansion, its own effect and its own transaction,
+finished before a commit exists to include it. Which checkout it commits in is
+decided the way §7.1 decides it, and neither observation carries authority.
 
-Commit writes only the staged index, fails when nothing is staged and returns
-the full SHA through `as`. It has no `paths`, implicit staging, `allowEmpty`,
-`amend`, signing, author or force controls initially. Git identity comes from
-the Workspace provider. The Git object, ref/index mutation and SHA journal
+Unlike Switch and Add it produces a value, so it renders nothing and is written
+with `as`: the binding is the full object id of the commit.
+
+**The message.** With only `message`, that string is the whole message. With only
+content, the rendered child text is. With both, `message` comes first, one blank
+line separates them, and the non-empty rendered child text follows. Content that
+renders no text — a staging child — contributes nothing, so a `message` prop
+written beside one is the whole message. A message with no text in it is refused.
+
+The child text is never trimmed on its own. The composed message is canonicalized
+once, and once only: CRLF and bare CR become LF, whitespace is removed from the
+end of the complete message, and exactly one final newline is added. Everything
+before that end survives unchanged — including the blank lines a rendered body
+begins with, which are part of what that content is. Those bytes are what Git
+commits, verbatim — Git's own message cleanup is disabled — and what it wrote is
+read back and compared before anything is published.
+
+A message must be well-formed text, on the same terms and for the same reason as
+a pathspec in §7.2, and a message that is not already canonical is refused where
+it reaches the composition Api directly rather than quietly rewritten: what the
+run retains is a digest of the bytes it committed.
+
+**Time.** The provider captures one instant while the effect runs, truncates it
+to whole seconds and records it as both author and committer time. There is no
+prop and no caller-supplied time, and a replay restores the retained second
+rather than reading a clock.
+
+**What it commits.** Exactly the index. There is no `paths`, no implicit staging,
+no `allowEmpty`, no `amend`, no signing and no author or force control, so
+unstaged and untracked work stays where it is. Git identity comes from the
+Workspace provider. The Git object, the branch and index it moves and the journal
 result commit in one effect transaction.
+
+Commit renders nothing and retains no message text. What it retains is evidence:
+the checkout it ran in, where the message came from and the digest and UTF-8 byte
+length of its exact bytes, the parent, tree and commit object ids, the second it
+recorded, and the branch, commit, HEAD tree and index tree the checkout held
+before and after.
+
+A retained result is read back for the invocation that recorded it. Beyond that
+evidence it describes an object graph a commit of the index can have: exactly one
+parent, which is the commit the checkout was on; a tree that is the one the index
+described; and a checkout that ends on that commit with both HEAD and the index
+describing that tree, on the branch it began on. A merge, an amend-like
+transition, a message that came back different or a time that is not the captured
+one is infrastructure — the run fails, the materialization is discarded and
+nothing is published.
+
+Failure follows §7.1, with one refusal of its own. An index that already holds
+what HEAD holds is nothing to commit, which is something the document asked for
+and did not get: it is decided from the checkout's own state, so no command runs
+and no object is written, and it is a failed durable result against a Workspace
+root that did not move, replayed exactly.
 
 ### 7.4 Push
 
@@ -1505,7 +1564,7 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
-| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` and `Git.Add` built by #294, Deno provider only; `Git.Commit` defined here, unbuilt (#294) |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |

@@ -426,3 +426,207 @@ export function gitAddResultJson(result: GitAddResult): Json {
     after: gitCheckoutStateJson(result.after),
   };
 }
+
+/** Where the text of one commit message came from. */
+export type GitCommitMessageSource = "prop" | "children" | "both";
+
+const MESSAGE_SOURCES: readonly GitCommitMessageSource[] = ["prop", "children", "both"];
+
+export function parseGitCommitMessageSource(value: unknown): GitCommitMessageSource | undefined {
+  return MESSAGE_SOURCES.find((source) => source === value);
+}
+
+/**
+ * What a `<Git.Commit>` invocation asks the provider to do.
+ *
+ * The message arrives canonical, because canonicalization is a decision about
+ * what a document meant and the component is where a document is read. What the
+ * provider does with it is arithmetic: these are the bytes Git receives, and the
+ * bytes the retained digest describes.
+ *
+ * `messageSource` travels beside it because the two are different facts. A
+ * reader of the run's history can see that a message came from prose written
+ * inside the element rather than from a prop, which no digest of the result
+ * would say.
+ */
+export interface GitCommitRequest {
+  readonly repository: RepositoryRecord;
+  /** The logical working directory the component observed. */
+  readonly workingDirectory: string;
+  /** The exact bytes to commit, already canonical. */
+  readonly message: string;
+  readonly messageSource: GitCommitMessageSource;
+}
+
+/**
+ * What a completed `<Git.Commit>` retained.
+ *
+ * The commit is described rather than quoted. Its message is retained as a
+ * digest and a byte length instead of as text, because a run's history is read
+ * by people and machines that have no business holding authored prose a second
+ * time — and a digest is what proves the bytes Git committed are the bytes the
+ * document composed, which the text itself could not.
+ *
+ * `parent`, `tree` and `commit` are the object graph the transition made:
+ * exactly one parent, which is the commit the checkout was on; the tree the
+ * index described; and the commit those two produced. `committedAt` is the whole
+ * Unix second the provider stamped both author and committer with, so a replay
+ * reads a time rather than a clock.
+ */
+export interface GitCommitResult {
+  readonly checkout: GitCheckoutIdentity;
+  readonly messageSource: GitCommitMessageSource;
+  /** Lowercase SHA-256 of the canonical message bytes. */
+  readonly messageDigest: string;
+  /** The canonical message's length in UTF-8 bytes. */
+  readonly messageLength: number;
+  readonly parent: string;
+  readonly tree: string;
+  readonly commit: string;
+  /** The whole Unix second this commit was authored and committed at. */
+  readonly committedAt: number;
+  readonly before: GitCheckoutState;
+  readonly after: GitCheckoutState;
+}
+
+/**
+ * What the invocation this commit result is being read for asked for.
+ *
+ * The message evidence rather than the message: the caller derives it once from
+ * the bytes it admitted, and the parser compares. A parser that recomputed a
+ * digest from a message it was handed would be checking the result against
+ * itself.
+ */
+export interface GitCommitExpectation extends GitCheckoutExpectation {
+  readonly messageSource: GitCommitMessageSource;
+  readonly messageDigest: string;
+  readonly messageLength: number;
+}
+
+const COMMIT_MEMBERS = [
+  "checkout",
+  "messageSource",
+  "messageDigest",
+  "messageLength",
+  "parent",
+  "tree",
+  "commit",
+  "committedAt",
+  "before",
+  "after",
+] as const;
+
+/** A SHA-256 digest, which is one width and one case wherever one is written. */
+function digest(value: unknown): string | undefined {
+  const candidate = text(value);
+  return candidate !== undefined && /^[0-9a-f]{64}$/.test(candidate) ? candidate : undefined;
+}
+
+/** A count of something, which is a whole number and never a negative one. */
+function count(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The commit result this value describes for this request, or `undefined`.
+ *
+ * Exact about membership and closed about meaning, like every retained result
+ * here. What it adds is the object graph: a commit of the index has exactly one
+ * parent and that parent is where the checkout was, its tree is the tree the
+ * index described, and the checkout ends on that commit with its HEAD tree and
+ * its index both equal to it. A commit also has to have been a commit — the
+ * parent and the new commit differ, and the index differed from HEAD before it,
+ * because committing an index that already matched HEAD is the condition this
+ * operation refuses rather than one it records.
+ *
+ * The branch is unchanged across it. Committing moves a branch's tip; it does
+ * not move the checkout to another branch, so a result saying otherwise
+ * describes a transition Commit does not make.
+ */
+export function parseGitCommitResult(
+  value: unknown,
+  expected: GitCommitExpectation,
+): GitCommitResult | undefined {
+  const record = members(value, COMMIT_MEMBERS);
+  if (record === undefined) {
+    return undefined;
+  }
+  const format = expected.repository.objectFormat;
+  const checkout = parseGitCheckoutIdentity(record.checkout);
+  const messageSource = parseGitCommitMessageSource(record.messageSource);
+  const messageDigest = digest(record.messageDigest);
+  const messageLength = count(record.messageLength);
+  const parent = objectId(record.parent, format);
+  const tree = objectId(record.tree, format);
+  const commit = objectId(record.commit, format);
+  const committedAt = count(record.committedAt);
+  const before = parseGitCheckoutState(record.before, format);
+  const after = parseGitCheckoutState(record.after, format);
+  if (
+    checkout === undefined ||
+    messageSource === undefined ||
+    messageDigest === undefined ||
+    messageLength === undefined ||
+    parent === undefined ||
+    tree === undefined ||
+    commit === undefined ||
+    committedAt === undefined ||
+    before === undefined ||
+    after === undefined
+  ) {
+    return undefined;
+  }
+
+  if (!selects(checkout, expected)) {
+    return undefined;
+  }
+
+  if (
+    messageSource !== expected.messageSource ||
+    messageDigest !== expected.messageDigest ||
+    messageLength !== expected.messageLength
+  ) {
+    return undefined;
+  }
+
+  if (
+    parent !== before.commit ||
+    tree !== before.indexTree ||
+    commit !== after.commit ||
+    after.headTree !== tree ||
+    after.indexTree !== tree ||
+    before.branch !== after.branch ||
+    parent === commit ||
+    before.indexTree === before.headTree
+  ) {
+    return undefined;
+  }
+
+  return Object.freeze({
+    checkout,
+    messageSource,
+    messageDigest,
+    messageLength,
+    parent,
+    tree,
+    commit,
+    committedAt,
+    before,
+    after,
+  });
+}
+
+export function gitCommitResultJson(result: GitCommitResult): Json {
+  return {
+    checkout: gitCheckoutIdentityJson(result.checkout),
+    messageSource: result.messageSource,
+    messageDigest: result.messageDigest,
+    messageLength: result.messageLength,
+    parent: result.parent,
+    tree: result.tree,
+    commit: result.commit,
+    committedAt: result.committedAt,
+    before: gitCheckoutStateJson(result.before),
+    after: gitCheckoutStateJson(result.after),
+  };
+}

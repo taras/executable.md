@@ -9,7 +9,7 @@
  * state.
  *
  * ```sh
- * deno run -A git-crash-child.ts crash <root> <run-id> <locator> [switch|add]
+ * deno run -A git-crash-child.ts crash <root> <run-id> <locator> [switch|add|commit]
  * deno run -A git-crash-child.ts inspect <root> <run-id>
  * ```
  *
@@ -36,19 +36,24 @@ import { openWorkflowRunDatabase, readRunRow } from "../../src/deno/database.ts"
 import { useJournalRouting } from "../../src/deno/journal-route.ts";
 import { readTransaction } from "../../src/deno/reading.ts";
 import { verifySchema } from "../../src/deno/schema.ts";
-import { WORKSPACE_GIT_ADD, WORKSPACE_GIT_SWITCH } from "../../src/deno/composition/provider.ts";
+import {
+  WORKSPACE_GIT_ADD,
+  WORKSPACE_GIT_COMMIT,
+  WORKSPACE_GIT_SWITCH,
+} from "../../src/deno/composition/provider.ts";
 import { useWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import { transactWorkspaceRoots, usePrivateWorkspace } from "../../src/deno/workspace/private.ts";
 import { count, report } from "./workspace-process.ts";
-import { addDocument, crashDocument } from "./git-crash-process.ts";
-import { stagedPaths } from "./composition.ts";
+import { addDocument, commitDocument, crashDocument } from "./git-crash-process.ts";
+import { headCommit, stagedPaths } from "./composition.ts";
 
 /** What each operation this can be killed inside is written as, and recorded under. */
 const OPERATIONS = {
   switch: { type: WORKSPACE_GIT_SWITCH, document: crashDocument },
   add: { type: WORKSPACE_GIT_ADD, document: addDocument },
+  commit: { type: WORKSPACE_GIT_COMMIT, document: commitDocument },
 } as const;
 
 function operationOf(name: string): (typeof OPERATIONS)["switch"] {
@@ -152,8 +157,12 @@ function* inspect(root: string, runId: string): Operation<void> {
   }
   const checkoutPath = observed.value.checkoutPath;
 
+  const head = checkoutPath === undefined ? undefined : yield* headCommit(database, checkoutPath);
+
   report({
     ...observed.value,
+    head: head?.commit,
+    headMessage: head?.message,
     staged: checkoutPath === undefined ? [] : yield* stagedPaths(database, checkoutPath),
     types: entries.value.map((entry) =>
       entry.event.type === "yield" ? entry.event.description.type : entry.event.type,
