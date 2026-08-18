@@ -121,3 +121,60 @@ export class RepositoryCompositionProtocolError extends WorkflowStorageError {
     );
   }
 }
+
+/**
+ * A word from the fixed vocabulary a Git operation's refusal is reported under.
+ *
+ * The same closed-set discipline the two composition components speak. A
+ * document learns that its base named no commit, or that the branch it asked for
+ * is checked out somewhere else — never which Git version said so, and never
+ * what it printed.
+ */
+export type GitFailureReason =
+  | "no-repository-context"
+  | "invalid-invocation"
+  | "not-a-checkout"
+  | "invalid-branch"
+  | "unresolved-base"
+  | "branch-checked-out-elsewhere"
+  | "overwrites-local-changes"
+  | "unusable-repository";
+
+/** A Git operation the document asked for and did not get. */
+export class GitOperationError extends Error {
+  override name = "GitOperationError";
+
+  /** The component that was written, as a document writes it. */
+  readonly operation: string;
+  readonly reason: GitFailureReason;
+
+  constructor(operation: string, reason: GitFailureReason, sentence: string) {
+    super(sentence);
+    this.operation = operation;
+    this.reason = reason;
+  }
+}
+
+/** No Git composition provider is installed in this scope. */
+export class GitCompositionProviderError extends WorkflowStorageError {
+  override name = "GitCompositionProviderError";
+
+  constructor(operation: string) {
+    super(
+      `no Git composition provider is installed, so ${operation} cannot answer. A workflow ` +
+        "host installs one for a live or partial execution.",
+    );
+  }
+}
+
+/** The provider answered with something that is not a Git operation result. */
+export class GitOperationProtocolError extends WorkflowStorageError {
+  override name = "GitOperationProtocolError";
+
+  constructor(operation: string) {
+    super(
+      `the Git composition provider answered ${operation} with a value that is not the result ` +
+        "that operation retains.",
+    );
+  }
+}

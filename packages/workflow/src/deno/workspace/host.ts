@@ -1,12 +1,13 @@
 /**
  * What a host installs around one workflow document execution.
  *
- * Four installations, in one place, because they only make sense together: the
+ * Five installations, in one place, because they only make sense together: the
  * run's effect coordinator decides how a Workspace effect commits, the Files
  * provider is what turns a document's `<File>` into one of those effects, the
  * Repository composition provider is what turns a `<Repository>` or
- * `<Worktree>` into another, and the logical working directory is what every
- * path either of them resolves is relative to. Installing some without the rest
+ * `<Worktree>` into another, the Git composition provider is what turns a
+ * `<Git.Switch>` into a third, and the logical working directory is what every
+ * path any of them resolves is relative to. Installing some without the rest
  * would leave a document resolving paths one provider cannot reach.
  *
  * They are installed **inside** the execution rather than at the entrypoint, so
@@ -27,10 +28,10 @@
  * answers with, and a host path resolved that way is retained in the durable
  * effects a run replays from.
  *
- * Repository, Worktree and Dir are registered here as ordinary defaults rather
- * than as reserved names, so a repository-local component with one of those
- * names is chosen ahead of them exactly as it would be ahead of any other
- * package's default.
+ * Repository, Worktree, Dir and the Git operations are registered here as
+ * ordinary defaults rather than as reserved names, so a repository-local
+ * component with one of those names is chosen ahead of them exactly as it would
+ * be ahead of any other package's default.
  */
 
 import { scoped, type Operation } from "effection";
@@ -38,6 +39,7 @@ import { API } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { useCompositionComponents } from "../../composition/installation.ts";
 import {
+  useGitComposition,
   useRepositoryComposition,
   type CompositionProviderOptions,
 } from "../composition/provider.ts";
@@ -89,6 +91,7 @@ export function withWorkflowWorkspace<T>(
       yield* useLogicalWorkspaceCwd();
       yield* useWorkflowFiles(database);
       yield* useRepositoryComposition(database, options.composition);
+      yield* useGitComposition(database, options.composition);
       yield* useCompositionComponents();
       return yield* operation;
     }),

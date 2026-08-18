@@ -17,7 +17,11 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../mod.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
-import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "../../src/deno/composition/provider.ts";
+import {
+  WORKSPACE_GIT_SWITCH,
+  WORKSPACE_REPOSITORY,
+  WORKSPACE_WORKTREE,
+} from "../../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../src/deno/workspace/private.ts";
@@ -147,6 +151,35 @@ export function* compositionEvents(database: WorkflowRunDatabase): Operation<Dur
       (event.description.type === WORKSPACE_REPOSITORY ||
         event.description.type === WORKSPACE_WORKTREE),
   );
+}
+
+/** Every Git operation event this run journaled, in order. */
+export function* gitEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+  const events = yield* database.journal.readAll();
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === WORKSPACE_GIT_SWITCH,
+  );
+}
+
+/** What one Git operation settled as, and what it retained when it settled `ok`. */
+export interface GitOutcomeRecord {
+  readonly status: string;
+  readonly name: string;
+  readonly message: string;
+  readonly record: unknown;
+}
+
+export function* gitOutcomes(database: WorkflowRunDatabase): Operation<GitOutcomeRecord[]> {
+  return (yield* gitEvents(database)).map((event) => {
+    const result = Object(Reflect.get(event, "result"));
+    const error = Object(Reflect.get(result, "error"));
+    return {
+      status: String(Reflect.get(result, "status")),
+      name: String(Reflect.get(error, "name") ?? ""),
+      message: String(Reflect.get(error, "message") ?? ""),
+      record: Reflect.get(Object(Reflect.get(result, "value")), "record"),
+    };
+  });
 }
 
 export function* retainedRepositories(

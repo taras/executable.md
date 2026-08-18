@@ -761,11 +761,25 @@ the transactional Workspace Git implementation, not an implicit host command.
 ```
 
 `branch` is required. Creation-only `base` is optional and defaults to current
-HEAD. Existing branches switch without reset; missing branches are created.
-Compatible local changes may carry, changes Git would overwrite fail and a
-branch checked out elsewhere fails. There are initially no path, detached,
-force or discard controls. `<Git.Checkout>` remains absent until its broader
-commit/path-restoration behavior has a distinct contract.
+HEAD. Existing branches switch without reset; missing branches are created. A
+branch the repository's remote published counts as existing, so naming one
+checks it out rather than creating another. `base` is therefore consulted only
+when the branch must be created. Compatible local changes may carry, changes Git
+would overwrite fail and a branch checked out elsewhere fails. There are
+initially no path, detached, force or discard controls. `<Git.Checkout>` remains
+absent until its broader commit/path-restoration behavior has a distinct
+contract.
+
+Which checkout moves is decided by where the element is written: the enclosing
+`<Repository>` names the repository and the contextual working directory names
+the checkout inside it, so the same element inside a `<Dir>` at a Worktree moves
+that Worktree. A working directory that is not one of the run's own checkouts
+for that Repository fails without running Git.
+
+Switch renders nothing, binds nothing and takes no content. What it retains is
+evidence: the checkout it ran in, the requested and resolved branch, the
+requested base and the commit a created branch actually started from, and the
+branch, commit, HEAD tree and index tree the checkout held before and after.
 
 ### 7.2 Add
 
@@ -1277,7 +1291,7 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
-| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | defined here; unbuilt (#294) |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` built by #294, Deno provider only; `Git.Add` and `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |

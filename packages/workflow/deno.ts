@@ -39,7 +39,11 @@ export { hashRunId, workflowRunLock, workflowRunPath } from "./src/deno/path.ts"
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/host.ts";
-export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./src/deno/composition/provider.ts";
+export {
+  WORKSPACE_GIT_SWITCH,
+  WORKSPACE_REPOSITORY,
+  WORKSPACE_WORKTREE,
+} from "./src/deno/composition/provider.ts";
 export type {
   CompositionObserver,
   CompositionProviderOptions,

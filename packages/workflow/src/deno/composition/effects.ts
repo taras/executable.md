@@ -27,11 +27,14 @@ import type { WorkspaceMetadata } from "../workspace/repositories.ts";
 import { GitRefusal } from "./git.ts";
 import {
   CompositionRefusal,
+  gitRefusal,
+  gitRefused,
   refusalReason,
   repositoryRefusal,
   repositoryRefused,
   worktreeRefusal,
   worktreeRefused,
+  type RefusalKind,
 } from "./refusals.ts";
 
 /** The effect type a Repository's creation identity is recorded under. */
@@ -41,7 +44,7 @@ export const WORKSPACE_REPOSITORY = "workspace_repository";
 export const WORKSPACE_WORKTREE = "workspace_worktree";
 
 /**
- * What one composition effect recorded when it recorded a checkout.
+ * What one composition effect recorded.
  *
  * A refusal is not one of these. It is the effect's *failed* outcome, published
  * against the unchanged Workspace root, because a refusal is the durable fact
@@ -115,7 +118,7 @@ export function parentOf(path: string): string {
  * document asked for.
  */
 export function* attempted(
-  kind: "repository" | "worktree",
+  kind: RefusalKind,
   name: string,
   subject: string,
   work: Operation<Json>,
@@ -124,15 +127,23 @@ export function* attempted(
     return created(yield* savepoint(work));
   } catch (error) {
     if (error instanceof GitRefusal) {
-      return kind === "repository"
-        ? repositoryRefused(name, error.reason)
-        : worktreeRefused(name, error.reason);
+      return refused(kind, name, error.reason);
     }
     if (isJournalableWorkspaceFailure(error)) {
       throw new RepositoryRetentionError(subject, error);
     }
     throw error;
   }
+}
+
+function refused(kind: RefusalKind, name: string, reason: string): never {
+  if (kind === "repository") {
+    repositoryRefused(name, reason);
+  }
+  if (kind === "worktree") {
+    worktreeRefused(name, reason);
+  }
+  gitRefused(name, reason);
 }
 
 function* compositionEffect(
@@ -156,8 +167,18 @@ function* compositionEffect(
  * travels on untouched — a stale-state condition stays fatal, and cancellation
  * stays cancellation.
  */
+function refusal(kind: RefusalKind, name: string, reason: string): Error {
+  if (kind === "repository") {
+    return repositoryRefusal(name, reason);
+  }
+  if (kind === "worktree") {
+    return worktreeRefusal(name, reason);
+  }
+  return gitRefusal(name, reason);
+}
+
 export function* settled(
-  kind: "repository" | "worktree",
+  kind: RefusalKind,
   name: string,
   database: WorkflowRunDatabase,
   description: EffectDescription,
@@ -174,7 +195,7 @@ export function* settled(
     if (reason === undefined) {
       throw error;
     }
-    throw kind === "repository" ? repositoryRefusal(name, reason) : worktreeRefusal(name, reason);
+    throw refusal(kind, name, reason);
   }
   const outcome = parseOutcome(value);
   if (outcome === undefined) {

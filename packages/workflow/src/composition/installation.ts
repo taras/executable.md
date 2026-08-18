@@ -1,10 +1,10 @@
 /**
  * Registers the composition components as ordinary defaults.
  *
- * Repository, Worktree and Dir are ordinary registered defaults — not
- * reserved and not structural — so a repository-local component may shadow
- * one for its own scope, and the workflow host installs them only for a live
- * or partial attachment. A completed root replay does not attach any
+ * Repository, Worktree, Dir and the Git operations are ordinary registered
+ * defaults — not reserved and not structural — so a repository-local component
+ * may shadow one for its own scope, and the workflow host installs them only
+ * for a live or partial attachment. A completed root replay does not attach any
  * provider, so a document that already ran through completion does not
  * re-register them either.
  */
@@ -14,6 +14,7 @@ import { registerComponents } from "@executablemd/core";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
 import Dir, { props as dirProps } from "./components/Dir.ts";
+import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
 
 const ORIGIN = "@executablemd/workflow/composition";
 
@@ -36,6 +37,12 @@ export function useCompositionComponents(): Operation<void> {
       origin: ORIGIN,
       props: dirProps,
       fn: Dir,
+    },
+    {
+      name: "Git.Switch",
+      origin: ORIGIN,
+      props: gitSwitchProps,
+      fn: GitSwitch,
     },
   ]);
 }

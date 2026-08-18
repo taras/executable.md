@@ -9,8 +9,10 @@
  * assembled by the same route from the same bytes.
  */
 import {
+  GitOperationError,
   RepositoryCompositionError,
   WorktreeCompositionError,
+  type GitFailureReason,
   type RepositoryFailureReason,
   type WorktreeFailureReason,
 } from "../../composition/errors.ts";
@@ -30,6 +32,45 @@ const WORKTREE_REASONS: ReadonlyMap<string, WorktreeFailureReason> = new Map([
   ["incompatible-reuse", "incompatible-reuse"],
   ["unusable-repository", "unusable-repository"],
 ] as const);
+
+/**
+ * The words a Git operation may be refused under, once it has begun.
+ *
+ * `no-repository-context` and `invalid-invocation` are deliberately absent: both
+ * are decided by the component before any effect exists, so neither can arrive
+ * back through the journal.
+ */
+const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
+  ["not-a-checkout", "not-a-checkout"],
+  ["invalid-branch", "invalid-branch"],
+  ["unresolved-base", "unresolved-base"],
+  ["branch-checked-out-elsewhere", "branch-checked-out-elsewhere"],
+  ["overwrites-local-changes", "overwrites-local-changes"],
+  ["unusable-repository", "unusable-repository"],
+] as const);
+
+const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
+  ["no-repository-context", "there is no enclosing <Repository>."],
+  ["invalid-invocation", "it is not written the way that component is written."],
+  [
+    "not-a-checkout",
+    "the working directory it ran in is not a checkout this run retains for that repository. A " +
+      "Git operation runs in the Repository or Worktree it is written inside.",
+  ],
+  ["invalid-branch", "the branch it names cannot be used as one."],
+  ["unresolved-base", "its base does not name a commit in that repository."],
+  [
+    "branch-checked-out-elsewhere",
+    "that branch is already checked out by another checkout of the same repository. Nothing " +
+      "was moved, reset or detached to make room for it.",
+  ],
+  [
+    "overwrites-local-changes",
+    "changes in the checkout would be overwritten by it. Nothing was discarded, stashed or " +
+      "forced to make it apply.",
+  ],
+  ["unusable-repository", "the checkout it ran in is not one this run can operate on."],
+]);
 
 const REPOSITORY_SENTENCES: ReadonlyMap<RepositoryFailureReason, string> = new Map([
   [
@@ -72,6 +113,23 @@ export function repositoryRefusal(name: string, reason: string): RepositoryCompo
   );
 }
 
+/**
+ * A Git refusal, named by the component a document wrote rather than by a
+ * repository or a worktree.
+ *
+ * `operation` plays the part `name` plays for the other two: it is what the
+ * sentence is built around, and what a replayed refusal is rebuilt with — so a
+ * live refusal and a replayed one are the same sentence for the same element.
+ */
+export function gitRefusal(operation: string, reason: string): GitOperationError {
+  const word = GIT_REASONS.get(reason) ?? "unusable-repository";
+  return new GitOperationError(
+    operation,
+    word,
+    `${operation} could not run: ${GIT_SENTENCES.get(word)}`,
+  );
+}
+
 export function worktreeRefusal(name: string, reason: string): WorktreeCompositionError {
   const word = WORKTREE_REASONS.get(reason) ?? "unusable-repository";
   return new WorktreeCompositionError(
@@ -102,7 +160,7 @@ export function worktreeRefusal(name: string, reason: string): WorktreeCompositi
 export class CompositionRefusal extends JournaledEffectFailure {
   override name: string;
 
-  constructor(kind: "repository" | "worktree", reason: string, sentence: string) {
+  constructor(kind: RefusalKind, reason: string, sentence: string) {
     super(sentence);
     this.name = `${REFUSAL_NAMES[kind]}:${reason}`;
   }
@@ -111,10 +169,14 @@ export class CompositionRefusal extends JournaledEffectFailure {
 const REFUSAL_NAMES = {
   repository: "RepositoryCompositionRefusal",
   worktree: "WorktreeCompositionRefusal",
+  git: "GitOperationRefusal",
 } as const;
 
+/** Which vocabulary a refusal is read and written in. */
+export type RefusalKind = keyof typeof REFUSAL_NAMES;
+
 /** The vocabulary word this restored failure refuses under, if it is a refusal. */
-export function refusalReason(error: unknown, kind: "repository" | "worktree"): string | undefined {
+export function refusalReason(error: unknown, kind: RefusalKind): string | undefined {
   if (!(error instanceof Error)) {
     return undefined;
   }
@@ -128,4 +190,8 @@ export function repositoryRefused(name: string, reason: string): never {
 
 export function worktreeRefused(name: string, reason: string): never {
   throw new CompositionRefusal("worktree", reason, worktreeRefusal(name, reason).message);
+}
+
+export function gitRefused(operation: string, reason: string): never {
+  throw new CompositionRefusal("git", reason, gitRefusal(operation, reason).message);
 }
