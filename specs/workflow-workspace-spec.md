@@ -248,6 +248,13 @@ response schema after the existing journal security filter. The event's result
 means the request was published; it never means the wait was answered. The
 run's stop reason references that event instead of copying its request.
 
+The operation reaches the workflow executor across separately loaded package
+copies through stable contextual routing. That route carries a suspension
+notice, not an answer: a middleware handler may refuse or suppress its own
+descendant's call, but returning a value cannot make an unanswered
+`suspendFor()` continue. The executor accepts a notice only at the exact current
+durable position of the matching retained request.
+
 With no delivered input, `suspendFor()` remains pending while the workflow host
 halts the document execution as structured control flow. It throws no document
 failure and creates no root Close. After every child and live attachment has
@@ -435,8 +442,12 @@ Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
 is now an advisory lock the operating system releases when a host dies, rather
-than something inferred from a status column. Durable suspension is designed
-above and unbuilt, and so is fork.
+than something inferred from a status column. Durable suspension is built on the
+same stack: a run that reaches `suspendFor()` retains one request, settles
+`suspended`, releases its lock and exits 2, and every later resume reaches that
+same wait. Typed answer delivery, which is what would end such a wait, belongs
+to #300 and is unbuilt, so a suspended run resumes into its request rather than
+past it. Fork is designed above and unbuilt.
 
 ## 4. Inspection commands
 
@@ -1313,7 +1324,7 @@ delegated without changing the document language.
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` built by #294, Deno provider only; `Git.Add` and `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
-| durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |
+| durable suspension request and executor-lock release | built by #367; typed input delivery belongs to #300 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |

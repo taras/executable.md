@@ -697,16 +697,41 @@ that already-filtered event by ID, so request text is never duplicated into
 lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
-execution-owned suspension controller. Context may select the workflow
-provider, but the controller accepts only the exact private capability for the
-current execution and suspension ID. With no delivered input, it reports the
-request to the workflow executor and remains pending while that executor
-initiates an
-orderly halt. The operation throws no ordinary error and produces no value; the
-halt leaves the root without a Close. The executor observes the authenticated
-suspension notice as its separate settlement candidate, waits for complete
-scope teardown, then atomically finishes the document-execution record and
-publishes `suspended` before releasing the executor lock.
+execution-owned suspension controller through a stable contextual API. That
+named route is what lets a component's separately loaded workflow package reach
+the controller installed by the binary's bundled copy. It is composition, not
+authority: middleware may refuse or suppress the route for its descendants, but
+no value it returns is a suspension answer and it cannot make `suspendFor()`
+continue past an unanswered wait.
+
+The retained request at the execution's exact current durable position is what
+authorizes entry. The controller derives the identifier for the position
+immediately behind the caller's own, requires the presented one to equal it,
+reads the Yield at that exact position, parses it as a suspension request and
+requires it to describe what is presented. An identifier from a request earlier
+or later in the journal, a reconstructed contextual API name, or a matching row
+without the exact current position authorizes nothing.
+
+Durable replay identity compares a type and a name, both public, so another
+durable operation can reproduce the retained request and arrive at the same
+position. Once the controller has validated the exact retained request, that
+operation is observationally the same request to wait: it gains no authority
+that calling `suspendFor()` with that request would not have. Package-instance
+identity therefore does not take part in suspension authority. Requiring it
+would make the public operation fail when the binary and a repository component
+load separate copies of `@executablemd/workflow`.
+
+With no delivered input, the controller reports the request to the workflow
+executor and remains pending while that executor initiates an orderly halt.
+`suspendFor()` also accepts no returned value as an answer in this state, so a
+middleware handler that suppresses the controller can only leave its descendant
+pending, as document code can already do; it cannot publish `suspended`, supply
+an answer or continue past the wait. The operation throws no ordinary error and
+produces no value; the halt leaves the root without a Close. The executor
+observes the validated suspension notice as its separate settlement candidate,
+waits for complete scope teardown, then atomically finishes the
+document-execution record and publishes `suspended` before releasing the
+executor lock.
 
 A root without Close is valid partial history. On resume, earlier durable
 effects and the request-publication Yield restore without executing or
@@ -719,12 +744,12 @@ record may settle `suspended`; the request remains singular.
 Issue #300 owns input delivery and scheduling. Its boundary is the suspension
 ID and retained response schema. A host may offer one value for that exact ID
 only after validating it against the retained schema. On a resumed execution,
-the suspension controller returns that validated value, and `suspendFor()`
-publishes a separate ordinary durable answer Yield before returning it to the
-caller. Delivery remains pending until answer publication commits, so a crash
-cannot consume input without retaining the answer; duplicates, mismatched IDs
-and late delivery are refused. None of that transport or scheduling behavior is
-part of #367.
+only authenticated retained answer state may let `suspendFor()` publish a
+separate ordinary durable answer Yield and return its value; a contextual
+handler's return value is never answer authority. Delivery remains pending until
+answer publication commits, so a crash cannot consume input without retaining
+the answer; duplicates, mismatched IDs and late delivery are refused. None of
+that transport or scheduling behavior is part of #367.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -2091,7 +2116,7 @@ Status is measured against main.
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
-| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | defined for #367, unbuilt; typed answer delivery and scheduling belong to #300 |
+| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | built on the #367 stack; typed answer delivery and scheduling belong to #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 

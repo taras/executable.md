@@ -153,3 +153,12 @@ export {
   WorkflowStorageError,
   WorkflowTransactionError,
 } from "./src/storage/errors.ts";
+
+export { SUSPENSION_REQUEST, suspendFor, suspensionId } from "./src/suspension/suspend.ts";
+export {
+  parseSuspensionRequest,
+  WorkflowSuspension,
+  WorkflowSuspensionProviderError,
+  WorkflowSuspensionRequestError,
+} from "./src/suspension/api.ts";
+export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";

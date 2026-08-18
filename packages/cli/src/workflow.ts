@@ -47,7 +47,7 @@
  * command cannot answer exits 1.
  */
 
-import { Err, Ok, ensure, scoped } from "effection";
+import { Err, Ok, ensure, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
@@ -69,6 +69,8 @@ import type {
   WorkflowExecutionTransitions,
   WorkflowRunCreation,
 } from "@executablemd/workflow/deno";
+import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
+import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
 
@@ -603,6 +605,13 @@ export function runWorkflow(
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
+    // Imported where it is used rather than at the top of this module. This
+    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
+    // reaches `node:sqlite` — which Node greets with an experimental warning on
+    // standard error the moment it loads. A run that opens no workflow storage
+    // should not be announcing that it might have.
+    const { createSuspensionController } = yield* until(import("@executablemd/workflow/deno"));
+    const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
       if (phase.state !== "running") {
@@ -651,15 +660,58 @@ export function runWorkflow(
         // Workspace for it would open a transaction and capture a root for
         // work that is not going to happen. A replayed terminal run keeps its
         // outcome either way — the begin transition preserved it.
-        return completed || replay ? operation : host.attach(database, operation);
+        //
+        // The suspension controller owns the scope *inside* the attachment, so
+        // halting a suspended execution tears the Workspace down with it and
+        // nothing survives the settlement.
+        return completed || replay
+          ? suspension.own(operation)
+          : host.attach(database, suspension.own(operation));
       },
     };
 
-    const result = yield* attempt(documentExecution, execute);
+    // Suspension is a settlement candidate of its own, beside the document's
+    // canonical outcome and foreground interruption. `race` is what makes it
+    // one: whichever settles first halts the other, and a suspension winning
+    // halts the execution — which is the structured teardown this run's
+    // settlement is evidence of, not work done after the outcome was decided.
+    // One outcome, from one place. The suspension controller ends a waiting
+    // execution from inside the execution's own scope, so whatever a finalizer
+    // raises on the way out — the Workspace attachment's, an Agent's, any
+    // descendant's — arrives here as this attempt's failure rather than being
+    // swallowed by a halt. An execution whose teardown failed did not reach a
+    // durable wait, and `suspended` is never claimed for one.
+    const attempted = yield* attempt(documentExecution, execute);
+    const waiting = suspension.reported() && !attempted.ok && suspension.entered(attempted.error);
+    const settlement: Settlement = waiting
+      ? { kind: "suspension", notice: yield* suspension.notice }
+      : { kind: "document", result: attempted };
+
     // The document is over, whatever storage does next — so teardown must not
     // relabel this run interrupted, even if what follows refuses.
     phase.state = "executed";
 
+    if (settlement.kind === "suspension") {
+      // The executor lock is still held, and stays held until this invocation
+      // returns: teardown finished above, and only then may the run claim a
+      // status. The stop reason names the retained request event rather than
+      // repeating anything the request said.
+      const requested = yield* suspensionEvent(database, settlement.notice.suspensionId);
+      const suspended = yield* transitions.settle(executorLock, {
+        executionId: execution.executionId,
+        status: "suspended",
+        ...(requested === undefined ? {} : { reason: requested }),
+      });
+      if (!suspended.ok) {
+        report(suspended.error.message);
+        return { exitCode: 1 };
+      }
+      phase.state = "settled";
+      reportStatus("suspended");
+      return { exitCode: EXIT_BY_STATUS.suspended };
+    }
+
+    const result = settlement.result;
     const status: WorkflowRunStatus = result.ok ? "completed" : "failed";
     const reason = result.ok ? undefined : yield* failureReason(database);
     const retained = yield* transitions.settle(executorLock, {
@@ -761,6 +813,37 @@ function* attempt(
   } catch (error) {
     return Err(error instanceof Error ? error : new Error(String(error)));
   }
+}
+
+/** Which candidate settled this execution. */
+type Settlement =
+  | { readonly kind: "document"; readonly result: Result<void> }
+  | { readonly kind: "suspension"; readonly notice: SuspensionNotice };
+
+/**
+ * The retained request event one suspension published, as a stop reason.
+ *
+ * A reference rather than a copy. The request already crossed the secret gate
+ * on its way into the journal and already carries this run's Workspace root;
+ * repeating its text into lifecycle state would retain the same words twice,
+ * under a column no gate reads.
+ */
+function* suspensionEvent(
+  database: WorkflowRunDatabase,
+  suspensionId: string,
+): Operation<WorkflowStopReason | undefined> {
+  const entries = yield* database.readJournalEntries();
+  if (!entries.ok) {
+    return undefined;
+  }
+  for (let index = entries.value.length - 1; index >= 0; index -= 1) {
+    const entry = entries.value[index];
+    const description = entry?.event.type === "yield" ? entry.event.description : undefined;
+    if (description?.type === SUSPENSION_REQUEST && description.name === suspensionId) {
+      return { kind: "journal", eventId: entry?.eventId ?? "" };
+    }
+  }
+  return undefined;
 }
 
 /** The exit code a status reports, for a caller composing its own outcome. */

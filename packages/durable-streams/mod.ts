@@ -81,6 +81,9 @@ export { parseDurableEvent } from "./parse.ts";
 
 // Core effect factories
 export { createDurableEffect, createDurableOperation } from "./effect.ts";
+
+export { durablePosition } from "./position.ts";
+export type { DurablePosition } from "./position.ts";
 export type { Executor } from "./effect.ts";
 
 // Structured live-operation coordination
