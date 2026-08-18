@@ -42,6 +42,7 @@ import {
   useBareRemote,
 } from "./support/git-remotes.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
+import type { PrivateWorkspaceTransaction } from "../src/deno/workspace/private.ts";
 import {
   causedBy,
   checkoutConfig,
@@ -60,7 +61,7 @@ import {
   workspaceText,
   writeCheckoutFile,
 } from "./support/composition.ts";
-import { publishedRoots } from "./support/replay.ts";
+import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
 
 const REMOTE = {
   commits: [
@@ -141,6 +142,36 @@ function plant(
         // The default hook location, so nothing but containment stops it.
         yield* workspace.filesystem.mkdir(`${checkout}/.git/hooks`, { recursive: true });
         yield* workspace.filesystem.writeFile(`${checkout}/.git/hooks/pre-push`, hook, 0o755);
+        const captured = yield* workspace.capture();
+        yield* workspace.publish(captured.rootId);
+      });
+      if (!planted.ok) {
+        throw planted.error;
+      }
+      return "";
+    },
+  };
+}
+
+/**
+ * A test-owned component that edits the retained checkout's object graph.
+ *
+ * Mid-document on purpose: what it writes has to be there when `<Git.Push>`
+ * expands, and only a fixture can plant a symbolic link or an alternates file
+ * no supported operation produces.
+ */
+function plantObjectGraph(
+  database: WorkflowRunDatabase,
+  edit: (workspace: PrivateWorkspaceTransaction, checkout: string) => Operation<void>,
+): ComponentRegistration {
+  return {
+    name: "Plant",
+    origin: "test",
+    props: { type: "object", additionalProperties: true },
+    *fn(): Operation<string> {
+      const checkout = yield* checkoutPath(database);
+      const planted = yield* transactWorkspaceRoots(database, function* (workspace) {
+        yield* edit(workspace, checkout);
         const captured = yield* workspace.capture();
         yield* workspace.publish(captured.rootId);
       });
@@ -872,6 +903,149 @@ describe("workflow Git.Push containment", () => {
       expect(outcome?.status).toBe("err");
       expect(outcome?.name).toBe("GitHostAmbiguousError");
       expect(subcommands(counting.counters)).not.toContain("push");
+      expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
+    });
+  });
+});
+
+describe("workflow Git.Push object-source containment", () => {
+  /**
+   * The alternate an author can write, and what happens when they do.
+   *
+   * The control repository reads the checkout's object database, and an object
+   * database says where Git reads *next*: `objects/info/alternates` is a file
+   * inside the Workspace, so a document that writes one is choosing which
+   * objects a push may publish. It is rejected rather than deleted or ignored —
+   * repairing it would publish from a database this run edited, and ignoring it
+   * would publish from a database that is not the one it verified.
+   *
+   * The escape is proven real rather than assumed: the same alternate, read by
+   * an ordinary `git` in the same export, does reach the foreign commit.
+   */
+  it("refuses an object graph whose alternates leave the authenticated database", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    const foreign = yield* useBareRemote({
+      commits: [{ message: "foreign", entries: [{ path: "foreign.txt", content: "foreign\n" }] }],
+    });
+    const foreignCommit = foreign.heads.get("main") ?? "";
+    const foreignObjects = `${foreign.locator}/objects`;
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          document(
+            remote.locator,
+            `<Git.Switch branch="${BRANCH}" />`,
+            `<Plant />`,
+            `<Git.Push />`,
+          ),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([
+                plantObjectGraph(database, function* (workspace, checkout) {
+                  yield* workspace.filesystem.mkdir(`${checkout}/.git/objects/info`, {
+                    recursive: true,
+                  });
+                  yield* workspace.filesystem.writeFile(
+                    `${checkout}/.git/objects/info/alternates`,
+                    `${foreignObjects}\n`,
+                  );
+                }),
+              ]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      // One fixed, cause-free boundary failure. It publishes nothing, activates
+      // the run's fail-stop, and repeats no path an author wrote.
+      expect(String(failure)).toContain("executed and published nothing");
+      expect(String(failure)).not.toContain(foreignObjects);
+      expect(String(failure)).not.toContain("alternate");
+
+      // Nothing was observed and nothing was performed.
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(yield* gitHostEvents(database)).toHaveLength(0);
+      // The Repository, the switch and the plant published a root each; the
+      // push published none and moved no frontier.
+      expect(publishedRoots(path)).toBe(3);
+      expect(committedRoot(path)).toBe(latestRoot(path));
+      // And the branch it would have published is still absent.
+      expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
+      expect(yield* survivingRoots(counting.counters)).toEqual([]);
+
+      // The escape really was reachable: an ordinary Git in the same export,
+      // reading the same alternates file, resolves the foreign commit.
+      const reached = yield* inCheckout(database, yield* checkoutPath(database), function* (run) {
+        const top = (yield* run(["rev-parse", "--show-toplevel"])).trim();
+        return nativeGit(["cat-file", "-t", foreignCommit], top, top);
+      });
+      expect(reached).toBe("commit");
+    });
+  });
+
+  /**
+   * The link an author can write, which needs no chain at all.
+   *
+   * The operating system resolves a symbolic link before Git reports anything
+   * about it, so a linked `objects/pack` makes an external directory the thing
+   * packs are read from while every question asked about the object database
+   * still answers correctly.
+   */
+  it("refuses an object graph that leaves the database through a symbolic link", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    const foreign = yield* useBareRemote({
+      commits: [{ message: "foreign", entries: [{ path: "foreign.txt", content: "foreign\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          document(
+            remote.locator,
+            `<Git.Switch branch="${BRANCH}" />`,
+            `<Plant />`,
+            `<Git.Push />`,
+          ),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([
+                plantObjectGraph(database, function* (workspace, checkout) {
+                  yield* workspace.filesystem.remove(`${checkout}/.git/objects/pack`, {
+                    recursive: true,
+                    force: true,
+                  });
+                  yield* workspace.filesystem.symlink(
+                    `${foreign.locator}/objects/pack`,
+                    `${checkout}/.git/objects/pack`,
+                  );
+                }),
+              ]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      expect(String(failure)).toContain("executed and published nothing");
+      expect(String(failure)).not.toContain(foreign.locator);
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(yield* gitHostEvents(database)).toHaveLength(0);
+      expect(publishedRoots(path)).toBe(3);
+      expect(committedRoot(path)).toBe(latestRoot(path));
       expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
     });
   });

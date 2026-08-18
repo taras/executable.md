@@ -47,7 +47,6 @@
  */
 
 import { Err, Ok, scoped, type Operation, type Result } from "effection";
-import { ensureDir, writeTextFile } from "@effectionx/fs";
 import {
   GitOperationInfrastructureError,
   GitOperationProtocolError,
@@ -73,7 +72,6 @@ import {
   type GitPushRequest,
   type GitPushResult,
 } from "../../composition/git-push-records.ts";
-import type { GitObjectFormat } from "../../composition/records.ts";
 import type { GitHostProvider } from "../../git-host/api.ts";
 import { reconcileGitHostEffect, withGitHostProvider } from "../../git-host/effect.ts";
 import { GitHostUnavailableError } from "../../git-host/errors.ts";
@@ -84,16 +82,8 @@ import type {
 } from "../../git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
-import {
-  commonDirectory,
-  currentBranch,
-  gitSession,
-  initControlPlane,
-  observeRemoteRef,
-  pushRefspec,
-  resolveCommit,
-  type GitSession,
-} from "./git.ts";
+import { currentBranch, gitSession, observeRemoteRef, pushRefspec, resolveCommit } from "./git.ts";
+import { objectSource, type PushObjectSource } from "./object-source.ts";
 import type { RepositoryHost } from "./host.ts";
 import {
   exportCheckoutFamily,
@@ -105,55 +95,6 @@ import { gitRefusal } from "./refusals.ts";
 
 function unusable(reason: string): never {
   throw new GitOperationInfrastructureError(PUSH, reason);
-}
-
-/**
- * The authorized way this run's objects are reached, and nothing more.
- *
- * Never the selected checkout itself. A checkout carries a `.git/config` the
- * Workspace retains and a document can write, and several ordinary settings in
- * one name a program or a destination: `remote.origin.pushurl`, a
- * `url.<base>.pushInsteadOf` rewrite, a `pre-push` hook, a credential helper,
- * `gpg.program`. Running the transport there would let retained document data
- * choose where this run publishes and what else runs while it happens.
- *
- * So the transport runs in a bare repository this provider created, configured
- * by nothing but `git init`, which reads the checkout's object database through
- * a read-only alternate. Same objects, different door — and the door this run
- * owns.
- *
- * It is built on first use rather than on construction, so an execution that
- * replays a completed Push spawns no Git at all: the shared engine hands the
- * retained record back without reaching a provider, and nothing here is asked
- * for anything.
- */
-interface PushObjectSource {
-  readonly git: GitSession;
-  /** The control repository, built if this is the first thing to need it. */
-  ready(): Operation<string>;
-}
-
-function objectSource(
-  host: RepositoryHost,
-  root: string,
-  objects: string,
-  format: GitObjectFormat,
-): PushObjectSource {
-  const git = gitSession(host, root);
-  const directory = `${root}/control`;
-  let built = false;
-  return {
-    git,
-    *ready(): Operation<string> {
-      if (!built) {
-        yield* initControlPlane(git, root, directory, format);
-        yield* ensureDir(`${directory}/objects/info`);
-        yield* writeTextFile(`${directory}/objects/info/alternates`, `${objects}\n`);
-        built = true;
-      }
-      return directory;
-    },
-  };
 }
 
 /**
@@ -196,9 +137,12 @@ function pushProvider(
   return {
     *observe(request): Operation<Result<GitHostObservation>> {
       const inputs = admit(request);
+      // The source proves its own containment on this first call, before any
+      // remote is contacted and before anything could have been published.
+      const directory = yield* source.ready();
       const observed = yield* observeRemoteRef(
         source.git,
-        yield* source.ready(),
+        directory,
         locator,
         inputs.destinationRef,
         inputs.repository.objectFormat,
@@ -276,22 +220,6 @@ function resultOf(inputs: GitPushInputs, observedRemoteCommit: string): GitPushR
   };
 }
 
-/**
- * The object database this checkout publishes from, once it is that checkout's.
- *
- * A linked worktree shares the Repository's objects, so both cases answer with
- * the Repository's own administration — and that is checked rather than
- * assumed, at the one place a host path becomes what the transport reads.
- */
-function* objectDatabase(checkout: GitCheckout): Operation<string> {
-  const common = yield* commonDirectory(checkout.git, checkout.directory);
-  const administration = `${checkout.repositoryDirectory}/.git`;
-  if (common !== administration) {
-    unusable("the checkout it ran in does not share the retained repository's object database");
-  }
-  return `${administration}/objects`;
-}
-
 /** What this invocation publishes: the branch the checkout is on, at its commit. */
 function* admitInputs(checkout: GitCheckout, admitted: GitPushRequest): Operation<GitPushInputs> {
   const branch = yield* currentBranch(checkout.git, checkout.directory);
@@ -355,17 +283,20 @@ export function* createGitPush(
 
     const checkout = yield* prepareCheckout(root, git, selection, exported, PUSH);
     const inputs = yield* admitInputs(checkout, admitted);
-    const objects = yield* objectDatabase(checkout);
 
     // The exact retained locator, authenticated against its own fingerprint
     // when the row was read, rather than `remote.origin.url` or a `pushurl` out
     // of a configuration file this run merely stores.
     const locator = selection.repository.locator;
+    // Its directory is acquired here, so it is removed with this push whether
+    // or not anything is built inside it. Everything else the source does waits
+    // until a live provider asks: a completed replay reaches none.
     const source = objectSource(
       host,
       yield* host.useDirectory(),
-      objects,
+      checkout,
       inputs.repository.objectFormat,
+      PUSH,
     );
 
     const record = yield* withGitHostProvider(

@@ -1099,6 +1099,21 @@ read-only alternate — the authenticated private object-source attachment of
 mutable `remote.origin.url` or `pushurl`, and the push carries one explicit
 refspec, no upstream option and no force option.
 
+Pointing that alternate at the object database says where Git starts reading,
+not where it stops. An object database names further ones in
+`objects/info/alternates` and Git follows that chain transitively, and a symbolic
+link anywhere under `objects/` redirects a read before Git reports anything about
+it — both are files inside the Workspace, so both are things a document can
+write. Everything Git may traverse is therefore proven to resolve inside the
+object database this run authenticated, before the first remote observation and
+after every local authority check. A graph that leaves it is rejected rather than
+repaired: deleting an authored alternate would publish from a database the run
+edited on the author's behalf, and ignoring one would publish from a database
+that is not the one it verified. The refusal is a boundary failure — nothing is
+observed, nothing is performed, nothing is published, and the run fail-stops —
+and it repeats no path an author wrote. A linked worktree shares the
+Repository's object database, so one proof covers both kinds of checkout.
+
 **What it retains.** One filtered Git-host reconciliation record: the filtered
 Repository identity — its name, locator fingerprint, requested base, creation
 commit, primary branch and object format, and never its checkout path — the
@@ -1494,10 +1509,20 @@ the selected provider's own closure, and disposes with that invocation.
 An attachment is authenticated against the retained identity it belongs to
 before it exists — the observed Repository record is compared with the retained
 row member for member, every retained row is held to the identity naming it, and
-the exported checkout is proven to be the one that record claims. It is never a
-durable input, never part of the natural key, and never visible to routing: the
-public surface carries the frozen JSON request and nothing else, so no middleware
-receives a locator, a host path, a credential, an object database or a function.
+the exported checkout is proven to be the one that record claims. What it grants
+access to is authenticated too, and separately: the local state behind an
+attachment can name further state, so the graph a provider could traverse through
+it is proven contained before the attachment is first used. That proof is the
+live provider's first act and happens on no other path — a completed replay
+reaches no provider, so it derives and parses its retained record without
+performing it. A graph that leaves what the run authenticated is a boundary
+failure like any other: it publishes no outcome, exposes no authored path, and
+activates fail-stop.
+
+An attachment is never a durable input, never part of the natural key, and never
+visible to routing: the public surface carries the frozen JSON request and
+nothing else, so no middleware receives a locator, a host path, a credential, an
+object database or a function.
 
 **No transaction spans the Workspace and the host.** The Workspace transaction a
 Git-host effect opens is read-only and is closed before the host is observed, so

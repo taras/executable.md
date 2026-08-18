@@ -43,6 +43,7 @@ import {
   runWorkflowDocument,
   subcommands,
   survivingRoots,
+  writeCheckoutFile,
 } from "./support/composition.ts";
 import {
   changedExactlyOne,
@@ -148,6 +149,53 @@ describe("workflow Git.Push durability", () => {
       expect(yield* gitHostEvents(database)).toHaveLength(1);
       expect(publishedRoots(path)).toBe(published);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
+    });
+  });
+
+  /**
+   * A completed push derives and parses its retained request, and asks the
+   * object source for nothing.
+   *
+   * Containment is the live provider's first act, so a replay that performed it
+   * anyway would fail here — the object graph is left in a state no push may
+   * read from before the replay runs. It succeeds, which is the claim: the
+   * shared engine hands back the retained record without reaching a provider,
+   * so no graph is walked, no control repository is built and no Git runs for
+   * the push.
+   */
+  it("replays a completed push over an object graph no live push would accept", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    const foreign = yield* useBareRemote({
+      commits: [{ message: "foreign", entries: [{ path: "foreign.txt", content: "foreign\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(database, source(remote.locator));
+      const published = yield* gitHostOutcomes(database);
+      expect(published[0]?.status).toBe("ok");
+
+      const [repository] = yield* retainedRepositories(database);
+      const checkout = repository?.record.checkoutPath ?? "";
+      yield* writeCheckoutFile(
+        database,
+        `${checkout}/.git/objects/info/alternates`,
+        `${foreign.locator}/objects\n`,
+        0o644,
+      );
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const counting = countingHost();
+      yield* runWorkflowDocument(database, source(remote.locator), countingOptions(counting));
+
+      expect(subcommands(counting.counters)).not.toContain("init");
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(yield* gitHostEvents(database)).toHaveLength(1);
+      expect(yield* gitHostOutcomes(database)).toEqual(published);
     });
   });
 
