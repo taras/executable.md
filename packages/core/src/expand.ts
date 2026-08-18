@@ -58,6 +58,7 @@ import {
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
+import type { WorkflowImportAuthority } from "./components/bundle.ts";
 import CoreTest from "./components/Test.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
@@ -182,6 +183,7 @@ function expandChildrenScoped(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -203,6 +205,7 @@ function expandChildrenScoped(
       path,
       0,
       checkedFailures,
+      bundle,
     );
   });
 }
@@ -241,6 +244,7 @@ interface ProjectionState {
    * the invocation is (§3.6).
    */
   checkedFailures: CheckedFailures | undefined;
+  bundle: WorkflowImportAuthority | undefined;
 }
 
 interface ProjectionFrame {
@@ -370,6 +374,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             options.path,
             0,
             state.checkedFailures,
+            state.bundle,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -464,6 +469,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             path,
             0,
             state.checkedFailures,
+            state.bundle,
           );
           outcome.resolve({ segments: [...errors, ...rendered] });
         } catch (error) {
@@ -608,6 +614,7 @@ export function* expandSegments(
    * root, all of which start from the default here and are outside it.
    */
   checkedFailures?: CheckedFailures,
+  bundle?: WorkflowImportAuthority,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -626,6 +633,7 @@ export function* expandSegments(
         path,
         indexBase,
         checkedFailures,
+        bundle,
       );
     });
   }
@@ -721,6 +729,7 @@ export function* expandSegments(
               counter,
               elementPath,
               checkedFailures,
+              bundle,
             )),
           );
           break;
@@ -739,6 +748,7 @@ export function* expandSegments(
               result,
               elementPath,
               checkedFailures,
+              bundle,
             )),
           );
           break;
@@ -758,6 +768,7 @@ export function* expandSegments(
             result,
             elementPath,
             checkedFailures,
+            bundle,
           );
           break;
         }
@@ -783,6 +794,7 @@ export function* expandSegments(
             result,
             elementPath,
             checkedFailures,
+            bundle,
           );
           break;
         }
@@ -799,6 +811,7 @@ export function* expandSegments(
             result,
             elementPath,
             checkedFailures,
+            bundle,
           );
           break;
         }
@@ -823,6 +836,7 @@ export function* expandSegments(
                   frame === undefined ? elementPath : extendPath(elementPath, frame),
                   0,
                   checkedFailures,
+                  bundle,
                 ),
               result,
             )),
@@ -867,6 +881,7 @@ export function* expandSegments(
           result,
           elementPath,
           checkedFailures,
+          bundle,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -1009,6 +1024,7 @@ export function* expandSegments(
                   source: segment.content,
                 },
                 checkedFailures,
+                bundle,
               ),
             );
           }
@@ -1069,6 +1085,7 @@ export function* expandSegments(
 function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1167,6 +1184,7 @@ function* expandCapture(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
     return [
@@ -1217,6 +1235,7 @@ function* expandCapture(
       path,
       0,
       checkedFailures,
+      bundle,
     ),
   );
 
@@ -1283,6 +1302,7 @@ function* expandEach(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1366,6 +1386,7 @@ function* expandEach(
       out,
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
+      bundle,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1627,6 +1648,7 @@ function* expandIf(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1700,6 +1722,7 @@ function* expandIf(
     branchPath,
     0,
     checkedFailures,
+    bundle,
   );
 }
 
@@ -1800,6 +1823,7 @@ function* expandLoop(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -1861,6 +1885,7 @@ function* expandLoop(
           extendPath(path, { f: "iter", i: iteration }),
           0,
           checkedFailures,
+          bundle,
         );
         if (frame.broken) {
           break;
@@ -1984,6 +2009,7 @@ function* expandPrintErrors(
   path: string,
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2046,6 +2072,7 @@ function* expandComponent(
    * block written there would be.
    */
   checkedFailures?: CheckedFailures,
+  bundle?: WorkflowImportAuthority,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2070,7 +2097,13 @@ function* expandComponent(
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
   try {
-    imported = yield* importComponent(name, position);
+    // The public chain answers, and canonical execution decides whether the
+    // answer is one it produced. In a workflow closed over a component bundle
+    // a handler may observe this import, delegate it, and refuse it by
+    // throwing; nothing it returns is invoked. Without a bundle the answer is
+    // whatever the chain produced, exactly as it always was.
+    const answered = yield* importComponent(name, position);
+    imported = bundle === undefined ? answered : bundle.authorize(name, answered);
   } catch (error) {
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.
@@ -2108,6 +2141,7 @@ function* expandComponent(
       owner,
       path,
       checkedFailures,
+      bundle,
     );
   }
 
@@ -2257,6 +2291,7 @@ function* expandComponent(
       ownPath: path,
       printedErrors: bodyContentErrors,
       checkedFailures,
+      bundle,
     });
     // Published on the eval scope, which every task the invocation owns
     // descends from — including its persist-eval blocks and its content.
@@ -2326,6 +2361,7 @@ function* expandComponent(
           claimProjection,
           path,
           checkedFailures,
+          bundle,
         );
       });
     } catch (error) {
@@ -2369,6 +2405,7 @@ function* expandComponent(
       bodyOwner,
       path,
       checkedFailures,
+      bundle,
     );
   });
 
@@ -2516,6 +2553,7 @@ function* expandFunctionComponent(
   path: string = "",
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
+  bundle?: WorkflowImportAuthority,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2658,6 +2696,7 @@ function* expandFunctionComponent(
           callerLoop: siteLoop,
           ownPath: path,
           checkedFailures,
+          bundle,
         });
         invocation.evalScope.scope.set(ActiveProjection, handle);
 
@@ -3619,6 +3658,7 @@ export function* expandBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
+  bundle?: WorkflowImportAuthority,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -3632,6 +3672,7 @@ export function* expandBody(
       path,
       0,
       checkedFailures,
+      bundle,
     );
   }
 
@@ -3652,6 +3693,7 @@ export function* expandBody(
         chunkPath,
         0,
         checkedFailures,
+        bundle,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -3666,6 +3708,7 @@ export function* expandBody(
           chunkPath,
           0,
           checkedFailures,
+          bundle,
         );
       });
     } else {
@@ -3682,6 +3725,7 @@ export function* expandBody(
           chunkPath,
           chunkBase,
           checkedFailures,
+          bundle,
         );
       });
     }
@@ -3708,6 +3752,7 @@ function runDocumentation(
   indexBase: number,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -3721,6 +3766,7 @@ function runDocumentation(
       path,
       indexBase,
       checkedFailures,
+      bundle,
     );
   });
 }
@@ -3771,6 +3817,7 @@ function* expandValueBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
+  bundle?: WorkflowImportAuthority,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -3792,6 +3839,7 @@ function* expandValueBody(
       path,
       index,
       checkedFailures,
+      bundle,
     );
   }
 

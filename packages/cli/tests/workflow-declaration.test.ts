@@ -1,0 +1,205 @@
+/**
+ * Tier WFD — the component bundle a workflow root declares.
+ *
+ * A root closes itself over a fixed set of authored components by writing them
+ * in its own frontmatter:
+ *
+ * ```yaml
+ * workflow:
+ *   components:
+ *     Discovery: ./Discovery.md
+ * ```
+ *
+ * Reading that declaration is a decision about identity, so it is deliberately
+ * narrow: one member, a non-empty mapping, component names the engine does not
+ * already own, and relative POSIX Markdown paths that stay inside the tree. A
+ * value that is nearly one of those is refused rather than repaired, because a
+ * repaired declaration runs a file the author did not write down.
+ *
+ * Nothing here reads a repository. The declaration is normalized against the
+ * root's own path in the pinned tree, and what comes back is what Git is then
+ * asked for.
+ */
+
+import { describe, it } from "@executablemd/test-support/bdd";
+import { expect } from "@executablemd/test-support/expect";
+import { declaredBundle } from "../src/workflow-bundle.ts";
+import type { DeclaredComponent } from "../src/workflow-bundle.ts";
+
+const ROOT = "workflows/loop.md";
+
+/** The five names the representative authored workflow declares. */
+const FIVE = {
+  InstructionFiles: "./InstructionFiles.md",
+  Discovery: "./Discovery.md",
+  UserCheckpoint: "./UserCheckpoint.md",
+  Planning: "./Planning.md",
+  Implementation: "./Implementation.md",
+};
+
+function declare(components: unknown, root = ROOT) {
+  return declaredBundle({ workflow: { components } }, root);
+}
+
+function accepted(components: unknown, root = ROOT): readonly DeclaredComponent[] {
+  const result = declare(components, root);
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+function refused(components: unknown, root = ROOT): string {
+  const result = declare(components, root);
+  if (result.ok) {
+    throw new Error("expected the declaration to be refused");
+  }
+  return result.error.message;
+}
+
+describe("Tier WFD — reading a workflow's component declaration", () => {
+  it("WFD1: the five-name map normalizes against a nested root", function* () {
+    expect(accepted(FIVE)).toEqual([
+      { name: "Discovery", path: "workflows/Discovery.md" },
+      { name: "Implementation", path: "workflows/Implementation.md" },
+      { name: "InstructionFiles", path: "workflows/InstructionFiles.md" },
+      { name: "Planning", path: "workflows/Planning.md" },
+      { name: "UserCheckpoint", path: "workflows/UserCheckpoint.md" },
+    ]);
+  });
+
+  it("WFD2: the order the author wrote is not the order identity keeps", function* () {
+    const reversed = Object.fromEntries(Object.entries(FIVE).reverse());
+
+    expect(accepted(reversed)).toEqual(accepted(FIVE));
+  });
+
+  it("WFD3: a root at the repository root normalizes without a directory", function* () {
+    expect(accepted({ Discovery: "./stages/Discovery.md" }, "loop.md")).toEqual([
+      { name: "Discovery", path: "stages/Discovery.md" },
+    ]);
+    expect(accepted({ Discovery: "stages/Discovery.md" }, "loop.md")).toEqual([
+      { name: "Discovery", path: "stages/Discovery.md" },
+    ]);
+  });
+
+  it("WFD4: two names may point at one blob on purpose", function* () {
+    expect(accepted({ Discovery: "./Stage.md", Planning: "./Stage.md" })).toEqual([
+      { name: "Discovery", path: "workflows/Stage.md" },
+      { name: "Planning", path: "workflows/Stage.md" },
+    ]);
+  });
+
+  it("WFD5: a root that declares nothing declares no bundle", function* () {
+    const absent = declaredBundle({}, ROOT);
+    expect(absent.ok && absent.value).toEqual([]);
+
+    const other = declaredBundle({ title: "Loop" }, ROOT);
+    expect(other.ok && other.value).toEqual([]);
+  });
+
+  it("WFD6: an empty map is not a second spelling of no bundle", function* () {
+    expect(refused({})).toContain("declares no component");
+  });
+
+  it("WFD7: the declaration is one closed member", function* () {
+    for (const declaration of [null, "components", ["Discovery"], 7]) {
+      const result = declaredBundle({ workflow: declaration }, ROOT);
+      expect(result.ok).toBe(false);
+    }
+
+    const extra = declaredBundle(
+      { workflow: { components: { Discovery: "./Discovery.md" }, version: 1 } },
+      ROOT,
+    );
+    expect(extra.ok).toBe(false);
+    expect(!extra.ok && extra.error.message).toContain('exactly one member, "components"');
+
+    const missing = declaredBundle({ workflow: {} }, ROOT);
+    expect(missing.ok).toBe(false);
+
+    for (const components of [null, "Discovery.md", ["Discovery.md"], 7]) {
+      expect(refused(components)).toContain("mapping of name to path");
+    }
+  });
+
+  it("WFD8: a value that is not a path is not a declaration", function* () {
+    for (const value of [null, 7, true, ["./Discovery.md"], { path: "./Discovery.md" }]) {
+      expect(refused({ Discovery: value })).toContain("without a path");
+    }
+  });
+
+  it("WFD9: every path form a declaration may not take", function* () {
+    const refusals: Array<[string, string]> = [
+      ["", "is empty"],
+      ["/etc/passwd", "is absolute"],
+      ["workflows\\Discovery.md", "backslash"],
+      ["Discovery\u0000.md", "NUL"],
+      ["../Discovery.md", "walks the tree"],
+      ["./../Discovery.md", "walks the tree"],
+      // Inside the repository after normalization, and still refused: a
+      // declaration names a file beside the document, not a route to one.
+      ["../workflows/Discovery.md", "walks the tree"],
+      ["./stages/./Discovery.md", "walks the tree"],
+      ["stages//Discovery.md", "empty segment"],
+      ["https://example.invalid/Discovery.md", "is a URL"],
+      ["file:///Discovery.md", "is a URL"],
+      ["@scope/package/Discovery.md", "is a package specifier"],
+      ["./stages/*.md", "glob syntax"],
+      ["./stages/{a,b}.md", "glob syntax"],
+      ["./stages/", "names a directory"],
+      ["./Discovery.ts", "is not a Markdown file"],
+      ["./Discovery.MD", "is not a Markdown file"],
+      ["./Discovery", "is not a Markdown file"],
+    ];
+
+    for (const [path, says] of refusals) {
+      const message = refused({ Discovery: path });
+      expect({ path, says: message.includes(says) }).toEqual({ path, says: true });
+      // The path a run would have opened is named, because it is what the
+      // author must change. Nothing else about the document is.
+      expect(message).toContain('"Discovery"');
+    }
+  });
+
+  it("WFD10: a declaration may not claim structural syntax or a core component", function* () {
+    for (const name of ["If", "Each", "Output", "PrintErrors"]) {
+      expect(refused({ [name]: "./Stage.md" })).toContain("structural syntax");
+    }
+    for (const name of ["File", "Parse", "Test", "Fetch", "Glob", "TempDir", "Elicit"]) {
+      expect(refused({ [name]: "./Stage.md" })).toContain("the engine supplies");
+    }
+  });
+
+  it("WFD11: a key that is not a component name is never printed back", function* () {
+    // A distinctive string rather than a credential-shaped one. What this proves
+    // is that a refused key is not echoed, and a value shaped like a token would
+    // put one into the diff of every review of this file.
+    const canary = "never-printed-canary-b7a1e9";
+
+    for (const name of [
+      "discovery",
+      "1Discovery",
+      "Discovery-Stage",
+      "",
+      "Discovery.stage",
+      canary,
+    ]) {
+      const message = refused({ [name]: "./Stage.md" });
+      expect({ name, names: message.includes("not a component name") }).toEqual({
+        name,
+        names: true,
+      });
+      // Every string contains the empty one, so there is nothing to check for it.
+      if (name !== "") {
+        expect(message).not.toContain(name);
+      }
+    }
+  });
+
+  it("WFD12: a nested name is a name, and normalizes like one", function* () {
+    expect(accepted({ "Stage.Discovery": "./stages/Discovery.md" })).toEqual([
+      { name: "Stage.Discovery", path: "workflows/stages/Discovery.md" },
+    ]);
+  });
+});

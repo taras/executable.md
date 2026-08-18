@@ -47,3 +47,5 @@
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
+export { WorkflowBundleError } from "./src/components/bundle.ts";
+export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";

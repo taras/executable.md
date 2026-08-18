@@ -17,6 +17,7 @@ import { isCanonicalDocumentTarget } from "@executablemd/core";
 import {
   canonicalJson,
   conflictingFields,
+  definitionComponents,
   definitionToJson,
   type GitWorkflowDefinitionV1,
   parseStopReasonInput,
@@ -25,6 +26,7 @@ import {
   WorkflowDefinitionError,
   WorkflowRequestError,
   type WorkflowRunRecord,
+  type WorkflowDefinition,
   WorkflowRunStorage,
   WorkflowStorageProviderError,
 } from "../mod.ts";
@@ -47,6 +49,32 @@ function definition(overrides: Record<string, unknown> = {}): Record<string, unk
 /** The descriptor, parsed, for tests that need one they already trust. */
 function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDefinitionV1 {
   const result = parseWorkflowDefinition(definition(overrides));
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** The five names the representative authored workflow declares, in one bundle. */
+const BUNDLE = [
+  { name: "Discovery", path: "workflows/Discovery.md", sourceHash: blob(1) },
+  { name: "Implementation", path: "workflows/Implementation.md", sourceHash: blob(2) },
+  { name: "InstructionFiles", path: "workflows/InstructionFiles.md", sourceHash: blob(3) },
+  { name: "Planning", path: "workflows/Planning.md", sourceHash: blob(4) },
+  { name: "UserCheckpoint", path: "workflows/UserCheckpoint.md", sourceHash: blob(5) },
+];
+
+/** A distinct SHA-1 blob id per component, so a swap is visible. */
+function blob(nth: number): string {
+  return `${nth}`.repeat(2).padEnd(40, "0");
+}
+
+function bundled(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...definition(), components: BUNDLE, ...overrides };
+}
+
+function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV1 {
+  const result = parseWorkflowDefinition(bundled(overrides));
   if (!result.ok) {
     throw result.error;
   }
@@ -430,7 +458,7 @@ describe("Tier WD — a definition's exact document target", () => {
     const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
     const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
 
-    const asking = (stored: WorkflowRunRecord, definition: GitWorkflowDefinitionV1) =>
+    const asking = (stored: WorkflowRunRecord, definition: WorkflowDefinition) =>
       conflictingFields(stored, {
         runId: stored.runId,
         definition,
@@ -448,5 +476,206 @@ describe("Tier WD — a definition's exact document target", () => {
 
     // So are two different sections of one document.
     expect(asking(section, other.definition)).toEqual(["definition"]);
+  });
+});
+
+/**
+ * Tier WD — the component bundle a definition is closed over.
+ *
+ * The bundle is a member of the one descriptor rather than a version past it.
+ * Absent, it identifies a run closed over no components — which is what every
+ * definition retained before bundles existed is. Present, it is the exact set
+ * the root may resolve, and it is identity: canonical, one entry per name,
+ * sorted by name, each holding the blob's own object id under the descriptor's
+ * own format.
+ */
+describe("Tier WD — the component bundle a definition is closed over", () => {
+  it("WD25: a descriptor closed over no bundle writes no bundle member", function* () {
+    const first = parsed();
+
+    expect("components" in first).toBe(false);
+    expect(Object.keys(definitionToJson(first) as Record<string, unknown>)).toEqual([
+      "version",
+      "kind",
+      "objectFormat",
+      "objectId",
+      "rootDocumentPath",
+    ]);
+    expect(definitionComponents(first)).toEqual([]);
+  });
+
+  it("WD26: a bundled descriptor round-trips its whole bundle unchanged", function* () {
+    const bundle = parsedBundle();
+
+    expect(bundle.version).toBe(1);
+    expect(bundle.components).toEqual(BUNDLE);
+    expect(definitionComponents(bundle)).toEqual(BUNDLE);
+
+    const json = definitionToJson(bundle) as Record<string, unknown>;
+    expect(json["components"]).toEqual(BUNDLE);
+
+    const again = parseWorkflowDefinition(json);
+    expect(again.ok).toBe(true);
+    expect(again.ok && again.value).toEqual(bundle);
+  });
+
+  it("WD27: a bundle's hashes are held to the format the descriptor names", function* () {
+    const sha256 = parsedBundle({
+      objectFormat: "sha256",
+      objectId: SHA256,
+      components: [{ name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 }],
+    });
+    expect(definitionComponents(sha256)).toEqual([
+      { name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 },
+    ]);
+
+    // The same entry under sha1 is the wrong length, and the sha1 bundle is the
+    // wrong length under sha256: neither is a hash this descriptor could hold.
+    expect(refusal(bundled({ components: definitionComponents(sha256) })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(refusal(bundled({ objectFormat: "sha256", objectId: SHA256 })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(
+      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: SHA1.toUpperCase() }] })).message,
+    ).toContain("lowercase");
+  });
+
+  it("WD28: the bundle is canonical — one entry per name, sorted by name", function* () {
+    const reversed = [...BUNDLE].reverse();
+    expect(refusal(bundled({ components: reversed })).message).toContain("sorted by name");
+
+    const duplicated = [BUNDLE[0], BUNDLE[0]];
+    expect(refusal(bundled({ components: duplicated })).message).toContain("once");
+
+    expect(refusal(bundled({ components: [] })).message).toContain("at least one component");
+    expect(refusal(bundled({ components: {} })).path).toBe("$.components");
+  });
+
+  it("WD29: each entry is closed, and names a Markdown path inside the tree", function* () {
+    expect(refusal(bundled({ components: [{ ...BUNDLE[0], origin: "elsewhere" }] })).path).toBe(
+      "$.components[0]",
+    );
+    expect(refusal(bundled({ components: [{ name: "Discovery", path: "a.md" }] })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(refusal(bundled({ components: [{ ...BUNDLE[0], name: "discovery" }] })).path).toBe(
+      "$.components[0].name",
+    );
+
+    for (const path of [
+      "",
+      "/etc/passwd",
+      "workflows\\Discovery.md",
+      "./Discovery.md",
+      "../Discovery.md",
+      "workflows/../Discovery.md",
+      "workflows//Discovery.md",
+      "workflows/Discovery.md/",
+      "workflows/Discovery.ts",
+      "workflows/Discovery",
+    ]) {
+      expect({
+        path,
+        at: refusal(bundled({ components: [{ ...BUNDLE[0], path }] })).path,
+      }).toEqual({ path, at: "$.components[0].path" });
+    }
+  });
+
+  it("WD30: a descriptor retained before bundles existed still reads", function* () {
+    // The exact JSON a run stored before the member existed. It parses, it
+    // means "closed over no components", and it serializes back byte for byte
+    // — which is what keeps the bundle a member rather than a second version.
+    const retained = {
+      version: 1,
+      kind: "git",
+      objectFormat: "sha1",
+      objectId: SHA1,
+      rootDocumentPath: "workflows/release.md",
+    };
+    const again = parseWorkflowDefinition(retained);
+
+    expect(again.ok).toBe(true);
+    expect(again.ok && definitionComponents(again.value)).toEqual([]);
+    expect(again.ok && definitionToJson(again.value)).toEqual(retained);
+
+    // Presence is the member being written at all: a descriptor that wrote it
+    // and named no bundle asked for one and failed to say which.
+    expect(refusal({ ...retained, components: undefined }).path).toBe("$.components");
+    expect(refusal({ ...retained, components: null }).path).toBe("$.components");
+  });
+
+  it("WD31: a refusal never repeats the bundle it refused", function* () {
+    // A distinctive string rather than a credential-shaped one: what is proved
+    // is that no part of a refused entry is echoed, and a value that is not a
+    // token proves it just as well. WD9 keeps the token-shaped canary for the
+    // descriptor's own members, where nothing this suite adds changes it.
+    const canary = "never-printed-canary-b7a1e9";
+
+    for (const error of [
+      refusal(bundled({ components: [{ ...BUNDLE[0], path: `/${canary}.md` }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: canary }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], name: canary }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], [canary]: 1 }] })),
+    ]) {
+      expect(error.message).not.toContain(canary);
+      expect(error.path).not.toContain(canary);
+    }
+  });
+});
+
+describe("Tier WD — a bundle decides compatible reuse", () => {
+  const stored = record({ definition: parsedBundle() });
+  const asking = (definition: WorkflowDefinition) =>
+    conflictingFields(stored, {
+      runId: stored.runId,
+      definition,
+      base: stored.base,
+      props: stored.props,
+    });
+
+  it("WD32: the same bundle is the same run", function* () {
+    expect(asking(parsedBundle())).toEqual([]);
+  });
+
+  it("WD33: a changed name, path, hash, or set is a different definition", function* () {
+    const renamed = [...BUNDLE.slice(1), { ...BUNDLE[0], name: "Zeroth" }].sort((a, b) =>
+      a.name < b.name ? -1 : 1,
+    );
+    const moved = [{ ...BUNDLE[0], path: "workflows/other/Discovery.md" }, ...BUNDLE.slice(1)];
+    const rehashed = [{ ...BUNDLE[0], sourceHash: blob(9) }, ...BUNDLE.slice(1)];
+    const fewer = BUNDLE.slice(1);
+
+    for (const components of [renamed, moved, rehashed, fewer]) {
+      expect(asking(parsedBundle({ components }))).toEqual(["definition"]);
+    }
+  });
+
+  it("WD34: a run closed over a bundle is not a run closed over none", function* () {
+    expect(asking(parsed())).toEqual(["definition"]);
+
+    const unbundled = record();
+    expect(
+      conflictingFields(unbundled, {
+        runId: unbundled.runId,
+        definition: parsedBundle(),
+        base: unbundled.base,
+        props: unbundled.props,
+      }),
+    ).toEqual(["definition"]);
+  });
+
+  it("WD35: what a run accumulates still takes no part in the comparison", function* () {
+    for (const status of WORKFLOW_RUN_STATUSES) {
+      expect(
+        conflictingFields(record({ definition: parsedBundle(), status }), {
+          runId: stored.runId,
+          definition: parsedBundle(),
+          base: stored.base,
+          props: stored.props,
+        }),
+      ).toEqual([]);
+    }
   });
 });

@@ -97,6 +97,39 @@ selector a caller wrote never occupies that field: identity is the resolved
 answer, so resuming re-enters the section the run actually executed rather than
 whatever the same glob would name against a later checkout.
 
+A root may also close itself over a **component bundle**, and that bundle is
+part of the definition too. The root declares it in its own frontmatter:
+
+```yaml
+workflow:
+  components:
+    InstructionFiles: ./InstructionFiles.md
+    Discovery: ./Discovery.md
+    UserCheckpoint: ./UserCheckpoint.md
+    Planning: ./Planning.md
+    Implementation: ./Implementation.md
+```
+
+`workflow` is one closed member, `components`, holding a non-empty mapping from
+a component name to a relative POSIX Markdown path beside the root. Each path is
+normalized against the root's own directory in the same pinned commit and read
+from that commit; the blob's own object ID is the component's source hash. A
+root that declares no `workflow` member is a run with no bundle and keeps the
+version 1 descriptor exactly; an explicitly empty mapping is refused rather than
+becoming a second spelling of the same thing. A declaration may not claim
+structural syntax, a component the engine supplies, or a name the host reserved.
+
+Because the hash is identity, changing what a component says changes the
+definition. A run of one bundle and a run of another are different runs, exactly
+as two document targets are, and a run closed over a bundle is never the same run
+as one closed over none.
+
+The bundle is what the names in that run resolve to, and the only thing they
+resolve to. The component search path stays empty, so a same-named file beside
+the definition in a mutable checkout answers nothing, and an undeclared name
+resolves to nothing at all. Components the engine supplies stay available
+underneath the bundle; the bundle adds names rather than replacing them.
+
 ### 3.1 Start and resume stream in the foreground
 
 Starting the same definition twice creates two runs:
@@ -469,7 +502,13 @@ retained failure, and that does not make the run eligible for `resume`.
   delegated to, and `temporaryDirectory` is refused rather than answered with a
   host directory.
 - A function-component root is not supported in this subset and fails before the
-  run executes.
+  run executes. A bundled component is Markdown for the same reason: a `.ts`
+  module, an extensionless path, a directory, a glob, a URL, a package
+  specifier, an absolute path and a path that walks the tree are each refused
+  rather than repaired.
+- A declared component the pinned commit does not hold as readable Markdown
+  refuses the `start` before storage is created and before any component code
+  runs.
 - The command exists on every runtime and the capability on one: the Deno
   entrypoint and the compiled binary own the local run store, and Node and Bun
   refuse before creating or executing anything.
@@ -489,6 +528,12 @@ same stack: a run that reaches `suspendFor()` retains one request, settles
 same wait. Typed answer delivery is what ends such a wait, and `xmd workflow
 answer` is built by #300; scheduling is not, so a wait ends when somebody
 resumes the run rather than on its own. Fork is designed above and unbuilt.
+
+The component bundle is built: a root declares one, `start` establishes it from
+the pinned commit, the definition retains it, and `resume` and completed replay
+reconstruct it. The adversarial implementation loop those five
+stage names describe is not — its scheduling and unattended continuation belong
+to the durable-suspension stack, and generated-XMD admission (§8.4) is unbuilt.
 
 ## 4. Inspection commands
 
@@ -612,14 +657,23 @@ the current status and its stop reason; one document-execution record per start
 and per resume; replaceable retrieval metadata; and the filtered journal.
 
 The immutable definition is a versioned descriptor naming an object format, an
-object ID and the repository-relative root document path. A repository locator
-is not part of it. Where the definition can be fetched from, and where it is
+object ID and the repository-relative root document path. It also carries the
+component bundle when the root declares one: an array sorted by component name,
+each entry holding that name, its canonical repository-relative path inside the
+pinned commit, and the blob's object ID under the descriptor's own object
+format. The bundle is a member of that descriptor rather than a version past it,
+so a definition retained before bundles existed parses unchanged and identifies
+a run closed over no components; an empty array is not a second spelling of that
+and is refused. A repository locator is not part of it. Where the definition can be fetched from, and where it is
 checked out on one machine, are retrieval metadata: replaceable, free of
 credentials, reauthorized by the host before use, and excluded from the
 comparison that decides whether a reused run ID addresses the same run.
 
 Compatible reuse compares the run ID, the whole descriptor including its
-version, the base and the normalized props, canonically. Status, stop reason,
+version and its component bundle, the base and the normalized props,
+canonically. A changed component name, canonical path, source hash or component
+set conflicts as `definition`, and the refusal names that field rather than any
+value behind it. Status, stop reason,
 retrieval metadata, timestamps, document executions and journal records are
 excluded, so a completed run asked for again is found rather than refused.
 
@@ -1181,6 +1235,7 @@ durable observations and mutations restore.
 | Construct | Partial replay behavior |
 | --- | --- |
 | implicit Workspace | reattach the same run-owned Workspace |
+| bundled component import | restore the retained `{ kind: "workflow", path, sourceHash, content }` selection and reconstruct the component from that exact source, resolving no name and reading no file |
 | lexical Dir/Repository/Worktree | reinstall contextual cwd and live facade |
 | Agent provider/session | attach lazily before the first live Agent operation |
 | Agent.AddDir | re-register in document order |
@@ -1215,8 +1270,19 @@ creation identity does not. Missing, damaged or conflicting retained state is a 
 stale-input condition: children and later siblings do not begin, `<PrintErrors>`
 cannot print it, and nothing is recloned or repaired.
 
+Before any of that, a run closed over a component bundle reconstructs it: `resume`
+reads every retained component from the retained commit and verifies each blob
+against the retained source hash under the executor lock, before a
+document-execution record is begun, before a Workspace is attached and before
+anything is appended. The working tree and the current `HEAD` are not consulted.
+The reconstructed bundle then holds the retained history to itself — a recorded
+import naming a component the bundle does not declare, or holding a different
+path, hash or source, appends nothing and invokes nothing.
+
 A completed root result returns without expanding the document or attaching
-Workspace, Agent or external providers.
+Workspace, Agent or external providers. It still reconstructs the bundle and
+still applies that admission, so retained output is accepted only for a history
+this run is a run of.
 
 A suspended root has no Close and is partial history. Resume reconstructs only
 the ephemeral structure reached on the path back to the request. Earlier

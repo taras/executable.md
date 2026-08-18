@@ -63,3 +63,13 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   core("SafeParse", SafeParse, parseJsonObject(safeParseProps), parseJsonObject(safeParseReturns)),
   core("Test", Test, parseJsonObject(testProps)),
 ]);
+
+/**
+ * The names core supplies, as a set.
+ *
+ * Derived from the registry above rather than restated, so a host deciding
+ * whether a name is already core's reads the one authoritative list. They stay
+ * ordinary defaults: this says which names core answers for, not which names
+ * anything is forbidden to register.
+ */
+export const CORE_COMPONENT_NAMES: ReadonlySet<string> = new Set(CORE_REGISTRY.keys());

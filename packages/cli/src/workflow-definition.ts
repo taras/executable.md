@@ -27,14 +27,18 @@ import { Err, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { API } from "@executablemd/runtime";
+import { parseMarkdownDefinition } from "@executablemd/core";
+import type { WorkflowBundleComponent } from "@executablemd/core/host";
 import {
+  definitionComponents,
   gitObjectFormat,
   parseWorkflowDefinition,
   readGitObject,
   repositoryRoot,
   revParse,
 } from "@executablemd/workflow";
-import type { GitWorkflowDefinitionV1, WorkflowDefinition } from "@executablemd/workflow";
+import type { WorkflowDefinition } from "@executablemd/workflow";
+import { declaredBundle, readBundle, reconstructBundle } from "./workflow-bundle.ts";
 
 /** The base a `start` records. The command has no base option, so it is this. */
 export const DEFINITION_BASE = "HEAD";
@@ -50,6 +54,21 @@ export interface EstablishedDefinition {
   readonly retrieval: Json;
   /** The document as the pinned commit holds it. */
   readonly source: string;
+  /**
+   * The execution view of the declared component bundle, empty when the root
+   * declares none.
+   *
+   * The same entries the definition retains, plus the exact source each was
+   * read from — so what identity names and what executes come from one read of
+   * one commit.
+   */
+  readonly components: readonly WorkflowBundleComponent[];
+}
+
+/** The pinned sources one execution runs: the root, and the bundle it is closed over. */
+export interface RetainedSources {
+  readonly source: string;
+  readonly components: readonly WorkflowBundleComponent[];
 }
 
 /** A definition that cannot be established, or a retained one that cannot be loaded. */
@@ -130,6 +149,26 @@ export function* establishDefinition(
 
       const pinnedCommit = yield* revParse(`${DEFINITION_BASE}^{commit}`);
       const objectFormat = yield* gitObjectFormat();
+      const source = yield* readGitObject(pinnedCommit, rootDocumentPath.value);
+
+      // The bundle is established from the same commit, and before the run
+      // exists: a declaration this command cannot read, or a component this
+      // commit does not hold, refuses the start rather than being discovered
+      // the first time a document writes the name.
+      const declared = declaredBundle(
+        (yield* parseMarkdownDefinition("__root__", rootDocumentPath.value, source)).meta,
+        rootDocumentPath.value,
+      );
+      if (!declared.ok) {
+        return declared;
+      }
+      const components =
+        declared.value.length === 0
+          ? Ok([])
+          : yield* readBundle(pinnedCommit, declared.value, objectFormat);
+      if (!components.ok) {
+        return components;
+      }
 
       const definition = parseWorkflowDefinition({
         version: 1,
@@ -137,18 +176,29 @@ export function* establishDefinition(
         objectFormat,
         objectId: pinnedCommit.toLowerCase(),
         rootDocumentPath: rootDocumentPath.value,
+        // Written only when the root declared one, so a document with no
+        // bundle stores the descriptor it always stored.
+        ...(components.value.length === 0
+          ? {}
+          : {
+              components: components.value.map((component) => ({
+                name: component.name,
+                path: component.path,
+                sourceHash: component.sourceHash,
+              })),
+            }),
       });
       if (!definition.ok) {
         return definition;
       }
 
-      const source = yield* readGitObject(pinnedCommit, rootDocumentPath.value);
       return Ok({
         definition: definition.value,
         base: DEFINITION_BASE,
         pinnedCommit,
         retrieval: { version: 1, kind: RETRIEVAL_KIND, checkout: root },
         source,
+        components: components.value,
       });
     });
   } catch (error) {
@@ -201,14 +251,14 @@ function parseRetrieval(metadata: Json | undefined): Result<string> {
 export function* loadRetainedDefinition(
   definition: WorkflowDefinition,
   metadata: Json | undefined,
-): Operation<Result<string>> {
+): Operation<Result<RetainedSources>> {
   const checkout = parseRetrieval(metadata);
   if (!checkout.ok) {
     return checkout;
   }
 
   try {
-    return yield* inRepository(checkout.value, function* (): Operation<Result<string>> {
+    return yield* inRepository(checkout.value, function* (): Operation<Result<RetainedSources>> {
       const root = yield* repositoryRoot();
       if (resolve(root) !== resolve(checkout.value)) {
         return Err(
@@ -227,7 +277,19 @@ export function* loadRetainedDefinition(
           ),
         );
       }
-      return Ok(yield* readGitObject(definition.objectId, definition.rootDocumentPath));
+      const source = yield* readGitObject(definition.objectId, definition.rootDocumentPath);
+      // Every retained component, from the retained commit, verified against
+      // the hash the definition holds. The working tree is never consulted, so
+      // a checkout edited since the run started continues the run it started.
+      const retained = definitionComponents(definition);
+      const components =
+        retained.length === 0
+          ? Ok([])
+          : yield* reconstructBundle(definition.objectId, retained, format);
+      if (!components.ok) {
+        return components;
+      }
+      return Ok({ source, components: components.value });
     });
   } catch (error) {
     return Err(
@@ -241,7 +303,7 @@ export function* loadRetainedDefinition(
 }
 
 /** Whether this definition names a document this slice can execute. */
-export function supportedRootDocument(definition: GitWorkflowDefinitionV1): Result<void> {
+export function supportedRootDocument(definition: WorkflowDefinition): Result<void> {
   if (definition.rootDocumentPath.endsWith(".md")) {
     return Ok(undefined);
   }

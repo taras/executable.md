@@ -297,6 +297,11 @@ export type ComponentSelection =
   | { kind: "structural"; construct: string }
   | { kind: "registered"; definition: FunctionComponentDefinition; origin: ComponentOrigin }
   | { kind: "repository"; path: string }
+  /**
+   * A component the workflow definition is closed over, with the exact source
+   * the pinned tree holds. Nothing was read from the filesystem to answer this.
+   */
+  | { kind: "workflow"; path: string; sourceHash: string; content: string }
   | { kind: "unresolved"; searched: string[]; registered: readonly ComponentOrigin[] };
 
 /** A registered implementation and the origin that named it. */

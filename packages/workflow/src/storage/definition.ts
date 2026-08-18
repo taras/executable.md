@@ -16,7 +16,7 @@
  */
 
 import { Err, Ok, type Result } from "effection";
-import { isCanonicalDocumentTarget } from "@executablemd/core";
+import { isCanonicalDocumentTarget, isComponentName } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { WorkflowDefinitionError } from "./errors.ts";
 import {
@@ -45,6 +45,32 @@ export interface GitWorkflowDefinitionV1 {
   readonly rootDocumentPath: string;
   /** One exact canonical document target, without a leading `#`. */
   readonly targetPath?: string;
+  /**
+   * The authored components this definition is closed over, when it is closed
+   * over any.
+   *
+   * Absent identifies a run with no bundle. That is what every definition
+   * retained before bundles existed is, and what a root declaring none still
+   * writes — so the member is added to the descriptor rather than the
+   * descriptor being versioned past it. An empty array is not a second
+   * spelling of absence and is refused.
+   */
+  readonly components?: readonly WorkflowComponentEntry[];
+}
+
+/**
+ * One authored component the workflow definition is closed over.
+ *
+ * `path` is the canonical repository-relative POSIX path of the Markdown blob
+ * inside the same pinned commit the root came from — never the `./Name.md` a
+ * root wrote. `sourceHash` is that blob's own object id under the descriptor's
+ * `objectFormat`, so changing what a component says changes the definition
+ * rather than changing what a retained definition executes.
+ */
+export interface WorkflowComponentEntry {
+  readonly name: string;
+  readonly path: string;
+  readonly sourceHash: string;
 }
 
 /** Every descriptor this build understands. */
@@ -63,7 +89,10 @@ const MEMBER_NAMES = [
   "objectId",
   "rootDocumentPath",
   "targetPath",
+  "components",
 ];
+
+const COMPONENT_MEMBER_NAMES = ["name", "path", "sourceHash"];
 
 function fail(reason: string, path: string): Error {
   return new WorkflowDefinitionError(reason, path);
@@ -103,6 +132,7 @@ function parseDefinition(value: unknown): WorkflowDefinition {
 
   const objectFormat = parseObjectFormat(members.get("objectFormat"));
   const targetPath = parseTargetPath(members);
+  const components = parseComponents(members, objectFormat);
 
   return {
     version: 1,
@@ -113,7 +143,96 @@ function parseDefinition(value: unknown): WorkflowDefinition {
       parseStringMember(members, "rootDocumentPath", "$", fail),
     ),
     ...(targetPath === undefined ? {} : { targetPath }),
+    ...(components === undefined ? {} : { components }),
   };
+}
+
+/**
+ * The bundle this descriptor is closed over, or nothing when it is closed over
+ * none.
+ *
+ * Presence is the member being written at all, exactly as it is for the exact
+ * target beside it. A descriptor that never wrote `components` identifies a run
+ * with no bundle — which is what a definition retained before bundles existed
+ * is, and why one still parses. A descriptor that wrote the member asked for a
+ * bundle, and every way of failing to name one is a refusal.
+ *
+ * Canonical rather than merely valid: exactly one entry per name, in
+ * lexicographic order by name. A descriptor that lists the same bundle twice
+ * over would otherwise be two identities for one run, and compatible reuse
+ * compares this array whole.
+ */
+function parseComponents(
+  members: Members,
+  format: GitWorkflowDefinitionV1["objectFormat"],
+): readonly WorkflowComponentEntry[] | undefined {
+  if (!members.has("components")) {
+    return undefined;
+  }
+  const value = members.get("components");
+  const path = "$.components";
+  if (!Array.isArray(value)) {
+    throw fail(`expected an array, found ${describe(value)}`, path);
+  }
+  if (value.length === 0) {
+    throw fail("expected at least one component", path);
+  }
+
+  const components: WorkflowComponentEntry[] = [];
+  let previous: string | undefined;
+  for (let index = 0; index < value.length; index++) {
+    const entry = parseComponent(value[index], `${path}[${index}]`, format);
+    if (previous !== undefined && !(previous < entry.name)) {
+      throw fail(
+        previous === entry.name
+          ? "expected each component name once"
+          : "expected components sorted by name",
+        path,
+      );
+    }
+    previous = entry.name;
+    components.push(entry);
+  }
+  return Object.freeze(components);
+}
+
+function parseComponent(
+  value: unknown,
+  path: string,
+  format: GitWorkflowDefinitionV1["objectFormat"],
+): WorkflowComponentEntry {
+  const members = parseMembers(value, path, fail);
+  requireMemberNames(members, COMPONENT_MEMBER_NAMES, path, fail);
+  const name = parseStringMember(members, "name", path, fail);
+  // Deliberately says nothing about the name it read. A declaration key is
+  // authored text, and one that fails the grammar has not earned being printed.
+  if (!isComponentName(name)) {
+    throw fail("expected a component name", `${path}.name`);
+  }
+  return {
+    name,
+    path: parseComponentPath(parseStringMember(members, "path", path, fail), `${path}.path`),
+    sourceHash: parseObjectIdAt(
+      parseStringMember(members, "sourceHash", path, fail),
+      format,
+      `${path}.sourceHash`,
+    ),
+  };
+}
+
+/**
+ * A component's path inside the pinned tree.
+ *
+ * The root document's rules, plus the one extension a bundled component may
+ * have: a bundle member is Markdown the engine parses, so a `.ts` module or an
+ * extensionless path names something this descriptor cannot describe.
+ */
+function parseComponentPath(value: string, path: string): string {
+  const normalized = parsePathAt(value, path);
+  if (!normalized.endsWith(".md")) {
+    throw fail('expected a ".md" path', path);
+  }
+  return normalized;
 }
 
 /**
@@ -163,7 +282,26 @@ export function definitionToJson(definition: WorkflowDefinition): Json {
     // explicit absence would parse back as a descriptor that asked for a target
     // and failed to name it.
     ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
+    // Same rule for the bundle: a definition closed over none writes no
+    // `components` member at all, so what a run stored before bundles existed
+    // is byte for byte what it stores now.
+    ...(definition.components === undefined
+      ? {}
+      : {
+          components: definition.components.map((component) => ({
+            name: component.name,
+            path: component.path,
+            sourceHash: component.sourceHash,
+          })),
+        }),
   };
+}
+
+/** The bundle this definition is closed over, empty when it is closed over none. */
+export function definitionComponents(
+  definition: WorkflowDefinition,
+): readonly WorkflowComponentEntry[] {
+  return definition.components ?? [];
 }
 
 function parseObjectFormat(value: unknown): GitWorkflowDefinitionV1["objectFormat"] {
@@ -181,12 +319,20 @@ function parseObjectFormat(value: unknown): GitWorkflowDefinitionV1["objectForma
  * about the run.
  */
 function parseObjectId(value: string, format: GitWorkflowDefinitionV1["objectFormat"]): string {
+  return parseObjectIdAt(value, format, "$.objectId");
+}
+
+function parseObjectIdAt(
+  value: string,
+  format: GitWorkflowDefinitionV1["objectFormat"],
+  path: string,
+): string {
   const length = OBJECT_ID_LENGTHS[format];
   if (value.length !== length) {
-    throw fail(`expected ${length} hexadecimal digits for ${format}`, "$.objectId");
+    throw fail(`expected ${length} hexadecimal digits for ${format}`, path);
   }
   if (!/^[0-9a-f]+$/.test(value)) {
-    throw fail("expected lowercase hexadecimal digits", "$.objectId");
+    throw fail("expected lowercase hexadecimal digits", path);
   }
   return value;
 }
@@ -199,7 +345,10 @@ function parseObjectId(value: string, format: GitWorkflowDefinitionV1["objectFor
  * stored as identity and later handed to something that opens it.
  */
 function parseRootDocumentPath(value: string): string {
-  const path = "$.rootDocumentPath";
+  return parsePathAt(value, "$.rootDocumentPath");
+}
+
+function parsePathAt(value: string, path: string): string {
   if (value === "") {
     throw fail("expected a path", path);
   }

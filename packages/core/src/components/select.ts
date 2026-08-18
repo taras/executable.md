@@ -6,9 +6,14 @@
  *
  * 1. structural syntax the engine owns;
  * 2. a reserved registration — a host protecting an invariant;
- * 3. a repository-local file;
- * 4. a registered default, including core's own components;
- * 5. nothing, which is the unresolved printed error.
+ * 3. the workflow component bundle this execution is closed over;
+ * 4. a repository-local file;
+ * 5. a registered default, including core's own components;
+ * 6. nothing, which is the unresolved printed error.
+ *
+ * The bundle tier exists only while a trusted host installed one, and a
+ * workflow execution searches no repository directories at all — so what a
+ * bundled name resolves to is the pinned source and never a file beside it.
  *
  * A repository file therefore overrides any ordinary package default, core's
  * included, while a reserved registration overrides the repository. Only
@@ -19,6 +24,7 @@
 
 import { stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
+import type { WorkflowImportAuthority } from "./bundle.ts";
 import { mergeRegistry } from "./registration.ts";
 import { CORE_REGISTRY } from "./registry.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
@@ -31,6 +37,15 @@ export interface SelectOptions {
   componentDirs?: readonly string[];
   /** What a host or package registered; core's defaults are added beneath it. */
   registry?: ComponentRegistry;
+  /**
+   * The component bundle this execution is closed over, when a trusted host
+   * installed one.
+   *
+   * Execution-owned: ordinary `execute()`, `xmd run`, and every inspection
+   * resolve without it, so nothing outside a workflow run learns that a bundle
+   * exists or can ask to resolve through one.
+   */
+  workflow?: WorkflowImportAuthority;
 }
 
 /** Strip leading ./ from paths for workspace-relative normalization. */
@@ -106,6 +121,16 @@ export function* selectComponent(
       kind: "registered",
       definition: entry.reserved.definition,
       origin: { kind: "registered", origin: entry.reserved.origin, reserved: true },
+    };
+  }
+
+  const bundled = options.workflow?.component(name);
+  if (bundled !== undefined) {
+    return {
+      kind: "workflow",
+      path: bundled.path,
+      sourceHash: bundled.sourceHash,
+      content: bundled.content,
     };
   }
 

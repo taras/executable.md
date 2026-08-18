@@ -1,0 +1,334 @@
+/**
+ * The component bundle one workflow execution is closed over.
+ *
+ * A workflow root may declare a fixed set of authored Markdown components, and
+ * a run is a run *of* that set: the same pinned Git tree supplies the root and
+ * every component, and nothing about the checkout beside it takes part. That
+ * makes the bundle two things at once — immutable workflow-definition identity,
+ * which the workflow package retains, and execution authority, which is what
+ * this module is.
+ *
+ * ## How it enters core
+ *
+ * As plain immutable data on an `ExecutionInstallation`, captured by value
+ * before any installation, middleware, or document code exists — the same terms
+ * a `JournalAdmission` and a `DurablePreparation` cross on. It is not a
+ * registration, a component directory, a contextual Api value, a context name,
+ * or module state: a separately loaded workflow package hands canonical core
+ * the sources it read, and there is nothing anyone else can reach, replace, or
+ * agree on a name for.
+ *
+ * ## What it authorizes
+ *
+ * Resolution: a declared name resolves to its exact pinned source, ahead of
+ * every registered default and without the filesystem being asked anything.
+ *
+ * Invocation: while a bundle is installed, the definition a document expands is
+ * the definition canonical execution produced. `Component.importComponent`
+ * middleware still composes around every import — it may observe one, delegate
+ * one, and refuse one by throwing — but it cannot answer one. A handler that
+ * returns without delegating, replaces what came back, or mutates it fails the
+ * import before the component is invoked, because canonical core issues a
+ * witness for the answer it produced and verifies it at the call site.
+ *
+ * All of it is execution-local. The authority is created per invocation and
+ * reclaimed with it, so two concurrent workflows declaring one name with
+ * different sources resolve their own and can observe neither.
+ */
+
+import { CORE_COMPONENT_NAMES } from "./registry.ts";
+import { isComponentName } from "./registration.ts";
+import { RESERVED_STRUCTURAL } from "../structural.ts";
+import type {
+  ComponentDefinition,
+  ComponentRegistry,
+  FunctionComponentDefinition,
+} from "../types.ts";
+
+/**
+ * One authored Markdown component, as the pinned tree holds it.
+ *
+ * `path` is canonical repository-relative POSIX — the path the blob has in the
+ * commit, never the `./Name.md` a root document wrote. `content` is that blob's
+ * exact bytes as text, and `sourceHash` is its object id, so what executes and
+ * what the definition identifies cannot drift apart.
+ */
+export interface WorkflowBundleComponent {
+  readonly name: string;
+  readonly path: string;
+  readonly sourceHash: string;
+  readonly content: string;
+}
+
+/** The execution view of one workflow's bundle: its entries and their sources. */
+export interface WorkflowComponentBundle {
+  readonly components: readonly WorkflowBundleComponent[];
+}
+
+/**
+ * A bundle that cannot be installed, or an import a bundled execution refuses.
+ *
+ * Thrown before the root document is imported when it is the bundle itself that
+ * is unusable, and out of one import when it is the answer that is.
+ */
+export class WorkflowBundleError extends Error {
+  override name = "WorkflowBundleError";
+}
+
+/** What canonical execution kept of one definition it produced. */
+interface Witness {
+  readonly name: string;
+  /**
+   * Core's own copy of its own answer, taken before the public chain could see
+   * the definition and reachable from nowhere but here.
+   *
+   * This is what gets invoked. Verification below decides whether the answer
+   * that came back still describes it, but what a component expands is never
+   * the object middleware was holding.
+   */
+  readonly canonical: ComponentDefinition | FunctionComponentDefinition | undefined;
+}
+
+/**
+ * Core's own copy of one definition.
+ *
+ * A structured clone of the data, with the implementation carried across by
+ * reference so a function component is invoked as exactly the function core
+ * selected. Definitions core produces hold parsed JSON and scanned segments,
+ * both of which clone; anything that does not is a value core did not build, so
+ * the copy is absent and authorization fails closed.
+ */
+function retain(
+  definition: ComponentDefinition | FunctionComponentDefinition,
+): ComponentDefinition | FunctionComponentDefinition | undefined {
+  try {
+    if (definition.kind === "function") {
+      // Cloned without the implementation, because a function is not
+      // structured-cloneable and must not be copied anyway: `<Test>` is
+      // recognized by the identity of the function core registered.
+      const { fn, ...data } = definition;
+      return { ...structuredClone(data), fn };
+    }
+    return structuredClone(definition);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether `answer` still describes `canonical`, reading data and nothing else.
+ *
+ * Deliberately not a serialization. `JSON.stringify()` consults `toJSON()` and
+ * invokes getters, so a definition can be mutated and then made to describe
+ * itself as it was — a masking `toJSON()`, or an accessor that answers once for
+ * the check and differently for the read. So this compares own property
+ * descriptors: a member that computes its value is not a member core wrote, and
+ * a definition holding one is refused rather than read twice.
+ *
+ * A function is compared by identity, and a prototype other than the one core's
+ * copy carries is a different object however its members read.
+ */
+function describesSame(canonical: unknown, answer: unknown): boolean {
+  if (typeof canonical === "function" || typeof answer === "function") {
+    return canonical === answer;
+  }
+  if (canonical === null || typeof canonical !== "object") {
+    return Object.is(canonical, answer);
+  }
+  if (answer === null || typeof answer !== "object") {
+    return false;
+  }
+  if (Array.isArray(canonical) !== Array.isArray(answer)) {
+    return false;
+  }
+  if (Object.getPrototypeOf(canonical) !== Object.getPrototypeOf(answer)) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(canonical);
+  if (keys.length !== Reflect.ownKeys(answer).length) {
+    return false;
+  }
+  for (const key of keys) {
+    const described = Object.getOwnPropertyDescriptor(answer, key);
+    if (described === undefined || !("value" in described)) {
+      return false;
+    }
+    const own = Object.getOwnPropertyDescriptor(canonical, key);
+    if (own === undefined || !describesSame(own.value, described.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The authority one bundled execution imports through.
+ *
+ * Held by canonical core and passed by value into core's own expansion, so no
+ * document, component, or middleware can reach it, replace it, or add to it.
+ */
+export class WorkflowImportAuthority {
+  readonly #components: ReadonlyMap<string, WorkflowBundleComponent>;
+  /**
+   * The definitions canonical execution produced, and what they were when it
+   * produced them.
+   *
+   * Weak, and keyed by the object itself: an answer that reaches the call site
+   * is authorized because it *is* the object the terminal minted, not because
+   * it resembles one.
+   */
+  readonly #issued = new WeakMap<object, Witness>();
+
+  constructor(components: ReadonlyMap<string, WorkflowBundleComponent>) {
+    this.#components = components;
+  }
+
+  /** The pinned component this name resolves to, if the bundle declares it. */
+  component(name: string): WorkflowBundleComponent | undefined {
+    return this.#components.get(name);
+  }
+
+  /**
+   * Record that canonical execution produced this answer for this name, and
+   * keep core's own copy of it.
+   *
+   * The copy is taken here, before the definition is handed to the public
+   * chain, so it is a copy of what core decided rather than of whatever the
+   * chain gave back.
+   */
+  issue(
+    name: string,
+    definition: ComponentDefinition | FunctionComponentDefinition,
+  ): ComponentDefinition | FunctionComponentDefinition {
+    this.#issued.set(definition, { name, canonical: retain(definition) });
+    return definition;
+  }
+
+  /**
+   * The definition this import may invoke, or the refusal saying why it may
+   * invoke none.
+   *
+   * Verified at the call site, after the public chain has returned and before
+   * anything is expanded or called. The ways a handler can decide an import —
+   * answering without delegating, replacing what came back, and changing it
+   * afterwards — are one question here: is this the answer canonical execution
+   * produced for this name, still describing what core produced?
+   *
+   * What comes back is core's own copy, never the object that travelled through
+   * the chain. So the comparison decides whether this import is *refused*, and
+   * nothing a handler still holds decides what is *invoked*.
+   */
+  authorize(
+    name: string,
+    answer: ComponentDefinition | FunctionComponentDefinition,
+  ): ComponentDefinition | FunctionComponentDefinition {
+    const witness =
+      typeof answer === "object" && answer !== null ? this.#issued.get(answer) : undefined;
+    if (witness === undefined) {
+      throw new WorkflowBundleError(
+        "Component.importComponent middleware answered an import with a definition canonical " +
+          "execution did not produce. A handler may observe, delegate or refuse an import in a " +
+          "workflow closed over a component bundle; only canonical execution answers one.",
+      );
+    }
+    if (witness.name !== name) {
+      throw new WorkflowBundleError(
+        "Component.importComponent middleware answered an import with the definition canonical " +
+          "execution produced for another component.",
+      );
+    }
+    const { canonical } = witness;
+    // Reading the answer runs whatever it is made of — a proxy's traps, an
+    // exotic object's own machinery — so a value that refuses to be compared is
+    // a value that failed the comparison.
+    const unchanged =
+      canonical !== undefined && read(() => describesSame(canonical, answer)) === true;
+    if (!unchanged) {
+      throw new WorkflowBundleError(
+        "Component.importComponent middleware changed the definition canonical execution " +
+          "produced before it was invoked.",
+      );
+    }
+    return canonical;
+  }
+}
+
+/** One read of a value the chain controls: its answer, or nothing. */
+function read<T>(inspect: () => T): T | undefined {
+  try {
+    return inspect();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The authority one invocation runs under, or nothing when no bundle is
+ * installed.
+ *
+ * Two installations carrying bundles is a host mistake rather than a merge: two
+ * authorities for one execution would make what a name resolves to depend on
+ * which was consulted first.
+ *
+ * The collision checks run here, before the root document is imported, because
+ * a bundle that claims a name the engine or a host already owns describes a
+ * document that cannot mean what it says. Structural syntax and core's defaults
+ * are fixed; a reserved registration is whatever this host installed, read once
+ * from the registry the execution starts with.
+ */
+export function installedBundle(
+  bundles: readonly WorkflowComponentBundle[],
+  registry: ComponentRegistry,
+): WorkflowImportAuthority | undefined {
+  if (bundles.length === 0) {
+    return undefined;
+  }
+  if (bundles.length > 1) {
+    throw new WorkflowBundleError(
+      "two installations supplied a workflow component bundle. One execution runs under one " +
+        "bundle, so which components a name resolves to is never a question of order.",
+    );
+  }
+  const bundle = bundles[0];
+  const components = new Map<string, WorkflowBundleComponent>();
+  for (const component of bundle?.components ?? []) {
+    const { name } = component;
+    // The name is printed only once it has passed the grammar a document
+    // writes: until then it is authored text of unknown provenance, and a
+    // refusal is not a reason to publish it.
+    if (!isComponentName(name)) {
+      throw new WorkflowBundleError(
+        "a workflow component bundle declared a name that is not a component name.",
+      );
+    }
+    if (RESERVED_STRUCTURAL.has(name)) {
+      throw new WorkflowBundleError(
+        `a workflow component bundle declared "${name}", which is structural syntax the engine ` +
+          "owns rather than a component.",
+      );
+    }
+    if (CORE_COMPONENT_NAMES.has(name)) {
+      throw new WorkflowBundleError(
+        `a workflow component bundle declared "${name}", which is a component the engine ` +
+          "supplies. A bundle adds names; it does not replace them.",
+      );
+    }
+    if (registry.get(name)?.reserved !== undefined) {
+      throw new WorkflowBundleError(
+        `a workflow component bundle declared "${name}", which this host reserved. A reserved ` +
+          "registration protects an invariant a bundle may not take back.",
+      );
+    }
+    if (components.has(name)) {
+      throw new WorkflowBundleError(`a workflow component bundle declared "${name}" twice.`);
+    }
+    components.set(name, component);
+  }
+  if (components.size === 0) {
+    throw new WorkflowBundleError(
+      "a workflow component bundle declared no components. A workflow closed over nothing is a " +
+        "workflow with no bundle, which is a different definition.",
+    );
+  }
+  return new WorkflowImportAuthority(components);
+}

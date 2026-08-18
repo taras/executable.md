@@ -1882,6 +1882,7 @@ run but are absent from the diagnostic trace.
 | `packages/workflow/src/deno/workspace/host.ts` | `withWorkflowWorkspace()` — the run's effect coordinator, logical cwd `/`, and Files provider installed together inside one execution |
 | `packages/workflow/src/journal.ts` | the `workflow_run` record, canonical-record recognition, and the refusals that name differing fields without their values |
 | `packages/workflow/src/run.ts` | `workflowInstallation()` / `retainedWorkflowInstallation()` — the `ExecutionInstallation` values a trusted host passes to `executeInstalled()`, each contributing a mandatory run-identity admission and the `prepare` hook that creates or restores the run inside the durable root |
+| `packages/workflow/src/bundle.ts` | `workflowBundleInstallation()` — the `ExecutionInstallation` that closes one execution over a workflow's component bundle, carrying the pinned execution view and the admission that holds every retained component import to it |
 | `packages/cli/src/file-stream.ts` | `FileStream` — JSONL-backed `DurableStream` implementation |
 
 Dependencies: `@effectionx/scope-eval`, `@effectionx/timebox`,
@@ -2575,15 +2576,26 @@ A component name is resolved in tiers, and the first tier that answers wins:
    missing component.
 2. **a reserved registration** — a host protecting a language or security
    invariant.
-3. **a repository-local file**, by the candidate order below.
-4. **a registered default**, including the components core supplies.
-5. **nothing**, which is the unresolved printed error.
+3. **the workflow component bundle** this execution is closed over, when a
+   trusted host installed one.
+4. **a repository-local file**, by the candidate order below.
+5. **a registered default**, including the components core supplies.
+6. **nothing**, which is the unresolved printed error.
 
 So a repository component overrides any ordinary package default, core's
 included, and a reserved registration overrides the repository. Only genuine
 absence falls through to a default: a candidate that exists but cannot be read,
 imported, parsed, or compiled fails where it is loaded, so a broken local
 component is never quietly replaced.
+
+The bundle tier exists only inside a workflow run, and such a run searches no
+repository directories at all — so a declared name resolves to the exact source
+its pinned commit holds and to nothing beside it in a mutable checkout. Core's
+own components stay available underneath, and a bundle may claim neither
+structural syntax, a name core supplies, nor a name the host reserved: those
+collisions are refused before the root document is imported. Ordinary
+`execute()`, `xmd run` and every inspection resolve without the tier, so nothing
+outside a workflow run learns that a bundle exists.
 
 Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
@@ -2647,6 +2659,37 @@ definition's source is already described by the selection that chose it, so
 source identity lives on the selection rather than being copied onto every
 definition.
 
+#### Only canonical execution answers a bundled import
+
+`Component.importComponent` is an overridable public surface: a handler may
+observe an import, delegate it, refuse it by throwing, and — ordinarily — answer
+it with a definition of its own.
+
+While a component bundle is installed, it may still do the first three and no
+longer the fourth. A handler that returns without delegating, replaces what came
+back, changes it afterwards, or answers a name the bundle does not declare fails
+the import before the component runs. A refusal is still a refusal, and
+observation and delegation are unchanged.
+
+Two things hold that together, and the second is what makes the first safe.
+Canonical core keeps its own copy of the definition it produced, taken before
+the public chain saw it, and **that copy is what a document expands** — so
+nothing a handler still holds decides what is invoked. The answer that comes
+back is then compared against that copy to decide whether the import is
+*refused*, and the comparison reads own property descriptors rather than a
+serialization: a member that computes its own value is not a member core wrote,
+so an accessor answering once for the check and differently for the read is
+refused for being an accessor, and a `toJSON()` describing a mutated definition
+as it used to be describes nothing this comparison consults. A function
+component's implementation crosses into the copy by reference, so what runs is
+exactly the function core selected.
+
+The bundle reaches core as plain immutable data on an `ExecutionInstallation`,
+captured by value before any installation, middleware or document code exists —
+the same terms a journal admission and a durable preparation cross on. It is
+execution-local: two concurrent workflows declaring one name with different
+sources resolve their own, and leaving the execution scope removes it.
+
 #### Origin
 
 Every selected implementation has a structured origin, and one resolver answers
@@ -2683,7 +2726,8 @@ before targets existed readable.
 ```typescript
 type DurableSelection =
   | { kind: "repository"; path: string; content: string; target?: string }
-  | { kind: "registered"; origin: string; reserved: boolean };
+  | { kind: "registered"; origin: string; reserved: boolean }
+  | { kind: "workflow"; path: string; sourceHash: string; content: string };
 
 function* durableImportComponent(
   name: string,
@@ -2705,7 +2749,13 @@ function* durableImportComponent(
       }
       throw new Error(`Cannot resolve component: ${name} (searched: …)`);
     },
-  )) as DurableSelection;
+  ));
+
+  // Parsed as a closed protocol, never asserted. A replay hands back whatever
+  // the journal holds, so an unknown kind, a missing or mistyped member, an
+  // extra member, and a value that refuses to be read are each one fixed
+  // diagnostic that publishes nothing the record planted.
+  const selection = readDurableSelection(recorded);
 
   // A registration is restored by origin: the implementation comes from the
   // registry this run has, and a recorded origin that is no longer registered
@@ -2763,10 +2813,35 @@ function* durableImportComponent(
     "reserved": false } }
 ```
 
+A component the workflow definition is closed over records its own shape:
+
+```json
+{ "type": "import_component", "name": "Discovery" }
+{ "status": "ok", "value": {
+    "kind": "workflow",
+    "path": "workflows/Discovery.md",
+    "sourceHash": "9fceb02d0ae598e95dc970b74767f19372d61af8",
+    "content": "discovered.\n" } }
+```
+
 One journal entry per component, whatever it resolved to. A repository entry
 captures both *which file was found* (path) and *what was in it* (content); a
 registration entry captures the origin that named it, because a function cannot
-be serialized and the implementation is looked up again on replay.
+be serialized and the implementation is looked up again on replay. A workflow
+entry captures the canonical repository-relative path of the blob inside the
+pinned commit — never the `./Name.md` a root document wrote — the blob's own
+object ID, and the exact pinned source, so a replay reconstructs the component
+from its own record without resolving a name or reading a file. Nothing else is
+added: no checkout path, no locator, no duplicate of the commit, no timestamp,
+no provider or generated identity.
+
+The trusted host that installed the bundle contributes a journal admission that
+holds every retained component import to it before public document policy or the
+root import. A recorded import that names a component the bundle does not
+declare, records a declared name as anything other than a bundled component,
+holds a different path, hash or source, or is a repository selection other than
+the root, appends nothing and invokes nothing. Registered defaults keep their
+own exact-origin replay check, which the admission neither repeats nor relaxes.
 
 ```typescript
 // A component's declared props interface is a canonical draft-07 JSON
@@ -7170,6 +7245,24 @@ preparation runs; on a live or partial continuation they run and record
 through the ordinary durable protocol, so an effect an earlier preparation
 completed is restored from its retained record rather than performed again.
 
+### The workflow component bundle
+
+An installation may also carry a `bundle`: the closed set of authored Markdown
+components one workflow execution is closed over, as plain immutable data —
+each entry's name, its canonical repository-relative path inside the pinned
+commit, that blob's object ID, and the exact source read from it. It is read
+once and copied entry by entry before any `install()` runs, on the same terms as
+the admissions and preparations beside it, so what a name resolves to and which
+answers a document may invoke are fixed before anything can observe or replace
+them. One execution runs under one bundle: two installations supplying one is
+refused rather than merged, as is a bundle claiming structural syntax, a
+component core supplies, or a name the host reserved — each before the root
+document is imported.
+
+What the bundle authorizes is described where resolution is (§5.3): the tier it
+occupies, the journal shape a selected member records, and the rule that while
+it is installed only canonical execution answers an import.
+
 ### The invocation's lifetime
 
 Each execution is owned by one structured task holding its own scope. That scope
@@ -8500,6 +8593,56 @@ Each row names the derivation it kills.
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
 
+### Tier WB — The workflow component bundle in core
+
+Provider-neutral, and portable across every runtime. Defined in §5.3 and §8.1.
+
+| # | Test | Verify |
+|---|------|--------|
+| WB1/WB2 | Resolution | A declared name resolves to its pinned source with no component search path, and a bundled component may import another |
+| WB3 | Defaults survive | A component core supplies still resolves underneath the bundle |
+| WB4/WB5 | Closed resolution | An undeclared name resolves to nothing, and the pinned source is what renders |
+| WB6 | Collisions | A declaration claiming structural syntax, a core default, or a host-reserved name is refused |
+| WB7/WB8 | One bundle | Two installations supplying a bundle are refused, and a refusal appends nothing |
+| WB9/WB10 | Middleware | Observation and delegation are unchanged, and a handler's refusal is still a refusal |
+| WB11/WB12/WB13 | Only canonical answers | A synthetic answer, a replacement, a mutation after delegation, another component's answer, and an undeclared-name answer each fail before invocation |
+| WB19/WB20 | Masked mutation | A mutation hidden behind its own `toJSON()`, and a member that computes its own value, are each refused before invocation and before anything written after the element renders |
+| WB14 | Isolation | Two concurrent bundles declaring one name with different sources resolve their own |
+| WB15 | Ordinary execution | `execute()` installs no authority: a handler still answers an import |
+| WB16/WB17/WB18 | Journal shape | One selection per import holding exactly `kind`, `path`, `sourceHash` and `content`; an exact replay reconstructs from the record and resolves nothing; an unreadable record is one fixed diagnostic |
+
+### Tier WBA — Holding retained history to the bundle
+
+Provider-neutral, and portable across every runtime. Defined in §5.3.
+
+| # | Test | Verify |
+|---|------|--------|
+| WBA1 | Exact history | A history recording exactly this bundle replays without importing again |
+| WBA2 | Mismatch | A changed path, hash or content is refused; a name the bundle does not declare is refused as undeclared |
+| WBA3 | Wrong kind | A declared name recorded as anything other than a bundled component is refused |
+| WBA4 | Repository selection | A repository selection that is not the root is refused |
+| WBA5 | Malformed | A member too many, a member too few, a value that is not an object, and a member whose accessor throws are each one fixed diagnostic that publishes nothing |
+| WBA6 | Unknown entry | A well-formed workflow selection for an undeclared name is refused |
+| WBA7 | Defaults | A registered default keeps replaying by its recorded origin |
+| WBA8 | The root | The run's own root import is not held to the bundle |
+
+Every refusal appends nothing and invokes nothing.
+
+### Tier WFD — Reading a workflow's component declaration
+
+Provider-neutral, and portable across every runtime. Defined in
+[Workflow workspaces](./workflow-workspace-spec.md) §3.
+
+| # | Test | Verify |
+|---|------|--------|
+| WFD1/WFD2/WFD3 | Normalization | The declaration normalizes against the root's own directory, and the order the author wrote is not the order identity keeps |
+| WFD4 | Aliasing | Two names may point at one blob |
+| WFD5/WFD6 | Absence | No `workflow` member is no bundle; an empty mapping is refused |
+| WFD7/WFD8 | Closed shape | `workflow` declares exactly `components`, a non-empty mapping of name to path |
+| WFD9 | Paths | Empty, absolute, backslashed, NUL-bearing, traversing, unnormalized, URL, package, glob, directory and non-`.md` values are each refused |
+| WFD10 | Names the engine owns | Structural syntax and core's components cannot be claimed |
+| WFD11/WFD12 | Grammar | A key that is not a component name is refused without being printed; a dotted name is accepted |
+
 ### Tier GT — The Git capability
 
 Defined in [Workflow runs](./workflow-spec.md) §7.
@@ -8548,13 +8691,19 @@ Provider-neutral, and portable across every runtime. Defined in
 |---|------|--------|
 | WD1 | Round trip | A descriptor parses, serializes and parses back to the same value |
 | WD2/WD3 | Closed shape | An undeclared member is refused, and so is anything that is not an object |
-| WD4/WD5/WD6 | Object identity | Only version 1 and the git kind; an object ID of the length its format requires, in lowercase hexadecimal |
+| WD4/WD5/WD6 | Object identity | Only the versions the descriptor defines and the git kind; an object ID of the length its format requires, in lowercase hexadecimal |
 | WD7/WD8 | Root document path | Absolute, backslashed, NUL-bearing, empty, `.`, `..` and unnormalized paths are refused; ordinary nested paths are not |
 | WD9 | No echo | A refusal never quotes the value it refused |
 | WD10/WD11/WD12 | Stored shapes | Exactly six statuses; both stop-reason variants, and neither a mixture nor a message |
 | WD13 | Canonical values | Key order does not change what a value is named |
 | WD14/WD15/WD16 | Compatible reuse | Every immutable field is compared and named when it differs; status, stop reason and timestamps take no part |
 | WD17 | No provider | `create` and `lookup` refuse rather than answering with an empty store |
+| WD25/WD26 | Bundle round trip | A descriptor closed over no bundle writes no `components` member; a bundled one round-trips a sorted five-entry array unchanged |
+| WD27 | Bundle hashes | A source hash is held to the length and case the descriptor's own object format requires |
+| WD28/WD29 | Canonical bundle | Sorted by name, one entry per name, non-empty; each entry closed and naming a repository-relative POSIX Markdown path |
+| WD30 | Retained descriptors still read | A descriptor stored before the member existed parses, means "closed over no components", and serializes back byte for byte; a written member naming no bundle is refused |
+| WD31 | No echo | A refusal never quotes a component's name, path or hash |
+| WD32/WD33/WD34/WD35 | Bundle identity | The same bundle is the same run; a changed name, path, hash or set conflicts as `definition`; a run closed over a bundle is never one closed over none; what a run accumulates still takes no part |
 
 ### Tier WS — Retained workflow runs
 
@@ -8918,6 +9067,11 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFC13 | Answer grammar | `answer` is an action whose refusal names the run; each of its three arguments is required and named when missing; a value that is not JSON, a fourth argument, and every option belonging to another action are refused, while `--no-secret-detection` is its own; `resume` grows no second positional |
 | WFC9 | Definition | A non-Markdown root and a path outside the repository fail before a run id is reported |
 | WFC10 | `xmd run` | Ordinary `xmd run` is unchanged and still writes into the caller's own filesystem |
+| WFC14 | Bundled stages | A root declaring five components reaches each of them, and a nested one, from the commit — while every checkout copy says something else |
+| WFC15/WFC16 | Establishment | A declared component the commit does not hold, one that is not Markdown the engine can read, and one that names a directory each refuse before a run id is reported |
+| WFC17 | Bundle reuse | A compatible reuse addresses the same run; a committed change to one component refuses as `definition`, publishes no status, exposes no source or path, and leaves the history byte-identical |
+| WFC18 | Resume from the tree | A resume reaches every stage after the root and every component are deleted from the checkout |
+| WFC19 | Unreachable bundle | A resume whose retained repository is gone is refused, publishes no status, and leaves the lifecycle records exactly as they were |
 
 ### Tier WFI — What a run hands to canonical core
 
