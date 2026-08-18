@@ -53,14 +53,13 @@
  */
 
 /**
- * The nested-execution authority is here for the same reason.
- *
- * `useTestHarness()` answers with what canonical `<Test>` minted for the
- * invocation currently expanding. Running another document as a root is
- * infrastructure — its own root import, its own journal, its own scope — so the
- * authority for it is reachable where the other infrastructure boundaries are,
- * and nothing a document or a component reaches by importing
- * `@executablemd/core` can ask for it.
+ * A **test harness installer** is the third, and it is a delivery rather than a
+ * capability anybody can ask for. Running another document as a root is
+ * infrastructure — its own root import, its own journal, its own scope — so who
+ * may do it is decided by canonical `<Test>`, and what it is handed to is
+ * decided here, by the host, as a function it holds and passes. There is no
+ * reader: nothing published, nothing named, and nothing for a same-name context
+ * or a second loaded copy to reach.
  */
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
@@ -79,5 +78,9 @@ export type {
   GeneratedXmdRequest,
 } from "./src/generated-xmd.ts";
 
-export { TestHarnessError, useTestHarness } from "./src/test-harness.ts";
-export type { TestHarness, TestHarnessAuthorization } from "./src/test-harness.ts";
+export { TestHarnessError } from "./src/test-harness.ts";
+export type {
+  TestHarness,
+  TestHarnessAuthorization,
+  TestHarnessInstaller,
+} from "./src/test-harness.ts";

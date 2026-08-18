@@ -285,9 +285,18 @@ ordinary component: it renders where it is written and configures nothing.
 
 Canonical core mints one opaque harness per `<Test>` invocation and expires it
 with that invocation; each `<Execution>` spends a single-use authorization from
-it. A repository component named `Test`, `Execution` or `WorkflowRun`, a package
-registering those names, `printErrors(fn)`, a separately loaded package copy and
-replaceable context acquire none of it.
+it.
+
+The harness is delivered rather than published: a trusted host attaches an
+installer to the execution, canonical `<Test>` calls it inside the invocation
+with that invocation's harness, and the installer registers the definitions that
+can run a child with the harness in their closure — shadowing a refusing default
+for exactly that test's body. There is nothing to read, so a repository component
+named `Test`, `Execution` or `WorkflowRun`, a package registering those names,
+`printErrors(fn)`, public middleware on any surface including the `<Test>`
+behavior hook, a separately loaded package copy, and replaceable context all
+acquire none of it. A document whose host attached no installer recognizes
+`<Execution>` and refuses it, inside a canonical `<Test>` as everywhere else.
 
 Host-profile middleware is policy. It receives a request rather than a child, so
 it may observe, narrow, refuse and delegate — and cannot create a child,

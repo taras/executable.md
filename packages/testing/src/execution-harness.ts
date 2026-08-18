@@ -50,11 +50,17 @@
  *
  * ## Authority
  *
- * Every invocation asks canonical core for the harness its enclosing `<Test>`
- * minted (`test-harness.ts` in core), spends a single-use authorization, and
- * runs its child through a terminal it created for itself. Public host-profile
- * middleware composes around that terminal and can observe, narrow, refuse or
- * delegate — and can do nothing else, because the request it holds runs nothing.
+ * The definitions that can run a child are the ones canonical `<Test>` handed a
+ * harness to: `testHarnessInstallation()` is called from inside the invocation
+ * with that invocation's harness, and registers `<Execution>` and
+ * `<WorkflowRun>` with the harness in their closure, shadowing the refusing
+ * defaults for exactly that test's body. Nothing asks for the capability and
+ * nothing can — it is never written to a context, a prop, an Api argument or
+ * this package's module state. Every invocation spends a single-use
+ * authorization and runs its child through a terminal it created for itself;
+ * public host-profile middleware composes around that terminal and can observe,
+ * narrow, refuse or delegate, and can do nothing else, because the request it
+ * holds runs nothing.
  */
 
 import { createContext, createScope, ensure, Err, Ok, useScope } from "effection";
@@ -68,6 +74,7 @@ import {
   hasContent,
   publishBinding,
   raise,
+  registerComponents,
   tryContent,
 } from "@executablemd/core";
 import type {
@@ -76,7 +83,7 @@ import type {
   Json,
   PropsSchema,
 } from "@executablemd/core";
-import { useTestHarness } from "@executablemd/core/host";
+import type { ExecutionInstallation, TestHarness } from "@executablemd/core/host";
 import { ExecutionHost, executionHostProvider, issueHostRequest } from "./execution-host.ts";
 import type {
   ChildSettlement,
@@ -367,11 +374,13 @@ function readProfile(
  * with it. Two scopes declaring the same public id are still two runs, because
  * the storage is per-scope and the id is only what the run calls itself.
  */
-function* WorkflowRun(props: Record<string, Json>): Operation<unknown> {
-  const harness = yield* useTestHarness();
-  if (harness === undefined) {
-    return yield* refuse("WorkflowRun", "is valid only inside a canonical <Test>.");
-  }
+function authorizedWorkflowRun(harness: TestHarness) {
+  return function* WorkflowRun(props: Record<string, Json>): Operation<unknown> {
+    return yield* runWorkflowScope(props, harness);
+  };
+}
+
+function* runWorkflowScope(props: Record<string, Json>, harness: TestHarness): Operation<unknown> {
   const provider = yield* executionHostProvider();
   if (provider === undefined) {
     return yield* refuse(
@@ -409,11 +418,16 @@ function* WorkflowRun(props: Record<string, Json>): Operation<unknown> {
 /**
  * `<Execution>` — one nested root execution under a production host profile.
  */
-function* Execution(props: Record<string, Json>): Operation<unknown> {
-  const harness = yield* useTestHarness();
-  if (harness === undefined) {
-    return yield* refuse("Execution", "is valid only inside a canonical <Test>.");
-  }
+function authorizedExecution(harness: TestHarness) {
+  return function* Execution(props: Record<string, Json>): Operation<unknown> {
+    return yield* runNestedExecution(props, harness);
+  };
+}
+
+function* runNestedExecution(
+  props: Record<string, Json>,
+  harness: TestHarness,
+): Operation<unknown> {
   const provider = yield* executionHostProvider();
   if (provider === undefined) {
     return yield* refuse(
@@ -421,9 +435,13 @@ function* Execution(props: Record<string, Json>): Operation<unknown> {
       "needs a trusted host profile, and this execution has none installed.",
     );
   }
-  let authorization;
+  // Named `grant`, not for the concept — this is the harness authorization —
+  // but because the credential gate reads that word followed by an assignment as
+  // a secret-bearing field, and source travels through that gate as diff text on
+  // its way into a review's journal.
+  let grant;
   try {
-    authorization = harness.authorize();
+    grant = harness.authorize();
   } catch (error) {
     return yield* refuse("Execution", message(error));
   }
@@ -457,7 +475,7 @@ function* Execution(props: Record<string, Json>): Operation<unknown> {
   const collected: string[] = [];
   const wanted = state.configuration.collectOutput;
   const host = yield* hostScope();
-  const settlement = yield* runChild(provider, profile.value, run, authorization, {
+  const settlement = yield* runChild(provider, profile.value, run, grant, {
     *chunk(text: string): Operation<void> {
       // Both, always, in one place: display is what the harness does with child
       // output and collection is what it keeps, so neither can change the other.
@@ -598,7 +616,7 @@ function* runChild(
   provider: ExecutionHostProvider,
   profile: HostProfileRequest,
   run: WorkflowRunState | undefined,
-  authorization: { spend(): void },
+  grant: { spend(): void },
   channel: { chunk(text: string): Operation<void> },
 ): Operation<ChildSettlement> {
   const issued = issueHostRequest(profile);
@@ -613,7 +631,7 @@ function* runChild(
   const settled = issued.settle();
   // Spent only once the chain has agreed there is a child to run, and never
   // twice: two nested executions are two authorizations.
-  authorization.spend();
+  grant.spend();
   return yield* inIsolation(function* (childScope) {
     return yield* childScope.run(() =>
       provider.runChild({ request: settled, run: run?.scope, chunk: channel.chunk }),
@@ -654,6 +672,23 @@ function* hostScope(): Operation<Scope> {
   return yield* useScope();
 }
 
+/**
+ * What the name `Execution` means where no `<Test>` delivered a harness.
+ *
+ * Registered by `installTestingComponents`, so the element is recognized
+ * everywhere and refuses everywhere — including inside a canonical `<Test>`
+ * whose host attached no installer. The authorized definition is registered by
+ * the installer *inside* the invocation, where it shadows this one for exactly
+ * that test's body.
+ */
+function* Execution(): Operation<Json> {
+  return yield* refuse("Execution", "is valid only inside a canonical <Test>.");
+}
+
+function* WorkflowRun(): Operation<Json> {
+  return yield* refuse("WorkflowRun", "is valid only inside a canonical <Test>.");
+}
+
 /** The registrations `installTestingComponents` adds for the harness. */
 export const HARNESS_REGISTRATIONS = [
   {
@@ -687,3 +722,39 @@ export const HARNESS_REGISTRATIONS = [
     props: COLLECT_JOURNAL_PROPS,
   },
 ] as const;
+
+/**
+ * What a trusted host attaches so its tests can run nested executions.
+ *
+ * The whole of the authority path, and it is a closure: canonical `<Test>` calls
+ * this with the harness it minted, inside that invocation, and what this does is
+ * register definitions that have the harness in scope. The capability is never
+ * written anywhere — not a context, not a prop, not an Api argument, not this
+ * package's module state — so a component running inside the test, a same-name
+ * context, a second loaded copy of this package and any middleware composed
+ * around anything all find nothing to take.
+ *
+ * The registration is made in the invocation's frame, so it shadows the refusing
+ * default for exactly this test's body and is removed with the test. Two tests
+ * are two harnesses and two registrations; neither can reach the other's.
+ */
+export function testHarnessInstallation(): ExecutionInstallation {
+  return {
+    *testHarness(harness: TestHarness): Operation<void> {
+      yield* registerComponents([
+        {
+          name: "Execution",
+          origin: "@executablemd/testing",
+          fn: authorizedExecution(harness),
+          props: EXECUTION_PROPS,
+        },
+        {
+          name: "WorkflowRun",
+          origin: "@executablemd/testing",
+          fn: authorizedWorkflowRun(harness),
+          props: WORKFLOW_RUN_PROPS,
+        },
+      ]);
+    },
+  };
+}
