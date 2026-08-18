@@ -52,7 +52,7 @@ import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
 import { WorkflowSuspension, type WorkflowSuspensionRequest } from "../suspension/api.ts";
 import { durablePosition } from "@executablemd/durable-streams";
-import { takeSuspensionEntry } from "../suspension/entry.ts";
+import { installSuspensionEntry, takeSuspensionEntry } from "../suspension/entry.ts";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
@@ -212,6 +212,32 @@ export function createSuspensionController(
           });
         }
 
+        function* accept(suspension: string, request: WorkflowSuspensionRequest): Operation<never> {
+          const armedFor = takeSuspensionEntry();
+
+          if (!(yield* atOwnRequest(options.database, suspension, request))) {
+            throw new WorkflowRequestError(
+              "this execution is not at that durable wait. A wait is entered by the execution " +
+                "that has just published its request, at the position that request was made — " +
+                "not by presenting an identifier a run retains somewhere else.",
+            );
+          }
+          if (armedFor !== suspension) {
+            throw new WorkflowRequestError(
+              "only this run's own suspendFor() may enter a durable wait. A durable " +
+                "operation that reproduces a retained request reaches the same position " +
+                "without being the operation that request belongs to.",
+            );
+          }
+          seen = { suspensionId: suspension, request };
+          reported.resolve(seen);
+          // The wait is the operation. The scope around it ends the execution;
+          // nothing here returns or raises, so a document cannot catch its own
+          // suspension and continue past it.
+          yield* suspend();
+          throw new WorkflowRequestError("a suspended execution resumed itself.");
+        }
+
         // Registered after the failing finalizer so it runs before it: an
         // observation of a teardown in flight must happen while the teardown is
         // still capable of succeeding.
@@ -220,35 +246,18 @@ export function createSuspensionController(
           yield* ensure(duringTeardown);
         }
 
+        // Installed where `suspendFor()` looks, which is not a contextual API:
+        // a contextual API composes, and a public handler that answered this
+        // without delegating would return a value from a wait that never
+        // happened. The public API is still installed below, and still refuses
+        // — nothing reaches it with an armed entry, because the real operation
+        // never goes that way.
+        yield* ensure(installSuspensionEntry(options.database.record.runId, accept));
+
         yield* WorkflowSuspension.around(
           {
             *enter([suspension, request]): Operation<never> {
-              // Taken unconditionally, so one arming admits one entry however
-              // this call goes: an attempt refused below must leave nothing
-              // behind for a later caller to use.
-              const armedFor = takeSuspensionEntry();
-
-              if (!(yield* atOwnRequest(options.database, suspension, request))) {
-                throw new WorkflowRequestError(
-                  "this execution is not at that durable wait. A wait is entered by the execution " +
-                    "that has just published its request, at the position that request was made — " +
-                    "not by presenting an identifier a run retains somewhere else.",
-                );
-              }
-              if (armedFor !== suspension) {
-                throw new WorkflowRequestError(
-                  "only this run's own suspendFor() may enter a durable wait. A durable " +
-                    "operation that reproduces a retained request reaches the same position " +
-                    "without being the operation that request belongs to.",
-                );
-              }
-              seen = { suspensionId: suspension, request };
-              reported.resolve(seen);
-              // The wait is the operation. The scope around it ends the
-              // execution; nothing here returns or raises, so a document cannot
-              // catch its own suspension and continue past it.
-              yield* suspend();
-              throw new WorkflowRequestError("a suspended execution resumed itself.");
+              return yield* accept(suspension, request);
             },
           },
           { at: "min" },

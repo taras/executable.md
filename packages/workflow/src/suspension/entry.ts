@@ -20,6 +20,10 @@
  * nothing behind for a later caller to use.
  */
 
+import type { Operation } from "effection";
+import type { Json } from "@executablemd/core";
+import { WorkflowSuspensionProviderError, type WorkflowSuspensionRequest } from "./api.ts";
+
 /** The suspension `suspendFor()` is entering, between arming and being taken. */
 let armed: string | undefined;
 
@@ -33,4 +37,58 @@ export function takeSuspensionEntry(): string | undefined {
   const taken = armed;
   armed = undefined;
   return taken;
+}
+
+/** What the execution-owned controller does with a wait it accepts. */
+export type SuspensionEntry = (
+  suspensionId: string,
+  request: WorkflowSuspensionRequest,
+) => Operation<Json>;
+
+/**
+ * The controller each live run installed, by run.
+ *
+ * `suspendFor()` reaches its controller through this map rather than through a
+ * contextual API, because a contextual API is composable by design: a public
+ * `around()` handler may answer an operation without delegating, and a document
+ * that could answer `enter()` could return a value from a wait that never
+ * happened. Composition is the right default for a provider a document may
+ * legitimately replace. A durable wait is not one.
+ *
+ * Keyed by run id so two runs in one process reach their own controllers, and
+ * removed when the execution that installed it ends.
+ */
+const controllers = (() => {
+  const installed = new Map<string, SuspensionEntry>();
+  return {
+    install(runId: string, entry: SuspensionEntry): () => void {
+      installed.set(runId, entry);
+      return () => {
+        if (installed.get(runId) === entry) {
+          installed.delete(runId);
+        }
+      };
+    },
+
+    get(runId: string): SuspensionEntry | undefined {
+      return installed.get(runId);
+    },
+  };
+})();
+
+export function installSuspensionEntry(runId: string, entry: SuspensionEntry): () => void {
+  return controllers.install(runId, entry);
+}
+
+/** Enter this run's wait through the controller its own execution installed. */
+export function enterSuspension(
+  runId: string,
+  suspensionId: string,
+  request: WorkflowSuspensionRequest,
+): Operation<Json> {
+  const entry = controllers.get(runId);
+  if (entry === undefined) {
+    throw new WorkflowSuspensionProviderError();
+  }
+  return entry(suspensionId, request);
 }

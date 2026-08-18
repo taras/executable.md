@@ -48,12 +48,8 @@ import { canonicalFingerprint, type Json } from "@executablemd/core";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
 import { getWorkflowRun } from "../run.ts";
-import { armSuspensionEntry } from "./entry.ts";
-import {
-  parseSuspensionRequest,
-  WorkflowSuspension,
-  type WorkflowSuspensionRequest,
-} from "./api.ts";
+import { armSuspensionEntry, enterSuspension } from "./entry.ts";
+import { parseSuspensionRequest, type WorkflowSuspensionRequest } from "./api.ts";
 
 /** The effect type one durable wait's request is retained under. */
 export const SUSPENSION_REQUEST = "suspension_request";
@@ -123,5 +119,5 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
   // entered by the operation that is running, not by whatever reached this
   // position.
   armSuspensionEntry(id);
-  return yield* WorkflowSuspension.operations.enter(id, parsed);
+  return yield* enterSuspension(run.runId, id, parsed);
 }

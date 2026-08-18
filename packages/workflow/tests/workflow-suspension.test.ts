@@ -31,6 +31,7 @@ import { retainedWorkflowInstallation } from "../src/run.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { useStorageRoot, withBegunRun } from "./support/storage.ts";
 import type { WorkflowRun } from "../src/run.ts";
+import { WorkflowSuspension } from "../src/suspension/api.ts";
 import type { WorkflowSuspensionApi } from "../src/suspension/api.ts";
 import { parseSuspensionRequest, WorkflowSuspensionRequestError } from "../src/suspension/api.ts";
 import { SUSPENSION_REQUEST, suspendFor } from "../src/suspension/suspend.ts";
@@ -416,6 +417,44 @@ describe("Tier WS — a durable wait's request and identity", () => {
 
       // And the prior effect was performed once, by the first execution.
       expect(reached).toEqual(["performed-prior-effect"]);
+    });
+  });
+
+  it("WS8: public middleware cannot answer a wait on the operation's behalf", function* () {
+    yield* withRun(function* (database) {
+      const continued: string[] = [];
+      let returned: unknown;
+
+      const attempted = yield* attempt(database, function* () {
+        // Document-side middleware on the public provider, answering without
+        // delegating — the ordinary way a composable API is replaced.
+        yield* WorkflowSuspension.around({
+          // deno-lint-ignore require-yield
+          *enter(): Operation<Json> {
+            return { bypassed: true };
+          },
+        });
+
+        returned = yield* suspendFor({
+          request: { kind: "approval" },
+          responseSchema: SCHEMA,
+        });
+        continued.push("continued-past-the-wait");
+      });
+
+      // The wait reached the execution-owned controller regardless: the real
+      // operation does not go through the replaceable path.
+      expect(attempted.notice?.suspensionId).toBeDefined();
+      expect(requests(attempted.events)).toHaveLength(1);
+
+      // The middleware's value was never returned and the document never ran on.
+      expect(returned).toBeUndefined();
+      expect(continued).toEqual([]);
+
+      // No outcome was recorded for a document that is waiting.
+      expect(
+        attempted.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toHaveLength(0);
     });
   });
 });

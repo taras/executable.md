@@ -697,9 +697,14 @@ that already-filtered event by ID, so request text is never duplicated into
 lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
-execution-owned suspension controller. Context may select the workflow provider;
-it authorizes nothing. The authority to enter a wait is the `suspendFor()`
-operation itself. Immediately before calling the controller it arms a one-use
+execution-owned suspension controller — and reaches it directly, not through a
+contextual provider. A contextual API composes: a public handler may answer an
+operation without delegating, which for a durable wait would mean returning a
+value from a wait that never happened, or suppressing one the run has already
+published a request for. Composition is the right default for a provider a
+document may legitimately replace; a durable wait is not one, so the controller a
+live execution installed is the only thing that can receive it. The authority to
+enter a wait is the `suspendFor()` operation itself. Immediately before calling the controller it arms a one-use
 private entry naming the wait it is entering, and the controller takes that entry
 once. The entry is unreachable outside the package that defines it, so nothing a
 document can import or reconstruct can arm one, and an attempt that is refused
