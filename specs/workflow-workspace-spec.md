@@ -1145,6 +1145,7 @@ decision agrees with the pre-state — `performed` follows proven absence and
 
 ```md
 <PullRequest
+  number={props.pullRequestNumber}
   title="Prepare release 1.4"
   base="main"
   draft={true}
@@ -1154,16 +1155,42 @@ Prepared from commit {commit}.
 </PullRequest>
 ```
 
-`title` is required. `base` defaults to the Repository's recorded initial
-branch, `draft` defaults to false and rendered children form the body. The
-contextual Repository selects the Git-host provider; its current named branch
-is head and must exist remotely at the current local commit. PullRequest never
-pushes. It returns the request URL through `as`.
+`title` is required. `number` defaults to undefined, `base` defaults to the
+Repository's recorded initial branch, `draft` defaults to false and rendered
+children form the body. The contextual Repository selects the Git-host provider;
+its current named branch is head. PullRequest never pushes, and direct remote
+observation is not a substitute for authorization to create or update one: the
+run must already hold a compatible `Git.Push` result for the same Repository
+identity, head branch, full destination ref and head SHA. A missing, conflicting
+or unreadable Push result fails before pull-request creation or update is
+observed.
+
+PullRequest is an upsert over one explicit pull-request identity. When `number`
+is undefined, the effect creates a pull request for the current head and base;
+if an interrupted earlier attempt already created that same request, the
+compatible remote pull request is adopted instead of duplicated. When `number`
+is present, the effect updates that exact pull request's mutable fields to the
+requested title, body, draft state and base; its existing head must already be
+the current head, and if those fields already match, it records a no-op result.
+A supplied number whose existing pull request belongs to another Repository,
+head or base is a conflict rather than a rewrite to unrelated state.
+
+The `as` result is stable creation/update evidence, not a live pull-request snapshot.
+It includes the filtered Repository identity, the provider's stable pull-request
+identity, number, URL, state, head SHA and base SHA. Reviews, comments, checks,
+labels, reviewers, merge state and later title, body, draft or branch movement
+are separate reads or effects rather than freshness smuggled into the creation
+result.
 
 There are initially no repository, head, provider, label, reviewer, merge or
-implicit-push controls. Uncertain creation adopts only one compatible request
-identified by stable effect provenance and head/base identity. It never rewrites
-or adopts an unrelated incompatible request.
+implicit-push controls. The natural key identifies either the supplied
+Repository pull-request number or, when no number was supplied, the Repository's
+creation request for that head branch and base branch; the complete request
+fingerprint still discriminates title, body, draft and number changes. Uncertain
+creation adopts only one compatible request identified by stable effect
+provenance and head/base identity. Uncertain update adopts only the supplied
+pull-request number when it already reflects the requested state. It never
+rewrites or adopts an unrelated incompatible request.
 
 ### 7.6 Multiple repositories are explicit composition
 
