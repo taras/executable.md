@@ -85,6 +85,14 @@ export type HostFilesObserver = (event: HostFilesEvent) => void;
 
 export interface HostFilesOptions {
   readonly observe?: HostFilesObserver;
+  /**
+   * The directory temporary directories are minted under, defaulting to the
+   * host's temporary root. The host's root is shared by every process on the
+   * machine, so a caller that censuses the minted namespace — a lifetime test
+   * proving nothing survives a cancellation — points this at a directory it
+   * owns, where the only entries are the ones this provider created.
+   */
+  readonly temporaryRoot?: string;
 }
 
 /**
@@ -473,7 +481,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       let created: string;
       try {
         // oxlint-disable-next-line local/no-sync-filesystem
-        created = mkdtempSync(join(tmpdir(), "xmd-tempdir-"));
+        created = mkdtempSync(join(options.temporaryRoot ?? tmpdir(), "xmd-tempdir-"));
       } catch (error) {
         yield* provide(nonWriteFailure("temporary-directory", "acquire", reasonOf(error)));
         return;

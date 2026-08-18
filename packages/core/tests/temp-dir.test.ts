@@ -127,12 +127,14 @@ function* imported(stream: InMemoryStream): Operation<string[]> {
 }
 
 /**
- * Every temporary directory currently on disk. The leak this guards against is
- * a directory nobody holds a reference to, so the only way to see one is to
- * look at the root they are all created under.
+ * Every temporary directory currently under `root`. The leak this guards
+ * against is a directory nobody holds a reference to, so the only way to see
+ * one is to look at the root they are all created under — and that root must
+ * be one this test owns: the host's shared temporary root holds directories
+ * every concurrently running suite mints, and a census over it cannot tell a
+ * leak from a neighbour.
  */
-function* temporaries(): Operation<string[]> {
-  const root = yield* until(realpath(tmpdir()));
+function* temporaries(root: string): Operation<string[]> {
   const entries = yield* until(readdir(root));
   return entries.filter((entry) => entry.startsWith("xmd-tempdir-")).sort();
 }
@@ -494,8 +496,10 @@ describe("Tier TD — TempDir", () => {
   // one behind — whether it arrives while the directory is in use or before
   // the acquiring task has run at all.
   it("TD15: a cancelled acquisition leaves no directory behind", function* () {
-    yield* useHostFiles();
-    const before = yield* temporaries();
+    // A root this test owns, so the census below sees only what these
+    // acquisitions minted.
+    const root = yield* useFixture();
+    yield* useHostFiles({ temporaryRoot: root });
 
     // Halted while the directory is live: the path is observed first, so the
     // assertion names the directory that actually existed.
@@ -510,15 +514,21 @@ describe("Tier TD — TempDir", () => {
     yield* live.halt();
     expect(yield* exists(directory)).toBe(false);
 
-    // Halted mid-acquisition, then given time to settle. An acquisition that
-    // suspended on a pending creation would finish here, after the task that
-    // asked for it is gone, and leave a directory nothing owns.
+    // Halted mid-acquisition. An acquisition that suspended on a pending
+    // creation would finish afterwards, after the task that asked for it is
+    // gone, and leave a directory nothing owns.
     const early = yield* spawn(() => useTemporaryDirectory());
     yield* early.halt();
-    yield* sleep(50);
 
-    // Whatever either task created, nothing survives it.
-    expect(yield* temporaries()).toEqual(before);
+    // Whatever either task created, nothing survives it. Converged on rather
+    // than sampled after a fixed pause: a removal is complete when the census
+    // says so, not when a saturated runner's clock has run out.
+    yield* when(
+      function* () {
+        expect(yield* temporaries(root)).toEqual([]);
+      },
+      { timeout: 5000 },
+    );
   });
 
   // TD16: the other durable effect a `<TempDir>` can consume. A nested
