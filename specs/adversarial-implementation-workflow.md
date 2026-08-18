@@ -192,8 +192,12 @@ would have been used without detecting or prioritizing them.
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
-`xmd workflow` that same question is still `<Elicit>`, answered inside the
-execution that asked it. A durable suspension is a different mechanism, and its
+`xmd workflow` that same question is still `<Elicit>`, and the same WebForm
+provider is installed — so an unanswered one opens a loopback form and the run
+blocks on it, staying `running`. It publishes no validated answer and no
+suspension request, never settles `suspended`, and never gives the executor lock
+back. An authored `<Answers>` region answers it without any of that. A durable
+suspension is a different mechanism, and its
 substrate is shipped: `suspendFor()` waits and gives the executor lock back
 (#367), the lock's ownership decides who may continue (#466), and a typed answer
 can be delivered to a waiting run (#300). None of that is reached from Markdown

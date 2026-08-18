@@ -208,8 +208,12 @@ that already knows the answer — a test, a demo, a non-interactive region — w
 this component in an `<Answers>` region and supplies it with `<Answer>` matchers,
 which changes who answers without changing this file.
 
-Under `xmd workflow` this stays an `<Elicit>`, answered inside the execution that
-asked it. A resume restores its journaled answer rather than asking again
+Under `xmd workflow` this stays an `<Elicit>`. The workflow host installs the
+same WebForm provider `xmd run` does, so an unanswered question opens a loopback
+browser form and blocks the run: it stays `running`, publishes no validated
+answer and no suspension request, never settles `suspended`, and never gives the
+executor lock back. The `<Answers>` region above is how a document answers it
+without a person. A resume restores a journaled answer rather than asking again
 (#366).
 
 The durable wait this checkpoint is eventually meant to become is a different
