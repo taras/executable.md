@@ -398,6 +398,113 @@ export function* switchBranch(git: GitSession, request: BranchSwitch): Operation
 }
 
 /**
+ * Stage exactly these pathspecs, from the directory the element was written in.
+ *
+ * One command for the whole array. `--` separates the pathspecs from the
+ * options, so an entry that reads as a flag is still a pathspec, and Git's own
+ * magic keeps its ordinary meaning.
+ *
+ * **Native Git is not all-or-none here.** A command naming an ignored path
+ * stages everything else it matched and *then* refuses, so the index it leaves
+ * behind holds part of what was asked for. What makes an Add all-or-none is the
+ * effect around it: this throws before anything is imported, the disposable
+ * materialization Git worked in is discarded with the scope, and the effect's
+ * savepoint takes back the attempt — so the Workspace never holds a partial
+ * staging, and the failed result describes a root that did not move.
+ *
+ * Four conditions are refusals a document can act on, and the set is closed. Any
+ * other nonzero exit is infrastructure: naming it the nearest refusal would
+ * publish a durable result claiming this run knows what happened.
+ */
+export function* addPaths(
+  git: GitSession,
+  request: {
+    readonly operation: string;
+    readonly workingDirectory: string;
+    readonly paths: readonly string[];
+  },
+): Operation<void> {
+  const outcome = yield* git.run(["add", "--", ...request.paths], request.workingDirectory);
+  if (outcome.code !== 0) {
+    const refusal = addFailure(outcome, request.paths);
+    if (refusal === undefined) {
+      throw new GitOperationInfrastructureError(
+        request.operation,
+        "native Git refused it in a way this provider has no word for",
+      );
+    }
+    throw new GitRefusal(refusal);
+  }
+}
+
+/** The one line Git prints when a path a command named is ignored. */
+const IGNORED_ADVISORY = "The following paths are ignored by one of your .gitignore files:";
+
+/**
+ * Which condition a refused `add` reported, or `undefined` for none of them.
+ *
+ * Git puts the pathspec it is complaining about *inside* its own diagnostic, so
+ * a document's own text appears in the message this reads. Searching that
+ * message for a phrase therefore lets the text answer the question: a pathspec
+ * written `../did not match any files` produces an outside-repository
+ * diagnostic that contains the unmatched phrase, and one written
+ * `:(did not match any files)x` produces an invalid-magic diagnostic that
+ * contains it too.
+ *
+ * So nothing here searches. Each condition has a fixed frame Git builds around
+ * the pathspec, and the pathspecs are what this provider just sent — so the
+ * frame is reconstructed for each of them and compared. A document can put any
+ * text it likes inside the frame; it cannot make one condition's diagnostic take
+ * another condition's shape around its own text.
+ *
+ * A diagnostic is not a line. A pathspec is any non-empty string, newlines
+ * included, and Git embeds it verbatim — so `paths={"missing\nfile"}` produces a
+ * two-line diagnostic that is still one message. The whole of what Git wrote is
+ * compared, less the newline it ends with, which is what keeps a pathspec's own
+ * spelling from deciding where the message stops.
+ *
+ * The exit status is part of the match, and a diagnostic that fits no frame is
+ * not given a word: it is infrastructure.
+ */
+function addFailure(outcome: GitOutcome, paths: readonly string[]): GitFailureReason | undefined {
+  // Exactly the newline Git ends its message with, and nothing else: trimming
+  // further would take characters a pathspec is allowed to end with.
+  const reported = outcome.stderr.endsWith("\n") ? outcome.stderr.slice(0, -1) : outcome.stderr;
+
+  if (outcome.code === 1) {
+    // The advisory leads, and the paths Git found follow it. That first line is
+    // the whole of what is matched here, because nothing else in the message is
+    // Git's own words.
+    return reported.startsWith(`${IGNORED_ADVISORY}\n`) ? "ignored-pathspec" : undefined;
+  }
+  if (outcome.code !== 128) {
+    return undefined;
+  }
+
+  for (const path of paths) {
+    if (reported === `fatal: pathspec '${path}' did not match any files`) {
+      return "unmatched-pathspec";
+    }
+    // The repository root Git names is its own; what is pinned here is the
+    // pathspec, which it prints twice before saying where the repository is.
+    if (
+      reported.startsWith(`fatal: ${path}: '${path}' is outside repository at '`) &&
+      reported.endsWith("'")
+    ) {
+      return "outside-checkout-pathspec";
+    }
+    // The magic word is Git's; the pathspec closes the line.
+    if (
+      reported.startsWith("fatal: Invalid pathspec magic '") &&
+      reported.endsWith(` in '${path}'`)
+    ) {
+      return "invalid-pathspec-magic";
+    }
+  }
+  return undefined;
+}
+
+/**
  * Which condition a refused `switch` reported, or `undefined` for none of them.
  *
  * The message selects a word and is then discarded, on the same terms as every

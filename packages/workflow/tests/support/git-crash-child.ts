@@ -9,7 +9,7 @@
  * state.
  *
  * ```sh
- * deno run -A git-crash-child.ts crash <root> <run-id> <locator>
+ * deno run -A git-crash-child.ts crash <root> <run-id> <locator> [switch|add]
  * deno run -A git-crash-child.ts inspect <root> <run-id>
  * ```
  *
@@ -36,20 +36,41 @@ import { openWorkflowRunDatabase, readRunRow } from "../../src/deno/database.ts"
 import { useJournalRouting } from "../../src/deno/journal-route.ts";
 import { readTransaction } from "../../src/deno/reading.ts";
 import { verifySchema } from "../../src/deno/schema.ts";
-import { WORKSPACE_GIT_SWITCH } from "../../src/deno/composition/provider.ts";
+import { WORKSPACE_GIT_ADD, WORKSPACE_GIT_SWITCH } from "../../src/deno/composition/provider.ts";
 import { useWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import { transactWorkspaceRoots, usePrivateWorkspace } from "../../src/deno/workspace/private.ts";
 import { count, report } from "./workspace-process.ts";
-import { crashDocument } from "./git-crash-process.ts";
+import { addDocument, crashDocument } from "./git-crash-process.ts";
+import { stagedPaths } from "./composition.ts";
 
-function* crash(root: string, runId: string, locator: string): Operation<void> {
+/** What each operation this can be killed inside is written as, and recorded under. */
+const OPERATIONS = {
+  switch: { type: WORKSPACE_GIT_SWITCH, document: crashDocument },
+  add: { type: WORKSPACE_GIT_ADD, document: addDocument },
+} as const;
+
+function operationOf(name: string): (typeof OPERATIONS)["switch"] {
+  const operation = Reflect.get(OPERATIONS, name === "" ? "switch" : name);
+  if (operation === undefined) {
+    throw new Error(`the Git crash helper has no ${name} operation`);
+  }
+  return operation;
+}
+
+function* crash(
+  root: string,
+  runId: string,
+  locator: string,
+  operationName: string,
+): Operation<void> {
   const path = workflowRunPath(root, runId);
+  const operation = operationOf(operationName);
 
   const connections = createWorkflowRunConnections(() => {}, {
     *afterRoutedJournalAppend(_database, event): Operation<void> {
-      if (event.type !== "yield" || event.description.type !== WORKSPACE_GIT_SWITCH) {
+      if (event.type !== "yield" || event.description.type !== operation.type) {
         return;
       }
       // Every read below is on the connection that opened the transaction, so
@@ -61,10 +82,10 @@ function* crash(root: string, runId: string, locator: string): Operation<void> {
         journalRows: count(
           sqlite.prepare("SELECT COUNT(*) AS count FROM journal_events").get()?.["count"],
         ),
-        switchRows: count(
+        operationRows: count(
           sqlite
             .prepare("SELECT COUNT(*) AS count FROM journal_events WHERE record LIKE ?")
-            .get(`%"type":"${WORKSPACE_GIT_SWITCH}"%`)?.["count"],
+            .get(`%"type":"${operation.type}"%`)?.["count"],
         ),
       });
       // Deno leaves when its event loop is empty, and a suspended Effection
@@ -91,11 +112,14 @@ function* crash(root: string, runId: string, locator: string): Operation<void> {
     database,
     scoped(function* () {
       return yield* collect(
-        yield* execute({ ...inlineSource(crashDocument(locator)), stream: database.journal }),
+        yield* execute({
+          ...inlineSource(operation.document(locator)),
+          stream: database.journal,
+        }),
       );
     }),
   );
-  report({ ready: false, reason: "the switch committed" });
+  report({ ready: false, reason: "the operation committed" });
 }
 
 function* inspect(root: string, runId: string): Operation<void> {
@@ -116,6 +140,7 @@ function* inspect(root: string, runId: string): Operation<void> {
     return {
       currentRoot: yield* workspace.currentRoot(),
       repositories: workspace.metadata.readRepositories().length,
+      checkoutPath: repository?.record.checkoutPath,
       which:
         repository === undefined
           ? undefined
@@ -125,9 +150,11 @@ function* inspect(root: string, runId: string): Operation<void> {
   if (!observed.ok) {
     throw observed.error;
   }
+  const checkoutPath = observed.value.checkoutPath;
 
   report({
     ...observed.value,
+    staged: checkoutPath === undefined ? [] : yield* stagedPaths(database, checkoutPath),
     types: entries.value.map((entry) =>
       entry.event.type === "yield" ? entry.event.description.type : entry.event.type,
     ),
@@ -137,9 +164,9 @@ function* inspect(root: string, runId: string): Operation<void> {
 main(function* () {
   // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
   // still has to typecheck under the Node project like every other source.
-  const [mode, root, runId, locator] = process.argv.slice(2);
+  const [mode, root, runId, locator, operation] = process.argv.slice(2);
   if (mode === "crash") {
-    yield* crash(root, runId, locator);
+    yield* crash(root, runId, locator, operation ?? "");
     return;
   }
   if (mode === "inspect") {

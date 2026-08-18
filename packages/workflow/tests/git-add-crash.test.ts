@@ -1,16 +1,16 @@
 /**
- * Tier WF — a `<Git.Switch>` across a process boundary.
+ * Tier WF — a `<Git.Add>` across a process boundary.
  *
- * The rest of the Git suites end their transactions in this process: they
- * commit, refuse, or are cancelled, and Effection tears the scope down. None of
- * that is a crash. At the kill point the switch transaction is open with the
- * imported checkout, the published Workspace root and the routed journal row all
- * written; `SIGKILL` then runs no application cleanup at all, so nothing commits
- * and nothing rolls back. Whether any of it reappears is decided by the next
- * connection to open the database.
+ * At the kill point the staging transaction is open with the imported index, the
+ * published Workspace root and the routed journal row all written; `SIGKILL`
+ * then runs no application cleanup, so nothing commits and nothing rolls back.
+ * What a later connection finds is decided there.
  *
- * The handshake is a line of JSON on standard output, never a sleep: the parent
- * kills the child at a point the child has said it has reached.
+ * The write that produced the file commits in its own effect before the staging
+ * begins, which is what makes the observation sharp: the recovered database must
+ * hold the file and an index that never saw it.
+ *
+ * The handshake is a line of JSON on standard output, never a sleep.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -21,23 +21,16 @@ import { fileURLToPath } from "node:url";
 import { exec as execProcess } from "@effectionx/process";
 import { exec } from "@executablemd/runtime";
 import { call, type Operation, race, scoped, spawn, withResolvers } from "effection";
-import { WORKSPACE_GIT_SWITCH } from "../src/deno/composition/provider.ts";
+import { WORKSPACE_GIT_ADD } from "../src/deno/composition/provider.ts";
 import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
-import { MAIN_CONTENT, RELEASE_CONTENT } from "./support/git-crash-process.ts";
+import { CRASH_PATH, MAIN_CONTENT } from "./support/git-crash-process.ts";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 const CRASH_CHILD = fileURLToPath(new URL("./support/git-crash-child.ts", import.meta.url));
 
 const REMOTE = {
-  commits: [
-    { message: "first", entries: [{ path: "which.txt", content: MAIN_CONTENT }] },
-    {
-      message: "release",
-      branch: "release",
-      entries: [{ path: "which.txt", content: RELEASE_CONTENT }],
-    },
-  ],
+  commits: [{ message: "first", entries: [{ path: "which.txt", content: MAIN_CONTENT }] }],
 } as const;
 
 interface ChildResult {
@@ -80,17 +73,15 @@ function committed(path: string): Record<string, unknown> {
   }
 }
 
-describe("workflow Git.Switch across a process boundary", () => {
-  it("commits the whole switch or none of it when a real SIGKILL lands", function* () {
+describe("workflow Git.Add across a process boundary", () => {
+  it("commits the whole staging or none of it when a real SIGKILL lands", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
-    const runId = "git-switch-crash";
+    const runId = "git-add-crash";
     yield* withStorage(root, function* () {
       yield* createRun({ runId });
     });
 
-    // Taken after the provider scope closed, so nothing this process holds is
-    // keeping the database open when the child starts.
     const path = runPath(root, runId);
 
     const during = yield* scoped(function* () {
@@ -104,6 +95,7 @@ describe("workflow Git.Switch across a process boundary", () => {
           root,
           runId,
           remote.locator,
+          "add",
         ],
         cwd: REPOSITORY,
       });
@@ -142,8 +134,6 @@ describe("workflow Git.Switch across a process boundary", () => {
         }),
       ]);
 
-      // The child holds its switch transaction open here, so what a second
-      // connection can see is the discriminating observation.
       const outside = committed(path);
       process.kill(child.pid, "SIGKILL");
       const status = yield* child.join();
@@ -153,22 +143,23 @@ describe("workflow Git.Switch across a process boundary", () => {
     expect(during.status.signal).toBe("SIGKILL");
     expect(during.status.code ?? null).toBeNull();
 
-    // Inside the crashed transaction the switch's journal row and its published
+    // Inside the crashed transaction the staging's journal row and its published
     // root both existed.
     expect(during.announcement["ready"]).toBe(true);
     expect(during.announcement["operationRows"]).toBe(1);
 
     // None of it was visible to anyone else while the child was alive: the
-    // Repository committed before the switch began, and that is all there is.
-    expect(during.outside["types"]).not.toContain(WORKSPACE_GIT_SWITCH);
+    // Repository and the file write committed before the staging began.
+    expect(during.outside["types"]).not.toContain(WORKSPACE_GIT_ADD);
     expect(during.outside["currentRoot"]).not.toBe(during.announcement["currentRoot"]);
 
     // A different process, through a newly installed production provider, finds
-    // the Repository and a checkout that never moved.
+    // the file and an index that never saw it.
     const inspected = announced(yield* runChild(["inspect", root, runId]));
     expect(inspected["repositories"]).toBe(1);
-    expect(inspected["which"]).toBe(MAIN_CONTENT);
-    expect(inspected["types"]).not.toContain(WORKSPACE_GIT_SWITCH);
+    expect(inspected["staged"]).toEqual([]);
+    expect(inspected["types"]).not.toContain(WORKSPACE_GIT_ADD);
     expect(inspected["currentRoot"]).toBe(during.outside["currentRoot"]);
+    expect(CRASH_PATH).toBe("added.txt");
   });
 });

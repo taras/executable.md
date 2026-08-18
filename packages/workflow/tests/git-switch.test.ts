@@ -21,7 +21,6 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, until } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
-import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 import { cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
@@ -52,6 +51,7 @@ import {
   countingOptions,
   gitEvents,
   gitOutcomes,
+  physicalGitApiCopy,
   raised,
   retainedRepositories,
   retainedWorktrees,
@@ -60,6 +60,7 @@ import {
   survivingRoots,
   workspaceText,
 } from "./support/composition.ts";
+import type { LoadedGitApi } from "./support/composition.ts";
 import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
 
 /**
@@ -144,43 +145,6 @@ function runForged(
   });
 }
 
-interface LoadedGitApi {
-  GitComposition: typeof GitComposition;
-}
-
-function loadedGitApi(value: unknown): value is LoadedGitApi {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof Reflect.get(value, "GitComposition") === "object"
-  );
-}
-
-/**
- * A second physical module holding the same Api name.
- *
- * Only the Api module is copied. Its imports are rewritten to the originals, so
- * what differs between the two is module identity and nothing else — which is
- * exactly the variable under test.
- */
-function* physicalGitApiCopy(): Operation<LoadedGitApi> {
-  // The shared fixture rather than the runtime's own temporary-directory API:
-  // this file only *runs* under Deno, and it is typechecked under the Node
-  // project like every other source here.
-  const directory = yield* useTempDirectory("xmd-git-api-copy-");
-  const source = new URL("../src/composition/", import.meta.url);
-  const text = (yield* readTextFile(new URL("git-api.ts", source)))
-    .replace('"./errors.ts"', JSON.stringify(new URL("errors.ts", source).href))
-    .replace('"./git-records.ts"', JSON.stringify(new URL("git-records.ts", source).href));
-  const destination = pathToFileURL(`${directory}/git-api.ts`);
-  yield* writeTextFile(destination, text);
-  const loaded = yield* until(import(destination.href));
-  if (!loadedGitApi(loaded)) {
-    throw new Error("the physical Git Api copy did not export its Api");
-  }
-  return loaded;
-}
-
 /**
  * What a retained result is read back for.
  *
@@ -210,7 +174,6 @@ function* expectation(
     base,
   };
 }
-
 function document(locator: string, ...lines: string[]): string {
   return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
 }

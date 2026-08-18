@@ -824,6 +824,50 @@ files, modifications and deletions are staged. Omission never means all paths;
 `"."` is explicit. Add returns no value and initially has no `all`, `update`,
 `patch`, `force` or `intentToAdd` props.
 
+One string is the one-entry array, and an array is passed to Git as written:
+order, repetitions, spelling and Git's own pathspec magic all survive, because
+each of them changes what is staged. The whole array is one command and one
+effect. An empty string, an empty array and an empty entry are refused rather
+than read as "here" or as "everything".
+
+A pathspec must be well-formed text. A string is UTF-16 code units and need not
+be well-formed, but the way to Git is UTF-8, and an unpaired surrogate becomes
+U+FFFD in transit — so what Git received would differ from what the run
+retained. A pathspec holding one is refused as malformed input, before any effect
+exists and before Git runs, wherever the request enters: a document's element and
+a direct call on the composition Api are held to the same boundary. Nothing is
+normalized or respelled to make one fit, and every well-formed string — U+FFFD
+included, along with newlines, separators, repetitions and pathspec magic —
+reaches Git exactly as written.
+
+`paths` is a pathspec, not a way of choosing a checkout. Which checkout is
+staged is decided the way §7.1 decides it, and every pathspec is read relative to
+the working directory the element was written in — so `<Git.Add paths="." />`
+inside a `<Dir path="packages">` stages that directory rather than the checkout
+that contains it.
+
+Add renders nothing, binds nothing and takes no content. What it retains is
+evidence: the checkout it ran in, the pathspecs exactly as they were given, and
+the branch, commit, HEAD tree and index tree the checkout held before and after.
+Staging moves the index and nothing else, so a retained result whose branch,
+commit or HEAD tree changed describes a transition Add does not make, while its
+index tree may have moved or not — staging what is already staged changes
+nothing. What Git matched is not enumerated: naming files it discovered would put
+content beyond the document's own pathspecs into retained history.
+
+Failure follows §7.1, with four refusals of its own. A pathspec that matched no
+files, one that selects an ignored path — Add has no force control — one that
+leaves the checkout, and one whose Git pathspec magic is invalid are each
+something the document asked for and did not get, so each is a failed durable
+result against a Workspace root that did not move, replayed exactly. Any other
+native failure is infrastructure: the run fails and nothing is published.
+
+Native Git is not all-or-none here. A command naming an ignored path stages
+everything else it matched before refusing, so an Add is all-or-none because the
+effect makes it so: nothing is imported, the materialization is discarded, and
+the attempt is rolled back, leaving no partial staging in the Workspace. No
+refusal names a path, quotes Git, or reports a file Git discovered.
+
 ### 7.3 Commit
 
 ```md
@@ -1321,7 +1365,7 @@ delegated without changing the document language.
 | provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
-| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` built by #294, Deno provider only; `Git.Add` and `Git.Commit` defined here, unbuilt (#294) |
+| transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` and `Git.Add` built by #294, Deno provider only; `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367; typed input delivery belongs to #300 |

@@ -60,3 +60,37 @@ export function canonicalWorkspacePath(value: unknown): string | undefined {
 export function beneath(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
+
+/**
+ * Whether this string is text a host can carry without changing it.
+ *
+ * A JavaScript string is UTF-16 code units and is not required to be well-formed
+ * text: an unpaired surrogate is a value a document can write. Every boundary a
+ * value like that crosses on its way to a program — a process argument list, a
+ * filesystem path — is UTF-8, and encoding an unpaired surrogate as UTF-8
+ * replaces it with U+FFFD. What arrives is then a different string from the one
+ * that was asked for, while the run's own history still holds the original.
+ *
+ * So values that must reach a program exactly as written are held to this first.
+ * U+FFFD itself is ordinary text and passes: what is refused is the string that
+ * would silently become it.
+ */
+export function wellFormedText(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit < 0xd800 || unit > 0xdfff) {
+      continue;
+    }
+    // A trailing surrogate with nothing leading it, or a leading one with no
+    // trailing one after it, is half of a character that was never written.
+    if (unit > 0xdbff) {
+      return false;
+    }
+    const following = value.charCodeAt(index + 1);
+    if (!(following >= 0xdc00 && following <= 0xdfff)) {
+      return false;
+    }
+    index += 1;
+  }
+  return true;
+}

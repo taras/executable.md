@@ -10,7 +10,11 @@
  */
 
 import { scoped, type Operation } from "effection";
-import { lstat } from "@effectionx/fs";
+import { lstat, readTextFile, writeTextFile } from "@effectionx/fs";
+import { pathToFileURL } from "node:url";
+import { until } from "effection";
+import { useTempDirectory } from "@executablemd/test-support/temp";
+import { GitComposition } from "../../src/composition/git-api.ts";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
@@ -18,6 +22,7 @@ import type { WorkflowRunDatabase } from "../../mod.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
 import {
+  WORKSPACE_GIT_ADD,
   WORKSPACE_GIT_SWITCH,
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
@@ -25,7 +30,11 @@ import {
 import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../src/deno/workspace/private.ts";
-import { importTree } from "../../src/deno/composition/materialize.ts";
+import {
+  exportTree,
+  importTree,
+  localizeAdministration,
+} from "../../src/deno/composition/materialize.ts";
 import type { StoredRepository } from "../../src/deno/workspace/repositories.ts";
 import type { WorktreeRecord } from "../../src/composition/records.ts";
 
@@ -157,7 +166,10 @@ export function* compositionEvents(database: WorkflowRunDatabase): Operation<Dur
 export function* gitEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
   const events = yield* database.journal.readAll();
   return events.filter(
-    (event) => event.type === "yield" && event.description.type === WORKSPACE_GIT_SWITCH,
+    (event) =>
+      event.type === "yield" &&
+      (event.description.type === WORKSPACE_GIT_SWITCH ||
+        event.description.type === WORKSPACE_GIT_ADD),
   );
 }
 
@@ -272,6 +284,96 @@ export function* workspaceTree(
     throw read.error;
   }
   return read.value;
+}
+
+/**
+ * What the index of one retained checkout holds staged, as native Git reads it.
+ *
+ * The direct observation a staging claim needs. Index trees say *that* something
+ * changed; this says *what*, by exporting the retained family into a disposable
+ * host tree — the same way the provider does — and asking Git.
+ */
+export function* stagedPaths(
+  database: WorkflowRunDatabase,
+  workspacePath: string,
+): Operation<string[]> {
+  return yield* scoped(function* () {
+    const host = denoRepositoryHost();
+    const root = yield* host.useDirectory();
+    const exported = yield* transactWorkspaceRoots(database, function* (workspace) {
+      const [repository] = workspace.metadata.readRepositories();
+      if (repository === undefined) {
+        throw new Error("the run retains no repository to read an index from");
+      }
+      const repositoryDirectory = yield* exportTree(
+        workspace.filesystem,
+        root,
+        repository.record.checkoutPath,
+        "inspection",
+      );
+      const worktrees: string[] = [];
+      for (const worktree of workspace.metadata.readWorktreesForRepository(
+        repository.record.name,
+      )) {
+        worktrees.push(
+          yield* exportTree(workspace.filesystem, root, worktree.checkoutPath, "inspection"),
+        );
+      }
+      yield* localizeAdministration(root, repositoryDirectory, worktrees, "inspection");
+      return `${root}${workspacePath}`;
+    });
+    if (!exported.ok) {
+      throw exported.error;
+    }
+    // `-z` because Git quotes a path holding anything outside ASCII by default,
+    // and what a suite compares has to be the name the Workspace holds.
+    const outcome = yield* host.git({
+      args: ["diff", "--cached", "--name-only", "-z"],
+      cwd: exported.value,
+      home: root,
+    });
+    if (outcome.code !== 0) {
+      throw new Error(`git diff --cached exited ${outcome.code}: ${outcome.stderr}`);
+    }
+    return outcome.stdout.split("\0").filter((name) => name !== "");
+  });
+}
+
+export interface LoadedGitApi {
+  GitComposition: typeof GitComposition;
+}
+
+function loadedGitApi(value: unknown): value is LoadedGitApi {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "GitComposition") === "object"
+  );
+}
+
+/**
+ * A second physical module holding the same Api name.
+ *
+ * Only the Api module is copied. Its imports are rewritten to the originals, so
+ * what differs between the two is module identity and nothing else — which is
+ * exactly the variable under test.
+ */
+export function* physicalGitApiCopy(): Operation<LoadedGitApi> {
+  // The shared fixture rather than the runtime's own temporary-directory API:
+  // this file only *runs* under Deno, and it is typechecked under the Node
+  // project like every other source here.
+  const directory = yield* useTempDirectory("xmd-git-api-copy-");
+  const source = new URL("../../src/composition/", import.meta.url);
+  const text = (yield* readTextFile(new URL("git-api.ts", source)))
+    .replace('"./errors.ts"', JSON.stringify(new URL("errors.ts", source).href))
+    .replace('"./git-records.ts"', JSON.stringify(new URL("git-records.ts", source).href));
+  const destination = pathToFileURL(`${directory}/git-api.ts`);
+  yield* writeTextFile(destination, text);
+  const loaded = yield* until(import(destination.href));
+  if (!loadedGitApi(loaded)) {
+    throw new Error("the physical Git Api copy did not export its Api");
+  }
+  return loaded;
 }
 
 /** Whether every materialization this run acquired has been removed. */
