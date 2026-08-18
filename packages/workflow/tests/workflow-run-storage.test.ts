@@ -1505,21 +1505,30 @@ describe("Tier WS — version 1 amended in place", () => {
    * would then prove nothing about the one builds actually produced.
    */
   function initializePreAmendmentVersionOne(database: DatabaseSync): void {
-    database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
-    for (const object of EXPECTED_SCHEMA) {
-      if (AMENDED_TABLES.includes(object.name) || ANSWER_TABLES.includes(object.name)) {
-        continue;
-      }
-      database.exec(`${object.sql};`);
-    }
-    database.exec("PRAGMA user_version = 1;");
+    initializeShapeWithout(database, [...AMENDED_TABLES, ...ANSWER_TABLES, ...FORK_TABLES]);
   }
 
   /** The shape complete before retained answer delivery joined version 1. */
   function initializePreAnswerVersionOne(database: DatabaseSync): void {
+    initializeShapeWithout(database, [...ANSWER_TABLES, ...FORK_TABLES]);
+  }
+
+  /** The shape complete before fork lineage and inherited provenance joined it. */
+  function initializePreForkVersionOne(database: DatabaseSync): void {
+    initializeShapeWithout(database, FORK_TABLES);
+  }
+
+  /**
+   * One shape that once claimed to be a complete version 1.
+   *
+   * Built by leaving out whichever amendments had not been made yet, so a new
+   * amendment adds one name here and one prior shape rather than silently
+   * turning every fixture below into a shape no build ever produced.
+   */
+  function initializeShapeWithout(database: DatabaseSync, omitted: readonly string[]): void {
     database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
     for (const object of EXPECTED_SCHEMA) {
-      if (ANSWER_TABLES.includes(object.name)) {
+      if (omitted.includes(object.name)) {
         continue;
       }
       database.exec(`${object.sql};`);
@@ -1530,6 +1539,8 @@ describe("Tier WS — version 1 amended in place", () => {
   const AMENDED_TABLES = ["workspace_repositories", "workspace_worktrees"];
 
   const ANSWER_TABLES = ["workflow_suspension_answers"];
+
+  const FORK_TABLES = ["workflow_fork_lineage", "journal_event_provenance"];
 
   it("WS23a: version 1 declares the Repository and Worktree tables", function* () {
     const root = yield* useStorageRoot();
@@ -1678,6 +1689,41 @@ describe("Tier WS — version 1 amended in place", () => {
     // An incomplete pre-release rather than arbitrary damage: this is a shape a
     // build really produced, and saying so is what tells its owner the run
     // cannot be continued rather than that the file is broken.
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(yield* until(readFile(path))).toEqual(before);
+  });
+
+  it("WS34a: version 1 declares the fork lineage and provenance tables", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const declared = EXPECTED_SCHEMA.filter((object) => FORK_TABLES.includes(object.name));
+    expect(declared.map((object) => object.name)).toEqual(FORK_TABLES);
+
+    const database = new DatabaseSync(runPath(root, "release-1.4"));
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
+      // A run that is not a fork declares them and holds nothing in them.
+      expect(database.prepare("SELECT * FROM workflow_fork_lineage").all()).toEqual([]);
+      expect(database.prepare("SELECT * FROM journal_event_provenance").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("WS34b: the shape before fork lineage is refused unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    tamper(path, initializePreForkVersionOne);
+    const before = yield* until(readFile(path));
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
     expect(yield* until(readFile(path))).toEqual(before);
   });

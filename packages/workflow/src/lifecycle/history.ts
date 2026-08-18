@@ -19,6 +19,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import type { SourcePosition } from "@executablemd/core";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
+import type { Forkability } from "./forkability.ts";
 import { describe, parseMembers, requireMemberNames } from "../storage/members.ts";
 
 /** One public history row. */
@@ -28,6 +29,16 @@ export interface WorkflowHistoryEntry {
   readonly workspaceRootId: string;
   /** Where the authored operation was written, when the event retained it. */
   readonly source?: Readonly<SourcePosition>;
+  /** Whether a fork may select this event, and what stands in the way. */
+  readonly forkability: Forkability;
+  /** Where an inherited row came from. Absent on a row this run wrote itself. */
+  readonly inherited?: InheritedEventProvenance;
+}
+
+/** The source run and source event one inherited row was admitted from. */
+export interface InheritedEventProvenance {
+  readonly sourceRunId: string;
+  readonly sourceEventId: string;
 }
 
 const MEMBERS = ["path", "offset", "line", "column"];

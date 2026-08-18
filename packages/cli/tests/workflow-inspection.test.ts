@@ -290,7 +290,8 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
 
   it("WFI7: the grammar is by action, and refuses what an action does not have", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
-      const forkable = yield* xmd(fixture, ["workflow", "history", "r", "--forkable"]).join();
+      // `--forkable` is history's, and history's alone.
+      const forkable = yield* xmd(fixture, ["workflow", "status", "r", "--forkable"]).join();
       expect(forkable.code).toBe(1);
       expect(forkable.stderr).toContain("--forkable");
 

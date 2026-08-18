@@ -261,11 +261,28 @@ export type {
   ExecutorAcquisition,
   ExecutorLock,
   WorkflowDeletion,
+  WorkflowForkLineage,
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
 export { readEventSource } from "./src/lifecycle/history.ts";
-export type { WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
+export type { InheritedEventProvenance, WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
+export { classifyForkability } from "./src/lifecycle/forkability.ts";
+export {
+  forkJournal,
+  forkRunRecordEvent,
+  isRootImportEvent,
+  isRunRecordEvent,
+  selectForkPrefix,
+} from "./src/fork.ts";
+export type { ForkCandidate, ForkSelection } from "./src/fork.ts";
+export type {
+  Forkability,
+  ForkabilityCandidate,
+  ForkabilityContext,
+  ForkBlocker,
+  ForkBlockerCode,
+} from "./src/lifecycle/forkability.ts";
 
 export {
   definitionComponents,

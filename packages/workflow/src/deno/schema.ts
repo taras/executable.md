@@ -424,6 +424,31 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
 ) STRICT`,
     },
   ],
+  [
+    "workflow_fork_lineage",
+    {
+      type: "table",
+      sql: `CREATE TABLE workflow_fork_lineage (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  source_run_id TEXT NOT NULL CHECK (length(source_run_id) > 0),
+  checkpoint_event_id TEXT NOT NULL CHECK (length(checkpoint_event_id) > 0),
+  checkpoint_workspace_root_id TEXT NOT NULL
+    REFERENCES workspace_roots(root_id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL
+) STRICT`,
+    },
+  ],
+  [
+    "journal_event_provenance",
+    {
+      type: "table",
+      sql: `CREATE TABLE journal_event_provenance (
+  event_id TEXT PRIMARY KEY REFERENCES journal_events(event_id) ON DELETE RESTRICT,
+  source_run_id TEXT NOT NULL CHECK (length(source_run_id) > 0),
+  source_event_id TEXT NOT NULL CHECK (length(source_event_id) > 0)
+) STRICT, WITHOUT ROWID`,
+    },
+  ],
 ]);
 
 export const EXPECTED_SCHEMA = Object.freeze(
@@ -562,11 +587,22 @@ function hasDeclaredVersionOneObjects(database: DatabaseSync, path: string): boo
   return schemaObjects(database, path).some((object) => OBJECTS.has(object.name));
 }
 
-/** Names introduced by the #300 amendment. Absence marks a pre-amendment shape. */
-const AMENDMENT_OBJECTS: readonly string[] = ["workflow_suspension_answers"];
+/**
+ * Every in-place amendment to version 1, newest first.
+ *
+ * Each entry names what that amendment added. Peeling them off in order is what
+ * reconstructs the shapes that once claimed to be a complete version 1, so a
+ * database an earlier build produced is refused as an incomplete pre-release
+ * rather than as arbitrary damage.
+ */
+const AMENDMENTS: readonly (readonly string[])[] = Object.freeze([
+  Object.freeze(["workflow_fork_lineage", "journal_event_provenance"]),
+  Object.freeze(["workflow_suspension_answers"]),
+  Object.freeze(["workspace_repositories", "workspace_worktrees"]),
+]);
 
-/** Names the #293 amendment introduced, which the #300 shape carries as well. */
-const REPOSITORY_OBJECTS: readonly string[] = ["workspace_repositories", "workspace_worktrees"];
+/** What the newest amendment added. Its presence marks a current-shape database. */
+const LATEST_AMENDMENT: readonly string[] = AMENDMENTS[0] ?? [];
 
 /** The very first pre-release shape, before Workspace root retention existed. */
 const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
@@ -579,17 +615,15 @@ const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
 /**
  * Every later shape that once claimed to be a complete version 1.
  *
- * Each amendment to version 1 is made in place, so a database an earlier build
- * produced is refused as an incomplete pre-release rather than as arbitrary
- * damage. Newest first: the shape before retained answer delivery, and the
- * shape before that, which had no Repository or Worktree metadata either.
+ * Newest first: version 1 minus the newest amendment, then minus the one before
+ * it, and so on.
  */
-const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze([
-  REQUIRED_OBJECTS.filter((name) => !AMENDMENT_OBJECTS.includes(name)),
-  REQUIRED_OBJECTS.filter(
-    (name) => !AMENDMENT_OBJECTS.includes(name) && !REPOSITORY_OBJECTS.includes(name),
-  ),
-]);
+const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze(
+  AMENDMENTS.map((_, index) => {
+    const removed = new Set(AMENDMENTS.slice(0, index + 1).flat());
+    return Object.freeze(REQUIRED_OBJECTS.filter((name) => !removed.has(name)));
+  }),
+);
 
 /**
  * Whether these declarations describe an earlier shape that once claimed to be
@@ -602,7 +636,7 @@ const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze([
  */
 function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean {
   const present = new Set(objects.map((object) => object.name));
-  if (AMENDMENT_OBJECTS.some((name) => present.has(name))) {
+  if (LATEST_AMENDMENT.some((name) => present.has(name))) {
     return false;
   }
   const earliest = new Set(EARLIEST_PRE_RELEASE_SHAPE);

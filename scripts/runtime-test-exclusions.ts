@@ -331,6 +331,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
+    path: "packages/cli/tests/workflow-fork.test.ts",
+    reason:
+      "drives `xmd workflow fork` against a real node:sqlite run store, killing a child mid-commit and reading the run database it leaves; the command only exists on the Deno entrypoints, and the provider-neutral half — forkability and fork selection — runs on every runtime as packages/workflow/tests/workflow-fork.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/368",
+  },
+  {
     path: "packages/workflow/tests/workflow-lifecycle-authority.test.ts",
     reason:
       "takes a real advisory lock through Deno.FsFile.tryLockSync and races it against a second Deno process; the lock primitive and the run store it guards are both Deno's",

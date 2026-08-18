@@ -144,6 +144,8 @@ function refusingHost(root: string, refuse: "settle" | "none", attempted: string
       const transitions = yield* host.useRunHost();
       return {
         begin: transitions.begin,
+        fork: transitions.fork,
+        stageFork: transitions.stageFork,
         *settle(executorLock, completion) {
           attempted.push(`settle:${completion.status}`);
           if (refuse === "settle") {

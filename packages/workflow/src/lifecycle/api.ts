@@ -57,6 +57,19 @@ export type ExecutorAcquisition =
   | { readonly kind: "already-running" };
 
 /**
+ * Where a forked run came from.
+ *
+ * Lineage, not identity: the fork's own `workflow_run` record is what its
+ * journal is held to, and this says which committed checkpoint of which run it
+ * was admitted from. A run that is not a fork carries none.
+ */
+export interface WorkflowForkLineage {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly checkpointWorkspaceRootId: string;
+}
+
+/**
  * Everything one run says about itself, read together.
  *
  * One snapshot, so the record, its retrieval metadata, its executions, its
@@ -73,6 +86,8 @@ export interface WorkflowLifecycleSnapshot {
     readonly workspaceRootId: string;
   };
   readonly currentWorkspaceRootId: string;
+  /** Where this run was forked from, when it was forked from anywhere. */
+  readonly lineage?: WorkflowForkLineage;
 }
 
 /**
