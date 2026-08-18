@@ -487,8 +487,8 @@ explicit composition rather than one implicit workspace:
   `<Dir path={…}>` inside the same `<Repository>`.
 - `<Dir>` is lexical cwd and nothing else: it establishes a bound path as cwd for
   its children, renders them normally, and restores the enclosing cwd when it
-  closes. Making a directory readable by an Agent is `<Agent.AddDir>` (#302), a
-  separate operation on purpose, and cwd never implies it. All three —
+  closes. It tells an Agent nothing: a workflow Agent is given no directory at
+  all (#302), so cwd is XMD's own and never an Agent's. All three —
   `<Repository>`, `<Worktree>` and `<Dir>` — are registered by
   `@executablemd/workflow/composition`, so they resolve under a workflow run and
   under no other host: plain `xmd run` composes no workflow and reports them
@@ -670,9 +670,12 @@ The ceiling is therefore the host's, not the document's. There is no `<Sandbox>`
 component and no document prop that grants an Agent write access; earlier
 revisions of this document declared readable roots, writable roots, environment,
 process, and network policy as markup, and that authority moved to where a
-document cannot widen it. What the document still declares is *access*:
-`<Agent.AddDir>` registers a read-only Workspace path with its enclosing Agent
-session, in document order, with no special first directory.
+document cannot widen it. The ceiling goes further than write access. A workflow
+Agent receives no Workspace checkout and no read-only materialization of one, no
+Workspace or host path as its working directory, no `additionalDirectories` over
+ACP, and no component that registers a directory with its session (#302). What
+it may reason over is what a prompt renders into it, and repository observation
+is the bounded XMD request/result loop #302 and #369 still owe.
 
 An Agent that cannot write proposes changes instead. It returns an XMD fragment,
 and a constrained evaluator parses the complete fragment before its first effect,
@@ -723,8 +726,9 @@ the host's Agent ceiling and the Workspace the document's file operations resolv
 inside.
 
 `<Repository>` and `<Worktree>` are built and registered by the workflow host
-(#293, shipped); `<Agent.AddDir>` (#302) and the durable Git and forge effects
-below them are not. `API.Files` and its host provider are: every document file operation
+(#293, shipped); the durable Git and forge effects that reach a remote, and the
+bounded observation loop an Agent would use, are not (#370, #295, #296, #369,
+#302). `API.Files` and its host provider are: every document file operation
 routes through that provider, which confines document paths to `Env.cwd` while the
 host namespace is stable. That claim is about traversal rather than about the
 filesystem being stable — a directory that is real when it is read could be
@@ -954,36 +958,44 @@ shipped behavior. They are recorded because the answers constrain what remains.
     reuses the run's retained definition and props rather than whatever the
     checkout holds now, and a document path locates a definition rather than
     selecting a previous run (#366).
+14. **How does `<Worktree>` identify itself, and how does the composition
+    replay?** Identity is the enclosing Repository's identity plus the
+    `<Worktree>`'s own explicit name — which is why the Repository comes from
+    lexical context rather than a prop, since a document able to name one could
+    name a Repository not in scope. A self-closing `<Worktree … as>` creates or
+    restores that named checkout and binds its Workspace-relative path without
+    establishing cwd; the lexical `<Dir path={…}>` beneath it establishes that
+    path as cwd and renders its descendants. Replay restores and verifies the
+    retained creation record rather than recreating a completed checkout effect,
+    missing or conflicting retained Git state fails explicitly instead of being
+    reset or merged, and cleanup is explicit — it never silently discards
+    retained work (#293, shipped).
 
 ### Open
 
 The exercise must resolve enough of these to implement one vertical slice:
 
-1. How does `<Worktree>` choose an idempotent identity, branch name, and cleanup
-   policy from the Repository base the run already pinned; what does a provider
-   without native worktree semantics present instead; and how does the lexical
-   `<Dir>` boundary that consumes a bound checkout path replay without recreating
-   a completed checkout effect (#293)?
-2. What does a read-only Agent receive, and how is the ceiling proven for each
-   provider before a Prompt runs (#302)?
-3. What is the public spelling and response schema of the constrained
+1. What bounded request/result loop lets an Agent observe the repository at all,
+   given that it receives no checkout, no materialization, no working directory
+   and no registered directory (#302, #369)?
+2. What is the public spelling and response schema of the constrained
    generated-XMD evaluator, and which components does the first allowlist admit
    (#369)?
-4. What state makes external effects safe to repeat or resume after
+3. What state makes external effects safe to repeat or resume after
    interruption, and how does a revision iteration reach the *same* pull request
    rather than a second one — expansion identity alone cannot answer it, so the
    effect's natural key has to, and a head that deliberately advanced on the same
    branch must be distinguishable from a conflicting one (#295, #297)?
-5. Which fetches does a review actually write? `<PullRequest>`'s creation result
+4. Which fetches does a review actually write? `<PullRequest>`'s creation result
    is deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer
    is handed the rest — but no stage composes those reads yet, and admitting
    `<Fetch>` inside generated XMD stays #369's.
-6. Which host mechanism closes the validate-then-use race for each supported
+5. Which host mechanism closes the validate-then-use race for each supported
    runtime, now that a run-owned Workspace resolves a document path without
    producing a host path at all (#227)?
-7. Which durable signals may schedule a resumption, and how is one arbitrated
+6. Which durable signals may schedule a resumption, and how is one arbitrated
    against an iteration's own completion and direct user input (#300)?
-9. What records who answered an elicitation? The journal retains the validated
+7. What records who answered an elicitation? The journal retains the validated
    decision and its question fingerprint but no actor identity, so a decision is
    attributable to a run and an expansion but not to a person. No issue owns it.
 

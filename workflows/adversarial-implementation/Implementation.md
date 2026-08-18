@@ -1,5 +1,5 @@
 ---
-required: [plan, authorization, instructions, planner, implementor, worktree]
+required: [plan, authorization, instructions, planner, implementor]
 
 props:
   plan: { type: string }
@@ -14,7 +14,6 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
-  worktree: { type: string }
 
 returns:
   report: { type: string }
@@ -58,10 +57,11 @@ returns:
 
 Implementation begins only after the user authorizes the converged plan.
 
-The implementor does not edit files. Under `xmd workflow` an Agent is read-only,
-enforced by the host rather than by anything this document writes, so the
-implementor inspects the checkout and returns an XMD fragment describing the
-change it proposes. A constrained evaluator preflights that fragment and expands
+The implementor does not edit files, and does not read them either. Under
+`xmd workflow` an Agent gets no checkout and no directory of any kind — the host
+enforces that, not anything this document writes (#302) — so the implementor
+works from the material rendered into its prompt and returns an XMD fragment
+describing the change it proposes. A constrained evaluator preflights that fragment and expands
 the components it admits, and those expansions are what write files — each one an
 ordinary durable effect with its own expansion identity, journal result, and
 Workspace transaction. Staging, committing, pushing, and opening the pull request
@@ -131,8 +131,6 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 <Agent name={props.implementor}>
   <Session name="implementor">
-    <Agent.AddDir path={props.worktree} />
-
     <Loop name="implementation" max={5}>
       <Prompt as="proposalCandidate" throwOnError>
         Repository instructions:
@@ -154,9 +152,9 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         {proposalSchema}
 
         Implement the authorized plan by returning Executable.md source that
-        performs it. You have read-only access to the registered checkout and
-        cannot modify anything directly; the `changes` field is the only way
-        your work takes effect.
+        performs it. You have no repository access and cannot modify anything
+        directly; the material above is what you may reason from, and the
+        `changes` field is the only way your work takes effect.
 
         `changes` may use only `<Dir>`, `<File>`, and `<DeleteFile>`. It may not
         contain eval or exec blocks, imports, or any other component. Report
@@ -213,8 +211,6 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
       <Agent name={props.planner}>
         <Session name="planner">
-          <Agent.AddDir path={props.worktree} />
-
           <Prompt as="verdictCandidate" throwOnError>
             Repository instructions:
 
@@ -249,10 +245,9 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
             {pullRequestVerdictSchema}
 
             Review the change at {pullRequest.headSha} against
-            {pullRequest.baseSha}, together with the authorized plan, the
-            instruction content above, and the registered checkout. You have no
-            network access: everything you may judge is either rendered here or
-            readable in the checkout.
+            {pullRequest.baseSha}, together with the authorized plan and the
+            instruction content above. You have neither repository nor network
+            access: everything you may judge is rendered here.
 
             A verdict is about one head. If the head moves, this verdict no
             longer describes the pull request and a fresh review is required.
@@ -424,12 +419,13 @@ that agent nothing. `<Expand>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, and
 `<PullRequest>` are XMD's own effects against the authoritative Workspace; the
 agent process never sees them and could not perform them.
 
-`<Agent.AddDir>` registers the checkout with each session that has to read it.
-The implementor's registration sits outside the loop so it happens once;
-the planner's sits inside, so it repeats per iteration. Re-registering a path a
-session already holds has to be idempotent for that to be safe — the ordered
-directory set must stay the same set — which is a requirement on #302 rather
-than something this document can guarantee.
+Neither session is given a directory. A workflow Agent gets no checkout, no
+materialization of one, no Workspace or host path as cwd, and nothing registered
+with its session (#302), so both agents here reason over what their prompts
+render: the instruction text, the authorized plan, the recorded authorization,
+the proposal source, and the pull request's identity. Evidence not rendered is
+evidence the stage does not have, and the bounded request/result loop that would
+let an agent ask for more belongs to #302 and #369.
 
 ## Every mutation is one effect, and pushing is separate
 
@@ -469,8 +465,8 @@ needs to distinguish the two.
 The planner has no network access, so whatever the prompt does not render is
 invisible to the review. What the prompt renders is the proposal source that
 performed the change, the implementor's report, and the pull request's identity —
-number, URL, state, head SHA, base SHA — together with the checkout the planner
-can read directly.
+number, URL, state, head SHA, base SHA — and nothing the planner could read for
+itself, because it can read nothing.
 
 `<PullRequest>`'s creation result is deliberately minimal (#295): stable provider
 identity, number, URL, state, head SHA and base SHA. Reviews, comments and check
@@ -491,8 +487,8 @@ exactly, because it is what makes the review adversarial rather than uninformed:
   than the planner's summary of them.
 
 This stage does not write those fetches yet, so today it reviews the change it
-just made against the plan and the checkout, and an objection raised by anyone
-other than the planner reaches neither surface. Admitting `<Fetch>` inside
+just made against the plan and the material rendered into the prompt, and an
+objection raised by anyone other than the planner reaches neither surface. Admitting `<Fetch>` inside
 Agent-generated XMD is a separate question and stays #369's.
 
 The verdict names one head. The prompt reviews the change at `headSha` against
@@ -578,7 +574,6 @@ revision turn, or acceptance.
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Agent.AddDir>` and the read-only ceiling | #302 | unbuilt |
 | `<Expand>` | #369 | unbuilt; public name open |
 | `<Git.Push>` | #370 | unbuilt |
 | `<PullRequest>` | #295 | unbuilt |
@@ -589,9 +584,8 @@ revision turn, or acceptance.
 
 The agent, parsing, capture, and control-flow syntax runs today, and so do the
 local Git effects: `<Git.Add>` and `<Git.Commit>` are built. The loop body above
-still does not expand, because five names in it resolve to nothing — the Agent
-ceiling, the constrained evaluator, and the three components that reach a remote
-or a forge. Until those land, the effects they stand for remain explicit
+still does not expand, because four names in it resolve to nothing — the
+constrained evaluator and the three components that reach a remote or a forge. Until those land, the effects they stand for remain explicit
 user-run steps between manual stages.
 
 Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,

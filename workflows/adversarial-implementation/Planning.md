@@ -1,5 +1,5 @@
 ---
-required: [handoff, handoffCheckpoint, instructions, planner, implementor, worktree]
+required: [handoff, handoffCheckpoint, instructions, planner, implementor]
 
 props:
   handoff: { type: string }
@@ -14,7 +14,6 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
-  worktree: { type: string }
 
 returns:
   plan: { type: string }
@@ -47,8 +46,9 @@ tests the handoff's theory; the planner tests the resulting plan. Evidence
 resolves factual disagreement, while the user resolves material choices.
 
 Both agents are read-only here, and that is not a restriction this stage has to
-impose: planning produces a plan, not a change. What the stage does have to do
-is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
+impose: planning produces a plan, not a change. Neither reads the repository
+either — a workflow Agent gets no checkout (#302) — so what the stage has to do
+is render the evidence each agent needs into its prompt.
 
 ## Target shape
 
@@ -70,8 +70,6 @@ is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
 
 <Agent name={props.implementor}>
   <Session name="implementor">
-    <Agent.AddDir path={props.worktree} />
-
     <Loop name="planning" max={5}>
       <Prompt as="plan" throwOnError>
         Repository instructions:
@@ -88,17 +86,17 @@ is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
         User response: {props.handoffCheckpoint.response}
         Rationale: {props.handoffCheckpoint.rationale}
 
-        Investigate the registered checkout. Confirm, refute, or amend the
-        implementation theory with evidence. You cannot modify anything, and
-        this stage produces no change. Return a concrete implementation plan
-        with the evidence, validation, effects, and pull-request boundaries
-        described by this workflow.
+        Work only from the material above: the repository instructions, the
+        handoff, and the recorded user decision. You have no repository access
+        and cannot modify anything, and this stage produces no change. Confirm,
+        refute, or amend the implementation theory against that material, and
+        say plainly what you cannot determine from it. Return a concrete
+        implementation plan with the evidence, validation, effects, and
+        pull-request boundaries described by this workflow.
       </Prompt>
 
       <Agent name={props.planner}>
         <Session name="planner">
-          <Agent.AddDir path={props.worktree} />
-
           <Prompt as="verdictCandidate" throwOnError>
             Repository instructions:
 
@@ -122,9 +120,11 @@ is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
 
             {verdictSchema}
 
-            Review the plan against the handoff, recorded user response, and
-            repository evidence. Include a focused revision prompt on failure.
-            Return only JSON matching the supplied result contract.
+            Review the plan against the handoff, the recorded user response,
+            and the instruction content above. You have no repository access:
+            everything you may judge is rendered here. Include a focused
+            revision prompt on failure. Return only JSON matching the supplied
+            result contract.
           </Prompt>
 
           <Loop max={2}>
@@ -223,22 +223,25 @@ is give each agent the checkout to reason about, which is `<Agent.AddDir>`.
   decision: planCheckpoint
 }} />
 
-## Two agents, two sessions, one checkout
+## Two agents, two sessions, no checkout
 
 The implementor's `<Agent>` and `<Session>` wrap the whole loop, so the plan
 prompt and the revision prompt reach the same conversation without repeating
 `agent` and `session` props on each one. The planner's `<Agent>` nests inside
-for the review and gives that session its own registration; leaving it restores
-the implementor's for the revision turn.
+for the review; leaving it restores the implementor's for the revision turn.
 
-`<Agent.AddDir>` registers a read-only Workspace path with its enclosing Agent
-session (#302). Registration is what grants an agent access — the lexical cwd the
-enclosing `<Worktree>` established governs where XMD's own file operations
-resolve and registers nothing. Both agents read the same checkout because both
-are reasoning about the same revision, and neither can write to it under
-`xmd workflow`. `<Agent.AddDir>` does not exist yet, and its exact placement
-relative to `<Session>` is #302's to settle; everything else in this body runs
-today.
+Neither agent reads the repository. A workflow Agent gets no checkout, no
+materialization of one, no Workspace or host path as its working directory, and
+no directory registered with its session (#302). Both reason about the same
+revision because both are handed the same values — the instruction text, the
+handoff, the plan, the recorded user decision — rendered into their prompts.
+
+`instructions` shows what that costs and what it buys: host-authored XMD file
+effects produced the exact repository-relative paths and contents, and the
+captured result travels as a prop into both prompts below. Evidence the stage
+does not receive as a value is evidence it does not have, and the bounded
+request/result loop that would let an agent ask for more is #302 and #369's,
+unbuilt. Everything else in this body runs today.
 
 ## The stage returns its control state
 

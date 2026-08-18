@@ -236,8 +236,8 @@ repository `Prompt.md` or `Agent.ts` outranks them:
     selects the planner and implementor from validated root props rather than
     literals. Each prompt is one durable operation whose record carries its
     identity, input, agent and session, terminal status, text, and structured
-    failure. `<Agent.AddDir>` is *not* among them; it belongs to the workflow
-    Agent boundary below.
+    failure. None of them hands an Agent a directory; the workflow Agent
+    boundary below is why there is none to hand.
 
 **Props are namespaced.** A declared prop is read as `props.name` in text, in
 executable-block content, in eval blocks, and in expression props alike:
@@ -245,7 +245,8 @@ executable-block content, in eval blocks, and in expression props alike:
 declaring `planner` creates no bare `{planner}` binding
 ([#305](https://github.com/taras/executable.md/issues/305), shipped). Authored
 bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` — stay bare,
-which is why `worktree={worktree}` passes a bound path down.
+which is why `<Dir path={worktree}>` reads the path a self-closing `<Worktree>`
+bound.
 
 **Content projects at any depth.** `<Content />` is substituted wherever a
 component body writes it, including nested inside another invocation such as a
@@ -256,20 +257,17 @@ schema validates them; projection is available where a caller genuinely writes
 prose into a component.
 
 The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
-`UserCheckpoint` therefore uses shipped syntax throughout, except for the
-`<Agent.AddDir>` registration `Discovery` and `Planning` need to give their
-agents the checkout. `UserCheckpoint` registers nothing, because it assesses
-supplied material rather than a repository. `Implementation` has no such
-exemption: its loop body invokes `<Expand>`, `<Git.Push>`, `<PullRequest>`, and
+`UserCheckpoint` therefore uses shipped syntax throughout. None of them asks for
+a directory: a workflow Agent is given none, so each stage reasons over what its
+prompt renders. `Implementation` is the exception, and not for that reason: its loop body invokes `<Expand>`, `<Git.Push>`, `<PullRequest>`, and
 `<Issue>`, which resolve to nothing. The `<Git.Add>` and `<Git.Commit>` beside
 them do resolve — under a workflow run, where the host registers them.
 
-Five names in this workflow resolve to nothing today, and each is owed by one
+Four names in this workflow resolve to nothing today, and each is owed by one
 issue:
 
 | Name | Owed by |
 | --- | --- |
-| `<Agent.AddDir>` | #302 |
 | `<Expand>` | #369 |
 | `<Git.Push>` | #370 |
 | `<Issue>` | #296 |
@@ -277,9 +275,12 @@ issue:
 
 `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left that list when
 #294 shipped them as Workspace-local durable effects, and #297 shipped the
-shared Git-host reconciliation the remote effects are built over. What still
-resolves to nothing is what reaches a remote or a forge, plus the Agent ceiling
-and the constrained evaluator.
+shared Git-host reconciliation the remote effects are built over.
+`<Agent.AddDir>` is absent for a different reason: #302 settles that a workflow
+Agent gets no checkout, no materialization, no cwd of its own and no registered
+directory, so it is not an implementation target this workflow is waiting on.
+What still resolves to nothing is what reaches a remote or a forge, plus the
+constrained evaluator.
 
 `<Repository>`, `<Worktree>` and `<Dir>` have left that list:
 `@executablemd/workflow/composition` registers all three (#293, shipped), which
@@ -300,8 +301,9 @@ checkout and binds its Workspace-relative path without establishing cwd for what
 follows, and a lexical `<Dir path={worktree}>` beneath it makes that bound path
 cwd for the stage flow, renders its children normally, and restores the enclosing
 `<Repository>` cwd on the way out. Both sit inside the lexical `<Repository>`, so
-its context is present throughout. `<Dir>` registers nothing with an Agent —
-`<Agent.AddDir>` remains the explicit authorization, and cwd never implies it.
+its context is present throughout. `<Dir>` tells an Agent nothing: it establishes
+cwd for XMD's own file effects, and a workflow Agent has no directory of any kind
+(#302).
 
 Everything else the workflow writes resolves: `<If>`, `<Else>`, `<Loop>`,
 `<Break>`, `<Each>`, `<Capture>`, `<Output>` and `<Return>` as structural syntax;
@@ -399,7 +401,7 @@ head rather than performing a hidden push.
 | Capability | Issue | Status |
 | --- | --- | --- |
 | provider-correct filesystem containment | #227 | open — `API.Files`, the host provider and the run's transaction-bound provider are built; the host validate-then-use race is what remains |
-| mandatory read-only workflow Agents and `<Agent.AddDir>` | #302 | open |
+| the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory | #302 | open |
 | `<Expand>`: preflight and expand constrained Agent-generated XMD | #369 | open; public component name undecided |
 | transactional Worker Shell | #363 | open; containment and transaction POCs complete |
 

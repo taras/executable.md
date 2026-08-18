@@ -7,12 +7,11 @@ and document-supplied answers in one process and one working directory. Nothing
 here needs WorkflowRun persistence, a Repository or Worktree, Git, a forge, or a
 Worker Shell.
 
-One thing has to be supplied for `Discovery` and `Planning` to run at all:
-`<Agent.AddDir>` is #302's and does not exist. `Agent/AddDir.md` beside this
-document is a no-op stub, and it resolves only for documents in *this*
-directory — registration and repository resolution are both scope-local, so the
-name still resolves to nothing everywhere the workflow's own inventory says it
-does.
+Nothing has to be stubbed for the stages to run. A workflow Agent receives no
+checkout, no materialization of one, no working directory and no registered
+directory (#302), so no stage reaches for one — each reasons over what its
+prompt renders. `InstructionFiles` is what makes that concrete below: the exact
+repository-relative paths and contents reach the prompts as captured data.
 
 ## Instruction files reach the prompt exactly
 
@@ -40,7 +39,6 @@ it fails rather than matching.
     instructions={instructions}
     planner="test"
     request="Add a health endpoint"
-    worktree="."
     as="handoff"
   />
 </TestAgent>
@@ -77,7 +75,6 @@ on the next iteration — reports `scenario exhausted` instead of passing.
     instructions={instructions}
     planner="planner"
     implementor="implementor"
-    worktree="."
     as="planning"
   />
 </TestAgent>
@@ -118,7 +115,6 @@ The checkpoint scenario constrains the material it was handed, which is where
     instructions={instructions}
     planner="planner"
     implementor="implementor"
-    worktree="."
     as="planning"
   />
 </TestAgent>
@@ -152,7 +148,6 @@ the parse failure is what proves the loop stopped where it should.
       instructions="INSTRUCTIONS"
       planner="planner"
       implementor="implementor"
-      worktree="."
       as="planning"
     />
   </AssertThrows>
