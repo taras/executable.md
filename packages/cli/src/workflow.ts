@@ -13,12 +13,18 @@
  * ```sh
  * xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
  * xmd workflow resume <run-id>
+ * xmd workflow answer [--no-secret-detection] <run-id> <suspension-id> <json>
  * xmd workflow status <run-id> [--json]
  * xmd workflow list [--status=<status>] [--json]
  * xmd workflow history <run-id> [--json]
  * xmd workflow cancel <run-id>
  * xmd workflow delete <run-id>
  * ```
+ *
+ * `answer` is delivery rather than execution: it retains one typed value for the
+ * wait a suspended run stopped at, and starts nothing. The run continues when
+ * somebody resumes it, which is the operation that publishes the answer and
+ * gives it to the document.
  *
  * `start` names a document; every other action names a run. That asymmetry is
  * the whole lifecycle rule: a document path locates a definition and never
@@ -100,6 +106,14 @@ export interface WorkflowHost {
    */
   useLifecycle(): Operation<void>;
   /**
+   * Install this host's typed answer delivery for the current scope.
+   *
+   * Separate from lifecycle because delivery is neither reading a run nor
+   * moving it: it retains one value for a wait, takes no executor lock, and a
+   * host that can read runs is not thereby a host that may write into them.
+   */
+  useDelivery(): Operation<void>;
+  /**
    * Attach one run's Workspace around a live or partial document execution.
    *
    * A completed run does not take this path: its root result is already
@@ -148,6 +162,7 @@ const HOST_ORPHANED_CODE = "executor-disappeared";
 export const WORKFLOW_ACTIONS = [
   "start",
   "resume",
+  "answer",
   "status",
   "list",
   "history",
@@ -155,8 +170,8 @@ export const WORKFLOW_ACTIONS = [
   "delete",
 ];
 
-/** The actions that read or control a run rather than executing one. */
-const MANAGEMENT_ACTIONS = ["status", "list", "history", "cancel", "delete"];
+/** The actions that read, answer or control a run rather than executing one. */
+const MANAGEMENT_ACTIONS = ["answer", "status", "list", "history", "cancel", "delete"];
 
 /** The options that belong to executing a run. */
 const EXECUTION_OPTIONS = [
@@ -171,6 +186,10 @@ const EXECUTION_OPTIONS = [
 const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.freeze({
   start: [...EXECUTION_OPTIONS, "--id"],
   resume: EXECUTION_OPTIONS,
+  // A delivery writes retained state, so it crosses the same gate a durable
+  // event crosses. It runs no document, so nothing else about executing one
+  // applies to it.
+  answer: ["--secret-detection", "--no-secret-detection"],
   status: ["--json"],
   history: ["--json"],
   list: ["--json", "--status"],
@@ -185,6 +204,14 @@ export const workflowConfig = object({
   },
   target: {
     description: "markdown definition to start, or the run id every other action addresses",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  suspension: {
+    description: "the wait an answer is delivered to (answer only)",
+    ...field(z.string().optional(), cli.argument()),
+  },
+  answer: {
+    description: "the answer itself, as one JSON value (answer only)",
     ...field(z.string().optional(), cli.argument()),
   },
   id: {
@@ -242,7 +269,14 @@ export type WorkflowManagementRequest =
       readonly status: WorkflowRunStatus | undefined;
       readonly json: boolean;
     }
-  | { readonly action: "cancel" | "delete"; readonly runId: string };
+  | { readonly action: "cancel" | "delete"; readonly runId: string }
+  | {
+      readonly action: "answer";
+      readonly runId: string;
+      readonly suspensionId: string;
+      readonly value: Json;
+      readonly secretDetection: boolean;
+    };
 
 /** One `xmd workflow` invocation, once its action has decided what it is. */
 export type WorkflowCommand =
@@ -340,6 +374,8 @@ export function parseWorkflowRequest(
   config: {
     action?: string;
     target?: string;
+    suspension?: string;
+    answer?: string;
     id?: string;
     verbose: boolean;
     raw: boolean;
@@ -408,7 +444,15 @@ export function parseWorkflowRequest(
 
 function manageRequest(
   action: string,
-  config: { target?: string; id?: string; json: boolean; status?: string },
+  config: {
+    target?: string;
+    suspension?: string;
+    answer?: string;
+    id?: string;
+    json: boolean;
+    status?: string;
+    secretDetection: boolean;
+  },
 ): Result<WorkflowCommand> {
   if (config.id !== undefined) {
     return Err(
@@ -459,6 +503,9 @@ function manageRequest(
   // ask about. Deletion's rule is that it expands nothing, not that it refuses
   // the character: `delete release-*` addresses the run called `release-*` and
   // never a set of runs.
+  if (action === "answer") {
+    return answerRequest(runId, config);
+  }
   if (action === "cancel" || action === "delete") {
     return Ok({ kind: "manage", request: { action, runId } });
   }
@@ -468,6 +515,62 @@ function manageRequest(
   // Reached only if `WORKFLOW_ACTIONS` names an action this function does not,
   // which is a disagreement inside the grammar rather than a caller's mistake.
   return Err(new Error(`xmd workflow ${action} has no request to make`));
+}
+
+/**
+ * One delivery, once its three arguments have been read.
+ *
+ * The value is parsed here rather than carried as text, because a JSON document
+ * that does not parse is this invocation's mistake and belongs beside the other
+ * grammar refusals — not inside a provider that has already opened a run.
+ */
+function answerRequest(
+  runId: string,
+  config: { suspension?: string; answer?: string; secretDetection: boolean },
+): Result<WorkflowCommand> {
+  const suspensionId = config.suspension;
+  if (suspensionId === undefined || suspensionId === "") {
+    return Err(
+      new Error(
+        "xmd workflow answer names the wait it answers — " +
+          "`xmd workflow answer <run-id> <suspension-id> <json>`. " +
+          "`xmd workflow status <run-id>` reports the request event the run stopped on.",
+      ),
+    );
+  }
+  const written = config.answer;
+  if (written === undefined || written === "") {
+    return Err(
+      new Error(
+        "xmd workflow answer requires the answer itself, as one JSON value — " +
+          "`xmd workflow answer <run-id> <suspension-id> <json>`",
+      ),
+    );
+  }
+
+  let value: Json;
+  try {
+    value = JSON.parse(written);
+  } catch (error) {
+    return Err(
+      new Error(
+        `the answer for xmd workflow answer is not JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }. Quote it so the shell passes it as one argument.`,
+      ),
+    );
+  }
+
+  return Ok({
+    kind: "manage",
+    request: {
+      action: "answer",
+      runId,
+      suspensionId,
+      value,
+      secretDetection: config.secretDetection,
+    },
+  });
 }
 
 /**

@@ -65,6 +65,7 @@ import {
 } from "./connections.ts";
 import { workflowRunPath } from "./path.ts";
 import { INSERT_RUN } from "./transitions.ts";
+import { useHostConnections } from "./host-connections.ts";
 import { useJournalRouting } from "./journal-route.ts";
 import { readTransaction } from "./reading.ts";
 import { initializeSchema, isUninitialized, translateSqliteError, verifySchema } from "./schema.ts";
@@ -124,6 +125,7 @@ export function* installWorkflowRunStorage(
   connections: WorkflowRunConnections,
 ): Operation<void> {
   const root = authorizedRoot(options.root);
+  yield* useHostConnections(connections);
   yield* useJournalRouting(connections);
   yield* usePrivateWorkspace(connections, internal);
   yield* useWorkspaceEffects(connections);

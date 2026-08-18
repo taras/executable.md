@@ -52,6 +52,8 @@ export { denoRepositoryHost } from "./src/deno/composition/host.ts";
 export type { GitInvocation, GitOutcome, RepositoryHost } from "./src/deno/composition/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
 export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";
+export { useWorkflowInputDelivery } from "./src/deno/delivery.ts";
+export type { WorkflowInputDeliveryOptions } from "./src/deno/delivery.ts";
 export { createSuspensionController } from "./src/deno/suspension.ts";
 export type {
   SuspensionController,

@@ -1,10 +1,17 @@
 /**
- * `xmd workflow status`, `list` and `history` — reading a run without running it.
+ * `xmd workflow status`, `list`, `history`, `cancel`, `delete` and `answer` —
+ * everything a run's caller does without running it.
  *
- * These commands answer from immutable lifecycle snapshots. Nothing here opens
- * a writable database, acquires the executor lock, replays, attaches a Workspace,
+ * The readings answer from immutable lifecycle snapshots. Nothing there opens a
+ * writable database, acquires the executor lock, replays, attaches a Workspace,
  * materializes a root, imports a document or contacts a provider: what a
  * reading command may do is read.
+ *
+ * `answer` writes, and writes exactly one thing: the value a suspended run's
+ * wait is to continue from. It takes no executor lock either, so a run that is
+ * about to be resumed can still be answered — and it starts nothing, so its
+ * success line reports the delivery rather than a status the run did not
+ * change.
  *
  * ## Two projections of one answer
  *
@@ -25,7 +32,7 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { WorkflowLifecycle } from "@executablemd/workflow";
+import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
   WorkflowHistoryEntry,
   WorkflowLifecycleSnapshot,
@@ -45,6 +52,23 @@ export function runWorkflowManagement(
   host: WorkflowHost,
 ): Operation<WorkflowOutcome> {
   return scoped(function* () {
+    if (request.action === "answer") {
+      yield* host.useDelivery();
+      const delivered = yield* WorkflowInputDelivery.operations.deliver({
+        runId: request.runId,
+        suspensionId: request.suspensionId,
+        value: request.value,
+        secretDetection: request.secretDetection,
+      });
+      if (!delivered.ok) {
+        return refuse(delivered.error);
+      }
+      // The delivery, and nothing about the run. Its status is unchanged, no
+      // execution began, and nothing here claims otherwise.
+      write(`workflow answer: ${delivered.value.runId} (${delivered.value.suspensionId})`);
+      return { exitCode: 0 };
+    }
+
     yield* host.useLifecycle();
 
     switch (request.action) {

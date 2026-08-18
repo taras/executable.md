@@ -741,15 +741,34 @@ replayed effect. At the same suspension ID, absent input reports the same
 notice, halts again and adds no second request event. The new document-execution
 record may settle `suspended`; the request remains singular.
 
-Issue #300 owns input delivery and scheduling. Its boundary is the suspension
-ID and retained response schema. A host may offer one value for that exact ID
-only after validating it against the retained schema. On a resumed execution,
-only authenticated retained answer state may let `suspendFor()` publish a
-separate ordinary durable answer Yield and return its value; a contextual
-handler's return value is never answer authority. Delivery remains pending until
-answer publication commits, so a crash cannot consume input without retaining
-the answer; duplicates, mismatched IDs and late delivery are refused. None of
-that transport or scheduling behavior is part of #367.
+### Typed answer delivery
+
+Issue #300 builds typed answer delivery. Its boundary is the suspension ID and
+the retained response schema. Delivery is an operation separate from execution:
+`xmd workflow answer <run-id> <suspension-id> <json>` retains one value for that
+exact wait and takes no executor lock, fetches no definition, attaches no
+Workspace, inserts no document-execution record, appends no journal event and
+changes no run status. A host offers a value only after the run is `suspended`,
+its stop reason names a retained `suspension_request` event carrying that ID,
+and the value satisfies the schema that request retained. The retained state and
+the answer event it would become cross the same secret gate durable journal
+persistence uses; `--no-secret-detection` disables that gate for one delivery.
+Every refusal — duplicate, consumed, wrong run, wrong request, late, invalid,
+cancelled-run and deleted-run — leaves the database unchanged, and neither the
+rejected value nor a secret match appears in a diagnostic.
+
+On a resumed execution, only authenticated retained answer state lets
+`suspendFor()` publish a separate ordinary durable `suspension_answer` Yield and
+return its value; a contextual handler's return value is never answer authority.
+Consuming the retained answer and appending that Yield are one database
+transaction, so a crash before it commits leaves the answer pending and a
+transaction that does not commit publishes nothing. Replay after that
+transaction commits restores the recorded answer event without reaching the live
+controller and without consuming or publishing again.
+
+Scheduling — automatic resume, watchers, unattended iteration and remote host
+selection — remains blocked on #301's supervised-workflow contract and is not
+part of this behavior.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -758,9 +777,10 @@ answer delivery remains with #300.
 Issue #367 changes no durable schema shape. Single-executor enforcement uses only the
 provider-owned advisory-lock sidecar, suspension uses existing filtered journal
 and run-state records, and history reads the existing event-to-root association.
-Complete schema version 1 therefore remains one exact shape. Any later durable
-input-delivery record for #300 requires its own schema-version decision and
-strict recognition amendment.
+Issue #300's retained answer state does add a durable record, and it amends
+complete schema version 1 in place on the same terms as every other amendment:
+one `workflow_suspension_answers` table, no version 2, no migration, and strict
+recognition refusing every earlier shape as an incomplete pre-release.
 
 Issue #293 amended that exact shape in place rather than introducing a second
 version. This pre-release carries no persistence compatibility obligation, so
@@ -2116,7 +2136,10 @@ Status is measured against main.
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
-| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | built on the #367 stack; typed answer delivery and scheduling belong to #300 |
+| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | built on the #367 stack |
+| `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
+| `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
+| workflow scheduling (watchers, unattended iteration, remote host selection) | — | blocked on #301 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 

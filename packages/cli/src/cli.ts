@@ -1006,7 +1006,7 @@ interface PropsPhase {
    * positional written after `--` is not in it, and asking the parser again
    * would lose exactly the token the separator was there to protect.
    */
-  workflow?: { action?: string; target?: string };
+  workflow?: { action?: string; target?: string; suspension?: string; answer?: string };
   root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
@@ -1168,10 +1168,15 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
 function* prepareWorkflowProps(
   rawArgs: string[],
   args: string[],
-  config: { action?: string; target?: string },
+  config: { action?: string; target?: string; suspension?: string; answer?: string },
   inlineDocument: string | undefined,
 ): Operation<PropsPhase> {
-  const workflow = { action: config.action, target: config.target };
+  const workflow = {
+    action: config.action,
+    target: config.target,
+    suspension: config.suspension,
+    answer: config.answer,
+  };
   if (inlineDocument !== undefined) {
     return {
       args: rawArgs,
@@ -1184,15 +1189,15 @@ function* prepareWorkflowProps(
   // Read before anything is stripped: `--` ends option parsing, so a token
   // after it is positional however it is spelled, and the count has to be taken
   // while the separator is still there to say where options stopped.
-  const extra = extraWorkflowArgument(rawArgs);
+  const extra = extraWorkflowArgument(rawArgs, config.action);
   if (extra !== undefined) {
     return {
       args: rawArgs,
       bindings: [],
       workflow,
       error:
-        `unrecognized argument for xmd workflow: ${extra} — start names one definition and ` +
-        "resume names one run",
+        `unrecognized argument for xmd workflow: ${extra} — start names one definition, ` +
+        "resume names one run, and answer names a run, a wait and one JSON value",
     };
   }
 
@@ -1268,11 +1273,15 @@ function namesWorkflow(args: string[]): boolean {
  * separated value, and `--` ends option parsing: every token after it is
  * positional, including one that begins with `-`.
  */
-function extraWorkflowArgument(args: string[]): string | undefined {
+function extraWorkflowArgument(args: string[], action?: string): string | undefined {
   const start = args.indexOf("workflow");
   if (start === -1) {
     return undefined;
   }
+  // The action is itself the first positional. Every action but `answer` takes
+  // one more; `answer` takes three, because a delivery names the run, the wait
+  // inside it and the value in that order.
+  const allowed = action === "answer" ? 4 : 2;
   let positionals = 0;
   let skip = false;
   let parsingOptions = true;
@@ -1294,7 +1303,7 @@ function extraWorkflowArgument(args: string[]): string | undefined {
       continue;
     }
     positionals += 1;
-    if (positionals > 2) {
+    if (positionals > allowed) {
       return arg;
     }
   }
@@ -1331,12 +1340,14 @@ function separateArgs(args: string[]): SeparatedArgs {
  * separator it is positional because of where it is.
  */
 function workflowPositionals(
-  config: { action?: string; target?: string },
+  config: { action?: string; target?: string; suspension?: string; answer?: string },
   tail: string[],
-): { action?: string; target?: string } {
-  const named = [config.action, config.target].filter((value) => value !== undefined);
-  const [action, target] = [...named, ...tail];
-  return { action, target };
+): { action?: string; target?: string; suspension?: string; answer?: string } {
+  const named = [config.action, config.target, config.suspension, config.answer].filter(
+    (value) => value !== undefined,
+  );
+  const [action, target, suspension, answer] = [...named, ...tail];
+  return { action, target, suspension, answer };
 }
 
 const COMMAND_NAMES = ["run", "test", "test-agent", "workflow"];

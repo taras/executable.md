@@ -21,7 +21,11 @@ import { mkdtemp } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
+import {
+  useWorkflowInputDelivery,
+  useWorkflowLifecycle,
+  useWorkflowRunHost,
+} from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, WorkflowLifecycle, WorkflowRunStorage } from "@executablemd/workflow";
 import type { WorkflowRunDatabase, WorkflowRunStatus } from "@executablemd/workflow";
@@ -115,6 +119,9 @@ function recordingHost(root: string, attached: string[]): WorkflowHost {
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });
     },
+    useDelivery(): Operation<void> {
+      return useWorkflowInputDelivery({ root });
+    },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       attached.push(database.record.runId);
       return operation;
@@ -147,6 +154,7 @@ function refusingHost(root: string, refuse: "settle" | "none", attempted: string
       };
     },
     useLifecycle: host.useLifecycle,
+    useDelivery: host.useDelivery,
     attach: host.attach,
   };
 }

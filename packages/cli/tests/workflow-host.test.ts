@@ -88,6 +88,32 @@ describe("Tier WFH — workflow host boundary", () => {
     });
   });
 
+  it("WFH4: an unsupported host refuses a delivery, and retains nothing", function* () {
+    yield* useFixture(function* (fixture) {
+      const result = yield* runCli(
+        ["workflow", "answer", "any-run", "any-wait", '{"approved":true}'],
+        {
+          cwd: fixture.dir,
+          env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+        },
+      ).join();
+
+      expect(result.code).toBe(1);
+      if (cliRuntime() === "deno") {
+        // The Deno entrypoint has the capability, so what refuses here is the
+        // run this delivery named rather than the host.
+        expect(result.stderr).toContain("any-run");
+        expect(result.stderr).not.toContain(UNSUPPORTED);
+        return;
+      }
+      expect(result.stderr).toContain(UNSUPPORTED);
+      // Refused before the store is created, so nothing was retained and no
+      // delivery line was written.
+      expect(result.stdout).not.toContain("workflow answer:");
+      expect(yield* exists(fixture.runs)).toBe(false);
+    });
+  });
+
   it("WFH3: an unsupported host refuses a resume too, and reads no store", function* () {
     yield* useFixture(function* (fixture) {
       const result = yield* runCli(["workflow", "resume", "any-run"], {
