@@ -10,7 +10,7 @@ real ACPX runtime and a real `xmd test-agent` worker.
     src="./agents/review.md"
   />
 
-  <Test name="reviews a change">
+  <Test name="reviews a change" timeout="120s">
     <Agent name="test">
       <Session name="review">
         <Prompt text="Review packages/core at revision abc123" as="firstReply" />

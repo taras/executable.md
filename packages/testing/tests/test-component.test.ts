@@ -278,6 +278,68 @@ describe("<Test> as a function component", () => {
     expect(run.output).toContain("timed out");
   });
 
+  // `timeout=` is the test's own bound: a body the installed default would cut
+  // short finishes inside the duration the element declares (§5.3).
+  it("lets a declared timeout outlive a shorter installed default", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="patient" timeout="5s">',
+      "```js eval",
+      "yield* sleep(150);",
+      "```",
+      "<Assert expr={true} />",
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc(
+      { "README.md": doc },
+      { handlers: createTestHandlers({ timeoutMs: 60 }) },
+    );
+
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  // The declared bound also cuts, and the diagnostic names the duration the
+  // element declared rather than the default it replaced.
+  it("times out at a declared timeout below the default", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="hasty" timeout="60ms">',
+      "```js persist eval",
+      "yield* suspend();",
+      "```",
+      "</Test>",
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({ "README.md": doc });
+
+    expect(run.results[0]?.error?.kind).toBe("timeout");
+    expect(run.results[0]?.error?.message).toContain("0.06 seconds");
+  });
+
+  // A malformed duration is refused where it was written, and where it was
+  // written is one test — the ones after it still run.
+  it("fails only the declaring test on a malformed timeout", function* () {
+    const doc = [
+      "<Testing>",
+      '<Test name="broken" timeout="soon">inside</Test>',
+      '<Test name="after"><Assert expr={true} /></Test>',
+      "</Testing>",
+      "",
+    ].join("\n");
+
+    const run = yield* runDoc({ "README.md": doc });
+
+    expect(run.results).toHaveLength(2);
+    expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.message).toContain("<Test timeout> must be a duration");
+    expect(run.results[1]?.status).toBe("pass");
+  });
+
   // A teardown-failed test had already returned, so the engine replaces its
   // output with the boundary's diagnostic — no body text survives (§5.4).
   it("renders only the boundary diagnostic when teardown fails", function* () {

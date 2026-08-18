@@ -25,7 +25,7 @@ import type { Json } from "../types.ts";
 
 export const props = {
   type: "object",
-  properties: { name: { type: "string" } },
+  properties: { name: { type: "string" }, timeout: { type: "string" } },
   additionalProperties: false,
 };
 

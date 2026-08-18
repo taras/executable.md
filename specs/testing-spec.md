@@ -154,6 +154,10 @@ The `name` prop is optional metadata. An unnamed test is identified by its
 source location; headings in the body remain ordinary output and are not
 inferred as names.
 
+The `timeout` prop is optional and declares this test's own timeout as a
+duration (`500ms`, `30s`, `5min`), replacing the 20-second default. A malformed
+duration is refused where it was written and fails only that test.
+
 ### Checked command failures inside a test
 
 A foreground command that exits nonzero is a checked failure, and outside a test
@@ -187,8 +191,9 @@ binding environment. It inherits ambient context and bindings, but its context
 changes, bindings, and ongoing effects do not escape. Its scope is fully torn
 down before the next test starts.
 
-Each test has a fixed 20-second timeout. A timed-out test is halted, reported as
-failed, and fully torn down before execution continues.
+Each test has a 20-second timeout by default; a `timeout=<duration>` prop on the
+`<Test>` element declares that one test's own. A timed-out test is halted,
+reported as failed, and fully torn down before execution continues.
 
 An assertion failure, unexpected error, or teardown error fails only the current
 test. Later tests still run. Unexpected errors remain distinct from assertion

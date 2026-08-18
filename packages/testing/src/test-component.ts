@@ -31,6 +31,7 @@ import {
   evalScope,
   hasContent,
   getExpansion,
+  parseDuration,
   raise,
   tryContent,
 } from "@executablemd/core";
@@ -243,7 +244,8 @@ export function failureReport(result: TestResult, options: { detail: boolean }):
 }
 
 /**
- * What core's `<Test>` does, for a given per-test timeout.
+ * What core's `<Test>` does, for a given default test timeout — the bound a
+ * test that declares no `timeout=` of its own runs under.
  *
  * This is the behavior half of the construct: core decides which element is a
  * test and what an invocation of one means for the run, and this decides what
@@ -269,6 +271,13 @@ export function testBehavior(timeoutMs: number) {
     }
 
     const name = typeof props.name === "string" ? props.name : undefined;
+    // A declared `timeout=` is this test's own bound; the installed default
+    // covers the rest. Parsed before the body starts, so a malformed duration
+    // is refused where it was written and fails only this test.
+    const timeout =
+      typeof props.timeout === "string"
+        ? parseDuration(props.timeout, "<Test timeout>")
+        : timeoutMs;
     const expansion = yield* getExpansion();
     const location = formatLocation(expansion);
     const parentEnv = yield* env;
@@ -309,7 +318,7 @@ export function testBehavior(timeoutMs: number) {
     let timedOut = false;
 
     if (yield* hasContent()) {
-      const boxed = yield* timebox(timeoutMs, function* () {
+      const boxed = yield* timebox(timeout, function* () {
         // Partial output plus the failure that ended it: what the body rendered
         // before it failed is part of what the test reports.
         return yield* tryContent();
@@ -322,7 +331,7 @@ export function testBehavior(timeoutMs: number) {
       }
     }
 
-    const result = classify(name, location, bodyError, timedOut, timeoutMs);
+    const result = classify(name, location, bodyError, timedOut, timeout);
     yield* stageResult(location, result, expansion.position);
 
     if (result.status === "fail") {
