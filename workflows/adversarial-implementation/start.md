@@ -357,9 +357,14 @@ suspends a run durably and gives its executor lock back (#367), and a typed
 answer can be delivered to it (#300, non-executing).
 
 What is missing is the join. No v1 Markdown element spells `suspendFor()`, this
-document calls nothing that suspends, and no scheduler resumes a run — so a
-question asked today is answered inside the document execution that asked it,
-and reaching that substrate belongs to #301's supervised composition. Gating is expressed by nesting, which
+document calls nothing that suspends, and no scheduler resumes a run. A
+checkpoint asked today is an ordinary `<Elicit>`: the workflow host installs the
+same WebForm provider `xmd run` does, so an unanswered question opens a loopback
+form and blocks the run, which stays `running` rather than settling `suspended`
+and never gives its executor lock back. An authored `<Answers>` region answers it
+instead. Reaching the suspension substrate belongs to #301's supervised
+composition, which must consume `suspendFor()` without inventing a v1 Markdown
+spelling for it. Gating is expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
 execution: it still reaches the final-gate report inside the root's `<Output>`
 and completes.
