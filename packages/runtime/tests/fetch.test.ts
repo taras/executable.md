@@ -21,6 +21,7 @@ import { when } from "@effectionx/converge";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { API, fetch } from "../apis.ts";
+import type { RuntimeFetchResponse } from "../apis.ts";
 import { Config } from "../config.ts";
 
 interface Loopback {
@@ -297,10 +298,32 @@ describe("Tier FR — the chainable calling shape", () => {
     const failure = yield* thrown(function* () {
       yield* fetch(`${server.origin}/missing`).expect();
     });
-    expect(failure?.message).toContain("responded with status 404");
+    // The transport's own refusal, which is what authored code already caught.
+    expect(failure?.name).toBe("HttpError");
+    expect(failure?.message).toContain("404");
 
     const response = yield* fetch(`${server.origin}/present`).expect();
     expect(yield* response.text()).toBe("body");
+  });
+
+  it("FR10b: expect() travels as part of the request, where middleware sees it", function* () {
+    const asked: Array<boolean | undefined> = [];
+    yield* API.Fetch.around({
+      *fetch([url, init], next): Operation<RuntimeFetchResponse> {
+        asked.push(init?.expect);
+        return yield* next(url, init);
+      },
+    });
+
+    const server = yield* useLoopback(respond([], "body"));
+    yield* fetch(`${server.origin}/plain`);
+    yield* fetch(`${server.origin}/checked`).expect();
+    yield* fetch(`${server.origin}/checked`).expect().text();
+
+    // A provider that authenticates, routes or refuses a request is entitled to
+    // know the caller treats a non-2xx as a failure; checking the status after
+    // the operation returned would hide it from every handler.
+    expect(asked).toEqual([undefined, true, true]);
   });
 
   it("FR11: every call crosses API.Fetch, so a host refusal covers the chain", function* () {

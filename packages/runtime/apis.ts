@@ -130,6 +130,17 @@ export interface FetchInit {
   headers?: Record<string, string>;
   body?: string;
   timeout?: number;
+  /**
+   * Fail the request on any status outside 2xx.
+   *
+   * Part of the request rather than something a caller applies to the answer,
+   * because middleware wrapping this operation is entitled to know it: a
+   * provider that authenticates, routes or refuses a request reads what the
+   * caller asked for, and "this caller treats a non-2xx as a failure" is part of
+   * that. The default adapter hands it to the transport, which raises its own
+   * `HttpError`.
+   */
+  expect?: boolean;
 }
 
 /**
@@ -597,20 +608,26 @@ export const API: {
   Fetch: createApi("runtime.fetch", {
     *fetch(input: string, init?: FetchInit): Operation<RuntimeFetchResponse> {
       const timeout = init?.timeout ?? (yield* contextualFetchTimeout);
+      const request = effectionFetch(input, {
+        method: init?.method,
+        headers: init?.headers,
+        body: init?.body,
+      });
       const response = yield* withTimeout(
         `fetch(${input})`,
         timeout,
-        effectionFetch(input, {
-          method: init?.method,
-          headers: init?.headers,
-          body: init?.body,
-        }),
+        init?.expect === true ? request.expect() : request,
       );
 
       // Read here, while the live response is still this scope's: a caller that
       // keeps the value reads a snapshot rather than a handle on a response
-      // that has since been disposed.
-      const headers = detachHeaders(response.headers);
+      // that has since been disposed. Collected through `forEach` rather than
+      // by iterating: the host `Headers` this reads is typed as iterable under
+      // some of the libs this package is built against and not others, and an
+      // array is iterable under all of them.
+      const entries: Array<[string, string]> = [];
+      response.headers.forEach((value, name) => entries.push([name, value]));
+      const headers = detachHeaders(entries);
 
       const settled: RuntimeFetchResponse = {
         status: response.status,
@@ -730,33 +747,12 @@ export interface FetchOperation extends Operation<RuntimeFetchResponse> {
   text(): Operation<string>;
   /** The response body parsed as JSON. */
   json(): Operation<unknown>;
-  /** The same request, failing on any status outside 2xx. */
+  /** The same request, asked for with `expect` — failing outside 2xx. */
   expect(): FetchOperation;
 }
 
-/** A status a response carrying data is allowed to have. */
-function isSuccess(status: number): boolean {
-  return status >= 200 && status <= 299;
-}
-
-function request(
-  input: string,
-  init: FetchInit | undefined,
-  expectSuccess: boolean,
-): Operation<RuntimeFetchResponse> {
-  return {
-    *[Symbol.iterator]() {
-      const response = yield* API.Fetch.operations.fetch(input, init);
-      if (expectSuccess && !isSuccess(response.status)) {
-        throw new Error(`fetch(${input}) responded with status ${response.status}`);
-      }
-      return response;
-    },
-  };
-}
-
-function chain(input: string, init: FetchInit | undefined, expectSuccess: boolean): FetchOperation {
-  const settled = () => request(input, init, expectSuccess);
+function chain(input: string, init: FetchInit | undefined): FetchOperation {
+  const settled = () => API.Fetch.operations.fetch(input, init);
   return {
     [Symbol.iterator]: () => settled()[Symbol.iterator](),
     *text(): Operation<string> {
@@ -765,12 +761,14 @@ function chain(input: string, init: FetchInit | undefined, expectSuccess: boolea
     *json(): Operation<unknown> {
       return JSON.parse(yield* (yield* settled()).text());
     },
-    expect: () => chain(input, init, true),
+    // Recorded on the request rather than checked on the answer, so the whole
+    // middleware chain sees what the caller asked for.
+    expect: () => chain(input, { ...init, expect: true }),
   };
 }
 
 export function fetch(input: string, init?: FetchInit): FetchOperation {
-  return chain(input, init, false);
+  return chain(input, init);
 }
 
 export const env: typeof API.Env.operations.env = API.Env.operations.env;

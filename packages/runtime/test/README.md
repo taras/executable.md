@@ -199,6 +199,11 @@ yield *
   );
 ```
 
+`init.expect` is part of the request, not a check a caller applies afterwards:
+it says the caller treats a non-2xx as a failure, and `.reviews/components/GitHubAuth.md`
+is a real consumer that reads it. A substituted provider that ignores it makes
+an authored `fetch(url).expect()` succeed on a 404.
+
 Count what the provider was asked to perform separately from what a document
 bound or a journal retained: those three can agree while the number of requests
 is wrong. Middleware that answers without delegating performs no request at all,
