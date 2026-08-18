@@ -715,6 +715,70 @@ describe("Tier GX — what the run keeps", () => {
   });
 });
 
+describe("Tier GX — a malformed generated request reports its class, not itself", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * `prepareFetchRequest()` reports what is wrong with a request by quoting it.
+   * Every case below writes a distinct marker into the part it makes malformed,
+   * and then asks the same three questions: did anything run, what does the run
+   * say, and what did the journal keep. The marker must appear in none of them.
+   */
+  const MALFORMED: Array<[string, string, string]> = [
+    ["an invalid URL", "gx-url-marker", `<Fetch url="gx-url-marker" />`],
+    ["a non-HTTP scheme", "gx-scheme-marker", `<Fetch url="file:///gx-scheme-marker" />`],
+    ["an unknown method", "GXMETHODMARKER", `<Fetch url="${URL_ONE}" method="GXMETHODMARKER" />`],
+    [
+      "a malformed timeout",
+      "gx-timeout-marker",
+      `<Fetch url="${URL_ONE}" timeout="gx-timeout-marker" />`,
+    ],
+    [
+      "a non-string header value",
+      "gx-header-marker",
+      `<Fetch url="${URL_ONE}" headers={{ "gx-header-marker": 1 }} />`,
+    ],
+    [
+      "one header name written twice",
+      "gx-twice-marker",
+      `<Fetch url="${URL_ONE}" headers={{ "GX-Twice-Marker": "a", "gx-twice-marker": "b" }} />`,
+    ],
+  ];
+
+  for (const [what, marker, element] of MALFORMED) {
+    it(`GX25: ${what} is refused as a request, carrying nothing of itself`, function* () {
+      const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+
+      const attempt = yield* evaluate(request(`${element}\n`, [pinnedFetch([ADMITTED_REQUEST])]));
+
+      expect(transport.performed).toHaveLength(0);
+      expect(admittedFragments(attempt.events)).toHaveLength(0);
+      expect(refusals(attempt.events)).toHaveLength(1);
+      expect(observations(attempt.events)).toHaveLength(0);
+      // The run says the class, and the journal keeps the class.
+      expect(attempt.failure).toContain("did not admit");
+      expect(persisted(attempt.events)).toContain('"construct":"request"');
+      // And neither of them keeps the request that caused it.
+      expect(attempt.failure).not.toContain(marker);
+      expect(persisted(attempt.events)).not.toContain(marker);
+    });
+  }
+
+  it("GX26: a malformed host ceiling fails as the host's own error, before anything is appended", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+
+    const attempt = yield* evaluate(
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([{ url: "gx-host-ceiling-marker" }])]),
+    );
+
+    // The host's own values are not generated text: a host that states a
+    // request it cannot mean is told which one, and nothing is retained.
+    expect(transport.performed).toHaveLength(0);
+    expect(admissions(attempt.events)).toHaveLength(0);
+    expect(attempt.failure).toContain("gx-host-ceiling-marker");
+  });
+});
+
 describe("Tier GX — a resumed run is held to the ceilings it was admitted under", () => {
   beforeAll(() => useTempFileCompiler());
 

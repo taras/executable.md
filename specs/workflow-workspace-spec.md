@@ -1291,11 +1291,22 @@ perform. Before the first effect, the evaluator:
   bundle;
 - refuses executable code blocks, expression props, interpolation that reads a
   binding, a result binding, and every component the host did not admit; and
-- refuses a request that does not normalize to one the host stated exactly.
+- refuses a request that is malformed, or that does not normalize to one the
+  host stated exactly.
 
-A refusal ends the whole fragment. Its diagnostic names the construct class and
-echoes no part of the candidate, so a rejected fragment publishes nothing —
-including a credential a rejected element carried.
+A refusal ends the whole fragment. Its diagnostic names the construct class, and
+so does what the run retains of it, so a rejected fragment publishes nothing —
+including a credential a rejected element carried. A malformed request is
+refused on the same terms as an unadmitted one: the ordinary component reports a
+bad URL, header or timeout by quoting it, and a generated request may not be
+quoted anywhere. The host's own ceilings are a different kind of value —
+normalized before the admission, and reported as themselves when the host
+states one it cannot mean.
+
+Admission is the line. Before it nothing of the candidate is retained; after it
+the exact source is retained deliberately, so an ordinary expansion diagnostic
+naming part of the fragment discloses nothing the journal does not already
+hold.
 
 One ordinary durable `generated_xmd` event records the decision. An admission
 carries the exact source, the retained roots and the selected one, the pinned

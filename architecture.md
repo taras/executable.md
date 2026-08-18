@@ -1124,7 +1124,13 @@ identities are on the allowlist, and which exact requests each may perform.
 Generated source receives none of those values, and nothing contextual carries
 them. A refusal names the construct class and echoes no part of the candidate —
 in its diagnostic and in what it retains alike, because the decision is recorded
-either way.
+either way. That holds for a request the candidate malformed as much as for one
+outside the admitted set: the component reports a bad URL, header or timeout by
+quoting it, so a generated request is normalized behind a boundary that keeps
+the class and drops the diagnostic. The host's own ceilings are not generated
+text and are normalized before the admission, so a host that states a request it
+cannot mean is told which one. Admission is the line: before it nothing of the
+candidate is retained, and after it the exact source is retained on purpose.
 
 A retained admission is a grant under the ceilings it was granted with, and a
 resumed run is held to them. Durable replay matches an effect by its type and

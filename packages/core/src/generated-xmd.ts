@@ -18,11 +18,18 @@
  *
  * What is refused is a construct *class*: executable code blocks, expression
  * props, interpolation that reads a binding, a result binding, a component the
- * host did not admit, and a request outside the admitted set. The record and
- * the diagnostic name the class and nothing else. Generated source is exactly
- * the text a refusal must not echo — and a refusal is *returned* by the
- * admission rather than thrown out of it, because a thrown one would be
- * serialized into the journal with a stack trace nobody asked for.
+ * host did not admit, and a request that is malformed or outside the admitted
+ * set. The record and the diagnostic name the class and nothing else. Generated
+ * source is exactly the text a refusal must not echo — which is why a candidate
+ * request is normalized behind a converting boundary rather than allowed to
+ * report itself, and why a refusal is *returned* by the admission rather than
+ * thrown out of it: a thrown one is serialized into the journal with its
+ * message and its stack.
+ *
+ * The line is admission. Before it, nothing of the candidate is retained, so a
+ * refusal carries none of it. After it the exact source is retained on purpose,
+ * so an ordinary expansion diagnostic quoting the fragment discloses nothing
+ * the journal does not already hold.
  *
  * ## A name is not an identity
  *
@@ -73,6 +80,7 @@ import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
 import { createBlockCounter, expandSegments } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { parseRequestRecord, prepareFetchRequest, requestRecord } from "./fetch-request.ts";
+import { timeoutFetch } from "@executablemd/runtime";
 import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
@@ -357,18 +365,42 @@ function sameRequest(one: FetchRequest, other: FetchRequest): boolean {
   return JSON.stringify(requestRecord(one)) === JSON.stringify(requestRecord(other));
 }
 
-/** The ceilings this run states, with every request normalized. */
-function* currentPolicy(
+/**
+ * The requests each admitted observation may perform, normalized.
+ *
+ * Deliberately computed *outside* the durable admission. These are the host's
+ * own values, so a malformed one is a host mistake rather than a statement
+ * about the candidate — it should fail as itself, before anything is appended,
+ * rather than be serialized into the journal as a refusal of the fragment.
+ */
+function* normalizedCeilings(
+  table: ReadonlyMap<string, GeneratedObservation>,
+): Operation<Map<string, FetchRequest[]>> {
+  const ceilings = new Map<string, FetchRequest[]>();
+  for (const [name, observation] of table) {
+    if (observation.requests === undefined) {
+      continue;
+    }
+    const normalized: FetchRequest[] = [];
+    for (const props of observation.requests) {
+      normalized.push(yield* prepareFetchRequest(props));
+    }
+    ceilings.set(name, normalized);
+  }
+  return ceilings;
+}
+
+/** The ceilings this run states, in the order the host stated them. */
+function currentPolicy(
   request: GeneratedXmdRequest,
   table: ReadonlyMap<string, GeneratedObservation>,
-): Operation<Policy> {
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
+): Policy {
   const requests: FetchRequest[] = [];
   const allowed: RetainedIdentity[] = [];
   for (const observation of table.values()) {
     allowed.push({ name: observation.name, identity: observation.identity });
-    for (const props of observation.requests ?? []) {
-      requests.push(yield* prepareFetchRequest(props));
-    }
+    requests.push(...(ceilings.get(observation.name) ?? []));
   }
   return {
     roots: [...request.workspaceRoots],
@@ -513,23 +545,36 @@ interface Preflight {
 function* preflight(
   source: string,
   table: ReadonlyMap<string, GeneratedObservation>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
 ): Operation<Preflight> {
-  const ceilings = new Map<string, FetchRequest[]>();
-  for (const [name, observation] of table) {
-    if (observation.requests === undefined) {
-      continue;
-    }
-    const normalized: FetchRequest[] = [];
-    for (const request of observation.requests) {
-      normalized.push(yield* prepareFetchRequest(request));
-    }
-    ceilings.set(name, normalized);
-  }
+  // Read once, here, so a contextual default that refuses fails as itself
+  // rather than as a statement about the fragment. Every candidate request
+  // below reads the same value, and what it can fail on afterwards is the
+  // props it was handed.
+  yield* timeoutFetch;
 
   const named: RetainedIdentity[] = [];
   const segments = scanSegments(source);
   yield* walk(segments, table, ceilings, named);
   return { segments, named };
+}
+
+/**
+ * The candidate's request, normalized — or the fixed refusal.
+ *
+ * `prepareFetchRequest()` reports what is wrong with a request by quoting it:
+ * the URL that is not a URL, the header name written twice, the timeout that is
+ * not a duration. Every one of those is generated text, and a refusal of
+ * generated text may not carry it — not into the run's failure, and not into
+ * the journal, where a thrown executor error is serialized with its message and
+ * its stack. So the diagnostic is dropped here and the class is kept.
+ */
+function* admitCandidateRequest(props: Record<string, Json>): Operation<FetchRequest> {
+  try {
+    return yield* prepareFetchRequest(props);
+  } catch {
+    throw new Refusal("request");
+  }
 }
 
 function* walk(
@@ -562,7 +607,7 @@ function* walk(
         }
         const ceiling = ceilings.get(segment.name);
         if (ceiling !== undefined) {
-          const candidate = yield* prepareFetchRequest(segment.props);
+          const candidate = yield* admitCandidateRequest(segment.props);
           if (!ceiling.some((allowed) => sameRequest(allowed, candidate))) {
             throw new Refusal("request");
           }
@@ -591,10 +636,11 @@ const GENERATED_XMD = "generated_xmd";
 function* admitSource(
   source: string,
   table: ReadonlyMap<string, GeneratedObservation>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
 ): Operation<DurableJson> {
   try {
-    const { named } = yield* preflight(source, table);
+    const { named } = yield* preflight(source, table, ceilings);
     return parseJson({
       decision: "admitted",
       source,
@@ -619,11 +665,12 @@ function* persistAdmission(
   id: string,
   source: string,
   table: ReadonlyMap<string, GeneratedObservation>,
+  ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
 ): Workflow<Json> {
   const stored = yield createDurableOperation<DurableJson>(
     { type: GENERATED_XMD, name: `generated:${id}`, input: policyRecord(policy) },
-    () => admitSource(source, table, policy),
+    () => admitSource(source, table, ceilings, policy),
   );
   return parseJson(stored);
 }
@@ -722,9 +769,10 @@ function expand(
  */
 export function* evaluateGeneratedXmd(request: GeneratedXmdRequest): Workflow<string> {
   const table = admitted(request.observations);
-  const policy = yield* ephemeral(currentPolicy(request, table));
+  const ceilings = yield* ephemeral(normalizedCeilings(table));
+  const policy = currentPolicy(request, table, ceilings);
 
-  const stored = yield* persistAdmission(request.id, request.source, table, policy);
+  const stored = yield* persistAdmission(request.id, request.source, table, ceilings, policy);
   const decided = readAdmission(stored);
   if (decided === undefined) {
     throw new GeneratedXmdError(UNREADABLE);
@@ -741,6 +789,6 @@ export function* evaluateGeneratedXmd(request: GeneratedXmdRequest): Workflow<st
 
   // The retained source is what expands, so a continuation runs the fragment
   // this run admitted rather than whatever a later caller happens to hold.
-  const restored = yield* ephemeral(preflight(decided.source, table));
+  const restored = yield* ephemeral(preflight(decided.source, table, ceilings));
   return yield* ephemeral(expand(request.id, restored.segments, table));
 }
