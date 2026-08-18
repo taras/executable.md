@@ -28,8 +28,12 @@ import type { Operation } from "effection";
 import { fileSource, inlineSource } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
-import { installExecutionHost } from "@executablemd/testing";
-import type { ChildInvocation, ChildSettlement, HostProfileRequest } from "@executablemd/testing";
+import type {
+  ChildInvocation,
+  ChildSettlement,
+  ExecutionHostProvider,
+  HostProfileRequest,
+} from "@executablemd/testing";
 import { installDocumentComponents } from "./cli.ts";
 import type { HostServiceInstaller } from "./cli.ts";
 
@@ -44,20 +48,20 @@ export interface TestingHostSettings {
 }
 
 /**
- * Install the trusted host profile for this run's Markdown tests.
+ * Build the trusted host profile for this run's Markdown tests.
  *
  * Called once, beside the other things a document execution runs with. A
  * document with no `<Execution>` never asks for a child, so this costs nothing
  * but the closure.
  */
-export function* installTestingExecutionHost(settings: TestingHostSettings): Operation<void> {
-  yield* installExecutionHost({
+export function testingExecutionHost(settings: TestingHostSettings): ExecutionHostProvider {
+  return {
     runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
       return runProfileChild(invocation, settings);
     },
     // No `useWorkflowRun`: this host answers the run profile. The workflow
     // profile is a separate capability and `<WorkflowRun>` says so on its own.
-  });
+  };
 }
 
 /** The root a request names: a reference to resolve, or the text itself. */

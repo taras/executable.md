@@ -29,7 +29,7 @@ This is not `<Call>`. `<Call>` remains structural composition inside the current
 - The CLI package owns the trusted provider. Testing must not import `@executablemd/cli`; `@executablemd/cli` already depends on `@executablemd/testing`.
 - Core remains authoritative for recognizing the real `<Test>`. Harness authority must derive from core's canonical `<Test>` invocation, not from component names, Context values, props, package origins, or public middleware.
 - A repository component named `Test`, `Execution`, or `WorkflowRun` receives ordinary component semantics and no harness authority.
-- Public host-profile middleware may observe, narrow, refuse, and delegate a request. It must not create a child execution, substitute completion, or publish an outcome.
+- Public host-profile middleware may observe, refuse, and delegate one immutable request. It must not create a child execution, replace the selected profile, substitute completion, or publish an outcome.
 - `host="run"` accepts exactly one of `target` or `source`. `source` uses `inlineSource()` and the production inline-source path; `target` uses `fileSource()` and the existing target resolver, not component-name lookup.
 - `host="workflow"` must be inside a canonical `WorkflowRun`. `action="start"` requires `target` and rejects `source`; `action="resume"` rejects both. The run id is declared on `WorkflowRun`, generated there when omitted, and shared by child attempts in that scope.
 - `DiagnosticJournal` selects diagnostic retention only for `host="run"`. `CollectJournal` observes an existing child journal and never creates one. Workflow always uses the production durable workflow journal and rejects `DiagnosticJournal`.
@@ -70,7 +70,7 @@ This is not `<Call>`. `<Call>` remains structural composition inside the current
 
    The reusable runner should accept a child output sink and return the child `Result<Json>` plus enough journal/output state for `Execution` to bind observations. It should still use `executeInstalled()` once, install the same core/runtime/testing/web/agent/service pieces as production `xmd run` after argument parsing, and preserve the host decision for `retainProcessOutput`.
 
-   Do not make `@executablemd/testing` import this runner. The CLI test host installs the provider into testing's host-profile Api.
+   Do not make `@executablemd/testing` import this runner. The CLI test host passes the provider as a trusted value into the test-harness installation; no public Context or Api selects it.
 
 4. Implement `host="run"`.
 
@@ -178,18 +178,18 @@ Commit: **`b3e6304`** — 🧪 Run another document as a root from inside a Mark
 Plan steps 1, 2, 3, 4, 6 and the run-profile half of step 7.
 
 - **Step 1 — core authority.** `packages/core/src/test-harness.ts`. An invocation of
-  canonical `<Test>` mints one `TestHarness`: a private-field-branded object, published
-  on a core-module-private context inside the invocation's own frame and expired when
-  that frame unwinds. `authorize()` yields a single-use `TestHarnessAuthorization`;
-  a second spend, and a spend after the test finished, are refusals. Reached through
-  `useTestHarness()` on `@executablemd/core/host` — the infrastructure boundary, beside
-  `executeInstalled()` — so nothing a document or component reaches by importing
-  `@executablemd/core` can ask for it. `TestBehaviorApi` was **not** changed: handing the
-  harness through a public same-name Api would have given every `TestBehavior.around`
-  handler the authority by construction.
+  canonical `<Test>` mints one `TestHarness`: a private-field-branded object delivered to
+  host-attached installer functions inside the invocation's own frame and expired when
+  that frame unwinds. `authorize()` yields a single-use `TestHarnessAuthorization`; a
+  second spend, and a spend after the test finished, are refusals. There is no harness
+  reader and no context holding the harness. The installer context holds only branded
+  functions captured before untrusted code begins, and calling one requires a harness
+  only canonical core mints. `TestBehaviorApi` was **not** changed: handing the harness
+  through a public same-name Api would have given every `TestBehavior.around` handler the
+  authority by construction.
 - **Step 2 — testing API and components.** `packages/testing/src/execution-host.ts`
   (one-use `ExecutionHostRequest`, the `ExecutionHost` Api whose public default always
-  refuses, `ExecutionHostProvider`, `installExecutionHost`) and
+  refuses, immutable host profiles, `ExecutionHostProvider`) and
   `packages/testing/src/execution-harness.ts` (`<Execution>`, `<WorkflowRun>`,
   `<DiagnosticJournal>`, `<CollectOutput>`, `<CollectJournal>`).
 - **Step 3 — CLI host assembly.** `installDocumentComponents()` extracted from
@@ -212,26 +212,27 @@ the first element that is not a declaration, then the ordinary pass runs after t
 is over. A declaration is recognized by the definition it resolves to, so a repository
 `CollectOutput.md` is an ordinary component.
 
-One core addition beyond the plan: `Component.publishBinding(value)`. The engine binds
-`as` from what a component *returns* — after the content it expanded — and never hands
-over the name, so without it the issue's own example (assertions inside `<Execution>`
-reading the `as` binding) is not expressible.
+One core addition beyond the plan: an engine-owned binding channel for harness-created
+components. The engine binds `as` from what a component *returns* — after the content it
+expanded — and never hands over the name. `<Execution>` needs its assertion body to read
+the child outcome before the invocation returns, so canonical `<Test>` creates
+binding-aware definitions through the delivered harness. The channel answers only whether
+this exact invocation has `as` and accepts one early publication of the child outcome; it
+is not part of the public `Component` Api.
 
 ### Focused commands run — all green
 
 ```bash
-deno task test packages/testing/tests/execution-harness.test.ts          # 6 passed (23 steps)
+deno task test packages/testing/tests/execution-harness.test.ts          # 6 passed (31 steps)
 deno task test packages/cli/tests/testing-execution-host.test.ts         # 1 passed (4 steps)
-deno task test packages/core/tests/execution-protocol.test.ts packages/core/tests/output-error-mode.test.ts packages/testing/tests/   # 34 passed (287 steps)
-deno task test packages/core/tests/                                      # 254 passed (2071 steps)
-deno task test packages/cli/tests/                                       # 34 passed (292 steps) — includes workflow-suspension and workflow-host
-deno task test --changed=origin/main                                     # exit 0
+deno task test packages/test-agent/tests/cross-package-resolution.test.ts # 1 passed (5 steps)
 deno task check                                                          # exit 0
-pnpm run lint                                                            # exit 0 (oxlint + oxfmt --check)
+git diff --check                                                         # exit 0
+pnpm exec oxfmt --check architecture.md issue-454-implementor-handoff.md packages/cli/src/cli.ts packages/cli/src/testing-host.ts packages/core/host.ts packages/core/mod.ts packages/core/src/component-api.ts packages/core/src/components/registration.ts packages/core/src/expand.ts packages/core/src/test-harness.ts packages/core/src/types.ts packages/testing/mod.ts packages/testing/src/execution-harness.ts packages/testing/src/execution-host.ts packages/testing/tests/execution-harness.test.ts packages/testing/tests/execution-host-stub.ts specs/executable-mdx-spec.md specs/testing-spec.md # exit 0
 ```
 
-`packages/cli/tests/` was run whole rather than only the two workflow files, because
-`cli.ts` changed.
+No focused core component-invocation test was added; the private binding path is
+covered by the harness regressions above and typechecked by `deno task check`.
 
 ### Acceptance criteria not proven
 

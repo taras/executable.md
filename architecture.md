@@ -2211,9 +2211,23 @@ The harness asks a **host profile** for its child through a request, and for the
 reason every other capability-backed surface here does: a handler given the
 child could answer without delegating, and its invented answer would *be* the
 child — no root imported, no journal written, and an assertion body passing
-against nothing. A handler may read the profile, narrow or replace it, refuse by
-throwing, and delegate. Only the invocation's own terminal reaches the trusted
-provider, and only the outcome that provider reported is published.
+against nothing. The trusted provider is attached as a value before untrusted
+installation, middleware or document code begins, captured by the test-harness
+installer, and closed over by the authorized definitions canonical `<Test>`
+registers for its body. A public handler may read the immutable profile, refuse
+by throwing, and delegate the exact request once. It cannot replace target,
+source, props, action or journal policy, and it never receives the provider.
+Only the invocation's own terminal reaches the captured provider, and only the
+outcome that provider reported is published.
+
+Binding is the same kind of invocation-owned authority. `<Execution>` receives
+from the engine a private binding channel for its exact invocation: it answers
+whether `as` was written and accepts one early publication of the child outcome
+before the assertion body expands. It exposes no name and no environment, and it
+does not travel through the public `Component` Api, Context, props, component
+metadata or a stable name. Public component middleware therefore cannot turn an
+unbound failed child into test data, suppress publication, or make assertions
+observe a synthetic completion.
 
 The child's scope does not descend from the document that ran it. That is not
 isolation for its own sake: a child is a *root* execution, and everything the

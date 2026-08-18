@@ -21,19 +21,18 @@
  * answer *would be* the child: no root imported, no journal written, no
  * workflow run recorded, and an assertion body that passed against nothing.
  *
- * A handler here may read the profile, narrow or replace it, refuse by
- * throwing, and delegate. It returns nothing and nothing it returns is read.
+ * A handler here may read the profile, refuse by throwing, and delegate the
+ * exact request. It returns nothing and nothing it returns is read.
  * The one thing that runs a child is the terminal `<Execution>` created for its
  * own invocation, and that terminal is reached only after the chain unwinds.
  *
  * The request is the capability: it carries a private reference to one
  * invocation and may be consumed exactly once, so a reconstructed look-alike, a
- * stale request left over from `withProfile()`, a second delegation and a
- * replayed request are refusals rather than second children.
+ * second delegation and a replayed request are refusals rather than second
+ * children.
  */
 
-import { createContext } from "effection";
-import type { Context, Operation, Result } from "effection";
+import type { Operation, Result } from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/core";
@@ -76,7 +75,7 @@ export class ExecutionHostError extends Error {
 
   constructor(problem: string) {
     super(
-      `Execution host middleware ${problem}. A handler may inspect, transform, refuse or ` +
+      `Execution host middleware ${problem}. A handler may inspect, refuse or ` +
         "delegate a request; only the invocation that issued one runs a child.",
     );
   }
@@ -84,34 +83,24 @@ export class ExecutionHostError extends Error {
 
 /** What a host-profile handler is given, and the whole of what it may do. */
 export interface ExecutionHostRequest {
-  /** The profile as it stands, after every handler that has run so far. */
+  /** The immutable profile this invocation asked for. */
   readonly profile: HostProfileRequest;
-  /** The same invocation, asked for a different profile. Supersedes this one. */
-  withProfile(profile: HostProfileRequest): ExecutionHostRequest;
 }
 
 /** One nested execution's private state. */
 class Invocation {
-  generation = 0;
   consumed = false;
   settled: HostProfileRequest | undefined;
 }
 
 class CanonicalHostRequest implements ExecutionHostRequest {
   readonly #invocation: Invocation;
-  readonly #generation: number;
   readonly profile: HostProfileRequest;
 
-  constructor(invocation: Invocation, profile: HostProfileRequest, generation: number) {
+  constructor(invocation: Invocation, profile: HostProfileRequest) {
     this.#invocation = invocation;
-    this.#generation = generation;
     this.profile = profile;
     Object.freeze(this);
-  }
-
-  withProfile(profile: HostProfileRequest): ExecutionHostRequest {
-    this.#invocation.generation += 1;
-    return new CanonicalHostRequest(this.#invocation, profile, this.#invocation.generation);
   }
 
   /**
@@ -132,12 +121,8 @@ class CanonicalHostRequest implements ExecutionHostRequest {
     if (invocation.consumed) {
       throw new ExecutionHostError("delegated a host request more than once");
     }
-    if (request.#generation !== invocation.generation) {
-      throw new ExecutionHostError("delegated a request that a later withProfile() superseded");
-    }
-    const settled = detachProfile(request.profile);
     invocation.consumed = true;
-    invocation.settled = settled;
+    invocation.settled = request.profile;
   }
 
   /** Whether this class built `value`, answered without trusting it. */
@@ -199,8 +184,9 @@ export interface IssuedHostRequest {
 
 export function issueHostRequest(profile: HostProfileRequest): IssuedHostRequest {
   const invocation = new Invocation();
+  const request = detachProfile(profile);
   return {
-    request: new CanonicalHostRequest(invocation, profile, invocation.generation),
+    request: new CanonicalHostRequest(invocation, request),
     consume(request: unknown): void {
       CanonicalHostRequest.consume(request, invocation);
     },
@@ -276,8 +262,9 @@ export interface ChildSettlement {
 /**
  * The trusted answer to a host request.
  *
- * Installed by the CLI test host, which owns production assembly. Reached only
- * from an `<Execution>`'s own terminal, so public middleware never holds it.
+ * Captured by the trusted test-harness installation, which owns production
+ * assembly. Reached only from an `<Execution>`'s own terminal, so public
+ * middleware never holds it and no Context selects it.
  */
 export interface ExecutionHostProvider {
   runChild(invocation: ChildInvocation): Operation<ChildSettlement>;
@@ -293,24 +280,4 @@ export interface ExecutionHostProvider {
    * refusal this package invented.
    */
   useWorkflowRun?(options: { readonly id?: string }): Operation<WorkflowRunScope>;
-}
-
-const Provider: Context<ExecutionHostProvider | undefined> = createContext<
-  ExecutionHostProvider | undefined
->("testing.execution-host.provider", undefined);
-
-/**
- * Install the trusted host profile for this scope.
- *
- * The CLI test host calls this. Nothing authored reaches it: it takes a value
- * the caller already holds rather than a name anybody could claim, which is the
- * same way a host attaches an installation to canonical execution.
- */
-export function* installExecutionHost(provider: ExecutionHostProvider): Operation<void> {
-  yield* Provider.set(provider);
-}
-
-/** The installed provider, or `undefined` where no trusted host is present. */
-export function* executionHostProvider(): Operation<ExecutionHostProvider | undefined> {
-  return yield* Provider.get();
 }

@@ -59,7 +59,7 @@
  * this package's module state. Every invocation spends a single-use
  * authorization and runs its child through a terminal it created for itself;
  * public host-profile middleware composes around that terminal and can observe,
- * narrow, refuse or delegate, and can do nothing else, because the request it
+ * refuse or delegate, and can do nothing else, because the request it
  * holds runs nothing.
  */
 
@@ -72,7 +72,6 @@ import {
   DocumentOutput,
   hasBinding,
   hasContent,
-  publishBinding,
   raise,
   registerComponents,
   tryContent,
@@ -83,8 +82,12 @@ import type {
   Json,
   PropsSchema,
 } from "@executablemd/core";
-import type { ExecutionInstallation, TestHarness } from "@executablemd/core/host";
-import { ExecutionHost, executionHostProvider, issueHostRequest } from "./execution-host.ts";
+import type {
+  ExecutionInstallation,
+  TestHarness,
+  TestHarnessBinding,
+} from "@executablemd/core/host";
+import { issueHostRequest } from "./execution-host.ts";
 import type {
   ChildSettlement,
   ExecutionHostApi,
@@ -374,14 +377,20 @@ function readProfile(
  * with it. Two scopes declaring the same public id are still two runs, because
  * the storage is per-scope and the id is only what the run calls itself.
  */
-function authorizedWorkflowRun(harness: TestHarness) {
-  return function* WorkflowRun(props: Record<string, Json>): Operation<unknown> {
-    return yield* runWorkflowScope(props, harness);
-  };
+function authorizedWorkflowRun(harness: TestHarness, provider: ExecutionHostProvider | undefined) {
+  return harness.component(function* WorkflowRun(
+    props: Record<string, Json>,
+    _binding: TestHarnessBinding,
+  ): Operation<unknown> {
+    return yield* runWorkflowScope(props, harness, provider);
+  });
 }
 
-function* runWorkflowScope(props: Record<string, Json>, harness: TestHarness): Operation<unknown> {
-  const provider = yield* executionHostProvider();
+function* runWorkflowScope(
+  props: Record<string, Json>,
+  harness: TestHarness,
+  provider: ExecutionHostProvider | undefined,
+): Operation<unknown> {
   if (provider === undefined) {
     return yield* refuse(
       "WorkflowRun",
@@ -418,17 +427,21 @@ function* runWorkflowScope(props: Record<string, Json>, harness: TestHarness): O
 /**
  * `<Execution>` — one nested root execution under a production host profile.
  */
-function authorizedExecution(harness: TestHarness) {
-  return function* Execution(props: Record<string, Json>): Operation<unknown> {
-    return yield* runNestedExecution(props, harness);
-  };
+function authorizedExecution(harness: TestHarness, provider: ExecutionHostProvider | undefined) {
+  return harness.component(function* Execution(
+    props: Record<string, Json>,
+    binding: TestHarnessBinding,
+  ): Operation<unknown> {
+    return yield* runNestedExecution(props, harness, provider, binding);
+  });
 }
 
 function* runNestedExecution(
   props: Record<string, Json>,
   harness: TestHarness,
+  provider: ExecutionHostProvider | undefined,
+  binding: TestHarnessBinding,
 ): Operation<unknown> {
-  const provider = yield* executionHostProvider();
   if (provider === undefined) {
     return yield* refuse(
       "Execution",
@@ -492,12 +505,12 @@ function* runNestedExecution(
     run.started = true;
   }
 
-  const bound = yield* hasBinding();
+  const bound = binding.has();
   if (bound) {
     // Published before the assertion body expands, because the body is *about*
     // this outcome. What the invocation returns is the same value, so the
     // binding the engine finally makes is the one already read here.
-    yield* publishBinding(settlement.outcome);
+    yield* binding.publish(settlement.outcome);
   } else if (settlement.outcome.kind === "settled" && !settlement.outcome.result.ok) {
     // No binding means nothing can assert about the failure, and a test that
     // ran a failing document and said nothing passed vacuously.
@@ -728,30 +741,30 @@ export const HARNESS_REGISTRATIONS = [
  *
  * The whole of the authority path, and it is a closure: canonical `<Test>` calls
  * this with the harness it minted, inside that invocation, and what this does is
- * register definitions that have the harness in scope. The capability is never
- * written anywhere — not a context, not a prop, not an Api argument, not this
- * package's module state — so a component running inside the test, a same-name
- * context, a second loaded copy of this package and any middleware composed
- * around anything all find nothing to take.
+ * register definitions that have the harness and the host's provider in scope.
+ * Neither value is written anywhere — not a context, not a prop, not an Api
+ * argument, not this package's module state — so a component running inside the
+ * test, a same-name context, a second loaded copy of this package and any
+ * middleware composed around anything all find nothing to take.
  *
  * The registration is made in the invocation's frame, so it shadows the refusing
  * default for exactly this test's body and is removed with the test. Two tests
  * are two harnesses and two registrations; neither can reach the other's.
  */
-export function testHarnessInstallation(): ExecutionInstallation {
+export function testHarnessInstallation(provider?: ExecutionHostProvider): ExecutionInstallation {
   return {
     *testHarness(harness: TestHarness): Operation<void> {
       yield* registerComponents([
         {
           name: "Execution",
           origin: "@executablemd/testing",
-          fn: authorizedExecution(harness),
+          fn: authorizedExecution(harness, provider),
           props: EXECUTION_PROPS,
         },
         {
           name: "WorkflowRun",
           origin: "@executablemd/testing",
-          fn: authorizedWorkflowRun(harness),
+          fn: authorizedWorkflowRun(harness, provider),
           props: WORKFLOW_RUN_PROPS,
         },
       ]);

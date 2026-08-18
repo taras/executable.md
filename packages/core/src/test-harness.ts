@@ -48,6 +48,7 @@
 
 import { createContext, ensure } from "effection";
 import type { Context, Operation } from "effection";
+import type { Json } from "./types.ts";
 
 /** A harness was forged, kept past its test, or spent twice. */
 export class TestHarnessError extends Error {
@@ -134,6 +135,16 @@ export class TestHarness {
     return new TestHarnessAuthorization(this.#invocation);
   }
 
+  /**
+   * Create a component definition that receives this test's private invocation
+   * binding channel directly from the engine.
+   */
+  component(
+    component: (props: Record<string, Json>, binding: TestHarnessBinding) => Operation<unknown>,
+  ): TestHarnessComponentDefinition {
+    return new TestHarnessComponentDefinition(component);
+  }
+
   /** Whether this class built `value`, answered without trusting it. */
   static own(value: unknown): value is TestHarness {
     if (typeof value !== "object" || value === null) {
@@ -155,6 +166,41 @@ export class TestHarness {
  * with it, so an installer that keeps one keeps something already dead.
  */
 export type TestHarnessInstaller = (harness: TestHarness) => Operation<void>;
+
+export interface TestHarnessBinding {
+  /** Whether this exact invocation was written with `as`. */
+  has(): boolean;
+  /** Publish this invocation's outcome once, before its assertion body expands. */
+  publish(value: unknown): Operation<void>;
+}
+
+type TestHarnessComponent = (
+  props: Record<string, Json>,
+  binding: TestHarnessBinding,
+) => Operation<unknown>;
+
+export class TestHarnessComponentDefinition {
+  readonly #component: TestHarnessComponent;
+
+  constructor(component: TestHarnessComponent) {
+    this.#component = component;
+  }
+
+  invoke(props: Record<string, Json>, binding: TestHarnessBinding): Operation<unknown> {
+    return this.#component(props, binding);
+  }
+
+  static own(value: unknown): value is TestHarnessComponentDefinition {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    try {
+      return #component in value;
+    } catch {
+      return false;
+    }
+  }
+}
 
 /**
  * The installers this execution runs, as a value only this module builds.

@@ -15,16 +15,16 @@ import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute, TestBehavior } from "@executablemd/core";
+import { Component, TestBehavior } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
-import type { ExecutionHostRequest } from "../src/execution-host.ts";
+import type { ExecutionHostProvider, ExecutionHostRequest } from "../src/execution-host.ts";
 import type { TestResult } from "../src/test-api.ts";
-import { useStubExecutionHost } from "./execution-host-stub.ts";
+import { stubExecutionHost } from "./execution-host-stub.ts";
 import type { StubHostLog, StubHostOptions } from "./execution-host-stub.ts";
 
 interface HarnessRun {
@@ -50,17 +50,18 @@ function* runHarness(
   return yield* scoped(function* () {
     yield* useStubFs(files);
     const tests = yield* useTesting();
-    const log = yield* useStubExecutionHost({
+    const stub = stubExecutionHost({
       files,
       ...(options.emit === undefined ? {} : { emit: options.emit }),
     });
+    const log = stub.log;
     if (options.around) {
       yield* options.around();
     }
     // The harness authority is a delivery the host attaches, so these tests are
     // the host: without this, `<Execution>` is recognized and refused.
     const execution = yield* executeInstalled({ path: "README.md", stream: new InMemoryStream() }, [
-      testHarnessInstallation(),
+      testHarnessInstallation(stub.provider),
     ]);
     const chunks: string[] = [];
     const output = yield* forEach(function* (chunk: string) {
@@ -571,9 +572,9 @@ describe("the authority path", () => {
   /** One run, with the host attaching exactly what the case is about. */
   function* runWith(
     files: Record<string, string>,
-    installations: readonly ExecutionInstallation[],
+    installations: (provider: ExecutionHostProvider) => readonly ExecutionInstallation[],
     around?: () => Operation<void>,
-  ): Operation<{ results: readonly TestResult[]; failure: string }> {
+  ): Operation<{ results: readonly TestResult[]; failure: string; log: StubHostLog }> {
     return yield* scoped(function* () {
       yield* useStubFs(files);
       // Installed ahead of the session, so a handler this case composes onto a
@@ -582,16 +583,17 @@ describe("the authority path", () => {
         yield* around();
       }
       const tests = yield* useTesting();
-      yield* useStubExecutionHost({ files });
+      const stub = stubExecutionHost({ files });
       const execution = yield* executeInstalled(
         { path: "README.md", stream: new InMemoryStream() },
-        installations,
+        installations(stub.provider),
       );
       yield* forEach(function* () {}, execution.output);
       const completion = yield* execution;
       return {
         results: yield* tests.results,
         failure: completion.ok ? "" : completion.error.message,
+        log: stub.log,
       };
     });
   }
@@ -600,7 +602,7 @@ describe("the authority path", () => {
     // The capability exists only as the argument of a delivery, so a host that
     // attached no receiver leaves every test without one — including this one,
     // which is a canonical <Test> in every other respect.
-    const run = yield* runWith(DOC, []);
+    const run = yield* runWith(DOC, () => []);
     expect(run.results[0]?.status).toBe("fail");
     expect(run.results[0]?.error?.message).toContain("canonical <Test>");
   });
@@ -626,15 +628,19 @@ describe("the authority path", () => {
     // canonical execution publishes one this module built, and a look-alike is
     // refused rather than delivered to.
     const Planted = createContext<unknown>("core.test.harness-installers", undefined);
-    const run = yield* runWith(DOC, [testHarnessInstallation()], function* () {
-      yield* Planted.set({
-        installers: [
-          function* (harness: unknown) {
-            stolen.push(harness);
-          },
-        ],
-      });
-    });
+    const run = yield* runWith(
+      DOC,
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* Planted.set({
+          installers: [
+            function* (harness: unknown) {
+              stolen.push(harness);
+            },
+          ],
+        });
+      },
+    );
     // Two facts, and the second is why the first is not an accident. The
     // planted installer is handed nothing; and the delivery it tried to stand in
     // for is unaffected, because canonical execution publishes its own holder
@@ -644,13 +650,152 @@ describe("the authority path", () => {
     expect(run.results[0]?.status).toBe("pass");
   });
 
+  it("ignores providers planted under the former public provider context", function* () {
+    const called: string[] = [];
+    const FormerProvider = createContext<ExecutionHostProvider | undefined>(
+      "testing.execution-host.provider",
+      undefined,
+    );
+    const run = yield* runWith(
+      DOC,
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* FormerProvider.set({
+          *runChild(_invocation) {
+            called.push("synthetic");
+            return { outcome: { kind: "settled", result: { ok: true, value: "" } }, output: "" };
+          },
+        });
+      },
+    );
+    expect(called).toEqual([]);
+    expect(run.log.roots).toEqual(["child.md"]);
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  it("does not let Component middleware turn a bound child failure into an unbound failure", function* () {
+    const run = yield* runWith(
+      {
+        "README.md": doc(
+          '<Test name="bound">',
+          '<Execution host="run" target="boom.md" as="child">',
+          "<AssertEquals actual={child.result.ok} expected={false} />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "boom.md": doc("```sh exec", "exit 3", "```"),
+      },
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasBinding() {
+            return false;
+          },
+        });
+      },
+    );
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
+  it("does not let Component middleware rescue an unbound child failure", function* () {
+    const run = yield* runWith(
+      {
+        "README.md": doc(
+          '<Test name="unbound">',
+          '<Execution host="run" target="boom.md" />',
+          "</Test>",
+        ),
+        "boom.md": doc("```sh exec", "exit 3", "```"),
+      },
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasBinding() {
+            return true;
+          },
+        });
+      },
+    );
+    expect(run.results[0]?.status).toBe("fail");
+    expect(run.results[0]?.error?.message).toContain("ran a child that failed");
+  });
+
+  it("leaves no public Component operation that can suppress early publication", function* () {
+    expect("publishBinding" in Component.operations).toBe(false);
+  });
+
+  it("freezes the host profile before middleware sees it", function* () {
+    let hasReplacement = true;
+    let topLevelFrozen = false;
+    let propsFrozen = false;
+    const run = yield* runWith(
+      {
+        "README.md": doc(
+          '<Test name="immutable">',
+          '<Execution host="run" target="child.md" props={{ who: "original" }} as="child">',
+          '<CollectOutput as="output" />',
+          "",
+          '<AssertStringIncludes actual={output} expected="hello original" />',
+          '<AssertEquals actual={output.includes("fake")} expected={false} />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc(
+          "---",
+          "props:",
+          "  type: object",
+          "  properties:",
+          "    who: { type: string }",
+          "  required: [who]",
+          "  additionalProperties: false",
+          "---",
+          "",
+          "hello {props.who}",
+        ),
+        "other.md": doc("wrong target"),
+      },
+      (provider) => [testHarnessInstallation(provider)],
+      function* () {
+        yield* ExecutionHost.around({
+          *run([request]: [ExecutionHostRequest], next) {
+            hasReplacement = "withProfile" in request;
+            try {
+              Object.assign(request.profile, {
+                target: "other.md",
+                source: "fake",
+                action: "resume",
+                journal: "diagnostic",
+              });
+            } catch {
+              topLevelFrozen = true;
+            }
+            try {
+              Object.assign(request.profile.props, { who: "fake" });
+            } catch {
+              propsFrozen = true;
+            }
+            yield* next(request);
+          },
+        });
+      },
+    );
+    expect(hasReplacement).toBe(false);
+    expect(topLevelFrozen).toBe(true);
+    expect(propsFrozen).toBe(true);
+    expect(run.log.requests[0]?.target).toBe("child.md");
+    expect(run.log.requests[0]?.props).toEqual({ who: "original" });
+    expect(run.results[0]?.status).toBe("pass");
+  });
+
   it("does not carry the capability in what <Test>'s behavior is called with", function* () {
     const arguments_: unknown[][] = [];
     const run = yield* runWith(
       {
         "README.md": doc('<Test name="behavior">', "body", "</Test>"),
       },
-      [testHarnessInstallation()],
+      (provider) => [testHarnessInstallation(provider)],
       function* () {
         // Public middleware on the behavior hook. It sees what a test was
         // written with and nothing else: no argument carries authority, so a

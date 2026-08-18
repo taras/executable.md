@@ -299,9 +299,20 @@ acquire none of it. A document whose host attached no installer recognizes
 `<Execution>` and refuses it, inside a canonical `<Test>` as everywhere else.
 
 Host-profile middleware is policy. It receives a request rather than a child, so
-it may observe, narrow, refuse and delegate — and cannot create a child,
+it may observe, refuse and delegate the exact immutable request — and cannot
+create a child, replace target, source, props, action or journal policy,
 substitute a completion, or publish an outcome. A handler that returns without
 delegating produces no child and is reported as the protocol violation it is.
+
+The trusted provider is attached to the execution as a value before untrusted
+installation, middleware or document code begins. The authorized definitions
+close over that provider; public host middleware never receives it.
+
+`<Execution>` receives an invocation-owned binding channel directly from the
+engine. It reports only whether this exact invocation has `as`, and publishes
+the exact child outcome once before assertions expand. The channel exposes no
+binding name or environment and does not travel through the public `Component`
+Api, Context, props, component metadata or stable names.
 
 ## Test API
 

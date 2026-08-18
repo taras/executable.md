@@ -7,6 +7,7 @@
 
 import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
+import type { TestHarnessComponentDefinition } from "./test-harness.ts";
 
 export type Json = DurableJson;
 
@@ -239,7 +240,7 @@ export interface FunctionComponentDefinition {
    * `as` after checking. Without it a return binds by reference, unchecked.
    */
   returns?: ReturnsSchema;
-  fn: FunctionComponent;
+  fn: FunctionComponent | TestHarnessComponentDefinition;
 }
 
 /**

@@ -21,10 +21,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute, fileSource, inlineSource, rootSourcePath } from "@executablemd/core";
-import { installExecutionHost } from "../src/execution-host.ts";
 import type {
   ChildInvocation,
   ChildSettlement,
+  ExecutionHostProvider,
   HostProfileRequest,
   WorkflowRunScope,
 } from "../src/execution-host.ts";
@@ -39,6 +39,11 @@ export interface StubHostLog {
   readonly roots: string[];
 }
 
+export interface StubExecutionHost {
+  readonly log: StubHostLog;
+  readonly provider: ExecutionHostProvider;
+}
+
 export interface StubHostOptions {
   /** The files the child reads. Usually the same map the outer document uses. */
   readonly files: Record<string, string>;
@@ -51,10 +56,10 @@ export interface StubHostOptions {
   readonly emit?: (chunk: (text: string) => Operation<void>) => Operation<void>;
 }
 
-export function* useStubExecutionHost(options: StubHostOptions): Operation<StubHostLog> {
+export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
   const log: StubHostLog = { requests: [], runs: [], roots: [] };
   let generated = 0;
-  yield* installExecutionHost({
+  const provider: ExecutionHostProvider = {
     *runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
       const request = invocation.request;
       log.requests.push(request);
@@ -105,6 +110,6 @@ export function* useStubExecutionHost(options: StubHostOptions): Operation<StubH
       log.runs.push(scope);
       return scope;
     },
-  });
-  return log;
+  };
+  return { log, provider };
 }

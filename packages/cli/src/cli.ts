@@ -98,7 +98,7 @@ import {
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
-import { installTestingExecutionHost } from "./testing-host.ts";
+import { testingExecutionHost } from "./testing-host.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
 import {
@@ -673,10 +673,10 @@ function* runDocument(
   // the provider for a service.
   yield* installService();
 
-  // What a `<Test>` in this document runs a nested execution under. Installed
-  // beside the service adapter and after the components, so a child is offered
-  // exactly what this command assembled — and never a second description of it.
-  yield* installTestingExecutionHost({
+  // What a `<Test>` in this document runs a nested execution under. Captured
+  // before document code begins, so a child is offered exactly what this
+  // command assembled — and never a second description of it.
+  const testingHost = testingExecutionHost({
     componentDirs: componentDir,
     secretDetection,
     installService,
@@ -700,7 +700,7 @@ function* runDocument(
     // The harness installer is this command's, not the document's: canonical
     // `<Test>` hands each invocation's authority to whoever the host attached,
     // and this is where `xmd` says that is the testing package.
-    [...(mode.installations ?? []), testHarnessInstallation()],
+    [...(mode.installations ?? []), testHarnessInstallation(testingHost)],
   );
 
   // Consume the output stream with forEach.
