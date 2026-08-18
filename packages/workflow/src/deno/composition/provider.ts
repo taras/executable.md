@@ -35,6 +35,7 @@ import type {
   GitSwitchRequest,
   GitSwitchResult,
 } from "../../composition/git-records.ts";
+import type { GitPushOutcome, GitPushRequest } from "../../composition/git-push-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -53,6 +54,7 @@ import { createWorktree, prepareWorktreeAttachment, worktreeDisagreement } from 
 import { createGitSwitch } from "./switch.ts";
 import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
+import { createGitPush } from "./push.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
@@ -199,6 +201,11 @@ export function useGitComposition(
       *commitIndex([request]: [GitCommitRequest]): Operation<GitCommitResult> {
         observe.effect?.("git", "commit");
         return yield* createGitCommit(database, host, request);
+      },
+
+      *pushCurrentBranch([request]: [GitPushRequest]): Operation<GitPushOutcome> {
+        observe.effect?.("git", "push");
+        return yield* createGitPush(database, host, request);
       },
     },
     { at: "min" },

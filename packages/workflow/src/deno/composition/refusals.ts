@@ -37,9 +37,11 @@ const WORKTREE_REASONS: ReadonlyMap<string, WorktreeFailureReason> = new Map([
 /**
  * The words a Git operation may be refused under, once it has begun.
  *
- * `no-repository-context` and `invalid-invocation` are deliberately absent: both
- * are decided by the component before any effect exists, so neither can arrive
- * back through the journal.
+ * `no-repository-context`, `invalid-invocation` and `unnamed-branch` are
+ * deliberately absent. The first two are decided by the component before any
+ * effect exists; the third is decided by Push before it describes a Git-host
+ * effect, and Push publishes no local durable result for it. None of the three
+ * can arrive back through the journal.
  */
 const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
   ["invalid-branch", "invalid-branch"],
@@ -83,6 +85,12 @@ const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
     "empty-index",
     "nothing is staged in the checkout it ran in, so there is no commit to make. Nothing was " +
       "staged for it: that component commits the index and never fills one.",
+  ],
+  [
+    "unnamed-branch",
+    "the checkout it ran in is not on a named branch, so there is no branch to publish. " +
+      "Nothing was contacted: a detached HEAD names a commit rather than somewhere to " +
+      "publish it to, and this component never invents a destination for one.",
   ],
 ]);
 

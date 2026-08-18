@@ -1046,15 +1046,76 @@ root that did not move, replayed exactly.
 
 ### 7.4 Push
 
-`<Git.Push />` has no props or result initially. It requires a current named
-branch, pushes it to the Repository's primary remote and establishes upstream
-tracking when necessary. The remote is a Git host, not the local Git capability
-that staged and committed: it owns the branch this publishes to, so Push
-reconciles through §10.2 rather than through the Workspace transaction. The same
-remote commit is compatible completion. Remote divergence fails; Push never
-force-pushes.
+```md
+<Repository name="project" url={props.repository}>
+  <Git.Switch branch="release/1.4" />
+  <Git.Add paths="release/notes.md" />
+  <Git.Commit message="Prepare 1.4" as="commit" />
+  <Git.Push />
+</Repository>
+```
+
+`<Git.Push />` takes no props. There is nothing to name: the remote is the
+Repository's own `origin`, the branch is the one the selected checkout is on,
+and the commit is the one that branch points at. Which checkout that is, is
+decided the way §7.1 decides it, so the same element inside a `<Dir>` at a
+linked worktree publishes that worktree's branch instead. There are initially no
+`remote`, `branch`, `refspec`, `path`, `force`, `upstream`, `provider` or
+credential props: publishing somewhere other than where the checkout is takes an
+explicit contract this component does not have.
+
+It renders nothing, binds nothing and takes no content, and it exposes no
+component result. That is a statement about what a document can read, not about
+what the run retains — the filtered reconciliation record below is durable.
+
+**Where the remote sits.** The branch this publishes to belongs to a Git host,
+which no local transaction can enclose, so Push reconciles through §10.2 rather
+than through the Workspace transaction. It observes the destination before it
+mutates: a destination that already holds this exact commit is compatible
+completion and is adopted with nothing performed, a destination proven absent is
+published to once, and a destination holding another commit is a conflict. Push
+never force-pushes, resets, merges or rebases, and it never creates or changes
+`branch.<name>.remote` or `branch.<name>.merge` — on success, on refusal, on
+cancellation, on crash and on replay alike.
 
 Push is explicit. Neither Commit nor PullRequest publishes implicitly.
+
+**The one refusal of its own.** A checkout whose HEAD names no branch has
+nothing to publish. It is decided from the checkout's own state, before a
+Git-host effect exists and before any remote is contacted, and it is a
+`unnamed-branch` refusal a document can act on. Failure otherwise follows §7.1:
+no Repository in scope, a Repository that is not the retained one and a
+directory inside no retained checkout are failures of the run.
+
+**What reaches the Git host, and how.** The network operation never runs through
+the selected checkout's own `.git/config`. That file is inside the Workspace the
+run retains, so a document can write one, and `remote.origin.pushurl`, a
+`url.<base>.pushInsteadOf` rewrite, a `pre-push` hook, a credential helper and a
+signing program are all things it could then name. The provider instead runs the
+transport in a disposable repository of its own, configured by nothing but its
+own creation, which reads the selected checkout's object database through a
+read-only alternate — the authenticated private object-source attachment of
+§10.2. The transport destination is the exact private retained locator, not a
+mutable `remote.origin.url` or `pushurl`, and the push carries one explicit
+refspec, no upstream option and no force option.
+
+**What it retains.** One filtered Git-host reconciliation record: the filtered
+Repository identity — its name, locator fingerprint, requested base, creation
+commit, primary branch and object format, and never its checkout path — the
+remote `origin`, the branch, the full destination ref `refs/heads/<branch>`, the
+refspec `<commit>:<destination>`, the local commit, the observed remote commit,
+and the reconciliation decision. No host path, locator, credential, Git object
+content or provider output appears in it. The natural key is that Repository
+identity with the remote and the destination ref: the external resource is the
+Repository's origin branch, while the complete request and its durable
+fingerprint still discriminate a changed source commit.
+
+A retained record is read back for the invocation that recorded it. Beyond the
+shape it describes a reconciliation this operation can reach: the remote is
+`origin`, the destination is that branch's ref, the refspec is that commit
+published to that destination, the observed commit is the one published, and the
+decision agrees with the pre-state — `performed` follows proven absence and
+`adopted` follows a destination that already held the commit.
 
 ### 7.5 Pull request
 
@@ -1284,6 +1345,13 @@ Workspace, Agent or external providers. It still reconstructs the bundle and
 still applies that admission, so retained output is accepted only for a history
 this run is a run of.
 
+A partial replay that reaches a completed Git-host effect may still reconstruct
+what that effect needed locally — a Push rebuilds its checkout from the Workspace
+in order to name the request it is asking about — and then hands back the
+retained record without selecting a provider, contacting the host or appending
+anything. The object-source attachment such a reconstruction produces is never
+durable and never reaches routing middleware.
+
 A suspended root has no Close and is partial history. Resume reconstructs only
 the ephemeral structure reached on the path back to the request. Earlier
 durable effects, including the request publication, restore without contacting
@@ -1415,6 +1483,28 @@ refusal, because a live operation that appended nothing would leave the next one
 to append at its journal position. A malformed value actually submitted to the
 terminal remains the distinct local protocol failure, which likewise publishes
 nothing.
+
+**What the provider may be given that the request does not carry.** A Git-host
+effect sometimes needs live local access the frozen request cannot describe. A
+Push needs the Git objects its commit is made of, and the destination it is
+authorized to reach. Both travel as an **object-source attachment**: adapter-private
+composition data the trusted host builds for exactly one reconciliation, holds in
+the selected provider's own closure, and disposes with that invocation.
+
+An attachment is authenticated against the retained identity it belongs to
+before it exists — the observed Repository record is compared with the retained
+row member for member, every retained row is held to the identity naming it, and
+the exported checkout is proven to be the one that record claims. It is never a
+durable input, never part of the natural key, and never visible to routing: the
+public surface carries the frozen JSON request and nothing else, so no middleware
+receives a locator, a host path, a credential, an object database or a function.
+
+**No transaction spans the Workspace and the host.** The Workspace transaction a
+Git-host effect opens is read-only and is closed before the host is observed, so
+a network round trip never holds the run's database. Nothing is claimed across
+the two: the local record commits on its own, and reconciliation — not a
+distributed transaction — is what makes an interrupted attempt reach the host
+once.
 
 **Cancellation.** Cancellation tears down the provider call, publishes no
 invented completion, and is never reported as Git-host unavailability.

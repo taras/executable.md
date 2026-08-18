@@ -68,7 +68,8 @@ import {
   GitOperationAuthorityError,
   GitOperationInfrastructureError,
 } from "../../composition/errors.ts";
-import type { StoredRepository } from "../workspace/repositories.ts";
+import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
+import type { StoredRepository, WorkspaceMetadata } from "../workspace/repositories.ts";
 import {
   currentBranch,
   gitSession,
@@ -169,7 +170,15 @@ export interface GitCheckout {
   readonly identity: GitCheckoutIdentity;
 }
 
-interface Selection {
+/**
+ * Which retained checkout one operation runs in, and what travels with it.
+ *
+ * Produced inside a Workspace transaction and consumed outside one, because the
+ * two halves need different things: choosing a checkout reads retained rows,
+ * and working in it reads a host tree. Both local Git effects and Push select
+ * this way, so the selection is a value rather than a step inside either.
+ */
+export interface GitCheckoutSelection {
   readonly repository: StoredRepository;
   readonly worktrees: readonly WorktreeRecord[];
   /** The Worktree this operation runs in, or `undefined` for the primary checkout. */
@@ -194,13 +203,13 @@ function unauthorized(operation: string, reason: string): never {
  * only be looked up, and looking one up is what a replaced context would rely
  * on.
  */
-function select(
-  context: MutationContext,
+export function selectGitCheckout(
+  metadata: WorkspaceMetadata,
   operation: string,
   request: GitOperationRequest,
-): Selection {
+): GitCheckoutSelection {
   const observed = request.repository;
-  const stored = context.metadata.readRepository(observed.name);
+  const stored = metadata.readRepository(observed.name);
   if (stored === undefined) {
     unauthorized(operation, "this run retains no Repository under the name it was given");
   }
@@ -213,7 +222,7 @@ function select(
     );
   }
 
-  const worktrees = context.metadata
+  const worktrees = metadata
     .readWorktreesForRepository(observed.name)
     .map((worktree) => agreedWorktree(worktree, worktreeSubject(worktree.name)));
 
@@ -360,11 +369,113 @@ function* disagreement(
   }
 }
 
+/** Where one retained Repository/Worktree family landed on the host. */
+export interface ExportedCheckouts {
+  readonly repositoryDirectory: string;
+  /** The selected checkout's own directory: the Repository's, or a Worktree's. */
+  readonly directory: string;
+  readonly worktreeDirectories: readonly string[];
+}
+
+/**
+ * Write the whole retained family into a host tree Git can be pointed at.
+ *
+ * The whole family, even when the operation runs in one checkout of it. Git
+ * decides what a repository's worktrees are by reading its own record of them,
+ * and it consults that record to refuse a branch another checkout holds — so a
+ * family exported in part would answer that question wrongly.
+ *
+ * This is the only step that reads the authoritative filesystem, which is why
+ * it is a function of its own: it runs inside a Workspace transaction, and
+ * everything after it runs against files, outside one. A Git subprocess never
+ * holds the run's database open.
+ */
+export function* exportCheckoutFamily(
+  filesystem: DenoWorkspaceFilesystem,
+  root: string,
+  selection: GitCheckoutSelection,
+): Operation<ExportedCheckouts> {
+  const record = selection.repository.record;
+  const repositoryDirectory = yield* exportTree(
+    filesystem,
+    root,
+    record.checkoutPath,
+    repositorySubject(record.name),
+  );
+  // The selected checkout's own directory is taken from the export that
+  // produced it rather than looked up afterwards: the two are the same string
+  // by construction, and a lookup that could miss would need a fallback that
+  // silently ran Git somewhere else.
+  let directory = repositoryDirectory;
+  const worktreeDirectories: string[] = [];
+  for (const worktree of selection.worktrees) {
+    const exported = yield* exportTree(
+      filesystem,
+      root,
+      worktree.checkoutPath,
+      worktreeSubject(worktree.name),
+    );
+    worktreeDirectories.push(exported);
+    if (worktree === selection.worktree) {
+      directory = exported;
+    }
+  }
+  return {
+    repositoryDirectory,
+    directory,
+    worktreeDirectories: Object.freeze(worktreeDirectories),
+  };
+}
+
+/**
+ * The exported checkout, once it is usable and once it is the retained one.
+ *
+ * Three things in one order, and the order is the point. The administration is
+ * localized first, because until it is, a linked worktree's pointers still name
+ * Workspace paths and native Git can answer nothing about it. The working
+ * directory is then proven to be a real directory inside the export. And the
+ * creation identity the record claims is read back out of the bytes — where the
+ * checkout came from, how it names objects, that the commit it was created at
+ * is present, and for a linked worktree that it is a worktree of the Repository
+ * it belongs to.
+ *
+ * Everything here reads the host tree rather than the Workspace, so it belongs
+ * outside the transaction that produced the export.
+ */
+export function* prepareCheckout(
+  root: string,
+  git: GitSession,
+  selection: GitCheckoutSelection,
+  exported: ExportedCheckouts,
+  operation: string,
+): Operation<GitCheckout> {
+  const record = selection.repository.record;
+  const { repositoryDirectory, directory, worktreeDirectories } = exported;
+
+  yield* localizeAdministration(root, repositoryDirectory, worktreeDirectories, selection.subject);
+
+  const checkout: GitCheckout = {
+    git,
+    directory,
+    repositoryDirectory,
+    workingDirectory: yield* workingDirectoryOf(directory, selection.within, operation),
+    identity: selection.identity,
+  };
+
+  yield* disagreement(
+    git,
+    { directory, repositoryDirectory, repository: record },
+    record,
+    selection.worktree,
+  );
+  return checkout;
+}
+
 function runInCheckout<T>(
   context: MutationContext,
   host: RepositoryHost,
   operation: string,
-  selection: Selection,
+  selection: GitCheckoutSelection,
   perform: (checkout: GitCheckout, before: GitCheckoutState) => Operation<T>,
   describe: (
     checkout: GitCheckout,
@@ -378,51 +489,9 @@ function runInCheckout<T>(
     const root = yield* host.useDirectory();
     const git = gitSession(host, root);
 
-    const repositoryDirectory = yield* exportTree(
-      context.filesystem,
-      root,
-      record.checkoutPath,
-      repositorySubject(record.name),
-    );
-    // The selected checkout's own directory is taken from the export that
-    // produced it rather than looked up afterwards: the two are the same string
-    // by construction, and a lookup that could miss would need a fallback that
-    // silently ran Git somewhere else.
-    let directory = repositoryDirectory;
-    const worktreeDirectories: string[] = [];
-    for (const worktree of selection.worktrees) {
-      const exported = yield* exportTree(
-        context.filesystem,
-        root,
-        worktree.checkoutPath,
-        worktreeSubject(worktree.name),
-      );
-      worktreeDirectories.push(exported);
-      if (worktree === selection.worktree) {
-        directory = exported;
-      }
-    }
-    yield* localizeAdministration(
-      root,
-      repositoryDirectory,
-      worktreeDirectories,
-      selection.subject,
-    );
-
-    const checkout: GitCheckout = {
-      git,
-      directory,
-      repositoryDirectory,
-      workingDirectory: yield* workingDirectoryOf(directory, selection.within, operation),
-      identity: selection.identity,
-    };
-
-    yield* disagreement(
-      git,
-      { directory, repositoryDirectory, repository: record },
-      record,
-      selection.worktree,
-    );
+    const exported = yield* exportCheckoutFamily(context.filesystem, root, selection);
+    const { repositoryDirectory, directory, worktreeDirectories } = exported;
+    const checkout = yield* prepareCheckout(root, git, selection, exported, operation);
 
     const before = yield* checkoutState(git, directory, operation);
     const performed = yield* perform(checkout, before);
@@ -464,7 +533,7 @@ export function* performGitOperation<T>(
     performed: T,
   ) => Json,
 ): Operation<CompositionOutcome> {
-  const selection = select(context, operation, request);
+  const selection = selectGitCheckout(context.metadata, operation, request);
   return yield* attempted(
     "git",
     operation,

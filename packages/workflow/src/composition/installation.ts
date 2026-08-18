@@ -20,6 +20,7 @@ import GitCommit, {
   props as gitCommitProps,
   returns as gitCommitReturns,
 } from "./components/GitCommit.ts";
+import GitPush, { props as gitPushProps } from "./components/GitPush.ts";
 
 const ORIGIN = "@executablemd/workflow/composition";
 
@@ -61,6 +62,12 @@ export function useCompositionComponents(): Operation<void> {
       props: gitCommitProps,
       returns: gitCommitReturns,
       fn: GitCommit,
+    },
+    {
+      name: "Git.Push",
+      origin: ORIGIN,
+      props: gitPushProps,
+      fn: GitPush,
     },
   ]);
 }

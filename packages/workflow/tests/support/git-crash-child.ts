@@ -10,6 +10,7 @@
  *
  * ```sh
  * deno run -A git-crash-child.ts crash <root> <run-id> <locator> [switch|add|commit]
+ * deno run -A git-crash-child.ts push <root> <run-id> <locator>
  * deno run -A git-crash-child.ts inspect <root> <run-id>
  * ```
  *
@@ -24,6 +25,13 @@
  * `crash` assembles the same adapter modules the Deno provider installs rather
  * than calling `useWorkflowRunStorage`. `inspect` has no such need and uses the
  * provider itself.
+ *
+ * `push` stops somewhere else, because a Git-host effect commits nothing to the
+ * Workspace: its stopping point is the host, immediately after native Git has
+ * reported that the remote accepted the branch and before anything local has
+ * been appended. That is the gap the shared reconciliation exists for — the
+ * remote is mutated and the journal does not know it — so this is the one
+ * process that can produce it.
  */
 
 import process from "node:process";
@@ -45,8 +53,12 @@ import { useWorkspaceEffects } from "../../src/deno/workspace/effect.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import { transactWorkspaceRoots, usePrivateWorkspace } from "../../src/deno/workspace/private.ts";
+import { executeInstalled } from "@executablemd/core/host";
+import { retainedWorkflowInstallation } from "../../src/run.ts";
+import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
+import type { GitInvocation, GitOutcome } from "../../src/deno/composition/host.ts";
 import { count, report } from "./workspace-process.ts";
-import { addDocument, commitDocument, crashDocument } from "./git-crash-process.ts";
+import { addDocument, commitDocument, crashDocument, pushDocument } from "./git-crash-process.ts";
 import { headCommit, stagedPaths } from "./composition.ts";
 
 /** What each operation this can be killed inside is written as, and recorded under. */
@@ -127,6 +139,61 @@ function* crash(
   report({ ready: false, reason: "the operation committed" });
 }
 
+/**
+ * Publish a branch, and stop with the remote updated and nothing recorded.
+ *
+ * The host is where this stops. Native Git has already told the run that the
+ * remote accepted the exact commit, and the durable result has not been
+ * appended — so a signal delivered here leaves the two ends disagreeing, which
+ * is precisely the state the next execution has to reconcile without pushing
+ * again.
+ */
+function* pushCrash(root: string, runId: string, locator: string): Operation<void> {
+  yield* useWorkflowRunStorage({ root });
+  const opened = yield* WorkflowRunStorage.operations.lookup(runId);
+  if (!opened.ok) {
+    throw opened.error;
+  }
+  const database = opened.value;
+
+  const inner = denoRepositoryHost();
+  const host = {
+    *git(invocation: GitInvocation): Operation<GitOutcome> {
+      const outcome = yield* inner.git(invocation);
+      if (invocation.args[0] === "push" && outcome.code === 0) {
+        report({ ready: true, pushed: true });
+        // Deno leaves when its event loop is empty, and a suspended Effection
+        // task is not on it. A timer nothing clears is what keeps this process
+        // alive until the signal arrives.
+        setInterval(() => {}, 1_000);
+        yield* suspend();
+      }
+      return outcome;
+    },
+    useDirectory: inner.useDirectory,
+  };
+
+  yield* withWorkflowWorkspace(
+    database,
+    scoped(function* () {
+      return yield* collect(
+        yield* executeInstalled(
+          { ...inlineSource(pushDocument(locator)), stream: database.journal },
+          [
+            retainedWorkflowInstallation({
+              runId: database.record.runId,
+              base: database.record.base,
+              pinnedCommit: database.record.definition.objectId,
+            }),
+          ],
+        ),
+      );
+    }),
+    { composition: { host } },
+  );
+  report({ ready: false, reason: "the push published" });
+}
+
 function* inspect(root: string, runId: string): Operation<void> {
   yield* useWorkflowRunStorage({ root });
   const opened = yield* WorkflowRunStorage.operations.lookup(runId);
@@ -176,6 +243,10 @@ main(function* () {
   const [mode, root, runId, locator, operation] = process.argv.slice(2);
   if (mode === "crash") {
     yield* crash(root, runId, locator, operation ?? "");
+    return;
+  }
+  if (mode === "push") {
+    yield* pushCrash(root, runId, locator);
     return;
   }
   if (mode === "inspect") {

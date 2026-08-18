@@ -709,3 +709,147 @@ export function* readCommitMessage(
   const outcome = yield* git.run(["log", "-1", "--pretty=format:%B", commit, "--"], directory);
   return outcome.code === 0 ? outcome.stdout : undefined;
 }
+
+/**
+ * The disposable repository one push reads its objects through.
+ *
+ * Never the selected checkout. A checkout carries its own `.git/config`, that
+ * file is inside the Workspace this run retains, and a document can write one —
+ * so `remote.origin.pushurl`, a `url.<base>.pushInsteadOf` rewrite, a
+ * `pre-push` hook, a credential helper and `gpg.program` are all things a
+ * pushed-from checkout could be asked to consult. Running the network operation
+ * there would let retained document data choose where this run publishes, what
+ * signs it, and what else runs while it happens.
+ *
+ * So the transport runs in a repository this provider just created, whose
+ * configuration is what `git init` wrote and nothing else. Nothing is copied
+ * into it: the objects it needs are reached through a read-only alternate
+ * naming the selected checkout's own object database, which is what makes this
+ * a different door onto the same objects rather than a second copy of them.
+ *
+ * The object format is the retained record's. An alternate whose objects are
+ * named by another algorithm is not a database this repository can read.
+ */
+export function* initControlPlane(
+  git: GitSession,
+  parent: string,
+  directory: string,
+  format: GitObjectFormat,
+): Operation<void> {
+  const outcome = yield* git.run(
+    [
+      "init",
+      "--bare",
+      "--quiet",
+      `--object-format=${format}`,
+      `--initial-branch=${PROVIDER_BRANCH}`,
+      "--",
+      directory,
+    ],
+    parent,
+  );
+  if (outcome.code !== 0) {
+    throw new GitRefusal("unusable-repository");
+  }
+}
+
+/** What one observation of a remote ref proved. */
+export type RemoteRefObservation =
+  | { readonly state: "absent" }
+  | { readonly state: "present"; readonly commit: string }
+  | { readonly state: "ambiguous" }
+  | { readonly state: "unreachable" };
+
+/**
+ * What the Git host holds at one exact ref, right now.
+ *
+ * `ls-remote` without `--exit-code`, so the two answers this has to tell apart
+ * stay apart: a transport that could not answer exits nonzero, while a
+ * repository that simply has no such ref exits zero and prints nothing. With
+ * `--exit-code` both would be a nonzero exit, and "the remote does not have
+ * this branch" would be indistinguishable from "the remote could not be
+ * reached" — which is the one confusion that would let an unreachable host be
+ * read as proven absence and performed against.
+ *
+ * The locator is the exact retained one and is given after `--`, so no
+ * configured remote name, pushurl or rewrite takes part in where this looks.
+ *
+ * What comes back is lines a remote wrote, so it is parsed rather than read.
+ * Data this cannot decide — a line with no separator, an object id that is not
+ * one in this repository's algorithm, or the same ref named twice — is
+ * ambiguity rather than a guess, because the state machine performs against
+ * proven absence and adopts against a proven commit, and neither is something
+ * to infer from a line that did not parse.
+ */
+export function* observeRemoteRef(
+  git: GitSession,
+  directory: string,
+  locator: string,
+  ref: string,
+  format: GitObjectFormat,
+): Operation<RemoteRefObservation> {
+  const outcome = yield* git.run(["ls-remote", "--", locator, ref], directory);
+  if (outcome.code !== 0) {
+    return { state: "unreachable" };
+  }
+
+  const width = format === "sha1" ? 40 : 64;
+  const objectId = new RegExp(`^[0-9a-f]{${width}}$`);
+  const named: string[] = [];
+  for (const line of outcome.stdout.split("\n")) {
+    if (line === "") {
+      continue;
+    }
+    const separator = line.indexOf("\t");
+    if (separator < 0) {
+      return { state: "ambiguous" };
+    }
+    if (line.slice(separator + 1) !== ref) {
+      continue;
+    }
+    const commit = line.slice(0, separator);
+    if (!objectId.test(commit)) {
+      return { state: "ambiguous" };
+    }
+    named.push(commit);
+  }
+
+  if (named.length === 0) {
+    return { state: "absent" };
+  }
+  if (named.length > 1) {
+    return { state: "ambiguous" };
+  }
+  return { state: "present", commit: named[0] ?? "" };
+}
+
+/**
+ * Publish one exact commit to one exact ref, and say whether Git accepted it.
+ *
+ * One explicit refspec and nothing implicit around it. There is no remote name,
+ * so no configuration decides where this goes; no `--force` and no
+ * `--force-with-lease`, so a destination Git will not fast-forward is refused
+ * by Git rather than overwritten here; and no `--set-upstream`, so
+ * `branch.<name>.remote` and `branch.<name>.merge` are exactly what they were.
+ *
+ * `--no-verify` beside the host's fixed `core.hooksPath`, which is what makes
+ * every hook absent rather than merely skipped, and `push.gpgSign=false`, so
+ * nothing signs a push certificate on a document's behalf.
+ *
+ * The answer is the exit status. What Git printed is not read: a remote writes
+ * into that stream, and a rejection this provider read out of a sentence would
+ * be a remote deciding what this run believes happened. What a nonzero exit
+ * earns is one more exact observation, made by the caller.
+ */
+export function* pushRefspec(
+  git: GitSession,
+  directory: string,
+  locator: string,
+  refspec: string,
+): Operation<boolean> {
+  const outcome = yield* git.run(
+    ["push", "--porcelain", "--no-verify", "--", locator, refspec],
+    directory,
+  );
+  return outcome.code === 0;
+}
