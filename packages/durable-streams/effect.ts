@@ -38,6 +38,7 @@ import {
 import { ReplayGuard } from "./replay-guard.ts";
 import { consumable, observeEvent } from "./retained.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
+import { advanceDurablePosition } from "./position.ts";
 import type {
   CoroutineView,
   DurableEffect,
@@ -156,6 +157,7 @@ function checkReplay<T>(
 
       if (outcome.outcome === "error") {
         ctx.replayIndex.consumeYield(ctx.coroutineId);
+        advanceDurablePosition(ctx);
         const error =
           outcome.error ??
           new StaleInputError(`Stale input detected for ${desc.type}("${desc.name}")`, {
@@ -169,6 +171,7 @@ function checkReplay<T>(
 
       // All guards approved — consume the entry and advance cursor
       ctx.replayIndex.consumeYield(ctx.coroutineId);
+      advanceDurablePosition(ctx);
 
       // Feed stored result synchronously, as a fresh mutable copy: the
       // authoritative result stays frozen so policy cannot rewrite it, while a
@@ -263,6 +266,9 @@ export function createDurableEffect<T>(
         routine.scope.run(function* () {
           try {
             yield* appendDurableEvent(ctx, event);
+            // After the append commits, not before: a position counts what the
+            // journal holds, so an append that failed must not move it.
+            advanceDurablePosition(ctx);
             resolve(protocolToEffection<T>(result));
           } catch (err) {
             resolve({
@@ -387,6 +393,7 @@ export function createDurableOperation<T extends Json>(
                 result: published,
               };
               yield* appendDurableEvent(ctx, event);
+              advanceDurablePosition(ctx);
             },
             activateFailure,
             getJournalProvenance(ctx.stream),

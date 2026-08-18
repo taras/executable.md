@@ -29,6 +29,13 @@ export interface DurableContext {
   coroutineId: CoroutineId;
   /** Counter for assigning child IDs. */
   childCounter: number;
+  /**
+   * How many durable yields this coroutine has settled.
+   *
+   * Advanced by both settlement paths, so a coroutine running past its retained
+   * history keeps counting where replay left off. See `position.ts`.
+   */
+  position?: number;
   /** Protocol failure shared by the root and every durable child. */
   durability?: DurabilityState;
 }
