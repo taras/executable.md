@@ -737,7 +737,16 @@ describe(
   () => {
     it("CT19: file help exits zero, describes the catalog, and never installs", function* () {
       yield* useFixture({ "doc.md": EFFECTFUL }, function* (dir) {
-        const run = yield* helpRun(["run", path.join(dir, "doc.md"), "--help"], dir);
+        // The journal is *requested*, so its absence is evidence. Asking for
+        // one and getting none is what separates "help created no journal"
+        // from "nothing asked for a journal", which any run would satisfy.
+        // IE19 is the positive control: an ordinary run with this option
+        // writes the trace.
+        const trace = path.join(dir, "trace.jsonl");
+        const run = yield* helpRun(
+          ["run", path.join(dir, "doc.md"), "--help", "--journal", trace],
+          dir,
+        );
 
         expect(run.status).toBe(0);
         expect(run.stdout).toContain("Targets in ");
@@ -749,7 +758,7 @@ describe(
         expect(run.serviceInstalled).toBe(false);
         expect(yield* exists(path.join(dir, "written.txt"))).toBe(false);
         expect(yield* exists(path.join(dir, ".xmd-eval"))).toBe(false);
-        expect(yield* exists(path.join(dir, "trace.jsonl"))).toBe(false);
+        expect(yield* exists(trace)).toBe(false);
       });
     });
   },
