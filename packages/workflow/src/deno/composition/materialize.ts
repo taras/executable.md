@@ -36,6 +36,9 @@ import { chmod, readFile, readlink, realpath, symlink, writeFile } from "node:fs
 import { RepositoryStaleStateError } from "../../composition/errors.ts";
 import type { DenoWorkspaceFilesystem } from "../workspace/filesystem.ts";
 
+/** Where the two administration files a linked worktree needs are written. */
+const GITDIR_PREFIX = "gitdir: ";
+
 /**
  * The host path a Workspace path names beneath this materialization root.
  *
@@ -263,4 +266,256 @@ export function* importTree(
     yield* filesystem.mkdir(parent, { recursive: true });
   }
   yield* importEntry(filesystem, source, workspacePath);
+}
+
+/**
+ * Git's control plane is not ordinary content.
+ *
+ * A tracked symbolic link inside a checkout is data: Git recorded its target in
+ * a commit, and the exporter recreates it verbatim because anything else would
+ * hand Git a tree it never produced. `.git` is not data. It is where Git is told
+ * what repository it is operating on, and the operating system resolves it
+ * before Git reports anything about it — so a `.git` that is a link to a
+ * compatible external repository answers every identity question this provider
+ * asks while native Git works entirely outside the export.
+ *
+ * The same is true of everything the linked-worktree administration is made of.
+ * `.git/worktrees` is read to discover which pointers exist, so a link there
+ * makes an external directory the thing that is read — and then rewritten, since
+ * localization writes back to whatever it found. And the pointers themselves are
+ * paths: one relative or traversal-shaped value is an administration directory
+ * outside the export, reached without any link at all.
+ *
+ * So the control plane is an explicitly validated exception. Every entry it is
+ * made of has to be the kind Git writes, present as a real entry rather than as
+ * something standing in for one, and every pointer value has to name one place
+ * beneath the Workspace root. Checked before any rewriting and before any Git
+ * command, because both are what would otherwise trust it.
+ */
+interface ControlPlane {
+  /** `<repository>/.git`, a real directory. */
+  readonly administration: string;
+  /** Slot name to its real `<repository>/.git/worktrees/<slot>` directory. */
+  readonly slots: ReadonlyMap<string, string>;
+}
+
+function* realDirectory(path: string): Operation<boolean> {
+  return (yield* entry(path))?.isDirectory() === true;
+}
+
+function* realFile(path: string): Operation<boolean> {
+  return (yield* entry(path))?.isFile() === true;
+}
+
+function refuse(subject: string, reason: string): never {
+  throw new RepositoryStaleStateError(subject, reason);
+}
+
+/**
+ * The exported repository's control plane, once every part of it is real.
+ *
+ * `lstat` throughout: a symbolic link reports as a link rather than as whatever
+ * it points at, so nothing here is decided by following one.
+ */
+function* repositoryControlPlane(
+  repositoryHostPath: string,
+  subject: string,
+): Operation<ControlPlane> {
+  const administration = `${repositoryHostPath}/.git`;
+  if (!(yield* realDirectory(administration))) {
+    refuse(
+      subject,
+      "the `.git` in the checkout it holds is not a real directory, so native Git would be " +
+        "told to operate on a repository this run did not retain",
+    );
+  }
+
+  const worktrees = `${administration}/worktrees`;
+  const slots = new Map<string, string>();
+  if ((yield* entry(worktrees)) !== undefined) {
+    if (!(yield* realDirectory(worktrees))) {
+      refuse(subject, "its `.git/worktrees` is not a real directory");
+    }
+    for (const name of yield* readdir(worktrees)) {
+      const slot = `${worktrees}/${name}`;
+      if (!(yield* realDirectory(slot))) {
+        refuse(subject, "one of its linked-worktree administration directories is not a real one");
+      }
+      // A slot is a pair or it is nothing. `git worktree add` creates the
+      // directory and writes this pointer together, so a slot that exists
+      // without one is not a stage of anything — it is a repository whose
+      // record of its own worktrees is incomplete, and native Git will still
+      // answer every identity query while it is.
+      if (!(yield* realFile(`${slot}/gitdir`))) {
+        refuse(
+          subject,
+          "one of its linked-worktree administration directories has no real `gitdir` pointer, " +
+            "so the repository's own record of its worktrees is incomplete",
+        );
+      }
+      slots.set(name, slot);
+    }
+  }
+  return { administration, slots };
+}
+
+/** The `<worktree>/.git` pointer file, once it is a real regular file. */
+function* worktreePointer(worktreeHostPath: string, subject: string): Operation<string> {
+  const pointer = `${worktreeHostPath}/.git`;
+  if (!(yield* realFile(pointer))) {
+    refuse(
+      subject,
+      "the `.git` in the worktree it holds is not a real file, so the administration native " +
+        "Git would follow is not the one this run retained",
+    );
+  }
+  return pointer;
+}
+
+function rewriteLine(content: string, rewrite: (path: string) => string): string {
+  const trimmed = content.trimEnd();
+  if (trimmed.startsWith(GITDIR_PREFIX)) {
+    return `${GITDIR_PREFIX}${rewrite(trimmed.slice(GITDIR_PREFIX.length))}\n`;
+  }
+  return `${rewrite(trimmed)}\n`;
+}
+
+function* pointerValue(file: string): Operation<string> {
+  const trimmed = (yield* readTextFile(file)).trimEnd();
+  return trimmed.startsWith(GITDIR_PREFIX) ? trimmed.slice(GITDIR_PREFIX.length) : trimmed;
+}
+
+/**
+ * The Workspace path a retained pointer names, once it names one at all.
+ *
+ * A retained pointer holds a Workspace path, because that is what
+ * canonicalization left there. Relative, empty, dot-segmented and
+ * traversal-shaped values are all refused rather than resolved: each of them
+ * names an administration directory somewhere other than where this run put one,
+ * and prefixing a root onto it would produce a path that leaves the export.
+ */
+function* retainedPointer(file: string, subject: string): Operation<string> {
+  const value = canonicalWorkspacePath(yield* pointerValue(file));
+  if (value === undefined) {
+    refuse(
+      subject,
+      "a linked-worktree administration pointer does not name one place beneath the " +
+        "Workspace root",
+    );
+  }
+  return value;
+}
+
+/**
+ * Hold the exported pair to each other before either is rewritten.
+ *
+ * Both ends are present here, so the check can be exact rather than merely
+ * contained: the worktree's pointer must name a slot this repository really has,
+ * and that slot's own pointer must name this worktree back. A pointer that
+ * passed the shape rule and still named some other checkout is what this
+ * catches.
+ */
+function* agreedPair(
+  root: string,
+  control: ControlPlane,
+  worktreeHostPath: string,
+  subject: string,
+): Operation<void> {
+  const pointer = yield* worktreePointer(worktreeHostPath, subject);
+  const named = `${root}${yield* retainedPointer(pointer, subject)}`;
+  const slot = [...control.slots.values()].find((candidate) => candidate === named);
+  if (slot === undefined) {
+    refuse(
+      subject,
+      "its `.git` names an administration directory the repository it belongs to does not have",
+    );
+  }
+  // Unconditional: every slot reaching here has been proven to hold a real
+  // pointer, so there is no absence for a comparison to be skipped over.
+  if (`${root}${yield* retainedPointer(`${slot}/gitdir`, subject)}` !== pointer) {
+    refuse(subject, "its administration directory names a different worktree");
+  }
+}
+
+/** Put a materialization root back in front of every retained administration path. */
+/**
+ * Every administration file a rewrite may touch, and nothing else.
+ *
+ * Discovered from the validated control plane rather than from the filesystem
+ * again, so the set that is rewritten is exactly the set that was proven real —
+ * and nothing is filtered out of it, because a slot that could be filtered out
+ * has already been refused.
+ */
+function* administrationFiles(
+  control: ControlPlane,
+  worktreeHostPaths: readonly string[],
+  subject: string,
+): Operation<string[]> {
+  const files = [...control.slots.values()].map((slot) => `${slot}/gitdir`);
+  for (const path of worktreeHostPaths) {
+    files.push(yield* worktreePointer(path, subject));
+  }
+  return files;
+}
+
+export function* localizeAdministration(
+  root: string,
+  repositoryHostPath: string,
+  worktreeHostPaths: readonly string[],
+  subject: string,
+): Operation<void> {
+  const control = yield* repositoryControlPlane(repositoryHostPath, subject);
+  for (const worktreeHostPath of worktreeHostPaths) {
+    yield* agreedPair(root, control, worktreeHostPath, subject);
+  }
+
+  for (const file of yield* administrationFiles(control, worktreeHostPaths, subject)) {
+    const value = yield* retainedPointer(file, subject);
+    const content = yield* readTextFile(file);
+    yield* writeTextFile(
+      file,
+      rewriteLine(content, () => `${root}${value}`),
+    );
+  }
+}
+
+/**
+ * Take the materialization root back out of every administration path.
+ *
+ * What is left is a Workspace path, which is what may be retained. A value that
+ * does not begin with the root is refused rather than left alone: Git wrote an
+ * administration path this provider did not predict, and retaining it would keep
+ * a host path — or a pointer to somewhere else entirely — in the run.
+ */
+export function* canonicalizeAdministration(
+  root: string,
+  repositoryHostPath: string,
+  worktreeHostPaths: readonly string[],
+  subject: string,
+): Operation<void> {
+  const control = yield* repositoryControlPlane(repositoryHostPath, subject);
+
+  for (const file of yield* administrationFiles(control, worktreeHostPaths, subject)) {
+    const value = yield* pointerValue(file);
+    if (!value.startsWith(`${root}/`)) {
+      refuse(
+        subject,
+        "a linked-worktree administration pointer names somewhere outside the directory this " +
+          "run materialized it in",
+      );
+    }
+    const retained = canonicalWorkspacePath(value.slice(root.length));
+    if (retained === undefined) {
+      refuse(
+        subject,
+        "a linked-worktree administration pointer does not name one place beneath the " +
+          "Workspace root",
+      );
+    }
+    const content = yield* readTextFile(file);
+    yield* writeTextFile(
+      file,
+      rewriteLine(content, () => retained),
+    );
+  }
 }

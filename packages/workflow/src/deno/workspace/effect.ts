@@ -18,7 +18,7 @@ import {
 import type { WorkflowRunConnections } from "../connections.ts";
 import { withEnlistedJournalRoute } from "../journal-route.ts";
 import { savepoint } from "../transaction.ts";
-import { isJournalableWorkspaceFailure } from "./errors.ts";
+import { isJournaledEffectFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
 import type { WorkspaceMetadata } from "./repositories.ts";
 import {
@@ -159,9 +159,12 @@ function* coordinateTransaction<T extends Json>(
     const root = yield* workspace.capture();
     yield* workspace.publish(root.rootId);
   } catch (error) {
-    if (!isJournalableWorkspaceFailure(error)) {
+    if (!isJournaledEffectFailure(error)) {
       throw error;
     }
+    // No `publish` on this path, deliberately: a failed effect leaves the
+    // Workspace root exactly where it found it, and the savepoint above has
+    // already taken back whatever the attempt had written.
     result = { status: "err", error: serializeError(error) };
   }
 

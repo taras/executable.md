@@ -145,6 +145,30 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "packages/workflow/tests/repository-components.test.ts",
+    reason:
+      "drives <Repository> and <Dir> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/293",
+  },
+  {
+    path: "packages/workflow/tests/repository-storage.test.ts",
+    reason:
+      "clones local bare repositories with a real `git` into the Deno DOFS Workspace and reads the retained node:sqlite rows back; the provider is the Deno one by design",
+    issue: "https://github.com/taras/executable.md/issues/293",
+  },
+  {
+    path: "packages/workflow/tests/repository-replay.test.ts",
+    reason:
+      "replays a partial node:sqlite WorkflowRun after deleting the remote and every host materialization, and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/293",
+  },
+  {
+    path: "packages/workflow/tests/repository-materialization.test.ts",
+    reason:
+      "exports retained checkouts to host directories and links their roots at external clones, against a real node:sqlite WorkflowRun database",
+    issue: "https://github.com/taras/executable.md/issues/293",
+  },
+  {
     path: "packages/workflow/tests/materialization.test.ts",
     reason:
       "exports and imports real host directories against the Deno DOFS Workspace adapter; node:sqlite remains behind --experimental-sqlite on Node 22",
