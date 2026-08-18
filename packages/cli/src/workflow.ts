@@ -47,7 +47,7 @@
  * command cannot answer exits 1.
  */
 
-import { Err, Ok, ensure, scoped } from "effection";
+import { Err, Ok, ensure, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
@@ -69,11 +69,7 @@ import type {
   WorkflowExecutionTransitions,
   WorkflowRunCreation,
 } from "@executablemd/workflow/deno";
-import {
-  createSuspensionController,
-  type SuspensionControllerOptions,
-  type SuspensionNotice,
-} from "@executablemd/workflow/deno";
+import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition } from "./workflow-definition.ts";
@@ -621,6 +617,12 @@ export function runWorkflow(
     // "this invocation is durably settled" are different facts, and collapsing
     // them is how a post-execution storage refusal would be republished as an
     // interruption. Teardown speaks only while the phase is still `running`.
+    // Imported where it is used rather than at the top of this module. This
+    // file is on the ordinary `xmd run` path too, and the Deno workflow adapter
+    // reaches `node:sqlite` — which Node greets with an experimental warning on
+    // standard error the moment it loads. A run that opens no workflow storage
+    // should not be announcing that it might have.
+    const { createSuspensionController } = yield* until(import("@executablemd/workflow/deno"));
     const suspension = createSuspensionController({
       database,
       ...(options.suspension ?? {}),
