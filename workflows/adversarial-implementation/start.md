@@ -8,6 +8,14 @@ props:
   branch: { type: string, default: agent/adversarial-implementation }
   planner: { type: string, default: codex }
   implementor: { type: string, default: claude }
+
+workflow:
+  components:
+    InstructionFiles: ./InstructionFiles.md
+    Discovery: ./Discovery.md
+    UserCheckpoint: ./UserCheckpoint.md
+    Planning: ./Planning.md
+    Implementation: ./Implementation.md
 ---
 
 # Adversarial Implementation Workflow
@@ -292,8 +300,9 @@ Those two are reported differently, because they are different requests. A
 decline is finished: the user said no. Exhaustion is not — it is the workflow
 asking the user what to do after five rounds failed to converge (#290, settled).
 Under a composed workflow that request is where the run suspends durably for
-user direction (#367, unbuilt); here it is where the report asks, and neither
-exhaustion nor an unchanged verdict is ever read as approval.
+user direction (#367, shipped) and gives its executor lock back; here it is
+where the report asks. Neither exhaustion nor an unchanged verdict is ever read
+as approval, and nothing resumes the run on its own.
 
 A checkpoint that found no material choice still produces an explicit
 `proceed: true` with its reason, so nothing advances because a decision was
@@ -437,20 +446,25 @@ Registration is scope-local and the workflow host is what installs it, so plain
 where a document ran, not whether a component exists.
 
 **Not expressible.** Every component that performs a durable environmental
-effect. These seven names resolve to nothing under either host:
+effect. These five names resolve to nothing under either host:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
 | `<Agent.AddDir>` and the read-only Agent ceiling | #302 | unbuilt |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
-| `<Git.Add>` | #294 | unbuilt |
-| `<Git.Commit>` | #294 | unbuilt |
 | `<Git.Push>` | #370 | unbuilt |
 | `<PullRequest>` | #295 | unbuilt |
 | `<Issue>` | #296 | unbuilt |
 
-So what remains non-executable is the implementation stage's durable Git and
-forge effects; the named checkouts the Workspace is composed from are here. What can be exercised today is discovery through plan convergence and
+`<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` have left that list:
+they are built as Workspace-local durable effects (#294, shipped), and the
+shared Git-host reconciliation the remote effects will need is shipped too
+(#297). What is still missing above them is the three components that reach a
+remote or a forge, the Agent ceiling, and the constrained evaluator.
+
+So what remains non-executable is the implementation stage's remote and forge
+effects; the named checkouts the Workspace is composed from, and the local Git
+effects inside them, are here. What can be exercised today is discovery through plan convergence and
 the user gates around them, running in one document execution and one existing
 working directory, with commits, pushes, pull requests, and issues performed as
 explicit user-run steps between manual stages. Proving that shipped subset is
@@ -474,27 +488,29 @@ that way: `<Repository>`, the self-closing `<Worktree>` and the lexical `<Dir>`
 are registered by the workflow host (#293, shipped), so the run's Workspace does
 get its checkout and the `<Glob>` above has a filesystem to search.
 
-What remains is reachability. A run pins its definition to one committed Git
-object and passes no repository component search path, so the stages beside it —
-`InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, `Implementation` —
-resolve to nothing under `xmd workflow start` and `xmd workflow resume`. Under
-`xmd run` they resolve as ordinary repository components on its search path,
-which is where the shipped subset is exercised — and where `<Repository>`,
-`<Worktree>` and `<Dir>` do *not* resolve, because plain `xmd run` composes no
-workflow.
+Reachability is settled, and the frontmatter above is how this document asks for
+it. A run pins its definition to one committed Git object and still passes no
+generic repository component search path — instead the root declares a closed
+component bundle in its own frontmatter, and `xmd workflow start` and `xmd workflow resume` resolve exactly those
+five names from the blobs that commit holds
+([#493](https://github.com/taras/executable.md/pull/493), shipped, delivering
+[#301](https://github.com/taras/executable.md/issues/301)'s component-bundle
+slice).
 
-Making `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, and
-`Implementation` reachable under `xmd workflow start` and `xmd workflow resume`
-is [#301](https://github.com/taras/executable.md/issues/301)'s, along with
-composing the supervised workflow they belong to. The outcome it owes is an
-authority and identity one: the trusted host authorizes the component code the
-retained definition invokes, and workflow-definition identity and
-retained-history admission account for it, so a resume or a replay cannot
-substitute what a mutable checkout holds now for the retained component code, and
-missing, incompatible, or unauthorized code is refused before it executes.
-Ordinary `xmd run` resolution is unchanged and workflow execution gains no
-generic repository component search path. How that is achieved is #301's design,
-still to pass architecture review; nothing here selects it.
+What that buys is identity, not convenience. Each declared name normalizes to a
+canonical repository-relative path and the blob's own object ID, and those
+entries are part of workflow-definition identity and retained-history admission:
+change what a stage says and it is a different definition, so a resume or a
+replay reconstructs the component from its retained source rather than from
+whatever a checkout holds now. A same-named file beside the definition answers
+nothing, and an undeclared name resolves to nothing at all. Ordinary `xmd run`
+resolution is unchanged — there the five resolve as ordinary repository
+components on its search path, and `<Repository>`, `<Worktree>` and `<Dir>` do
+*not* resolve, because plain `xmd run` composes no workflow.
+
+What #301 still owes is the supervised composition itself — scheduling the loop
+and continuing it unattended. The bundle makes the stage names reachable; it
+does not make the workflow run.
 
 ## Rendered data flow
 
