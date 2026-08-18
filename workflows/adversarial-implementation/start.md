@@ -329,14 +329,18 @@ this root's output.
 ## Waiting for the user is a suspension, not a stop
 
 A checkpoint that reaches a person is a durable wait, and a durable wait is not
-a failure. Under `xmd workflow` the elicitation is to record its pending request
-and the Workspace frontier, release the executor, and return control with a run
-ID and a stop reason on standard error, so that the process, the Workspace
-attachment, and the Agent processes need not stay alive.
-`xmd workflow resume <run-id>` already continues the same workflow run once the
-answer is available: completed durable effects restore from the journal,
-ephemeral attachments rebuild, and partial replay continues at the retained
-frontier.
+a failure. The mechanism for one exists: `suspendFor()` records a pending
+request and the Workspace frontier, gives the executor lock back, and returns
+control with a run ID and a stop reason on standard error, so that the process,
+the Workspace attachment, and the Agent processes need not stay alive (#367).
+`xmd workflow resume <run-id>` continues the same workflow run once the answer
+is available: completed durable effects restore from the journal, ephemeral
+attachments rebuild, and partial replay continues at the retained frontier.
+
+The checkpoints above do not call it. `suspendFor()` is an Api operation with no
+v1 Markdown element, and a suspension is a different mechanism from `<Elicit>`,
+which asks inside the execution already running — so nothing here converts one
+into the other.
 
 That is what the earlier drafts of this document were reaching for with a
 `<Stage>` boundary. The construct was rejected — the root document is the
@@ -348,10 +352,14 @@ retained frontier. Reading a run back is shipped too: `xmd workflow status`,
 `list`, and `history` report immutable lifecycle snapshots without advancing
 anything (#460). So is the authority underneath: the executor lock owns
 lifecycle transitions, so single-executor ownership, atomic begin and settle,
-cancellation and deletion are shipped (#466). What is still missing is the wait
-itself — durable suspension, and releasing the executor at a checkpoint, remain
-#367. So a question asked today is answered inside the document execution that
-asked it. Gating is expressed by nesting, which
+cancellation and deletion are shipped (#466). So is the wait: `suspendFor()`
+suspends a run durably and gives its executor lock back (#367), and a typed
+answer can be delivered to it (#300, non-executing).
+
+What is missing is the join. No v1 Markdown element spells `suspendFor()`, this
+document calls nothing that suspends, and no scheduler resumes a run — so a
+question asked today is answered inside the document execution that asked it,
+and reaching that substrate belongs to #301's supervised composition. Gating is expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
 execution: it still reaches the final-gate report inside the root's `<Output>`
 and completes.
