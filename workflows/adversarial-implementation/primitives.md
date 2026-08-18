@@ -263,18 +263,22 @@ supplied material rather than a repository. `Implementation` has no such
 exemption: its loop body invokes `<Expand>`, `<Git.Add>`, `<Git.Commit>`,
 `<Git.Push>`, `<PullRequest>`, and `<Issue>`, which resolve to nothing.
 
-Seven names in this workflow resolve to nothing today, and each is owed by one
+Five names in this workflow resolve to nothing today, and each is owed by one
 issue:
 
 | Name | Owed by |
 | --- | --- |
 | `<Agent.AddDir>` | #302 |
 | `<Expand>` | #369 |
-| `<Git.Add>` | #294 |
-| `<Git.Commit>` | #294 |
 | `<Git.Push>` | #370 |
 | `<Issue>` | #296 |
 | `<PullRequest>` | #295 |
+
+`<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left that list when
+#294 shipped them as Workspace-local durable effects, and #297 shipped the
+shared Git-host reconciliation the remote effects are built over. What still
+resolves to nothing is what reaches a remote or a forge, plus the Agent ceiling
+and the constrained evaluator.
 
 `<Repository>`, `<Worktree>` and `<Dir>` have left that list:
 `@executablemd/workflow/composition` registers all three (#293, shipped), which
@@ -320,7 +324,7 @@ whose dependency order this workflow consumes in the same sequence.
 | foreground `xmd workflow start` / `resume` with an implicit Workspace and declarative `<File>` effects | #366 | shipped |
 | read-only `status`, `list` and `history` over immutable lifecycle snapshots | #367 slice 1, delivered by #460 | shipped |
 | single-executor ownership, atomic begin/settle, cancellation, deletion, all owned by the executor lock | #367 slice 2, delivered by #466 | shipped |
-| durable suspension, and releasing the executor at a checkpoint | #367 | open |
+| durable suspension, and releasing the executor lock back | #367 slice 3, delivered by #475 | shipped |
 | versioned history checkpoints, compatible forks, `history --forkable` and forkability reasons | #368 | open |
 
 `xmd workflow start` is what makes this document a workflow rather than a script,
@@ -335,31 +339,31 @@ selects a previous run — replaying completed work and continuing the partial
 remainder. Both are Deno-entrypoint and compiled-binary capabilities; the Node
 and Bun entrypoints parse the grammar and refuse.
 
-What the command does *not* supply is a checkout to run in or a way to reach a
-repository component: the run's Workspace starts empty until #293, and a pinned
-definition is executed with no repository component search path, so the stage
-components beside this one — `InstructionFiles`, `Discovery`, `UserCheckpoint`,
-`Planning`, `Implementation` — resolve to nothing under `xmd workflow start` and
-`xmd workflow resume`, and are exercised under `xmd run` instead.
+The command supplies the checkout, and a root reaches its stages by declaring
+them. A workflow run still searches no repository directories at all; instead
+`start.md` closes itself over a **component bundle** in its own frontmatter, and
+`xmd workflow start` and `xmd workflow resume` resolve exactly those five names
+from the blobs the pinned definition commit holds (#493, shipped, delivering
+#301's component-bundle slice).
 
-That gap belongs to #301, in the "compose and certify" table below. It owes the
-authority and identity outcome rather than a spelling: `InstructionFiles`,
-`Discovery`, `UserCheckpoint`, `Planning`, and `Implementation` become reachable
-under `xmd workflow start` and `xmd workflow resume` from component code the
-trusted host authorized, with workflow-definition identity and retained-history
-admission accounting for that code, so resume and replay cannot substitute
-mutable checkout content for it and unauthorized or incompatible code is refused
-before it runs. `xmd run` resolution is unchanged, and no generic repository
-component search path is introduced for workflow execution. The mechanism is
-#301's to design, and it remains subject to architecture review there.
+Identity is what the bundle buys. Each declared name normalizes to a canonical
+repository-relative path and the blob's own object ID, and those entries join
+workflow-definition identity and retained-history admission — so changing what a
+stage says makes a different definition, and a resume or a replay reconstructs
+the component from its retained source rather than from a mutable checkout. A
+same-named file beside the definition answers nothing, an undeclared name
+resolves to nothing at all, and ordinary `xmd run` resolution is unchanged.
+
+What #301 still owes is the supervised composition itself: scheduling the loop
+and continuing it unattended. Reachable stage names are not a running workflow.
 
 **2. Repository and deterministic Git composition.**
 
 | Capability | Issue | Status |
 | --- | --- | --- |
 | `<Repository>`, self-closing `<Worktree>`, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | shipped — registered by the workflow host |
-| `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | open |
-| shared external forge-effect reconciliation | #297 | open |
+| `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
+| shared Git-host effect reconciliation | #297 | shipped — one request-only surface; the components over it are not |
 | explicit `<Git.Push>` | #370 | open |
 | `<PullRequest>` over an explicitly pushed head | #295 | open |
 | provenance-linked deferred `<Issue>` | #296 | open |
@@ -416,8 +420,9 @@ replay expands the same fragment without asking the Agent again.
 | namespaced document props | #305 | shipped |
 | synchronize this living target with settled contracts | #292 | this change |
 | prove the shipped planning-document logic | #290 | this change — the proof lands here; #290 closes on delivery |
-| compose the supervised workflow, and make its stage components reachable under `start` and `resume` | #301 | open |
-| resume from explicit durable signals | #300 | open |
+| a root's declared component bundle, resolved from its pinned commit | #301 slice, delivered by #493 | shipped |
+| compose the supervised workflow — scheduling the loop, continuing it unattended | #301 | open |
+| typed durable answer delivery to a suspended run | #300 | shipped — delivery is non-executing; automatic scheduling is not shipped |
 | default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
 | certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
 

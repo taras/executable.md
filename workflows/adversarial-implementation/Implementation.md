@@ -534,7 +534,7 @@ exhaustion looks like: the user kept approving and the verdict never passed. The
 caller's gate rejects that pair, so an exhausted review cannot reach acceptance
 and starts no later durable effect. As in `Planning`, exhaustion is a request
 for user direction rather than a terminal answer of the stage's own (#290,
-settled); a composed workflow suspends there for it (#367, unbuilt).
+settled); a composed workflow suspends there for it (#367, shipped).
 
 ## Approval precedes durable effects
 
@@ -577,16 +577,19 @@ revision turn, or acceptance.
 | --- | --- | --- |
 | `<Agent.AddDir>` and the read-only ceiling | #302 | unbuilt |
 | `<Expand>` | #369 | unbuilt; public name open |
-| `<Git.Add>`, `<Git.Commit>` | #294 | unbuilt |
 | `<Git.Push>` | #370 | unbuilt |
 | `<PullRequest>` | #295 | unbuilt |
 | `<Issue>` | #296 | unbuilt |
-| shared forge reconciliation behind push, pull request and issue | #297 | unbuilt |
+| `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
+| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, not the components over it |
 | the forge read that returns reviews, comments and checks | — | unowned |
 
-The agent, parsing, capture, and control-flow syntax runs today; the loop body
-above does not expand, because those names resolve to nothing. Until they land,
-the effects they stand for remain explicit user-run steps between manual stages.
+The agent, parsing, capture, and control-flow syntax runs today, and so do the
+local Git effects: `<Git.Add>` and `<Git.Commit>` are built. The loop body above
+still does not expand, because five names in it resolve to nothing — the Agent
+ceiling, the constrained evaluator, and the three components that reach a remote
+or a forge. Until those land, the effects they stand for remain explicit
+user-run steps between manual stages.
 
 Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,
 `verdict`, `checkpointMaterial`, and `reviewCheckpoint` are authored bindings and
