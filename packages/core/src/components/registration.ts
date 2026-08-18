@@ -26,6 +26,7 @@ import type {
   RegistryEntry,
   ReturnsSchema,
 } from "../types.ts";
+import type { TestHarnessComponentDefinition } from "../test-harness.ts";
 
 /**
  * A malformed registration: an unusable name or schema, or two registrations
@@ -65,7 +66,7 @@ export interface ComponentRegistration {
    * return binds by reference under `as`, unchecked.
    */
   returns?: ReturnsSchema;
-  fn: FunctionComponent;
+  fn: FunctionComponent | TestHarnessComponentDefinition;
 }
 
 type Kind = "reserved" | "default";

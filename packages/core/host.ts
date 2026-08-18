@@ -63,5 +63,6 @@ export { TestHarnessError } from "./src/test-harness.ts";
 export type {
   TestHarness,
   TestHarnessAuthorization,
+  TestHarnessBinding,
   TestHarnessInstaller,
 } from "./src/test-harness.ts";

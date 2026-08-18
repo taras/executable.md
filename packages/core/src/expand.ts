@@ -87,6 +87,8 @@ import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
 import { liveEnvironment, validateBindingName } from "./live-env.ts";
+import { TestHarnessComponentDefinition } from "./test-harness.ts";
+import type { TestHarnessBinding } from "./test-harness.ts";
 
 export { validateBindingName } from "./live-env.ts";
 
@@ -2669,6 +2671,26 @@ function* expandFunctionComponent(
 
   const expansion = snapshot(path, name, position);
 
+  let publishedBinding = false;
+  const binding: TestHarnessBinding = {
+    has(): boolean {
+      return asBinding !== undefined;
+    },
+    *publish(value: unknown): Operation<void> {
+      if (publishedBinding) {
+        throw new Error(`<${name} /> published its invocation binding more than once.`);
+      }
+      publishedBinding = true;
+      if (asBinding === undefined) {
+        return;
+      }
+      if (siteEnv === undefined) {
+        throw new Error(`Prop "as" on <${name} /> requires a parent evaluation environment.`);
+      }
+      siteEnv.values[asBinding] = value;
+    },
+  };
+
   /** The invocation itself, and what a failure of it means. */
   const invoke = function* (): Operation<Segment[]> {
     // Call the function component inside its invocation, with content middleware
@@ -2749,19 +2771,6 @@ function* expandFunctionComponent(
             *hasBinding(_args, _next) {
               return asBinding !== undefined;
             },
-            // The same prop, written early. The name stays here: what crosses
-            // is the value, and only for an invocation the engine is going to
-            // bind anyway. An invocation without `as` has nowhere to write, so
-            // this does nothing rather than inventing somewhere.
-            *publishBinding([value], _next) {
-              if (asBinding === undefined) {
-                return;
-              }
-              const parentEnv = yield* env;
-              if (parentEnv) {
-                parentEnv.values[asBinding] = value;
-              }
-            },
             // deno-lint-ignore require-yield
             *hasCapture([captureName], _next) {
               return captureName in literalCaptures || captureName in expressionCaptures;
@@ -2814,6 +2823,9 @@ function* expandFunctionComponent(
           );
         }
         try {
+          if (TestHarnessComponentDefinition.own(definition.fn)) {
+            return yield* definition.fn.invoke(validatedProps, binding);
+          }
           return yield* definition.fn(validatedProps);
         } catch (error) {
           if (error instanceof Error) {
@@ -2956,7 +2968,11 @@ function* expandFunctionComponent(
   // containment exists to keep from it (§3.6).
   function* accepted(): Operation<Segment[]> {
     const before = inherited?.failure;
-    const produced = yield* printsErrors(definition.fn)
+    let printsOwnFailures = false;
+    if (!TestHarnessComponentDefinition.own(definition.fn)) {
+      printsOwnFailures = printsErrors(definition.fn);
+    }
+    const produced = printsOwnFailures
       ? scoped(function* () {
           yield* usePrintErrors("component");
           return yield* invoke();
@@ -2966,7 +2982,7 @@ function* expandFunctionComponent(
     if (suffered !== undefined && suffered !== before) {
       return [yield* raise(suffered)];
     }
-    return produced;
+    return yield* produced;
   }
   return yield* accepted();
 }
