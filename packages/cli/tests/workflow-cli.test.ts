@@ -553,3 +553,239 @@ describe("Tier WFC — xmd workflow start and resume", () => {
     });
   });
 });
+
+/**
+ * The five stage names the representative authored workflow declares, as a
+ * committed bundle beside the root that declares them.
+ *
+ * `Discovery` invokes `InstructionFiles`, so one run proves both the declared
+ * order the root writes and the nested order a bundled component reaches.
+ */
+const LOOP_ROOT = [
+  "---",
+  "workflow:",
+  "  components:",
+  "    InstructionFiles: ./InstructionFiles.md",
+  "    Discovery: ./Discovery.md",
+  "    UserCheckpoint: ./UserCheckpoint.md",
+  "    Planning: ./Planning.md",
+  "    Implementation: ./Implementation.md",
+  "---",
+  "",
+  "# Loop",
+  "",
+  "<Discovery />",
+  "",
+  "<UserCheckpoint />",
+  "",
+  "<Planning />",
+  "",
+  "<Implementation />",
+  "",
+].join("\n");
+
+const LOOP_FILES: Record<string, string> = {
+  "flows/loop.md": LOOP_ROOT,
+  "flows/InstructionFiles.md": "instruction files listed.\n",
+  "flows/Discovery.md": "discovered.\n\n<InstructionFiles />\n",
+  "flows/UserCheckpoint.md": "checkpoint reached.\n",
+  "flows/Planning.md": "planned.\n",
+  "flows/Implementation.md": "implemented.\n",
+};
+
+/** Overwrite every checkout copy, so a run that reads one is visible. */
+function* editCheckout(fixture: Fixture): Operation<void> {
+  for (const name of Object.keys(LOOP_FILES)) {
+    yield* writeTextFile(join(fixture.repository, name), "EDITED IN THE WORKING TREE\n");
+  }
+}
+
+/** Commit whatever the working tree now holds, so a second commit exists. */
+function* commitAgain(fixture: Fixture, message: string): Operation<void> {
+  yield* git(fixture.repository, ["add", "-A"]);
+  yield* git(fixture.repository, ["-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
+}
+
+describe("Tier WFC — a workflow closed over a component bundle", () => {
+  it("WFC14: the five declared stages run from the commit, not from the checkout", function* () {
+    yield* useFixture(LOOP_FILES, function* (fixture) {
+      // Every one of the six files says something else in the working tree by
+      // the time the run starts.
+      yield* editCheckout(fixture);
+
+      const started = yield* xmd(fixture, ["workflow", "start", "flows/loop.md"]).join();
+
+      expect(started.code).toBe(0);
+      expect(reportedStatus(started.stderr)).toBe("completed");
+      expect(started.stdout).not.toContain("EDITED IN THE WORKING TREE");
+
+      const order = [
+        "discovered.",
+        "instruction files listed.",
+        "checkpoint reached.",
+        "planned.",
+        "implemented.",
+      ].map((text) => started.stdout.indexOf(text));
+      expect(order.every((at) => at >= 0)).toBe(true);
+      expect([...order].sort((left, right) => left - right)).toEqual(order);
+    });
+  });
+
+  it("WFC15: a declared component the commit does not hold refuses before the run", function* () {
+    const cases: Array<{ says: string; files: Record<string, string> }> = [
+      {
+        says: "missing",
+        files: { ...LOOP_FILES, "flows/Planning.md": undefined as unknown as string },
+      },
+      {
+        says: "not markdown the engine can read",
+        files: {
+          ...LOOP_FILES,
+          "flows/Planning.md": ["---", "props: 7", "---", "", "planned.", ""].join("\n"),
+        },
+      },
+    ];
+
+    for (const { says, files } of cases) {
+      const present = Object.fromEntries(
+        Object.entries(files).filter(([, content]) => content !== undefined),
+      );
+      yield* useFixture(present, function* (fixture) {
+        const started = yield* xmd(fixture, [
+          "workflow",
+          "start",
+          "--id=loop-1",
+          "flows/loop.md",
+        ]).join();
+
+        expect({ says, code: started.code }).toEqual({ says, code: 1 });
+        // Nothing was created: no run id was reported and no status published.
+        expect(reportedRunId(started.stderr)).toBeUndefined();
+        expect(reportedStatus(started.stderr)).toBeUndefined();
+
+        const status = yield* xmd(fixture, ["workflow", "status", "loop-1"]).join();
+        expect({ says, code: status.code }).toEqual({ says, code: 1 });
+      });
+    }
+  });
+
+  it("WFC16: a declaration that names a directory names no component", function* () {
+    yield* useFixture(
+      {
+        ...LOOP_FILES,
+        "flows/loop.md": LOOP_ROOT.replace("./Planning.md", "./stages"),
+        "flows/stages/keep.md": "kept.\n",
+      },
+      function* (fixture) {
+        const started = yield* xmd(fixture, ["workflow", "start", "flows/loop.md"]).join();
+
+        expect(started.code).toBe(1);
+        expect(started.stderr).toContain("Planning");
+        expect(reportedRunId(started.stderr)).toBeUndefined();
+      },
+    );
+  });
+
+  it("WFC17: the bundle decides compatible reuse", function* () {
+    yield* useFixture(LOOP_FILES, function* (fixture) {
+      const created = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=loop-2",
+        "flows/loop.md",
+      ]).join();
+      expect(created.code).toBe(0);
+      expect(reportedRunId(created.stderr)).toBe("loop-2");
+
+      const reused = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=loop-2",
+        "flows/loop.md",
+      ]).join();
+      expect(reused.code).toBe(0);
+      expect(reportedStatus(reused.stderr)).toBe("completed");
+
+      const before = yield* xmd(fixture, ["workflow", "history", "loop-2", "--json"]).join();
+
+      // One component says something else, and it is committed — so the run
+      // this request describes is a run of different code.
+      yield* writeTextFile(join(fixture.repository, "flows/Planning.md"), "planned differently.\n");
+      yield* commitAgain(fixture, "a component changed");
+
+      const conflicting = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=loop-2",
+        "flows/loop.md",
+      ]).join();
+      expect(conflicting.code).toBe(1);
+      expect(conflicting.stderr).toContain("definition");
+      expect(reportedStatus(conflicting.stderr)).toBeUndefined();
+      // No source, path, or hash reaches the refusal.
+      expect(conflicting.stderr).not.toContain("planned differently.");
+      expect(conflicting.stderr).not.toContain("flows/Planning.md");
+
+      // And it left the run exactly as it was: no execution record, no event.
+      const after = yield* xmd(fixture, ["workflow", "history", "loop-2", "--json"]).join();
+      expect(after.stdout).toBe(before.stdout);
+    });
+  });
+
+  it("WFC18: a resume reads the pinned tree, whatever the checkout now says", function* () {
+    yield* useFixture(LOOP_FILES, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=loop-3",
+        "flows/loop.md",
+      ]).join();
+      expect(started.code).toBe(0);
+      const before = yield* xmd(fixture, ["workflow", "history", "loop-3", "--json"]).join();
+
+      // Every component is gone from the working tree, and the root with them.
+      for (const name of Object.keys(LOOP_FILES)) {
+        yield* rm(join(fixture.repository, name), { force: true });
+      }
+
+      const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-3"]).join();
+
+      expect(resumed.code).toBe(0);
+      expect(reportedStatus(resumed.stderr)).toBe("completed");
+      expect(resumed.stdout).toContain("implemented.");
+
+      // A completed run replays what it retained: the bundle was reconstructed
+      // and the history admitted, and then nothing was performed or appended.
+      const after = yield* xmd(fixture, ["workflow", "history", "loop-3", "--json"]).join();
+      expect(after.stdout).toBe(before.stdout);
+    });
+  });
+
+  it("WFC19: a resume whose pinned components are unreachable is refused whole", function* () {
+    yield* useFixture(LOOP_FILES, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=loop-4",
+        "flows/loop.md",
+      ]).join();
+      expect(started.code).toBe(0);
+
+      const before = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
+
+      // The repository this run retains is no longer a repository.
+      yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+
+      const resumed = yield* xmd(fixture, ["workflow", "resume", "loop-4"]).join();
+
+      expect(resumed.code).toBe(1);
+      expect(reportedStatus(resumed.stderr)).toBeUndefined();
+
+      // Its lifecycle records are exactly what they were: the refusal happened
+      // before an execution was recorded.
+      yield* git(fixture.repository, ["init", "-q", "--initial-branch=main", "."]);
+      const after = yield* xmd(fixture, ["workflow", "history", "loop-4", "--json"]).join();
+      expect(after.stdout).toBe(before.stdout);
+    });
+  });
+});

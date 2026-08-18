@@ -17,14 +17,17 @@ import { isCanonicalDocumentTarget } from "@executablemd/core";
 import {
   canonicalJson,
   conflictingFields,
+  definitionComponents,
   definitionToJson,
   type GitWorkflowDefinitionV1,
+  type GitWorkflowDefinitionV2,
   parseStopReasonInput,
   parseWorkflowDefinition,
   WORKFLOW_RUN_STATUSES,
   WorkflowDefinitionError,
   WorkflowRequestError,
   type WorkflowRunRecord,
+  type WorkflowDefinition,
   WorkflowRunStorage,
   WorkflowStorageProviderError,
 } from "../mod.ts";
@@ -49,6 +52,38 @@ function parsed(overrides: Partial<GitWorkflowDefinitionV1> = {}): GitWorkflowDe
   const result = parseWorkflowDefinition(definition(overrides));
   if (!result.ok) {
     throw result.error;
+  }
+  if (result.value.version !== 1) {
+    throw new Error("expected a version 1 descriptor");
+  }
+  return result.value;
+}
+
+/** The five names the representative authored workflow declares, in one bundle. */
+const BUNDLE = [
+  { name: "Discovery", path: "workflows/Discovery.md", sourceHash: blob(1) },
+  { name: "Implementation", path: "workflows/Implementation.md", sourceHash: blob(2) },
+  { name: "InstructionFiles", path: "workflows/InstructionFiles.md", sourceHash: blob(3) },
+  { name: "Planning", path: "workflows/Planning.md", sourceHash: blob(4) },
+  { name: "UserCheckpoint", path: "workflows/UserCheckpoint.md", sourceHash: blob(5) },
+];
+
+/** A distinct SHA-1 blob id per component, so a swap is visible. */
+function blob(nth: number): string {
+  return `${nth}`.repeat(2).padEnd(40, "0");
+}
+
+function bundled(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...definition(), version: 2, components: BUNDLE, ...overrides };
+}
+
+function parsedBundle(overrides: Record<string, unknown> = {}): GitWorkflowDefinitionV2 {
+  const result = parseWorkflowDefinition(bundled(overrides));
+  if (!result.ok) {
+    throw result.error;
+  }
+  if (result.value.version !== 2) {
+    throw new Error("expected a version 2 descriptor");
   }
   return result.value;
 }
@@ -107,8 +142,9 @@ describe("Tier WD — workflow definition descriptors", () => {
     expect(refusal("git").message).toContain("found string");
   });
 
-  it("WD4: admits only version 1 and only the git kind", function* () {
-    expect(refusal(definition({ version: 2 })).path).toBe("$.version");
+  it("WD4: admits only the versions it defines, and only the git kind", function* () {
+    expect(refusal(definition({ version: 3 })).path).toBe("$.version");
+    expect(refusal(definition({ version: 0 })).path).toBe("$.version");
     expect(refusal(definition({ kind: "svn" })).path).toBe("$.kind");
   });
 
@@ -430,7 +466,7 @@ describe("Tier WD — a definition's exact document target", () => {
     const section = record({ definition: parsed({ targetPath: "Release/Publish" }) });
     const other = record({ definition: parsed({ targetPath: "Release/Announce" }) });
 
-    const asking = (stored: WorkflowRunRecord, definition: GitWorkflowDefinitionV1) =>
+    const asking = (stored: WorkflowRunRecord, definition: WorkflowDefinition) =>
       conflictingFields(stored, {
         runId: stored.runId,
         definition,
@@ -448,5 +484,186 @@ describe("Tier WD — a definition's exact document target", () => {
 
     // So are two different sections of one document.
     expect(asking(section, other.definition)).toEqual(["definition"]);
+  });
+});
+
+/**
+ * Tier WD — the component bundle a definition is closed over.
+ *
+ * A V2 descriptor is a V1 descriptor plus the exact set of authored components
+ * the root may resolve. The array is identity, so it is canonical: one entry
+ * per name, sorted by name, each holding the blob's own object id under the
+ * descriptor's own format. Everything here is about what makes two descriptors
+ * the same run and what makes them different ones.
+ */
+describe("Tier WD — the component bundle a definition is closed over", () => {
+  it("WD25: a V1 descriptor keeps its exact shape and writes no bundle member", function* () {
+    const first = parsed();
+
+    expect("components" in first).toBe(false);
+    expect(Object.keys(definitionToJson(first) as Record<string, unknown>)).toEqual([
+      "version",
+      "kind",
+      "objectFormat",
+      "objectId",
+      "rootDocumentPath",
+    ]);
+    expect(definitionComponents(first)).toEqual([]);
+  });
+
+  it("WD26: a V2 descriptor round-trips its whole bundle unchanged", function* () {
+    const bundle = parsedBundle();
+
+    expect(bundle.version).toBe(2);
+    expect(bundle.components).toEqual(BUNDLE);
+    expect(definitionComponents(bundle)).toEqual(BUNDLE);
+
+    const json = definitionToJson(bundle) as Record<string, unknown>;
+    expect(json["components"]).toEqual(BUNDLE);
+
+    const again = parseWorkflowDefinition(json);
+    expect(again.ok).toBe(true);
+    expect(again.ok && again.value).toEqual(bundle);
+  });
+
+  it("WD27: a bundle's hashes are held to the format the descriptor names", function* () {
+    const sha256 = parsedBundle({
+      objectFormat: "sha256",
+      objectId: SHA256,
+      components: [{ name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 }],
+    });
+    expect(sha256.components).toEqual([
+      { name: "Discovery", path: "workflows/Discovery.md", sourceHash: SHA256 },
+    ]);
+
+    // The same entry under sha1 is the wrong length, and the sha1 bundle is the
+    // wrong length under sha256: neither is a hash this descriptor could hold.
+    expect(refusal(bundled({ components: [sha256.components[0]] })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(refusal(bundled({ objectFormat: "sha256", objectId: SHA256 })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(
+      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: SHA1.toUpperCase() }] })).message,
+    ).toContain("lowercase");
+  });
+
+  it("WD28: the bundle is canonical — one entry per name, sorted by name", function* () {
+    const reversed = [...BUNDLE].reverse();
+    expect(refusal(bundled({ components: reversed })).message).toContain("sorted by name");
+
+    const duplicated = [BUNDLE[0], BUNDLE[0]];
+    expect(refusal(bundled({ components: duplicated })).message).toContain("once");
+
+    expect(refusal(bundled({ components: [] })).message).toContain("at least one component");
+    expect(refusal(bundled({ components: {} })).path).toBe("$.components");
+  });
+
+  it("WD29: each entry is closed, and names a Markdown path inside the tree", function* () {
+    expect(refusal(bundled({ components: [{ ...BUNDLE[0], origin: "elsewhere" }] })).path).toBe(
+      "$.components[0]",
+    );
+    expect(refusal(bundled({ components: [{ name: "Discovery", path: "a.md" }] })).path).toBe(
+      "$.components[0].sourceHash",
+    );
+    expect(refusal(bundled({ components: [{ ...BUNDLE[0], name: "discovery" }] })).path).toBe(
+      "$.components[0].name",
+    );
+
+    for (const path of [
+      "",
+      "/etc/passwd",
+      "workflows\\Discovery.md",
+      "./Discovery.md",
+      "../Discovery.md",
+      "workflows/../Discovery.md",
+      "workflows//Discovery.md",
+      "workflows/Discovery.md/",
+      "workflows/Discovery.ts",
+      "workflows/Discovery",
+    ]) {
+      expect({
+        path,
+        at: refusal(bundled({ components: [{ ...BUNDLE[0], path }] })).path,
+      }).toEqual({ path, at: "$.components[0].path" });
+    }
+  });
+
+  it("WD30: neither version may be read as the other", function* () {
+    // A V1 descriptor carrying a bundle declares a member V1 does not have.
+    expect(refusal({ ...definition(), components: BUNDLE }).path).toBe("$");
+    // A V2 descriptor without one is missing the member that makes it V2.
+    expect(refusal({ ...definition(), version: 2 }).path).toBe("$.components");
+    expect(refusal(bundled({ version: 3 })).path).toBe("$.version");
+  });
+
+  it("WD31: a refusal never repeats the bundle it refused", function* () {
+    const secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz";
+
+    for (const error of [
+      refusal(bundled({ components: [{ ...BUNDLE[0], path: `/${secret}.md` }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], sourceHash: secret }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], name: secret }] })),
+      refusal(bundled({ components: [{ ...BUNDLE[0], [secret]: 1 }] })),
+    ]) {
+      expect(error.message).not.toContain(secret);
+      expect(error.path).not.toContain(secret);
+    }
+  });
+});
+
+describe("Tier WD — a bundle decides compatible reuse", () => {
+  const stored = record({ definition: parsedBundle() });
+  const asking = (definition: WorkflowDefinition) =>
+    conflictingFields(stored, {
+      runId: stored.runId,
+      definition,
+      base: stored.base,
+      props: stored.props,
+    });
+
+  it("WD32: the same bundle is the same run", function* () {
+    expect(asking(parsedBundle())).toEqual([]);
+  });
+
+  it("WD33: a changed name, path, hash, or set is a different definition", function* () {
+    const renamed = [...BUNDLE.slice(1), { ...BUNDLE[0], name: "Zeroth" }].sort((a, b) =>
+      a.name < b.name ? -1 : 1,
+    );
+    const moved = [{ ...BUNDLE[0], path: "workflows/other/Discovery.md" }, ...BUNDLE.slice(1)];
+    const rehashed = [{ ...BUNDLE[0], sourceHash: blob(9) }, ...BUNDLE.slice(1)];
+    const fewer = BUNDLE.slice(1);
+
+    for (const components of [renamed, moved, rehashed, fewer]) {
+      expect(asking(parsedBundle({ components }))).toEqual(["definition"]);
+    }
+  });
+
+  it("WD34: a run closed over a bundle is not a run closed over none", function* () {
+    expect(asking(parsed())).toEqual(["definition"]);
+
+    const unbundled = record();
+    expect(
+      conflictingFields(unbundled, {
+        runId: unbundled.runId,
+        definition: parsedBundle(),
+        base: unbundled.base,
+        props: unbundled.props,
+      }),
+    ).toEqual(["definition"]);
+  });
+
+  it("WD35: what a run accumulates still takes no part in the comparison", function* () {
+    for (const status of WORKFLOW_RUN_STATUSES) {
+      expect(
+        conflictingFields(record({ definition: parsedBundle(), status }), {
+          runId: stored.runId,
+          definition: parsedBundle(),
+          base: stored.base,
+          props: stored.props,
+        }),
+      ).toEqual([]);
+    }
   });
 });

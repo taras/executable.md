@@ -80,6 +80,18 @@ const OwnContributions: Context<OwnIndex> = createContext<OwnIndex>(
 
 const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
 
+/**
+ * Whether `name` is spelled the way a document writes a component name.
+ *
+ * The grammar registration is held to, offered as a predicate so a host
+ * deciding what a name may be does not restate it. It answers about spelling
+ * alone: a name that passes may still be structural syntax, a reserved
+ * registration, or a name nothing supplies.
+ */
+export function isComponentName(name: string): boolean {
+  return name.length > 0 && name.split(".").every((segment) => SEGMENT.test(segment));
+}
+
 function kindOf(registration: ComponentRegistration): Kind {
   return registration.reserved === true ? "reserved" : "default";
 }
@@ -93,8 +105,7 @@ function assertUsableName(name: string): void {
       `cannot register "${name}": it is structural syntax the engine owns, not a component`,
     );
   }
-  const segments = name.split(".");
-  if (!segments.every((segment) => SEGMENT.test(segment))) {
+  if (!isComponentName(name)) {
     throw new ComponentRegistrationError(
       `cannot register "${name}": a component name is capitalized, and each ` +
         "dot-separated part must start with an uppercase letter",

@@ -167,6 +167,13 @@ export function* inspectComponent(options: InspectComponentOptions): Operation<C
       };
     case "unresolved":
       return { kind: "unresolved", searched: selected.searched, registered: selected.registered };
+    case "workflow":
+      // A component bundle is authority one document execution runs under.
+      // Inspection installs none, so this tier answers for no inspection.
+      throw new Error(
+        `Component ${name} resolved through a workflow component bundle, which describes a ` +
+          "document execution rather than a document.",
+      );
     case "repository": {
       const origin: ComponentOrigin = { kind: "repository", path: selected.path };
       if (isFunctionComponentPath(selected.path)) {

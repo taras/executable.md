@@ -15,7 +15,11 @@
  */
 
 import type { CreateWorkflowRunRequest } from "./api.ts";
-import type { WorkflowDefinition } from "./definition.ts";
+import {
+  definitionComponents,
+  type WorkflowComponentEntry,
+  type WorkflowDefinition,
+} from "./definition.ts";
 import { canonicalJson, type WorkflowRunRecord } from "./record.ts";
 
 /**
@@ -61,6 +65,10 @@ export function conflictingFields(
  * would let a resumed run continue something it never started. Absent compares
  * equal only to absent, which is what makes whole-document and targeted
  * definitions incompatible rather than merely unequal.
+ *
+ * The component bundle is compared on the same terms, and the version is
+ * compared first: a run closed over a bundle is never the same run as one
+ * closed over none.
  */
 function sameDefinition(stored: WorkflowDefinition, requested: WorkflowDefinition): boolean {
   return (
@@ -69,6 +77,34 @@ function sameDefinition(stored: WorkflowDefinition, requested: WorkflowDefinitio
     stored.objectFormat === requested.objectFormat &&
     stored.objectId === requested.objectId &&
     stored.rootDocumentPath === requested.rootDocumentPath &&
-    stored.targetPath === requested.targetPath
+    stored.targetPath === requested.targetPath &&
+    sameComponents(definitionComponents(stored), definitionComponents(requested))
   );
+}
+
+/**
+ * The bundle is compared whole, entry by entry, in the canonical order both
+ * descriptors were parsed in.
+ *
+ * A component the run no longer declares, a name pointed at a different file,
+ * and a file whose contents changed are all the same fact: this request asks
+ * for code the stored run is not a run of. Reusing the run id would resume a
+ * procedure under components it never executed.
+ */
+function sameComponents(
+  stored: readonly WorkflowComponentEntry[],
+  requested: readonly WorkflowComponentEntry[],
+): boolean {
+  if (stored.length !== requested.length) {
+    return false;
+  }
+  return stored.every((component, index) => {
+    const other = requested[index];
+    return (
+      other !== undefined &&
+      component.name === other.name &&
+      component.path === other.path &&
+      component.sourceHash === other.sourceHash
+    );
+  });
 }

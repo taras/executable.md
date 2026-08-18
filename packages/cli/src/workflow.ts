@@ -61,7 +61,9 @@ import type { DurableStream, Json } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
+  definitionComponents,
   retainedWorkflowInstallation,
+  workflowBundleInstallation,
   WORKFLOW_RUN_STATUSES,
   WorkflowLifecycle,
 } from "@executablemd/workflow";
@@ -78,7 +80,7 @@ import type {
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
-import type { EstablishedDefinition } from "./workflow-definition.ts";
+import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
 
 /**
  * What this module cannot do without knowing the host.
@@ -676,6 +678,17 @@ export function runWorkflow(
     }
     const { lock: executorLock } = acquired.value;
 
+    // A resumed run closed over a component bundle reconstructs it here: under
+    // the executor lock, from the retained commit, and before the execution
+    // record exists. A component that is gone, changed, or unreachable leaves
+    // the run's lifecycle records exactly as they are rather than adding an
+    // attempt that never began.
+    const reconstructed = yield* reconstructedSources(request, runId);
+    if (!reconstructed.ok) {
+      report(reconstructed.error.message);
+      return { exitCode: 1 };
+    }
+
     // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
     // recorded — or none of it is.
@@ -693,7 +706,7 @@ export function runWorkflow(
     reportRun(record.runId);
 
     // Only now, and only because execution or replay was admitted.
-    const source = yield* documentSource(start, database);
+    const source = yield* documentSource(start, database, reconstructed.value);
     if (!source.ok) {
       report(source.error.message);
       return { exitCode: 1 };
@@ -743,7 +756,7 @@ export function runWorkflow(
 
     const completed = yield* isCompleted(database.journal);
     const documentExecution: WorkflowExecution = {
-      root: retainedSource(record.definition.rootDocumentPath, source.value),
+      root: retainedSource(record.definition.rootDocumentPath, source.value.source),
       props: record.props,
       stream: database.journal,
       // The run already exists: the begin transition created or found it before
@@ -757,6 +770,13 @@ export function runWorkflow(
           base: record.base,
           pinnedCommit: record.definition.objectId,
         }),
+        // The bundle this run is a run of, when it is a run of one. Both start
+        // and resume install it, and a completed replay installs it too: the
+        // retained history is held to the same components before its recorded
+        // output is accepted.
+        ...(source.value.components.length === 0
+          ? []
+          : [workflowBundleInstallation(source.value.components)]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a
@@ -881,11 +901,45 @@ function* startCreation(
 function* documentSource(
   start: WorkflowStart | undefined,
   database: WorkflowRunDatabase,
-): Operation<Result<string>> {
+  reconstructed: RetainedSources | undefined,
+): Operation<Result<RetainedSources>> {
   if (start !== undefined) {
-    return Ok(start.established.source);
+    return Ok({ source: start.established.source, components: start.established.components });
+  }
+  if (reconstructed !== undefined) {
+    return Ok(reconstructed);
   }
   return yield* loadRetainedDefinition(database.record.definition, database.retrieval?.metadata);
+}
+
+/**
+ * The pinned sources a resumed run closed over a bundle needs before it begins.
+ *
+ * Answers with nothing for a `start`, which established its own bundle from Git
+ * before it asked storage for anything, and for a run whose definition names no
+ * components — that one keeps loading its root after the run has been admitted,
+ * because a run that ended is not one to fetch a definition for.
+ *
+ * A run this host cannot inspect answers with nothing too. What that run is,
+ * and whether this action may advance it, is the begin transition's to decide,
+ * and answering it here would report a different refusal for the same fact.
+ */
+function* reconstructedSources(
+  request: WorkflowRequest,
+  runId: string,
+): Operation<Result<RetainedSources | undefined>> {
+  if (request.action !== "resume") {
+    return Ok(undefined);
+  }
+  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
+  if (!snapshot.ok) {
+    return Ok(undefined);
+  }
+  const { definition } = snapshot.value.record;
+  if (definitionComponents(definition).length === 0) {
+    return Ok(undefined);
+  }
+  return yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
 }
 
 /**

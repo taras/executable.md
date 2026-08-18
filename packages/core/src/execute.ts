@@ -118,6 +118,8 @@ import {
   selectComponent,
   unresolvedMessage,
 } from "./components/select.ts";
+import { installedBundle } from "./components/bundle.ts";
+import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
@@ -178,7 +180,97 @@ export type ExecuteOptions = RootDocumentSource & ExecuteSettings;
 type DurableSelection =
   | { kind: "repository"; path: string; content: string; target?: string }
   | { kind: "target-failure"; path: string; content: string; failure: TargetFailureRecord }
-  | { kind: "registered"; origin: string; reserved: boolean };
+  | { kind: "registered"; origin: string; reserved: boolean }
+  /**
+   * A component the workflow definition is closed over.
+   *
+   * The exact pinned source is retained, as a repository selection retains what
+   * it read, so a replay reconstructs the component from the record instead of
+   * resolving a name again. `path` is the canonical repository-relative path of
+   * the blob, never the declaration a root document wrote, and the hash is the
+   * blob's own object id — which is what a trusted host verifies the retained
+   * selection against before any of it is replayed.
+   */
+  | { kind: "workflow"; path: string; sourceHash: string; content: string };
+
+/**
+ * What a recorded import decided, read as a closed protocol.
+ *
+ * Journal data, so it is parsed rather than asserted: every variant declares
+ * exactly its own members, an unknown kind is malformed rather than absent, and
+ * a value that will not be read — an accessor that throws, a proxy that traps —
+ * is malformed too. Nothing it holds reaches a diagnostic.
+ */
+function readDurableSelection(value: unknown): DurableSelection | undefined {
+  const record = attempt(() => parseJson(value));
+  if (record === undefined || !isJsonObject(record)) {
+    return undefined;
+  }
+  const members = Object.keys(record).length;
+  const kind = record["kind"];
+
+  if (kind === "registered") {
+    const origin = record["origin"];
+    const reserved = record["reserved"];
+    if (members !== 3 || typeof origin !== "string" || typeof reserved !== "boolean") {
+      return undefined;
+    }
+    return { kind: "registered", origin, reserved };
+  }
+
+  const path = record["path"];
+  const content = record["content"];
+  if (typeof path !== "string" || typeof content !== "string") {
+    return undefined;
+  }
+
+  if (kind === "workflow") {
+    const sourceHash = record["sourceHash"];
+    if (members !== 4 || typeof sourceHash !== "string") {
+      return undefined;
+    }
+    return { kind: "workflow", path, sourceHash, content };
+  }
+
+  if (kind === "repository") {
+    const target = record["target"];
+    if (target === undefined) {
+      return members === 3 ? { kind: "repository", path, content } : undefined;
+    }
+    if (members !== 4 || typeof target !== "string" || !isCanonicalTarget(target)) {
+      return undefined;
+    }
+    return { kind: "repository", path, content, target };
+  }
+
+  if (kind === "target-failure") {
+    const failure = recordedDocumentTargetFailure(record["failure"]);
+    if (members !== 4 || failure === undefined) {
+      return undefined;
+    }
+    return {
+      kind: "target-failure",
+      path,
+      content,
+      failure: {
+        kind: failure.kind,
+        selector: failure.selector,
+        matches: [...failure.matches],
+        available: [...failure.available],
+      },
+    };
+  }
+
+  return undefined;
+}
+
+/**
+ * What a resumed run says when a recorded component import cannot be read.
+ *
+ * Fixed: the record is journal data, and describing what it holds would put
+ * whatever a hostile history planted into a diagnostic.
+ */
+const UNREADABLE_IMPORT_RECORD = "A recorded component import cannot be read by this version.";
 
 /**
  * A selection that named no single section, as the journal holds it.
@@ -216,8 +308,9 @@ function* durableImportComponent(
   searchPaths: string[],
   registry: ComponentRegistry,
   position: Readonly<SourcePosition> | undefined,
+  bundle: WorkflowImportAuthority | undefined,
 ): Workflow<ComponentDefinition | FunctionComponentDefinition> {
-  const selection = (yield createDurableOperation<DurableSelection>(
+  const recorded = yield createDurableOperation<DurableSelection>(
     // The root import is the run's own entry rather than an authored element,
     // so it carries no source however it was reached.
     { type: "import_component", name, ...(root ? {} : sourceDescription(position)) },
@@ -253,7 +346,11 @@ function* durableImportComponent(
         };
       }
 
-      const selected = yield* selectComponent(name, { componentDirs: searchPaths, registry });
+      const selected = yield* selectComponent(name, {
+        componentDirs: searchPaths,
+        registry,
+        ...(bundle === undefined ? {} : { workflow: bundle }),
+      });
 
       switch (selected.kind) {
         case "repository":
@@ -261,6 +358,16 @@ function* durableImportComponent(
             kind: "repository",
             path: selected.path,
             content: yield* readTextFile(selected.path),
+          };
+        case "workflow":
+          // The exact pinned source, already in hand: the bundle was read from
+          // the definition's own commit before this run existed, so recording it
+          // reads nothing and a replay reconstructs it without resolving a name.
+          return {
+            kind: "workflow",
+            path: selected.path,
+            sourceHash: selected.sourceHash,
+            content: selected.content,
           };
         case "registered":
           return {
@@ -276,7 +383,15 @@ function* durableImportComponent(
           throw new Error(unresolvedMessage(name, selected.searched));
       }
     },
-  )) as DurableSelection;
+  );
+
+  // Parsed rather than asserted: a replay hands back whatever the journal holds,
+  // and a history somebody else wrote is not a `DurableSelection` because it
+  // type-checked on the way in.
+  const selection = readDurableSelection(recorded);
+  if (selection === undefined) {
+    throw new Error(name === "__root__" ? UNREADABLE_ROOT_RECORD : UNREADABLE_IMPORT_RECORD);
+  }
 
   // Rebuilt here rather than carried out of the durable operation, so a replayed
   // failed selection and a live one raise the same error with the same fields.
@@ -303,6 +418,13 @@ function* durableImportComponent(
       );
     }
     return found.definition;
+  }
+
+  if (selection.kind === "workflow") {
+    // Reconstructed from the record's own source. Selection already decided
+    // this name, and a bundled component is Markdown by construction, so
+    // nothing here reads a file or imports a module.
+    return yield* ephemeral(parseMarkdownDefinition(name, selection.path, selection.content));
   }
 
   const { path, content, target } = selection;
@@ -1449,6 +1571,7 @@ function* runValueRoot(
   path: string,
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
+  bundle: WorkflowImportAuthority | undefined,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -1477,6 +1600,7 @@ function* runValueRoot(
         path,
         0,
         checkedFailures,
+        bundle,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1513,7 +1637,10 @@ function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void
   }
 }
 
-function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult> {
+function* documentWorkflow(
+  props: Record<string, Json>,
+  bundle: WorkflowImportAuthority | undefined,
+): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
   // document, component, or printing boundary can clear it (#441).
@@ -1522,7 +1649,12 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
   // installed by execute maps "__root__" to the run's root document source.
   // The ephemeral() wrapper bridges typing only — the import inside remains a
   // durable, journaled operation.
-  const root = yield* ephemeral(importComponent("__root__"));
+  const root = yield* ephemeral(
+    (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
+      const imported = yield* importComponent("__root__");
+      return bundle === undefined ? imported : bundle.authorize("__root__", imported);
+    })(),
+  );
 
   if (root.kind === "function") {
     throw new Error("Root document must be a markdown file, not a function component");
@@ -1596,6 +1728,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         streamed,
         rootPath,
         checkedFailures,
+        bundle,
       );
     }
 
@@ -1618,6 +1751,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         selected,
         rootPath,
         checkedFailures,
+        bundle,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -1643,6 +1777,7 @@ function* documentWorkflow(props: Record<string, Json>): Workflow<DocumentResult
         rootPath,
         0,
         checkedFailures,
+        bundle,
       );
 
       while (emittedThrough < produced.length) {
@@ -1753,6 +1888,7 @@ function* executeDocument(
   admissions: readonly JournalAdmission[] = [],
   completions: readonly CompletionFailure[] = [],
   preparations: readonly DurablePreparation[] = [],
+  bundles: readonly WorkflowComponentBundle[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -1834,6 +1970,14 @@ function* executeDocument(
       // renderChildren → importComponent → createDurableOperation.
       const rootEvalScope = yield* useEvalScope();
 
+      // The bundle this execution is closed over, resolved against the
+      // registrations it starts with. A name the engine, a core default, or a
+      // reserved registration already owns is refused here — before the journal
+      // is read, before the root document is imported, and before any component
+      // runs — because a bundle that could take one back would change what a
+      // document already written means.
+      const bundle = installedBundle(bundles, yield* Component.operations.registry);
+
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
       // and the root eval scope.
@@ -1843,13 +1987,18 @@ function* executeDocument(
             // Read per import, in the invoking scope, so a component registered
             // by a nested scope is visible to what that scope expands.
             const registered = yield* Component.operations.registry;
-            return yield* durableImportComponent(
+            const definition = yield* durableImportComponent(
               name,
               name === "__root__" ? root : undefined,
               componentDirs,
               registered,
               position,
+              bundle,
             );
+            // The witness for this answer. It is issued where the answer is
+            // produced and verified where it is invoked, so what a handler does
+            // to the value in between is visible rather than authoritative.
+            return bundle === undefined ? definition : bundle.issue(name, definition);
           },
           *applyModifiers([modifiers, context], _next) {
             const chain = composeModifierChain(modifiers, context, registry);
@@ -1885,7 +2034,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed),
+            documentWorkflow(claimed, bundle),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -2029,6 +2178,19 @@ export type JournalAdmission = (retained: readonly DurableEvent[]) => Operation<
  */
 export interface ExecutionInstallation {
   readonly admissions?: readonly JournalAdmission[];
+  /**
+   * The component bundle this execution is closed over.
+   *
+   * Plain immutable data: the authored names, their canonical paths inside the
+   * pinned tree, their blob object ids, and the exact sources read from it.
+   * Captured by value alongside the admissions, before any installation runs,
+   * so what a name resolves to — and which answers a document may invoke — is
+   * fixed before anything can observe or replace it.
+   *
+   * One execution runs under one bundle. Two installations supplying one is
+   * refused rather than merged.
+   */
+  readonly bundle?: WorkflowComponentBundle;
   /**
    * What this installation records inside the durable root.
    *
@@ -2311,6 +2473,30 @@ function* invoke(
       return prepare === undefined ? [] : [prepare];
     }),
   );
+  // Read once and frozen for the same reason, and copied entry by entry so the
+  // authority is closed over this run's own values rather than over an array a
+  // host still holds.
+  const bundles = Object.freeze(
+    installations.flatMap((installation) => {
+      const bundle = installation.bundle;
+      return bundle === undefined
+        ? []
+        : [
+            Object.freeze({
+              components: Object.freeze(
+                [...bundle.components].map((component) =>
+                  Object.freeze({
+                    name: component.name,
+                    path: component.path,
+                    sourceHash: component.sourceHash,
+                    content: component.content,
+                  }),
+                ),
+              ),
+            }),
+          ];
+    }),
+  );
 
   for (const installation of installations) {
     if (installation.install) {
@@ -2342,7 +2528,13 @@ function* invoke(
   // Whatever a handler returns is not an execution, so it is not read.
   yield* invocationExecution.operations.execute(issued.request);
 
-  return yield* executeDocument(issued.settle(), admissions, issued.completions(), preparations);
+  return yield* executeDocument(
+    issued.settle(),
+    admissions,
+    issued.completions(),
+    preparations,
+    bundles,
+  );
 }
 
 /**

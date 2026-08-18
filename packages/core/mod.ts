@@ -182,10 +182,15 @@ export type {
 } from "./src/inspect.ts";
 
 // Component registration — scope-local names resolved ahead of package defaults.
-export { ComponentRegistrationError, registerComponents } from "./src/components/registration.ts";
+export {
+  ComponentRegistrationError,
+  isComponentName,
+  registerComponents,
+} from "./src/components/registration.ts";
 export type { ComponentRegistration } from "./src/components/registration.ts";
 export { DEFAULT_COMPONENT_DIRS, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
+export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";
 export { RESERVED_STRUCTURAL } from "./src/structural.ts";
 export { printErrors } from "./src/component-failures.ts";
 export { parseMarkdownDefinition } from "./src/definition.ts";

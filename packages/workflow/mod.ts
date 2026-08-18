@@ -61,6 +61,7 @@ export {
 } from "./src/git.ts";
 export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
+export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 
@@ -192,8 +193,17 @@ export type {
 export { readEventSource } from "./src/lifecycle/history.ts";
 export type { WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
 
-export { definitionToJson, parseWorkflowDefinition } from "./src/storage/definition.ts";
-export type { GitWorkflowDefinitionV1, WorkflowDefinition } from "./src/storage/definition.ts";
+export {
+  definitionComponents,
+  definitionToJson,
+  parseWorkflowDefinition,
+} from "./src/storage/definition.ts";
+export type {
+  GitWorkflowDefinitionV1,
+  GitWorkflowDefinitionV2,
+  WorkflowComponentEntry,
+  WorkflowDefinition,
+} from "./src/storage/definition.ts";
 
 export { conflictingFields } from "./src/storage/compatibility.ts";
 
