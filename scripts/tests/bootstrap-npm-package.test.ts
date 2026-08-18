@@ -8,7 +8,8 @@
  *
  * Substitution happens only at contextual Api boundaries: `Env.cwd` for the
  * workspace the document reads, `Elicitation` for the question, `API.Process`
- * for the code blocks. The document's own shell runs for real under bash, and
+ * for the code blocks, and `FetchApi` for the readiness probe the confirming
+ * reads wait on. The document's own shell runs for real under bash, and
  * its manifests, artifact, comparisons and branching are the real components
  * and eval blocks. Only `npm` is replaced, by a shell function on `BASH_ENV`.
  * Nothing here contacts a registry.
@@ -24,6 +25,9 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { FetchApi } from "@effectionx/fetch";
+import type { FetchResponse } from "@effectionx/fetch";
 
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -101,7 +105,7 @@ npm() {
       ;;
     view)
       state="$(cat "$NPM_STATE_FILE")"
-      if [ "$state" = "missing" ]; then
+      if [ "\${NPM_VIEW_ALWAYS_MISSING-}" = "1" ] || [ "$state" = "missing" ]; then
         echo "npm error code E404" >&2
         return 1
       fi
@@ -136,6 +140,12 @@ npm() {
     trust)
       case "$2" in
         list)
+          if [ "\${NPM_TRUST_LIST_FAILS-}" = "1" ]; then
+            echo '{"error":{"code":"EOTP","summary":"This operation requires a one-time password."}}'
+            echo "npm error code EOTP" >&2
+            echo "npm error This operation requires a one-time password." >&2
+            return 1
+          fi
           if [ "$(cat "$NPM_STATE_FILE")" = "missing" ]; then
             echo "npm error code E404" >&2
             return 1
@@ -204,6 +214,39 @@ function useFixture(): Operation<Fixture> {
   });
 }
 
+/**
+ * What the registry answers the document's readiness probe.
+ *
+ * The probe reads a status and nothing else — it never touches the body — so
+ * the response is built from a real `Response` and carries the fields that
+ * status is read through. Consuming one of the body operations is a mistake
+ * this substitute is entitled to make loudly rather than answer.
+ */
+function readinessResponse(status: number, url: string): FetchResponse {
+  const raw = new Response(null, { status });
+  const noBody = () => {
+    throw new Error("the readiness probe reads no body");
+  };
+  return {
+    raw,
+    bodyUsed: false,
+    ok: raw.ok,
+    status: raw.status,
+    statusText: raw.statusText,
+    headers: raw.headers,
+    url,
+    redirected: false,
+    type: raw.type,
+    json: noBody,
+    text: noBody,
+    arrayBuffer: noBody,
+    blob: noBody,
+    formData: noBody,
+    body: noBody,
+    expect: noBody,
+  } as unknown as FetchResponse;
+}
+
 /** One recorded call to the fake npm. */
 interface NpmCall {
   args: string;
@@ -241,6 +284,12 @@ interface RunOptions {
   packFails?: boolean;
   publishFails?: boolean;
   trustFails?: boolean;
+  /** Makes `npm trust list` fail for a reason that is not a missing package. */
+  trustListFails?: boolean;
+  /** Makes `npm view` report nothing published however the registry answers. */
+  viewAlwaysMissing?: boolean;
+  /** How many readiness probes answer 404 before the registry reports ready. */
+  probeMisses?: number;
   /** How the provider behaves: answer correctly, fail, or break its schema. */
   elicit?: "answer" | "throw" | "invalid";
   /** Overrides the `package` prop, for the input-validation cases. */
@@ -254,6 +303,8 @@ interface Run {
   output: string;
   calls: NpmCall[];
   requests: ElicitationRequest[];
+  /** Every URL the document's readiness probe asked for. */
+  probes: string[];
   /** Every command the Process Api was asked to run, interception included. */
   execCount: number;
 }
@@ -269,6 +320,7 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
     yield* writeTextFile(fixture.logFile, "");
 
     const requests: ElicitationRequest[] = [];
+    const probes: string[] = [];
     const counter = { execs: 0 };
 
     // Installed on this scope, not inside a resource: middleware installs on the
@@ -313,6 +365,22 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
       { at: "min" },
     );
 
+    // The document's readiness probe is a real HTTP request, and the fake npm
+    // is a shell function it cannot reach. Answering it from the same state
+    // file keeps the two agreeing, and keeps this suite off the network.
+    yield* FetchApi.around(
+      {
+        *fetch([input]) {
+          const url = String(input);
+          probes.push(url);
+          const lagging = probes.length <= (options.probeMisses ?? 0);
+          const missing = (yield* readTextFile(fixture.stateFile)) === "missing";
+          return readinessResponse(lagging || missing ? 404 : 200, url);
+        },
+      },
+      { at: "min" },
+    );
+
     yield* API.Process.around({
       *exec([execOptions], next) {
         counter.execs++;
@@ -330,6 +398,8 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
             NPM_PACK_FAILS: options.packFails ? "1" : "",
             NPM_PUBLISH_FAILS: options.publishFails ? "1" : "",
             NPM_TRUST_FAILS: options.trustFails ? "1" : "",
+            NPM_TRUST_LIST_FAILS: options.trustListFails ? "1" : "",
+            NPM_VIEW_ALWAYS_MISSING: options.viewAlwaysMissing ? "1" : "",
           },
         });
       },
@@ -363,6 +433,7 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
       output: chunks.join(""),
       calls: parseLog(yield* readLog(fixture)),
       requests,
+      probes,
       execCount: counter.execs,
     };
   });
@@ -510,8 +581,11 @@ describe("bootstrap an npm package", () => {
       expect(called(result, "publish")).toBe(false);
       expect(called(result, "trust github")).toBe(false);
       expect(result.output).toContain("Its trusted publisher already matches");
-      // Nothing to write, so nothing is asked for and no artifact is built.
-      expect(result.requests.length).toBe(0);
+      // It still asks: npm answers `trust list` only with a code, so a run
+      // cannot establish that there is nothing to do without one. Nothing is
+      // written on that answer, and no artifact is built for a publish that
+      // will not happen.
+      expect(result.requests.length).toBe(1);
       expect(called(result, "pack")).toBe(false);
       // It still reads the registry back and reports the end state.
       expect(result.output).toContain("is the only published version");
@@ -594,7 +668,9 @@ describe("bootstrap an npm package", () => {
       expect(result.requests.length).toBe(0);
       expectNoRegistryMutation(result);
     });
+  });
 
+  describe("refusing after the question, before the registry", () => {
     for (const [description, foreign] of Object.entries(FOREIGN_TRUST)) {
       it(`refuses a trusted publisher with ${description}, and revokes nothing`, function* () {
         const fixture = yield* useFixture();
@@ -606,15 +682,40 @@ describe("bootstrap an npm package", () => {
         expect(result.output).toContain(
           "npm trust revoke @executablemd/fixture --id a2479f35-0000-4000-8000-000000000000",
         );
-        expect(result.requests.length).toBe(0);
+        // The code buys the answer this refusal turns on, and buys nothing
+        // else: it is spent reading, and the run stops before either write.
+        expect(result.requests.length).toBe(1);
         expectNoRegistryMutation(result);
         // Whatever was there is still there.
         expect(yield* readTextFile(fixture.trustFile)).toBe(foreign);
       });
     }
-  });
 
-  describe("refusing after the question, before the registry", () => {
+    it("reports npm's own error when it will not say what the package trusts", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, {
+        state: "bootstrap",
+        trust: EXPECTED_TRUST,
+        trustListFails: true,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("npm did not answer what `@executablemd/fixture` trusts");
+      // npm's diagnostic reaches both the page and the failure, rather than
+      // being replaced by a guess about what it meant.
+      expect(result.output).toContain("This operation requires a one-time password");
+      expect(result.failure).toContain("EOTP");
+      // A read that failed is not a publisher that conflicts. Reporting one
+      // sends the operator to revoke a configuration by an id nobody read —
+      // and here, to revoke the very configuration this document installs.
+      expect(result.output).not.toContain(
+        "already trusts a publisher this document did not set up",
+      );
+      expect(result.output).not.toContain("trust revoke");
+      expect(result.requests.length).toBe(1);
+      expectNoRegistryMutation(result);
+    });
+
     it("stops when the provider cannot reach anyone", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { elicit: "throw" });
@@ -730,15 +831,65 @@ describe("bootstrap an npm package", () => {
     });
   });
 
-  describe("what the document guarantees about its own shape", () => {
-    it("carries one code to the two authenticated commands and nowhere else", function* () {
+  describe("waiting out a registry that has not caught up", () => {
+    it("asks the registry for this package before reading it back", function* () {
       const fixture = yield* useFixture();
       const result = yield* run(fixture, { state: "missing", trust: "" });
 
+      expect(result.ok).toBe(true);
+      // Named, so a gate that stopped running cannot pass by doing nothing.
+      expect(result.probes.length).toBeGreaterThan(0);
+      expect(result.probes[0]).toContain("@executablemd/fixture");
+    });
+
+    it("keeps asking until the registry carries the package it just wrote", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, {
+        state: "missing",
+        trust: "",
+        probeMisses: 2,
+      });
+
+      // The run that started this: both writes land, the registry has not
+      // caught up, and the old document called that a failed publish.
+      expect(result.failure).toBe("");
+      expect(result.ok).toBe(true);
+      expect(result.probes.length).toBe(3);
+      expect(result.output).toContain("is the only published version");
+    });
+
+    it("says the reads are behind rather than that nothing was published", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, {
+        state: "missing",
+        trust: "",
+        viewAlwaysMissing: true,
+      });
+
+      expect(result.ok).toBe(false);
+      // Both writes happened; only the reading half is behind.
+      expect(called(result, "publish --access public --tag bootstrap")).toBe(true);
+      expect(called(result, "trust github @executablemd/fixture")).toBe(true);
+      expect(result.output).toContain("package reads still report nothing published");
+      expect(result.output).toContain("Nothing here failed and nothing is half done");
+      // The claim the old message made, and the one the operator acted on.
+      expect(result.output).not.toContain("is not reserved at");
+    });
+  });
+
+  describe("what the document guarantees about its own shape", () => {
+    it("carries one code to the authenticated commands and nowhere else", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "missing", trust: "" });
+
+      // Three commands need it, and one answer covers all three: the two
+      // writes, and the read npm will not answer without it.
+      expect(callTo(result, "trust list")?.otp).toBe(CODE);
       expect(callTo(result, "publish")?.otp).toBe(CODE);
       expect(callTo(result, "trust github")?.otp).toBe(CODE);
+      const authenticated = ["publish", "trust github", "trust list"];
       const unauthenticated = result.calls.filter(
-        (call) => !call.args.startsWith("publish") && !call.args.startsWith("trust github"),
+        (call) => !authenticated.some((prefix) => call.args.startsWith(prefix)),
       );
       expect(unauthenticated.length).toBeGreaterThan(0);
       expect(unauthenticated.every((call) => call.otp === "")).toBe(true);

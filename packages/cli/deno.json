@@ -1,6 +1,7 @@
 {
   "name": "@executablemd/cli",
   "version": "0.8.0",
+  "license": "MIT",
   "exports": "./src/deno.ts",
   "imports": {
     "@standard-schema/spec": "npm:@standard-schema/spec@^1.0.0",
