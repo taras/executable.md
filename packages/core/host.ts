@@ -18,6 +18,14 @@
  *   entered at all. They are what lets a host — the workflow package, for one —
  *   prepare a run in the journal that the document then runs against.
  *
+ * A third act of infrastructure sits beside them. **Generated XMD** is source
+ * an Agent produced, and `evaluateGeneratedXmd()` is how a trusted host runs it:
+ * the complete fragment is preflighted before its first effect, only the pinned
+ * observation identities the host admitted may execute, and what was admitted is
+ * recorded as one ordinary durable event before the first observation. It is
+ * reached from a preparation, because what it performs belongs in the run's
+ * journal.
+ *
  * Both stop at the first refusal, and a refusal stops only what has not
  * happened yet: durable effects an earlier preparation completed stay
  * retained and are not rolled back, and the durable root records the refusal as
@@ -49,3 +57,14 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
+export {
+  evaluateGeneratedXmd,
+  GeneratedXmdError,
+  pinnedComponent,
+  pinnedFetch,
+} from "./src/generated-xmd.ts";
+export type {
+  GeneratedObservation,
+  GeneratedRequest,
+  GeneratedXmdRequest,
+} from "./src/generated-xmd.ts";
