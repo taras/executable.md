@@ -32,6 +32,5 @@ export interface SuspensionAuthority {
   capability(suspensionId: string): SuspensionCapability;
 }
 
-export const CurrentSuspensionAuthority: Context<SuspensionAuthority> = createContext<
-  SuspensionAuthority
->("executablemd.workflow.suspension.authority");
+export const CurrentSuspensionAuthority: Context<SuspensionAuthority> =
+  createContext<SuspensionAuthority>("executablemd.workflow.suspension.authority");

@@ -2091,7 +2091,7 @@ Status is measured against main.
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |
-| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | defined for #367, unbuilt; typed answer delivery and scheduling belong to #300 |
+| `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | built on the #367 stack; typed answer delivery and scheduling belong to #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 

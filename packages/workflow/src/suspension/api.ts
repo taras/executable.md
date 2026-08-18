@@ -75,10 +75,7 @@ export interface WorkflowSuspensionApi {
    * return at all: the wait is what the operation is, and the owner ends the
    * execution around it.
    */
-  enter(
-    capability: SuspensionCapability,
-    request: WorkflowSuspensionRequest,
-  ): Operation<Json>;
+  enter(capability: SuspensionCapability, request: WorkflowSuspensionRequest): Operation<Json>;
 }
 
 export const WorkflowSuspension: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
@@ -120,7 +117,12 @@ export function parseSuspensionRequest(value: unknown): WorkflowSuspensionReques
     );
   }
   const schema = retainableJson(responseSchema);
-  if (schema === undefined || typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+  if (
+    schema === undefined ||
+    typeof schema !== "object" ||
+    schema === null ||
+    Array.isArray(schema)
+  ) {
     throw new WorkflowSuspensionRequestError(
       "a suspension's responseSchema describes the value that may end the wait, so it must be a " +
         "JSON object.",

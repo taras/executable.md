@@ -435,8 +435,12 @@ Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
 is now an advisory lock the operating system releases when a host dies, rather
-than something inferred from a status column. Durable suspension is designed
-above and unbuilt, and so is fork.
+than something inferred from a status column. Durable suspension is built on the
+same stack: a run that reaches `suspendFor()` retains one request, settles
+`suspended`, releases its lock and exits 2, and every later resume reaches that
+same wait. Typed answer delivery, which is what would end such a wait, belongs
+to #300 and is unbuilt, so a suspended run resumes into its request rather than
+past it. Fork is designed above and unbuilt.
 
 ## 4. Inspection commands
 
@@ -1280,7 +1284,7 @@ delegated without changing the document language.
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | defined here; unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
-| durable suspension request and executor-lock release | defined for #367; unbuilt; typed input delivery belongs to #300 |
+| durable suspension request and executor-lock release | built by #367; typed input delivery belongs to #300 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |

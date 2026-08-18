@@ -39,11 +39,14 @@ function* observed(
   body: (record: (position: DurablePosition) => void) => Operation<void>,
 ): Operation<DurablePosition[]> {
   const positions: DurablePosition[] = [];
-  yield* durableRun(function* () {
-    return yield* body((position) => {
-      positions.push(position);
-    });
-  }, { stream });
+  yield* durableRun(
+    function* () {
+      return yield* body((position) => {
+        positions.push(position);
+      });
+    },
+    { stream },
+  );
   return positions;
 }
 
@@ -52,13 +55,14 @@ describe("Tier DP — durable coroutine position", () => {
     const stream = new InMemoryStream();
 
     const positions = yield* observed(stream, (record) =>
-      function* () {
+      (function* () {
         record(yield* durablePosition());
         yield* effect("first");
         record(yield* durablePosition());
         yield* effect("second");
         record(yield* durablePosition());
-      }());
+      })(),
+    );
 
     expect(positions.map((position) => position.index)).toEqual([0, 1, 2]);
     expect(new Set(positions.map((position) => position.coroutineId)).size).toBe(1);
@@ -68,14 +72,15 @@ describe("Tier DP — durable coroutine position", () => {
     const first = new InMemoryStream();
 
     const live = yield* observed(first, (record) =>
-      function* () {
+      (function* () {
         yield* effect("first");
         record(yield* durablePosition());
         yield* effect("second");
         record(yield* durablePosition());
         yield* effect("third");
         record(yield* durablePosition());
-      }());
+      })(),
+    );
 
     // The same procedure against retained history that stops part-way: the
     // first two effects replay and the third runs live. This is the case a
@@ -93,14 +98,15 @@ describe("Tier DP — durable coroutine position", () => {
     );
 
     const resumed = yield* observed(partial, (record) =>
-      function* () {
+      (function* () {
         yield* effect("first");
         record(yield* durablePosition());
         yield* effect("second");
         record(yield* durablePosition());
         yield* effect("third");
         record(yield* durablePosition());
-      }());
+      })(),
+    );
 
     expect(live.map((position) => position.index)).toEqual([1, 2, 3]);
     expect(resumed).toEqual(live);
@@ -110,11 +116,12 @@ describe("Tier DP — durable coroutine position", () => {
     const stream = new InMemoryStream();
 
     const positions = yield* observed(stream, (record) =>
-      function* () {
+      (function* () {
         record(yield* durablePosition());
         yield* effect("between");
         record(yield* durablePosition());
-      }());
+      })(),
+    );
 
     const [before, after] = positions;
     expect(before?.index).not.toBe(after?.index);
@@ -124,7 +131,7 @@ describe("Tier DP — durable coroutine position", () => {
     const stream = new InMemoryStream();
 
     const positions = yield* observed(stream, (record) =>
-      function* () {
+      (function* () {
         yield* effect("parent-first");
         record(yield* durablePosition());
 
@@ -147,7 +154,8 @@ describe("Tier DP — durable coroutine position", () => {
             return "child";
           },
         ]);
-      }());
+      })(),
+    );
 
     const [parent, childStart, childNext] = positions;
 

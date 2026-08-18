@@ -72,10 +72,7 @@ export function suspensionId(runId: string, position: DurablePosition): string {
   }).slice(0, 32);
 }
 
-function describeSuspension(
-  id: string,
-  request: WorkflowSuspensionRequest,
-): EffectDescription {
+function describeSuspension(id: string, request: WorkflowSuspensionRequest): EffectDescription {
   return {
     type: SUSPENSION_REQUEST,
     name: id,
