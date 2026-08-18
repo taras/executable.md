@@ -1155,6 +1155,16 @@ default receives none. What a test does is supplied by the testing package
 through a contextual operation that names no component; see
 `specs/testing-spec.md`.
 
+That same invocation is the only thing that may run *another* document as a
+root. A Markdown test writes `<Execution host="run" …>` to execute a referenced
+document, one selected target inside it, or inline source, under the trusted
+host's production assembly — its own root import, journal, output stream, scope
+and teardown, in a scope that does not descend from the document that ran it.
+The authority is minted by canonical `<Test>` and expires with that invocation,
+so a repository `Test` selected ahead of core's default confers none of it here
+either. The authored surface, the declarations that configure a child, and the
+outcome it publishes are specified in `specs/testing-spec.md`.
+
 `<PrintErrors>`'s authority is
 carried by execution-owned structure — the element hands it to the expansion of
 its own body, which carries it to everything the region causes: the branches,
@@ -9586,6 +9596,25 @@ perform, separately from the binding, the rendered output, and the journal.
 | FE35 | Independence | Cancelling one invocation tears down only its own request |
 | FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
 | FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
+
+### Tier NEX — Nested document executions (`specs/testing-spec.md`)
+
+Each case distinguishes what was *displayed*, what was *collected*, what the
+outcome *was*, and what the journal *holds*, rather than treating matching text
+as proof of all four. Progressive display is gated at the output consumer, never
+timed.
+
+| # | Test | Verify |
+|---|------|--------|
+| NEX1–NEX3 | Roots | An arbitrary file path, one selected target inside a document, and a text root's rendered value each execute as a root, with root props applied |
+| NEX4 | Inline source | `source` runs under the `<eval>` identity and writes no authored file |
+| NEX5 | Grammar | `host="run"` refuses zero or both of `target` and `source`, before any child exists |
+| NEX6–NEX8 | Failure | With `as`, a settled `Err` is assertable; without `as`, it fails the owning test; the output rendered before the failure survives |
+| NEX9–NEX11 | Display and collection | The second chunk is produced only after the first reached this document's consumer; a child nothing collects is still displayed; `<Capture>` around `<Execution>` holds lexical content and never the child's stream |
+| NEX12–NEX15 | Journal | A transient run retains nothing; `<CollectJournal>` without a selected journal fails before the root import; `<DiagnosticJournal>` retains and is collectable; every declaration is settled before the host is first asked for a child |
+| NEX16–NEX22 | Authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
+| NEXH1–NEXH4 | Production assembly | Under `xmd test`, a child resolves `./dir/kebab-name.md` and `file.md#Target`, runs a foreground command through the entrypoint's own adapter, collects a diagnostic journal, leaves no file behind for inline source, and refuses `<WorkflowRun>` on a host with no workflow profile |
+
 
 ---
 

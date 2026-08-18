@@ -68,6 +68,9 @@ Existing documents and code get aligned to this section retroactively.
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
 | authority | the power to decide what an execution or effect *is* — whether it happens, what it may replay from, and what it settles to — as distinct from the power to observe or refuse one |
 | authoritative behavior | behavior that exercises authority; non-authoritative behavior may inspect, narrow, refuse or add a failure, but cannot bring an execution into being, substitute one, or rescue one |
+| testing harness | the testing-only construct through which one canonical `<Test>` invocation runs another document as a real document execution under a selected host profile; it is not component composition and is unavailable to any element core did not recognize as its own `<Test>` |
+| host profile | a named production assembly a trusted host offers a testing harness — `run` today — reused after argument parsing rather than restated; a host that cannot offer one refuses rather than approximating it |
+| execution outcome | what one nested document execution ended as, as the harness publishes it: a settlement carrying the exact completion `Result`, or, for a workflow attempt, a durable suspension carrying the run and suspension identities. A suspension is neither success nor failure |
 | trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
@@ -2168,6 +2171,50 @@ A registry answers a name with whatever was registered under it, so admitting
 middleware a binding contract names. Ordinary blocks are unaffected: a document
 still reaches a registered modifier by name, a replaced `timeout` included.
 
+### Capability-backed nested execution
+
+A Markdown test may run another document as a real root — its own root import,
+its own journal, its own scope and teardown. Nothing else may, and the boundary
+is not a name: a repository `Test.md`, a package registering `Test`, a component
+called `Execution`, and every middleware installed anywhere are all outside it.
+
+Authority is minted where the same decision is already made for a checked
+command failure. Canonical core recognizes its own `<Test>` definition
+structurally, and an invocation of *that* definition mints one opaque harness,
+scoped to the invocation. The object carries a private field, so nothing can
+construct one, and it expires when the invocation is dismantled, so nothing can
+keep one. Each nested execution spends a single-use authorization derived from
+it; a second spend, and a spend after the test has finished, are refusals.
+
+The harness asks a **host profile** for its child through a request, and for the
+reason every other capability-backed surface here does: a handler given the
+child could answer without delegating, and its invented answer would *be* the
+child — no root imported, no journal written, and an assertion body passing
+against nothing. A handler may read the profile, narrow or replace it, refuse by
+throwing, and delegate. Only the invocation's own terminal reaches the trusted
+provider, and only the outcome that provider reported is published.
+
+The child's scope does not descend from the document that ran it. That is not
+isolation for its own sake: a child is a *root* execution, and everything the
+outer document installed — its testing session and its one-execution guard, its
+output routing, its service adapters, its contextual providers — is contextual
+and would otherwise be inherited. Ownership is unchanged: the outer invocation
+destroys the child's scope, so cancelling or completing the test halts the child
+and waits for its teardown before the test proceeds.
+
+Configuration is installed before the child's root is imported. The harness
+reads its own children in two passes: a scan that expands the declaration prefix
+and stops where assertion content begins, and — after the child is over — the
+ordinary pass in which the declarations answer with what they observed and the
+assertions run. A declaration is recognized by the definition it resolves to, so
+a repository component of the same name is an ordinary component and the scan
+ends where it is written.
+
+Journal configuration and journal observation are separate. A run without a
+diagnostic declaration retains nothing and allocates no journal because output
+was displayed; observation grants no retention, and asking to observe a journal
+nothing selected is malformed configuration that fails before the root import.
+
 ### Trusted host orchestration
 
 A **trusted host** is the code that decides what an execution is for — a CLI
@@ -2311,6 +2358,7 @@ Status is measured against main.
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
+| testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |

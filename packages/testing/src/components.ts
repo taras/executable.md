@@ -35,6 +35,7 @@ import { readCompletedRun } from "./journal.ts";
 import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
 import { AssertThrows, ASSERT_THROWS_PROPS, createTestHandlers } from "./handlers.ts";
 import { Testing, TESTING_PROPS } from "./testing-component.ts";
+import { HARNESS_REGISTRATIONS } from "./execution-harness.ts";
 import {
   absorbTestFailure,
   RaisedSegmentError,
@@ -124,6 +125,11 @@ export function* installHandlers(
       props: ASSERT_THROWS_PROPS,
       captures: ["message"],
     },
+    // The nested-execution harness. Registered like everything else here, and
+    // authoritative like nothing else here: each invocation asks canonical
+    // `<Test>` for the authority, so registering the name grants none of it and
+    // a repository component of the same name receives ordinary semantics.
+    ...HARNESS_REGISTRATIONS.map((registration) => ({ ...registration })),
     ...[...ASSERTIONS.values()].map((assertion) => ({
       name: assertion.name,
       origin: "@executablemd/testing",

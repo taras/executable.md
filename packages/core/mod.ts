@@ -63,7 +63,9 @@ export {
   retain,
   tryContent,
   hasCapture,
+  hasBinding,
   capture,
+  publishBinding,
   handleFailure,
 } from "./src/component-api.ts";
 
