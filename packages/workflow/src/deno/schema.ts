@@ -406,6 +406,24 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
 ) STRICT, WITHOUT ROWID`,
     },
   ],
+  [
+    "workflow_suspension_answers",
+    {
+      type: "table",
+      sql: `CREATE TABLE workflow_suspension_answers (
+  suspension_id TEXT PRIMARY KEY,
+  request_event_id TEXT NOT NULL REFERENCES journal_events(event_id) ON DELETE RESTRICT,
+  request_fingerprint TEXT NOT NULL CHECK (
+    length(request_fingerprint) = 64 AND request_fingerprint NOT GLOB '*[^0-9a-f]*'
+  ),
+  answer TEXT NOT NULL CHECK (json_valid(answer)),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'consumed')),
+  created_at TEXT NOT NULL,
+  consumed_at TEXT,
+  CHECK ((state = 'consumed') = (consumed_at IS NOT NULL))
+) STRICT`,
+    },
+  ],
 ]);
 
 export const EXPECTED_SCHEMA = Object.freeze(
@@ -544,19 +562,11 @@ function hasDeclaredVersionOneObjects(database: DatabaseSync, path: string): boo
   return schemaObjects(database, path).some((object) => OBJECTS.has(object.name));
 }
 
-/**
- * Every earlier shape that once claimed to be a complete version 1.
- *
- * The plan for #293 amends version 1 in place: Repository and Worktree
- * metadata are part of the only supported complete shape, and any database a
- * pre-amendment build produced is refused as damaged. Two prior shapes exist
- * — the very first pre-release with only the run/journal/execution tables,
- * and the intermediate shape that added Workspace root retention — and both
- * are named here so the refusal reads as an incomplete pre-release rather
- * than as arbitrary damage.
- */
-/** Names introduced by the #293 amendment. Absence marks a pre-amendment shape. */
-const AMENDMENT_OBJECTS: readonly string[] = ["workspace_repositories", "workspace_worktrees"];
+/** Names introduced by the #300 amendment. Absence marks a pre-amendment shape. */
+const AMENDMENT_OBJECTS: readonly string[] = ["workflow_suspension_answers"];
+
+/** Names the #293 amendment introduced, which the #300 shape carries as well. */
+const REPOSITORY_OBJECTS: readonly string[] = ["workspace_repositories", "workspace_worktrees"];
 
 /** The very first pre-release shape, before Workspace root retention existed. */
 const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
@@ -567,16 +577,28 @@ const EARLIEST_PRE_RELEASE_SHAPE: readonly string[] = [
 ];
 
 /**
+ * Every later shape that once claimed to be a complete version 1.
+ *
+ * Each amendment to version 1 is made in place, so a database an earlier build
+ * produced is refused as an incomplete pre-release rather than as arbitrary
+ * damage. Newest first: the shape before retained answer delivery, and the
+ * shape before that, which had no Repository or Worktree metadata either.
+ */
+const PRIOR_COMPLETE_SHAPES: readonly (readonly string[])[] = Object.freeze([
+  REQUIRED_OBJECTS.filter((name) => !AMENDMENT_OBJECTS.includes(name)),
+  REQUIRED_OBJECTS.filter(
+    (name) => !AMENDMENT_OBJECTS.includes(name) && !REPOSITORY_OBJECTS.includes(name),
+  ),
+]);
+
+/**
  * Whether these declarations describe an earlier shape that once claimed to be
  * a complete version 1.
  *
- * The plan for #293 amends version 1 in place: Repository and Worktree
- * metadata are part of the only supported complete shape, and any database a
- * pre-amendment build produced is refused as an incomplete pre-release rather
- * than as arbitrary corruption. Two prior shapes exist — the very first
- * pre-release with only the run/journal/execution tables, and the amended
- * shape's predecessor that added Workspace root retention but not the
- * Repository/Worktree tables.
+ * The very first pre-release held only the run, journal and execution tables.
+ * Every shape after it is version 1 minus whichever amendments had not been
+ * made yet, and each is named here so the refusal reads as an incomplete
+ * pre-release rather than as corruption.
  */
 function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean {
   const present = new Set(objects.map((object) => object.name));
@@ -587,10 +609,10 @@ function isIncompletePreReleaseShape(objects: readonly SchemaObject[]): boolean 
   if (present.size === earliest.size && [...present].every((name) => earliest.has(name))) {
     return objects.every((object) => object.type === "table");
   }
-  const preAmendment = new Set(
-    REQUIRED_OBJECTS.filter((name) => !AMENDMENT_OBJECTS.includes(name)),
-  );
-  return present.size === preAmendment.size && [...present].every((name) => preAmendment.has(name));
+  return PRIOR_COMPLETE_SHAPES.some((shape) => {
+    const expected = new Set(shape);
+    return present.size === expected.size && [...present].every((name) => expected.has(name));
+  });
 }
 
 /**

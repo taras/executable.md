@@ -169,3 +169,14 @@ export {
   WorkflowSuspensionRequestError,
 } from "./src/suspension/api.ts";
 export type { WorkflowSuspensionApi, WorkflowSuspensionRequest } from "./src/suspension/api.ts";
+export { SUSPENSION_ANSWER } from "./src/suspension/answer.ts";
+export {
+  WorkflowAnswerDeliveryError,
+  WorkflowInputDelivery,
+  WorkflowInputDeliveryProviderError,
+} from "./src/suspension/delivery.ts";
+export type {
+  WorkflowAnswerDelivery,
+  WorkflowAnswerRetention,
+  WorkflowInputDeliveryApi,
+} from "./src/suspension/delivery.ts";

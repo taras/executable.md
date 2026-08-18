@@ -6599,11 +6599,20 @@ journal is valid continuation input.
 
 On resume, prior effects and the suspension-request Yield replay. They execute
 nothing and append nothing. With no input, the same suspension ID releases the
-new executor again without duplicating the request. With a schema-validated
-input, the #300 delivery path publishes one separate durable answer
-before `suspendFor()` returns that value, so interruption cannot consume an
-answer the journal does not hold. Delivery, duplicate reconciliation and resume
-scheduling belong to #300.
+new executor again without duplicating the request.
+
+With a schema-validated input, the operation publishes one separate durable
+`suspension_answer` Yield before returning that value. Only retained delivery
+state can make it do so; the value a contextual handler returns is never answer
+authority. Consuming that state and appending the answer are one database
+transaction, so an interruption cannot consume an answer the journal does not
+hold, and a replay that finds the answer event restores the value without
+reaching the live route again.
+
+A host retains one such answer with `xmd workflow answer <run-id>
+<suspension-id> <json>`, which is delivery and not execution: it takes no
+executor lock and leaves the run `suspended` until somebody resumes it. Resume
+scheduling belongs to #301.
 
 Suspension is distinct from `<Elicit>`. Elicitation's current provider remains
 a live interaction whose validated answer is the one durable effect. A workflow
@@ -8396,6 +8405,7 @@ Runs against the production Deno adapter, on real files. Defined in
 | WS23–WS26 | Values a record cannot use | A descriptor that describes nothing, an empty identity or base, a timestamp that is not an instant or names a day that never happened, a stored stop time, an empty journal identity, and props that are not an object are refused without quoting what they held |
 | WS24d | A number too large to hold | A 64-bit stored value reaches a parser instead of escaping as an error quoting it |
 | WS27 | Damage | A scribbled page is reported as damage, and the file stays where it is |
+| WS33a–WS33c | Version 1 amended for answers | Version 1 declares the retained answer table and creates it empty; the shape before it is refused unchanged as an incomplete pre-release; an answer table rebuilt without its constraints is damage rather than a row to read |
 
 ### Tier WJ — The retained journal and caller-owned transactions
 
@@ -8729,6 +8739,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFC6 | Failure | A failing document exits 1 and retains `failed`; a compatible reuse replays that failure. The component search path is empty, so a component beside the definition never resolves |
 | WFC7 | Storage | A missing run and an unreadable database are reported without a status line, and the database is left byte-identical |
 | WFC8 | Grammar | A missing or unknown subcommand, a missing target, a third argument, `--id` on resume, an agent option and an inline document are each refused |
+| WFC13 | Answer grammar | `answer` is an action whose refusal names the run; each of its three arguments is required and named when missing; a value that is not JSON, a fourth argument, and every option belonging to another action are refused, while `--no-secret-detection` is its own; `resume` grows no second positional |
 | WFC9 | Definition | A non-Markdown root and a path outside the repository fail before a run id is reported |
 | WFC10 | `xmd run` | Ordinary `xmd run` is unchanged and still writes into the caller's own filesystem |
 
@@ -8749,6 +8760,24 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 |---|------|--------|
 | WFH1/WFH3 | Unsupported host | Node and Bun refuse `start` and `resume` with the settled sentence, report no run id or status, and create no run store |
 | WFH2 | One grammar | Every runtime renders the same `xmd workflow` help |
+| WFH4 | Unsupported delivery | Node and Bun refuse `answer` with the same sentence, write no delivery line and create no run store |
+
+### Tier WAD — Delivering an answer to a durable wait
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.5. Runs
+against the production Deno adapter, on real run files.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAD1 | Correlation | A value is retained only for the exact wait it names; a wait this run is not at, and a run that holds no such wait, are refused with nothing written |
+| WAD2 | The retained schema judges | Every value the response schema refuses is refused before persistence, and a value it describes still goes in afterwards |
+| WAD3 | The secret gate | A credential-shaped answer is refused with neither the value nor the match in the diagnostic; `--no-secret-detection` retains the same value |
+| WAD4 | Delivery is not execution | Status, stop reason, document-execution records and retained history are byte-for-byte what the suspension left |
+| WAD5 | No executor lock | A delivery succeeds while a live workflow executor holds the run's lock |
+| WAD6/WAD7/WAD8 | Refusals | A duplicate, an answer already spent, a completed run, a cancelled run and a run nothing is stored for are each refused, and none of them writes |
+| WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
+| WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
+| WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
 ### Tier WFX — A killed run resumes from its frontier
 

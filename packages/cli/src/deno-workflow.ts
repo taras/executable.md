@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { Operation } from "effection";
 import { env as readEnv } from "@executablemd/runtime";
 import {
+  useWorkflowInputDelivery,
   useWorkflowLifecycle,
   useWorkflowRunHost,
   withWorkflowWorkspace,
@@ -43,6 +44,9 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
     },
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });
+    },
+    useDelivery(): Operation<void> {
+      return useWorkflowInputDelivery({ root });
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return withWorkflowWorkspace(database, operation);

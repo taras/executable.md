@@ -206,6 +206,7 @@ export {
   ReturnValidationError,
 } from "./src/validate.ts";
 export type { NormalizedIssue } from "./src/validate.ts";
+export { validateParsed } from "./src/components/parse-schema.ts";
 
 // Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
 export { installAgentComponents } from "./src/agent/components.ts";

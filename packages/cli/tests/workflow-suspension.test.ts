@@ -9,6 +9,10 @@
  * The suspension itself is real. The document body calls `suspendFor()`, which
  * publishes its request and then does not return; the settlement that follows
  * is the production path, including the halt that tears the execution down.
+ *
+ * `xmd workflow answer` runs through the same module the CLI dispatches to, so
+ * what is observed of a delivery is what a caller sees: one stdout line, no
+ * status line, and a run whose lifecycle the delivery did not touch.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -25,13 +29,23 @@ import { DatabaseSync } from "node:sqlite";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
-import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
+import {
+  useWorkflowInputDelivery,
+  useWorkflowLifecycle,
+  useWorkflowRunHost,
+} from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { runWorkflow } from "../src/workflow.ts";
-import type { WorkflowExecution, WorkflowHost, WorkflowRequest } from "../src/workflow.ts";
+import type {
+  WorkflowExecution,
+  WorkflowHost,
+  WorkflowManagementRequest,
+  WorkflowRequest,
+} from "../src/workflow.ts";
+import { runWorkflowManagement } from "../src/workflow-management.ts";
 
 const SCHEMA = { type: "object", properties: { approved: { type: "boolean" } } };
 
@@ -76,6 +90,9 @@ function host(root: string, events: string[] = []): WorkflowHost {
     },
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });
+    },
+    useDelivery(): Operation<void> {
+      return useWorkflowInputDelivery({ root });
     },
     attach<T>(_database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return scoped(function* () {
@@ -269,6 +286,89 @@ function useWaitingDocument(performed: string[]): Operation<void> {
   ]);
 }
 
+/**
+ * What one management invocation wrote, on each stream separately.
+ *
+ * The distinction is the point: a delivery reports itself on standard output
+ * and publishes no `workflow status:` line at all, and a test reading only exit
+ * codes cannot tell that from a status published beside a zero.
+ */
+interface Written {
+  readonly out: string[];
+  readonly err: string[];
+}
+
+function manage(
+  request: WorkflowManagementRequest,
+  workflowHost: WorkflowHost,
+): Operation<{ exitCode: number; written: Written }> {
+  return scoped(function* () {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    yield* ensure(() => {
+      console.log = log;
+      console.error = error;
+    });
+    console.log = (...parts: unknown[]) => {
+      out.push(parts.map((part) => String(part)).join(" "));
+    };
+    console.error = (...parts: unknown[]) => {
+      err.push(parts.map((part) => String(part)).join(" "));
+    };
+    const outcome = yield* runWorkflowManagement(request, workflowHost);
+    return { exitCode: outcome.exitCode, written: { out, err } };
+  });
+}
+
+/** The retained answers this run holds, read the way something outside XMD would. */
+function answers(path: string): { suspensionId: string; state: string; answer: string }[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    return database
+      .prepare("SELECT suspension_id, state, answer FROM workflow_suspension_answers")
+      .all()
+      .map((row) => ({
+        suspensionId: String(row["suspension_id"]),
+        state: String(row["state"]),
+        answer: String(row["answer"]),
+      }));
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * The same waiting document, recording what the wait handed back.
+ *
+ * The value is what proves delivery reached the document rather than merely
+ * reaching its journal: an answered wait returns, and the step after it runs
+ * with the value in hand.
+ */
+function useAnsweredDocument(performed: string[]): Operation<void> {
+  return registerComponents([
+    {
+      name: "Wait",
+      origin: "tier-wfs",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        yield* durableCall("prior", function* () {
+          performed.push("performed-prior-effect");
+          return "done";
+        });
+        performed.push("reached-the-wait");
+        const answer = yield* suspendFor({
+          request: { kind: "approval" },
+          responseSchema: SCHEMA,
+        });
+        performed.push(`continued-with-${JSON.stringify(answer)}`);
+        return "";
+      },
+    },
+  ]);
+}
+
 function body(): (execution: WorkflowExecution) => Operation<Result<void>> {
   return function* (execution): Operation<Result<void>> {
     return yield* execution.around(
@@ -441,6 +541,139 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
     expect(afterReplay.status).toBe("completed");
     expect(afterReplay.priorEffects).toBe(after.priorEffects);
     expect(afterReplay.requests).toHaveLength(0);
+  });
+
+  it("WFS4: a delivery retains a value, changes nothing else, and a resume spends it", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useFixture();
+    yield* useGit(fixture);
+
+    const runId = yield* createRun(root, fixture);
+    const performed: string[] = [];
+    yield* useAnsweredDocument(performed);
+
+    expect(
+      (yield* runWorkflow(
+        { ...REQUEST, action: "resume", target: runId },
+        undefined,
+        host(root),
+        body(),
+      )).exitCode,
+    ).toBe(2);
+
+    const path = workflowRunPath(root, runId);
+    const suspended = retained(path);
+    const suspensionId = suspended.requests[0] ?? "";
+    expect(suspensionId).not.toBe("");
+
+    const delivered = yield* manage(
+      {
+        action: "answer",
+        runId,
+        suspensionId,
+        value: { approved: true },
+        secretDetection: true,
+      },
+      host(root),
+    );
+
+    expect(delivered.exitCode).toBe(0);
+    // The delivery, on standard output, and nothing else anywhere. A status
+    // line here would say the run moved, and it did not.
+    expect(delivered.written.out).toEqual([`workflow answer: ${runId} (${suspensionId})`]);
+    expect(delivered.written.err).toEqual([]);
+
+    // The run is exactly where the suspension left it: same status, same stop
+    // reason, same executions, same history.
+    const afterDelivery = retained(path);
+    expect(afterDelivery).toEqual(suspended);
+    expect(answers(path)).toEqual([
+      { suspensionId, state: "pending", answer: JSON.stringify({ approved: true }) },
+    ]);
+
+    // Nothing executed, so the document is still where it stopped.
+    expect(performed).toEqual(["performed-prior-effect", "reached-the-wait"]);
+
+    // The resume is what spends it: the wait returns the delivered value, the
+    // document continues past it, and the run completes.
+    const resumed = yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      host(root),
+      body(),
+    );
+
+    expect(resumed.exitCode).toBe(0);
+    expect(performed).toEqual([
+      "performed-prior-effect",
+      "reached-the-wait",
+      "reached-the-wait",
+      `continued-with-${JSON.stringify({ approved: true })}`,
+    ]);
+
+    const afterResume = retained(path);
+    expect(afterResume.status).toBe("completed");
+    expect(afterResume.rootCloses).toBe(1);
+    // One request across every execution, and the delivery is spent.
+    expect(afterResume.requests).toHaveLength(1);
+    expect(answers(path)[0]?.state).toBe("consumed");
+  });
+
+  it("WFS5: a delivery does not take the executor lock, and a wrong wait is refused", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useFixture();
+    yield* useGit(fixture);
+
+    const runId = yield* createRun(root, fixture);
+    yield* useAnsweredDocument([]);
+
+    yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      host(root),
+      body(),
+    );
+
+    const path = workflowRunPath(root, runId);
+    const suspensionId = retained(path).requests[0] ?? "";
+    expect(suspensionId).not.toBe("");
+
+    // A wait this run is not at, refused without writing anything.
+    const wrong = yield* manage(
+      {
+        action: "answer",
+        runId,
+        suspensionId: `${suspensionId}0`,
+        value: {},
+        secretDetection: true,
+      },
+      host(root),
+    );
+    expect(wrong.exitCode).toBe(1);
+    expect(wrong.written.out).toEqual([]);
+    expect(wrong.written.err[0]).toContain("is not waiting at");
+    expect(answers(path)).toEqual([]);
+
+    // And the real wait, answered while a live workflow executor holds the
+    // lock. Delivery never asks for it, so holding it changes nothing.
+    const delivered = yield* scoped(function* () {
+      yield* useWorkflowLifecycle({ root });
+      const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+      expect(acquired.ok && acquired.value.kind).toBe("acquired");
+      return yield* manage(
+        {
+          action: "answer",
+          runId,
+          suspensionId,
+          value: { approved: false },
+          secretDetection: true,
+        },
+        host(root),
+      );
+    });
+
+    expect(delivered.exitCode).toBe(0);
+    expect(answers(path)[0]?.state).toBe("pending");
   });
 
   it("WFS3: an ordinary execution outside a workflow run is unaffected", function* () {

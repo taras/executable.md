@@ -59,9 +59,20 @@ import {
   type WorkflowSuspensionRequest,
 } from "../suspension/api.ts";
 import { durablePosition } from "@executablemd/durable-streams";
+import type { Json } from "@executablemd/durable-streams";
 import { SUSPENSION_REQUEST, suspensionId } from "../suspension/suspend.ts";
+import {
+  type SuspensionAnswerAuthority,
+  type SuspensionAnswerProvider,
+  useSuspensionAnswerProvider,
+} from "../suspension/answer.ts";
 import type { WorkflowRunDatabase } from "../storage/api.ts";
-import { WorkflowRequestError } from "../storage/errors.ts";
+import { WorkflowRequestError, WorkflowTransactionError } from "../storage/errors.ts";
+import { consumeRetainedAnswer, readRetainedAnswer } from "./answers.ts";
+import type { WorkflowRunConnections } from "./connections.ts";
+import { hostConnections } from "./host-connections.ts";
+import { withEnlistedJournalRoute } from "./journal-route.ts";
+import { readTransaction } from "./reading.ts";
 
 /** What one execution reported it is waiting for. */
 export interface SuspensionNotice {
@@ -213,6 +224,15 @@ export function createSuspensionController(
 
     own<T>(operation: Operation<T>): Operation<T> {
       return scoped(function* () {
+        // The run's retained delivery state is this host's, so the answer
+        // provider is installed only where this host's registry is. A
+        // controller running without one enters waits and never claims: an
+        // execution with no way to reach retained state has no answers.
+        const connections = yield* hostConnections();
+        if (connections !== undefined) {
+          yield* useSuspensionAnswerProvider(answerProvider(options.database, connections));
+        }
+
         function* accept(suspension: string, request: WorkflowSuspensionRequest): Operation<never> {
           const refused = yield* atOwnRequest(options.database, suspension, request);
           if (refused !== undefined) {
@@ -260,4 +280,106 @@ export function createSuspensionController(
       });
     },
   };
+}
+
+/**
+ * The owner of one run's retained delivery state.
+ *
+ * Two facts have to move together and only this host can move them: the answer
+ * stops being pending, and the journal gains the event that says the wait ended.
+ * So the transaction is opened here, the publication the durable operation
+ * offered is routed into it, and the value is returned only once that
+ * transaction has committed. A crash anywhere before the commit leaves the
+ * answer pending and the wait unanswered, which is a run that can be resumed
+ * again rather than one that has silently lost a value somebody delivered.
+ */
+function answerProvider(
+  database: WorkflowRunDatabase,
+  connections: WorkflowRunConnections,
+): SuspensionAnswerProvider {
+  return {
+    *claim(authority: SuspensionAnswerAuthority): Operation<Json | undefined> {
+      // Where the execution stands, before what the run retains. An execution
+      // that is not at this wait has nothing to claim, and the public route
+      // reports that refusal authoritatively a moment later.
+      const refused = yield* atOwnRequest(database, authority.suspensionId, authority.request);
+      if (refused !== undefined) {
+        return undefined;
+      }
+
+      const connection = connections.validateLease(database).connection;
+      const pending = yield* scoped(function* () {
+        yield* connection.lock.hold();
+        return readTransaction(connection.database, () =>
+          readRetainedAnswer(connection.database, authority.suspensionId),
+        );
+      });
+      if (pending === undefined || pending.state !== "pending") {
+        return undefined;
+      }
+
+      connections.validateJournalProvenance(database, authority.journalProvenance);
+
+      const claimed = yield* database.transact(function* (transaction) {
+        const active = connections.authorizeTransaction(database, transaction);
+        const writable = active.lease?.connection;
+        if (writable === undefined) {
+          throw new WorkflowTransactionError(
+            "the answer claim is not bound to this active WorkflowRun transaction.",
+          );
+        }
+        const token = connections.issueToken(database, transaction);
+
+        // Read again under the write lock. What was pending a moment ago may
+        // have been claimed by another execution, and the publication that
+        // commits with the consumption has to be of the value that consumption
+        // took.
+        const retained = readRetainedAnswer(writable.database, authority.suspensionId);
+        if (retained === undefined || retained.state !== "pending") {
+          throw new WorkflowRequestError(
+            `the answer retained for ${authority.suspensionId} was consumed by another ` +
+              "execution before this one could publish it.",
+          );
+        }
+        if (retained.requestFingerprint !== fingerprintOf(authority.request)) {
+          throw new WorkflowRequestError(
+            `the answer retained for ${authority.suspensionId} was delivered against a ` +
+              "different request, so it is not an answer to the wait this execution reached.",
+          );
+        }
+
+        yield* withEnlistedJournalRoute(
+          database,
+          transaction,
+          token,
+          authority.publish(retained.answer),
+        );
+
+        if (
+          !consumeRetainedAnswer(
+            writable.database,
+            authority.suspensionId,
+            new Date().toISOString(),
+          )
+        ) {
+          throw new WorkflowRequestError(
+            `the answer retained for ${authority.suspensionId} could not be consumed, so its ` +
+              "publication is discarded with this transaction.",
+          );
+        }
+        return retained.answer;
+      });
+      if (!claimed.ok) {
+        throw claimed.error;
+      }
+      return claimed.value;
+    },
+  };
+}
+
+function fingerprintOf(request: WorkflowSuspensionRequest): string {
+  return canonicalFingerprint({
+    request: request.request,
+    responseSchema: request.responseSchema,
+  });
 }

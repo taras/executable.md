@@ -19,7 +19,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { workflowRunLock, workflowRunPath } from "@executablemd/workflow/deno";
-import { useWorkflowLifecycle, useWorkflowRunHost } from "@executablemd/workflow/deno";
+import {
+  useWorkflowInputDelivery,
+  useWorkflowLifecycle,
+  useWorkflowRunHost,
+} from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
@@ -267,6 +271,9 @@ function liveHost(root: string, attachment: Attachment): WorkflowHost {
     },
     useLifecycle(): Operation<void> {
       return useWorkflowLifecycle({ root });
+    },
+    useDelivery(): Operation<void> {
+      return useWorkflowInputDelivery({ root });
     },
     attach<T>(_database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return scoped(function* () {

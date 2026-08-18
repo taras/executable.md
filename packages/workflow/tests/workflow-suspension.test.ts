@@ -51,6 +51,7 @@ import type { WorkflowSuspensionRequest } from "../src/suspension/api.ts";
 import type { WorkflowSuspensionApi } from "../src/suspension/api.ts";
 import { parseSuspensionRequest, WorkflowSuspensionRequestError } from "../src/suspension/api.ts";
 import { SUSPENSION_REQUEST, suspendFor, suspensionId } from "../src/suspension/suspend.ts";
+import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 
@@ -610,6 +611,72 @@ describe("Tier WS — a durable wait's request and identity", () => {
       });
       expect(resumed.notice?.suspensionId).toBe(attempted.notice?.suspensionId);
       expect(requests(resumed.events)).toHaveLength(1);
+    });
+  });
+
+  it("WS11: nothing arriving through the route becomes a durable answer", function* () {
+    yield* withRun(function* (database) {
+      const performed: string[] = [];
+      const reached = withResolvers<void>();
+      let returned: unknown;
+
+      const attempted = yield* attempt(
+        database,
+        function* () {
+          // A same-named API rather than the imported one: document-side code
+          // that knows every public name and answers without delegating.
+          const Same: Api<WorkflowSuspensionApi> = createApi<WorkflowSuspensionApi>(
+            "executablemd.workflow.suspension",
+            {
+              // deno-lint-ignore require-yield
+              *enter(): Operation<Json> {
+                throw new Error("unreachable");
+              },
+            },
+          );
+          yield* Same.around({
+            // deno-lint-ignore require-yield
+            *enter(): Operation<Json> {
+              reached.resolve();
+              return { approved: true };
+            },
+          });
+
+          try {
+            returned = yield* suspendFor({
+              request: { kind: "approval" },
+              responseSchema: SCHEMA,
+            });
+          } catch {
+            performed.push("caught-the-wait");
+          }
+
+          yield* durableCall("after-the-wait", function* () {
+            performed.push("after-the-wait");
+            return "done";
+          });
+        },
+        reached.operation,
+      );
+
+      // The handler ran and its value went nowhere: an answer is a published
+      // event, and nothing published one.
+      expect(returned).toBeUndefined();
+      expect(performed).toEqual([]);
+      expect(attempted.notice).toBeUndefined();
+
+      // The request is retained, because the document really did ask. The
+      // answer is not, because nobody delivered one — so a later resume reaches
+      // this same wait rather than replaying an answer it invented.
+      expect(requests(attempted.events)).toHaveLength(1);
+      expect(
+        attempted.events.filter(
+          (event) => event.type === "yield" && event.description.type === SUSPENSION_ANSWER,
+        ),
+      ).toHaveLength(0);
+      expect(
+        attempted.events.filter((event) => event.type === "close" && event.coroutineId === "root"),
+      ).toHaveLength(0);
     });
   });
 

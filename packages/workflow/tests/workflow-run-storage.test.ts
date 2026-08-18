@@ -1507,7 +1507,19 @@ describe("Tier WS — version 1 amended in place", () => {
   function initializePreAmendmentVersionOne(database: DatabaseSync): void {
     database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
     for (const object of EXPECTED_SCHEMA) {
-      if (AMENDED_TABLES.includes(object.name)) {
+      if (AMENDED_TABLES.includes(object.name) || ANSWER_TABLES.includes(object.name)) {
+        continue;
+      }
+      database.exec(`${object.sql};`);
+    }
+    database.exec("PRAGMA user_version = 1;");
+  }
+
+  /** The shape complete before retained answer delivery joined version 1. */
+  function initializePreAnswerVersionOne(database: DatabaseSync): void {
+    database.exec(`PRAGMA application_id = ${APPLICATION_ID};`);
+    for (const object of EXPECTED_SCHEMA) {
+      if (ANSWER_TABLES.includes(object.name)) {
         continue;
       }
       database.exec(`${object.sql};`);
@@ -1516,6 +1528,8 @@ describe("Tier WS — version 1 amended in place", () => {
   }
 
   const AMENDED_TABLES = ["workspace_repositories", "workspace_worktrees"];
+
+  const ANSWER_TABLES = ["workflow_suspension_answers"];
 
   it("WS23a: version 1 declares the Repository and Worktree tables", function* () {
     const root = yield* useStorageRoot();
@@ -1630,5 +1644,71 @@ describe("Tier WS — version 1 amended in place", () => {
     // Described and left exactly as found: nothing upgraded it, and nothing
     // downgraded it either.
     expect(yield* until(readFile(path))).toEqual(before);
+  });
+
+  it("WS33a: version 1 declares the retained answer table", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const declared = EXPECTED_SCHEMA.filter((object) => ANSWER_TABLES.includes(object.name));
+    expect(declared.map((object) => object.name)).toEqual(ANSWER_TABLES);
+
+    const database = new DatabaseSync(runPath(root, "release-1.4"));
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(1);
+      expect(database.prepare("SELECT * FROM workflow_suspension_answers").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("WS33b: the shape before retained delivery is refused unchanged", function* () {
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    tamper(path, initializePreAnswerVersionOne);
+    const before = yield* until(readFile(path));
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    // An incomplete pre-release rather than arbitrary damage: this is a shape a
+    // build really produced, and saying so is what tells its owner the run
+    // cannot be continued rather than that the file is broken.
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowIncompleteVersionOneError);
+    expect(yield* until(readFile(path))).toEqual(before);
+  });
+
+  it("WS33c: a damaged answer row is damage, not a row to ignore", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      yield* createRun();
+    });
+
+    const path = runPath(root, "release-1.4");
+    // Rebuilt without the constraints version 1 declares, which is the only way
+    // a row like this exists — and exactly what an editor outside XMD leaves.
+    tamper(path, (database) => {
+      database.exec("DROP TABLE workflow_suspension_answers");
+      database.exec(`
+        CREATE TABLE workflow_suspension_answers (
+          suspension_id TEXT PRIMARY KEY, request_event_id TEXT, request_fingerprint TEXT,
+          answer TEXT, state TEXT, created_at TEXT, consumed_at TEXT
+        );
+      `);
+    });
+
+    const result = yield* withStorage(root, function* () {
+      return yield* lookup("release-1.4");
+    });
+
+    expect(result.ok).toBe(false);
+    // The table is there and its name is right; its declaration is not the one
+    // version 1 writes, so recognition refuses it rather than reading rows
+    // through a parser that assumes the constraints hold.
+    expect(!result.ok && result.error).toBeInstanceOf(WorkflowDatabaseCorruptError);
   });
 });

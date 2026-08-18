@@ -43,11 +43,13 @@
  * procedure sit at different positions and cannot receive each other's answer.
  */
 
-import { type Operation, suspend } from "effection";
+import type { Operation } from "effection";
 import { canonicalFingerprint, type Json } from "@executablemd/core";
 import { createDurableOperation, durablePosition } from "@executablemd/durable-streams";
 import type { DurablePosition, EffectDescription, Workflow } from "@executablemd/durable-streams";
 import { getWorkflowRun } from "../run.ts";
+import { parseJsonValue } from "../storage/members.ts";
+import { suspensionAnswerEffect } from "./answer.ts";
 import {
   parseSuspensionRequest,
   WorkflowSuspension,
@@ -119,17 +121,30 @@ export function* suspendFor(request: WorkflowSuspensionRequest): Operation<Json>
   // it to check.
   yield* publishRequest(id, parsed);
 
-  yield* WorkflowSuspension.operations.enter(id, parsed);
+  return yield* publishAnswer(id, parsed);
+}
 
-  // Reaching this line means the route answered, and nothing may: this slice
-  // delivers no answers, so the controller that accepts a wait never returns
-  // from one. A value here came from a handler standing between this operation
-  // and that controller.
-  //
-  // The wait therefore goes unentered, and this operation does what an unentered
-  // wait is — it stops. Raising would not do: an ordinary error is something the
-  // document can catch, and a caught suspension is a document continuing past a
-  // wait it asked for and did not get. Nothing catches this.
-  yield* suspend();
-  throw new WorkflowSuspensionRequestError("a suspended execution resumed itself.");
+/**
+ * The answer, restored or claimed.
+ *
+ * A durable operation of its own, directly behind the request, so an execution
+ * that already received its answer replays it instead of asking again. Its live
+ * path reaches the public route only when nothing is retained to answer with,
+ * and returns only what was published — which is why returning at all means the
+ * wait is over.
+ */
+function* publishAnswer(id: string, parsed: WorkflowSuspensionRequest): Workflow<Json> {
+  // The protocol hands back what the journal held, which is `unknown` until it
+  // has been walked. A retained answer reaches the document, so it is parsed
+  // here rather than asserted — the same boundary every restored value passes.
+  const restored: unknown = yield suspensionAnswerEffect(id, parsed, () =>
+    WorkflowSuspension.operations.enter(id, parsed),
+  );
+  return parseJsonValue(restored, "$", answerFailure);
+}
+
+function answerFailure(reason: string, path: string): Error {
+  return new WorkflowSuspensionRequestError(
+    `the answer that ended this wait is not a value this run can carry: ${reason} at ${path}`,
+  );
 }

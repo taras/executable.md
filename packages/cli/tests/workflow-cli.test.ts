@@ -360,6 +360,89 @@ describe("Tier WFC — xmd workflow start and resume", () => {
     });
   });
 
+  it("WFC13: answer takes three arguments, and only its own options", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // Recognized as an action: what refuses it is the run it addressed.
+      const noRun = yield* xmd(fixture, [
+        "workflow",
+        "answer",
+        "release-1",
+        "wait-1",
+        '{"approved":true}',
+      ]).join();
+      expect(noRun.code).toBe(1);
+      expect(noRun.stderr).toContain("release-1");
+      expect(noRun.stderr).not.toContain("unrecognized subcommand");
+
+      // Each of the three arguments is required, and named when it is missing.
+      const noWait = yield* xmd(fixture, ["workflow", "answer", "release-1"]).join();
+      expect(noWait.code).toBe(1);
+      expect(noWait.stderr).toContain("names the wait it answers");
+
+      const noValue = yield* xmd(fixture, ["workflow", "answer", "release-1", "wait-1"]).join();
+      expect(noValue.code).toBe(1);
+      expect(noValue.stderr).toContain("as one JSON value");
+
+      // The value is JSON, and a value that is not is this invocation's mistake
+      // rather than something a provider discovers after opening a run.
+      const notJson = yield* xmd(fixture, [
+        "workflow",
+        "answer",
+        "release-1",
+        "wait-1",
+        "approved",
+      ]).join();
+      expect(notJson.code).toBe(1);
+      expect(notJson.stderr).toContain("is not JSON");
+
+      // A fourth argument is a fourth argument, however it is spelled.
+      const extra = yield* xmd(fixture, [
+        "workflow",
+        "answer",
+        "release-1",
+        "wait-1",
+        "{}",
+        "extra",
+      ]).join();
+      expect(extra.code).toBe(1);
+      expect(extra.stderr).toContain("extra");
+
+      // Options that belong to executing a run, and to reading one, are not
+      // this action's.
+      for (const option of ["--json", "--verbose", "--id=other"]) {
+        const refused = yield* xmd(fixture, [
+          "workflow",
+          "answer",
+          "release-1",
+          "wait-1",
+          "{}",
+          option,
+        ]).join();
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain(option.split("=")[0] ?? option);
+      }
+
+      // A delivery writes retained state, so the secret gate is one of its own.
+      const optedOut = yield* xmd(fixture, [
+        "workflow",
+        "answer",
+        "release-1",
+        "wait-1",
+        "{}",
+        "--no-secret-detection",
+      ]).join();
+      expect(optedOut.code).toBe(1);
+      expect(optedOut.stderr).toContain("release-1");
+      expect(optedOut.stderr).not.toContain("unrecognized option");
+
+      // And `answer` is not an option `resume` grew: a resume still names one
+      // run and nothing else.
+      const resumeExtra = yield* xmd(fixture, ["workflow", "resume", "release-1", "wait-1"]).join();
+      expect(resumeExtra.code).toBe(1);
+      expect(resumeExtra.stderr).toContain("wait-1");
+    });
+  });
+
   it("WFC11: `--` ends the options, not the grammar", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       // A third argument is a third argument however it is written. Before this,

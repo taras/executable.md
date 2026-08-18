@@ -116,6 +116,12 @@ root props again:
 xmd workflow resume run_01J...
 ```
 
+An answer names the run, the wait inside it, and one JSON value:
+
+```sh
+xmd workflow answer run_01J... 9f2c... '{"approved":true}'
+```
+
 An inspection names no document and reads no definition: `status`, `list` and
 `history` reach neither Git nor the working tree.
 
@@ -213,7 +219,7 @@ The initial statuses are:
 | Status | Meaning | `resume` |
 | --- | --- | --- |
 | `running` | one workflow executor is active | follows or reports the active executor |
-| `suspended` | the workflow reached a deliberate durable wait | continues when the awaited input is available |
+| `suspended` | the workflow reached a deliberate durable wait | continues on the next explicit resume, from the answer delivered for that wait |
 | `interrupted` | the workflow executor stopped outside an authored wait | allowed |
 | `completed` | the root result completed | full replay only |
 | `failed` | an uncaught failure escaped the root | refused |
@@ -272,13 +278,48 @@ absent, replay restores the same request event, performs no earlier effect,
 publishes no duplicate request, and returns incomplete again after teardown.
 Providers remain lazy and are not contacted for replayed effects.
 
-Issue #300 owns typed input delivery and scheduling. Its public correlation
-boundary is the retained suspension ID and response schema. A validated answer
-is not consumed until a separate durable answer event commits; a crash before
-that commit leaves it eligible for the same request. Duplicate, late and
-wrong-request delivery is refused. This suspension and executor-lock-release
-contract folds issue #322 into #367; #322 is not a separate implementation
-prerequisite.
+#### Typed answer delivery
+
+Delivery is an operation separate from execution. Its public correlation
+boundary is the retained suspension ID and response schema:
+
+```sh
+xmd workflow answer [--secret-detection|--no-secret-detection] <run-id> <suspension-id> <json>
+```
+
+`answer` records one pending answer and nothing else. It acquires no executor
+lock, starts and resumes no document execution, attaches no Workspace, fetches
+no definition, inserts no document-execution record, appends no journal event,
+changes no run status and publishes no `workflow status:` line. On success it
+writes one line to standard output:
+
+```text
+workflow answer: <run-id> (<suspension-id>)
+```
+
+A value is accepted only when the run is `suspended`, its stop reason names a
+retained `suspension_request` event carrying the supplied suspension ID, and the
+value satisfies the response schema that request retained. Secret detection
+applies to the retained state and the answer event it would become, on the same
+terms as durable journal persistence, and is on unless `--no-secret-detection`
+disables it for that delivery. Duplicate, consumed, wrong-run, wrong-request,
+late, invalid, cancelled-run and missing-run delivery is refused, and a refusal
+leaves the run's storage unchanged. A refusal retains neither the rejected value
+nor a secret match in its diagnostic.
+
+`resume` keeps its grammar: exactly one run id, no answer flag and no untyped
+generic answer. On a later explicit resume, `suspendFor()` continues only from
+retained pending answer state for the exact current unanswered request, and
+publishes one ordinary durable `suspension_answer` Yield before returning the
+value to the document. Consuming that pending state and appending that Yield are
+one database transaction: a crash or an injected failure before it commits
+leaves the answer pending and publishes nothing, and replay after it commits
+restores the retained answer event without consuming or publishing again.
+
+This suspension and executor-lock-release contract folds issue #322 into #367;
+#322 is not a separate implementation prerequisite. Scheduling — automatic
+resume, watchers, unattended iteration and remote host selection — remains
+blocked on #301.
 
 ### 3.6 Interruption and cancellation differ
 
@@ -445,9 +486,9 @@ is now an advisory lock the operating system releases when a host dies, rather
 than something inferred from a status column. Durable suspension is built on the
 same stack: a run that reaches `suspendFor()` retains one request, settles
 `suspended`, releases its lock and exits 2, and every later resume reaches that
-same wait. Typed answer delivery, which is what would end such a wait, belongs
-to #300 and is unbuilt, so a suspended run resumes into its request rather than
-past it. Fork is designed above and unbuilt.
+same wait. Typed answer delivery is what ends such a wait, and `xmd workflow
+answer` is built by #300; scheduling is not, so a wait ends when somebody
+resumes the run rather than on its own. Fork is designed above and unbuilt.
 
 ## 4. Inspection commands
 
@@ -1077,6 +1118,7 @@ durable observations and mutations restore.
 | Glob | restore historical path set |
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
+| suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
 | Git.Push/PullRequest | restore or reconcile stable external identity |
 
@@ -1368,7 +1410,9 @@ delegated without changing the document language.
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | `Git.Switch` and `Git.Add` built by #294, Deno provider only; `Git.Commit` defined here, unbuilt (#294) |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
-| durable suspension request and executor-lock release | built by #367; typed input delivery belongs to #300 |
+| durable suspension request and executor-lock release | built by #367 |
+| `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
+| workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
 | history fork | defined here; unbuilt (#368) |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD constrained evaluator | behavior defined; public name/schema open |
