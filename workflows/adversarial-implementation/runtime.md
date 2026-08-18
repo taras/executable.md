@@ -119,9 +119,15 @@ Three outcomes are distinct, and none of them is a failure of the document:
   is available.
 - **Interruption.** Losing the executor outside an authored wait, including
   Ctrl-C, leaves the run `interrupted` and resumable at the journal frontier.
-- **Cancellation.** `xmd workflow cancel <run-id>` asks an active executor to
-  stop and makes the run terminal. It retains the journal and Workspace for
-  inspection and does not undo completed local or external effects.
+- **Cancellation.** `xmd workflow cancel <run-id>` never reaches into a live
+  document execution. When the lock reports a live workflow executor it refuses
+  without mutation and directs the caller to interrupt that foreground process
+  instead. Without one, an eligible retained state — a stale `running` with no
+  root Close, or a `suspended` or `interrupted` run — transitions to `cancelled`
+  under the exact executor lock, validated inside the transaction that publishes
+  it. A `completed` or `failed` outcome is authoritative and cancellation
+  refuses. It retains the journal and Workspace for inspection and does not undo
+  completed local or external effects.
 
 An uncaught failure escaping the root is terminal too. Reusing that run's ID
 replays the retained failure rather than silently retrying it; a corrected
