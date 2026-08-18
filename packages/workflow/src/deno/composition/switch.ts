@@ -28,14 +28,9 @@ import { SWITCH } from "../../composition/components/GitSwitch.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { branchExists, resolveBaseCommit, resolveCommit, switchBranch } from "./git.ts";
 import type { RepositoryHost } from "./host.ts";
-import {
-  fingerprintOf,
-  settled,
-  type CompositionOutcome,
-  type MutationContext,
-} from "./effects.ts";
+import { settled, type CompositionOutcome, type MutationContext } from "./effects.ts";
 import { gitRefused } from "./refusals.ts";
-import { performGitOperation, type GitCheckout } from "./operations.ts";
+import { gitOperationFingerprint, performGitOperation, type GitCheckout } from "./operations.ts";
 import { placedCheckout } from "./identity.ts";
 
 /** The effect type one branch change is recorded under. */
@@ -55,8 +50,9 @@ export function* describeSwitch(request: GitSwitchRequest): Operation<EffectDesc
   // The whole observation, not only what it asked for. The record a document was
   // written against is part of what this effect is: replaying a result recorded
   // for one Repository under an observation naming another would hand back a
-  // transition that never described this invocation.
-  const configuration = fingerprintOf([
+  // transition that never described this invocation — and the encoding is
+  // injective, so no two observations can arrive at one name.
+  const configuration = gitOperationFingerprint([
     request.repository.name,
     request.repository.locatorFingerprint,
     request.repository.requestedBase,

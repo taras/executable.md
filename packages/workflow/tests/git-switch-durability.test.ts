@@ -21,7 +21,16 @@ import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { GitOperationProtocolError } from "../src/composition/errors.ts";
+import { GitOperationError, GitOperationProtocolError } from "../src/composition/errors.ts";
+import { DivergenceError } from "@executablemd/durable-streams";
+import { RepositoryContext } from "../src/composition/context.ts";
+import type { RepositoryRecord } from "../src/composition/records.ts";
+import { gitOperationFingerprint } from "../src/deno/composition/operations.ts";
+import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
+import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
+import type { WorkflowRunDatabase } from "../src/storage/api.ts";
+import { collect, execute, inlineSource } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
 import { WORKSPACE_GIT_SWITCH } from "../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome } from "../src/deno/composition/host.ts";
@@ -96,6 +105,14 @@ function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
   return value instanceof GitOperationProtocolError;
 }
 
+function isDivergence(value: unknown): value is DivergenceError {
+  return value instanceof DivergenceError;
+}
+
+function isGitFailure(value: unknown): value is GitOperationError {
+  return value instanceof GitOperationError;
+}
+
 /** Every table this run's database holds, as another connection sees them. */
 function tableNames(path: string): string[] {
   const database = new DatabaseSync(path);
@@ -136,6 +153,43 @@ function damageSwitchResult(path: string, damage: (record: Record<string, unknow
   if (rewritten !== 1) {
     throw new Error(`the journal holds ${rewritten} switch results`);
   }
+}
+
+/**
+ * One `<Git.Switch>` inside the checkout, under a supplied Repository context.
+ *
+ * A self-closing `<Repository>` retains a checkout and installs no context, so
+ * the record the component observes is exactly the one a caller supplies here —
+ * which is what a replaced context is, and what makes the two runs below differ
+ * by nothing but that record.
+ */
+function observedSource(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}" as="repository" />`,
+    "<Dir path={repository}>",
+    `<Git.Switch branch="release" />`,
+    "</Dir>",
+  ].join("\n");
+}
+
+function runObserved(
+  database: WorkflowRunDatabase,
+  record: RepositoryRecord,
+  locator: string,
+  options: WorkflowWorkspaceOptions,
+): Operation<Json> {
+  return scoped(function* () {
+    return yield* withWorkflowWorkspace(
+      database,
+      scoped(function* () {
+        yield* RepositoryContext.around({ current: () => record }, { at: "min" });
+        return yield* collect(
+          yield* execute({ ...inlineSource(observedSource(locator)), stream: database.journal }),
+        );
+      }),
+      options,
+    );
+  });
 }
 
 describe("workflow Git.Switch durability", () => {
@@ -349,6 +403,69 @@ describe("workflow Git.Switch durability", () => {
     });
   });
 
+  /**
+   * A recorded transition belongs to the observation it was authorized for.
+   *
+   * Durable identity is type and name, and the name is where the observation
+   * lives, so the encoding behind it has to be injective: two records that
+   * digested alike would let a replay hand back a transition authorized for one
+   * of them to the other, on the path where nothing is authenticated because
+   * nothing is executed.
+   *
+   * `requestedBase` is the demonstration. A record that never supplied a base
+   * retains `null`; a replaced context can supply the string a sentinel-based
+   * encoding used for absence, and the two must still be different effects.
+   */
+  it("refuses to replay a transition recorded for a different Repository record", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      // What this fixture retains, learned from a run of its own: creation
+      // identity is a function of the name, the url and the base.
+      const learning = yield* createRun({ runId: "learning" });
+      yield* runDocument(learning, `<Repository name="project" url="${remote.locator}" as="r" />`);
+      const [learned] = yield* retainedRepositories(learning);
+      const record = learned?.record;
+      if (record === undefined || record.requestedBase !== null) {
+        throw new Error("the fixture did not retain a Repository with no requested base");
+      }
+
+      const database = yield* createRun();
+      const first = countingHost();
+      yield* runObserved(database, record, remote.locator, countingOptions(first));
+      expect(subcommands(first.counters)).toContain("switch");
+      const recorded = yield* gitEvents(database);
+      expect(recorded).toHaveLength(1);
+      const published = publishedRoots(path);
+
+      dropRootClose(path);
+
+      // The same expansion, under a context differing in one member only.
+      const second = countingHost();
+      const failure = yield* raised(
+        runObserved(
+          database,
+          { ...record, requestedBase: "\u0000" },
+          remote.locator,
+          countingOptions(second),
+        ),
+      );
+
+      // Two different effects, so the recorded one is not this one's to take:
+      // the journal says so at the position it reaches, before anything runs.
+      // A collision would instead have handed this observation a transition
+      // recorded for another, on the path where nothing is authenticated
+      // because nothing is executed.
+      expect(causedBy(failure, isDivergence)).toBeInstanceOf(DivergenceError);
+      expect(causedBy(failure, isGitFailure)).toBe(undefined);
+      expect(subcommands(second.counters)).not.toContain("switch");
+      expect(yield* gitEvents(database)).toHaveLength(recorded.length);
+      expect(publishedRoots(path)).toBe(published);
+    });
+  });
+
   it("leaves the frontier untouched when a blocked switch is halted", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
@@ -449,6 +566,50 @@ describe("workflow Git.Switch durability", () => {
  * it returns only once a reader has the pipe open, so the child is provably
  * running at the moment the scope is torn down.
  */
+/**
+ * The encoding behind a Git operation's durable identity, on its own.
+ *
+ * The replay above proves one collision cannot happen; this proves the shape of
+ * the encoding, which is what makes every other arrangement of values safe too.
+ * Absence, a separator, a length prefix and the empty string are all ordinary
+ * content somewhere — a branch may be named `1:a`, a base may contain any
+ * character — so none of them may be readable as structure.
+ */
+describe("workflow Git operation identity", () => {
+  it("gives distinct values distinct fingerprints", function* () {
+    const arrangements: (string | null)[][] = [
+      [],
+      [null],
+      [""],
+      ["\u0000"],
+      ["\u0001"],
+      ["-"],
+      [null, null],
+      [null, ""],
+      ["", null],
+      ["a", "b"],
+      ["a\u0001b"],
+      ["ab", ""],
+      ["", "ab"],
+      ["1:a"],
+      ["1", "a"],
+      ["2:ab", "c"],
+      ["2:ab c"],
+      ["main", null],
+      [null, "main"],
+    ];
+
+    const fingerprints = arrangements.map((values) => gitOperationFingerprint(values));
+    expect(new Set(fingerprints).size).toBe(arrangements.length);
+  });
+
+  it("gives one value one fingerprint", function* () {
+    expect(gitOperationFingerprint(["main", null, "a\u0001b"])).toBe(
+      gitOperationFingerprint(["main", null, "a\u0001b"]),
+    );
+  });
+});
+
 describe("workflow Git operation teardown", () => {
   it("kills the Git child it spawned when the scope is halted", function* () {
     const directory = yield* useTempDirectory("xmd-git-teardown-");

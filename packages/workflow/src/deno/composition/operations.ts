@@ -53,6 +53,7 @@
 
 import { scoped, type Operation, until } from "effection";
 import { lstat } from "@effectionx/fs";
+import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { realpath } from "node:fs/promises";
 import type { Json } from "@executablemd/durable-streams";
@@ -94,6 +95,33 @@ import {
 import { attempted, type CompositionOutcome, type MutationContext } from "./effects.ts";
 import { repositoryDisagreement } from "./repository.ts";
 import { worktreeDisagreement } from "./worktree.ts";
+
+/**
+ * The digest one Git operation's durable identity is built from.
+ *
+ * Injective, because the values it covers include a whole retained record and a
+ * document's own strings, and durable identity is what decides whether a
+ * recorded result may be handed back for an invocation. Two different
+ * observations that digested alike would let a replay return a transition
+ * authorized for one of them to the other — without the live path, where the
+ * observation is authenticated, ever running.
+ *
+ * So each value is length-prefixed rather than joined by a separator, and
+ * absence is a marker no encoded value can produce. Any character may appear in
+ * a branch, a base, a name or a path — including the ones a separator scheme
+ * would reserve — and a length prefix says exactly how much of what follows
+ * belongs to this value, so no arrangement of values can be read as another.
+ *
+ * This is deliberately its own encoding rather than a change to
+ * `fingerprintOf()`, whose digests are already part of retained Repository and
+ * Worktree identity in this run's history.
+ */
+export function gitOperationFingerprint(values: readonly (string | null)[]): string {
+  const canonical = values
+    .map((value) => (value === null ? "-" : `${value.length}:${value}`))
+    .join("");
+  return createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 16);
+}
 
 /** What a component supplies about where its operation belongs. */
 export interface GitOperationRequest {
