@@ -150,7 +150,35 @@ const ESCAPES: ReadonlyMap<string, number> = new Map([
   ['"', 0x22],
 ]);
 
+/**
+ * Git's octal escape grammar, which is narrower than "three octal digits".
+ *
+ * `unquote_c_style()` cases the leading digit as `0`–`3` and nothing else, so
+ * `\\4` through `\\7` are escapes it does not know: quoting fails and
+ * `parse_alt_odb_entry()` reads the whole entry as ordinary literal text. The
+ * reason is arithmetic — an escape names one byte, and `\\400` is already
+ * 256 — so a reader that accepted a wider leading digit would be computing a
+ * value no byte can hold.
+ *
+ * Accepting one is not a near miss. `\\457` is 303, and 303 truncated into a
+ * byte is 47, which is `/`: a reader that wrapped it would see a path separator
+ * where Git sees an invalid escape, and the two would then resolve entirely
+ * different object directories from the same entry.
+ */
+const OCTAL_LEAD = /^[0-3]$/;
 const OCTAL = /^[0-7]$/;
+
+/**
+ * One byte of an unquoted path, or `undefined` when the value is not one.
+ *
+ * Git's own grammar already keeps every value it accepts inside a byte, and
+ * this is what makes that a property this reading checks rather than one it
+ * assumes: nothing here reaches a typed array that would quietly truncate a
+ * value into a different character.
+ */
+function pathByte(value: number): number | undefined {
+  return Number.isInteger(value) && value >= 0 && value <= 0xff ? value : undefined;
+}
 
 type Unquoted =
   /** The path the quoting names, and where the closing quote left off. */
@@ -181,7 +209,8 @@ function decodePath(bytes: readonly number[]): string | undefined {
  * the path this produces the path Git would open.
  *
  * Quoting Git rejects — an unterminated string, an escape it does not know, a
- * short octal escape — is not an error here either. Git falls back to reading
+ * short octal escape, an octal escape whose leading digit is `4` or higher — is
+ * not an error here either. Git falls back to reading
  * the line as ordinary text, so this says `literal` and the caller does the
  * same, which is what keeps a broken-looking line safely classified rather than
  * quietly resolved as something it is not.
@@ -224,7 +253,7 @@ function unquoteCStyle(text: string): Unquoted {
     const second = text[index];
     const third = text[index + 1];
     if (
-      !OCTAL.test(escape) ||
+      !OCTAL_LEAD.test(escape) ||
       second === undefined ||
       third === undefined ||
       !OCTAL.test(second) ||
@@ -232,8 +261,12 @@ function unquoteCStyle(text: string): Unquoted {
     ) {
       return { kind: "literal" };
     }
+    const octal = pathByte((Number(escape) << 6) | (Number(second) << 3) | Number(third));
+    if (octal === undefined) {
+      return { kind: "literal" };
+    }
     index += 2;
-    bytes.push((Number(escape) << 6) | (Number(second) << 3) | Number(third));
+    bytes.push(octal);
   }
 }
 

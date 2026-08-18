@@ -1080,6 +1080,118 @@ describe("workflow Git.Push object-source containment", () => {
   });
 
   /**
+   * An escape Git's grammar rejects, which a wider reading turns into a
+   * separator.
+   *
+   * `unquote_c_style()` cases an octal escape's leading digit as `0`–`3`,
+   * because an escape names one byte and `\400` is already 256. So `\457` is
+   * not a short escape or a near miss — it is an escape Git does not have, and
+   * a quoted entry containing one fails to unquote and is read as ordinary
+   * literal text instead.
+   *
+   * A reader that accepted the wider digit would compute 303 and truncate it
+   * into a byte, which is 47, which is `/`. It would see a path separator where
+   * Git sees no escape at all, and the same entry would then name two different
+   * object directories: one inside the authenticated database, reached through
+   * segments the extra separator created, and one Git actually traverses.
+   *
+   * Both are planted. The decoy chain satisfies the truncating reading; the
+   * literal spelling Git falls back to reaches a database outside the
+   * materialization entirely.
+   */
+  it("refuses an alternates entry whose octal escape Git's own grammar rejects", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+    const foreign = yield* useBareRemote({
+      commits: [{ message: "foreign", entries: [{ path: "foreign.txt", content: "foreign\n" }] }],
+    });
+    const foreignCommit = foreign.heads.get("main") ?? "";
+
+    // `\457` is invalid to Git and decodes to `/` under a truncating reading.
+    const escape = "\\457";
+    // Quoted: Git rejects the quoting and reads the whole line, including both
+    // quotes, as one relative path. Truncating: `a` `/` `b`, two segments.
+    const entry = `"a${escape}b/../../foreign"`;
+    // Where each reading lands, relative to the object database:
+    //   truncating → <objects>/a/b/../../foreign  → <objects>/foreign
+    //   Git        → <objects>/"a\457b/../../foreign"  → <repository>/.git/foreign"
+    const literalSegment = `"a${escape}b`;
+    const foreignSlot = `foreign"`;
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          document(
+            remote.locator,
+            `<Git.Switch branch="${BRANCH}" />`,
+            `<Plant />`,
+            `<Git.Push />`,
+          ),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([
+                plantObjectGraph(database, function* (workspace, checkout) {
+                  const objects = `${checkout}/.git/objects`;
+                  yield* workspace.filesystem.mkdir(`${objects}/info`, { recursive: true });
+                  yield* workspace.filesystem.writeFile(`${objects}/info/alternates`, `${entry}\n`);
+                  // The decoy the truncating reading resolves: the two segments
+                  // its invented separator creates, and the directory the
+                  // `../..` after them lands back on.
+                  yield* workspace.filesystem.mkdir(`${objects}/a/b`, { recursive: true });
+                  yield* workspace.filesystem.mkdir(`${objects}/foreign`, { recursive: true });
+                  // The one segment Git's literal reading starts from, so its
+                  // path resolves rather than merely failing to exist.
+                  yield* workspace.filesystem.mkdir(`${objects}/${literalSegment}`, {
+                    recursive: true,
+                  });
+                  // Where Git's literal reading ends: an object database
+                  // outside the materialization, holding a commit this run
+                  // never had.
+                  yield* workspace.filesystem.symlink(
+                    `${foreign.locator}/objects`,
+                    `${checkout}/.git/${foreignSlot}`,
+                  );
+                }),
+              ]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      // One fixed, cause-free boundary failure, repeating nothing an author
+      // wrote: not the entry, not its escape, not where it pointed.
+      expect(String(failure)).toContain("executed and published nothing");
+      expect(String(failure)).not.toContain(entry);
+      expect(String(failure)).not.toContain(escape);
+      expect(String(failure)).not.toContain(foreign.locator);
+      expect(String(failure)).not.toContain(foreignSlot);
+
+      expect(subcommands(counting.counters)).not.toContain("ls-remote");
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(yield* gitHostEvents(database)).toHaveLength(0);
+      expect(publishedRoots(path)).toBe(3);
+      expect(committedRoot(path)).toBe(latestRoot(path));
+      expect(remoteRefs(remote).has(DESTINATION)).toBe(false);
+
+      // The escape really was reachable, and reachable only through Git's own
+      // reading of it: ordinary Git in the same export rejects the quoting,
+      // resolves the literal spelling, links the outside database and answers
+      // for a commit this run never held. The decoy chain holds no objects, so
+      // nothing but that fallback explains this.
+      const reached = yield* inCheckout(database, yield* checkoutPath(database), function* (run) {
+        const top = (yield* run(["rev-parse", "--show-toplevel"])).trim();
+        return nativeGit(["cat-file", "-t", foreignCommit], top, top);
+      });
+      expect(reached).toBe("commit");
+    });
+  });
+
+  /**
    * The link an author can write, which needs no chain at all.
    *
    * The operating system resolves a symbolic link before Git reports anything
