@@ -140,7 +140,8 @@ export type GitFailureReason =
   | "ignored-pathspec"
   | "outside-checkout-pathspec"
   | "invalid-pathspec-magic"
-  | "empty-index";
+  | "empty-index"
+  | "unnamed-branch";
 
 /** A Git operation the document asked for and did not get. */
 export class GitOperationError extends Error {

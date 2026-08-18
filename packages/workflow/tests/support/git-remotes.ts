@@ -168,3 +168,33 @@ export function useBareRemote(options: RemoteOptions): Operation<BareRemote> {
 export function moveRemoteBranch(remote: BareRemote, branch: string, commit: string): void {
   git(["update-ref", `refs/heads/${branch}`, commit], remote.locator, remote.locator);
 }
+
+/**
+ * Every ref this bare remote holds right now, read out of the remote itself.
+ *
+ * The discriminating observation for a push. What a run retains says what it
+ * believes it published; this says what the other end actually has.
+ */
+export function remoteRefs(remote: BareRemote): Map<string, string> {
+  const listed = git(
+    ["for-each-ref", "--format=%(objectname) %(refname)"],
+    remote.locator,
+    remote.locator,
+  );
+  const refs = new Map<string, string>();
+  for (const line of listed.split("\n")) {
+    if (line === "") {
+      continue;
+    }
+    const [commit, name] = line.split(" ");
+    if (commit !== undefined && name !== undefined) {
+      refs.set(name, commit);
+    }
+  }
+  return refs;
+}
+
+/** The commit one branch names on the remote, or `undefined` when it has none. */
+export function remoteBranch(remote: BareRemote, branch: string): string | undefined {
+  return remoteRefs(remote).get(`refs/heads/${branch}`);
+}

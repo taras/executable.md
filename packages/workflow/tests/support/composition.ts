@@ -16,6 +16,9 @@ import { until } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitComposition } from "../../src/composition/git-api.ts";
 import { collect, execute, inlineSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { retainedWorkflowInstallation } from "../../src/run.ts";
+import { GIT_HOST_EFFECT } from "../../src/git-host/effect.ts";
 import type { Json } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../mod.ts";
@@ -114,6 +117,75 @@ export function runDocument(
       }),
       options,
     );
+  });
+}
+
+/**
+ * Execute `source` as this run's root document, associated with the run itself.
+ *
+ * The same attachment `runDocument()` makes, plus the workflow-run installation
+ * a Git-host effect needs: external identity is the run and the expansion, and
+ * a document execution that is not associated with a run has no first half of
+ * that pair. The run's three members come from its own retained record, exactly
+ * as the CLI supplies them.
+ *
+ * `around` runs inside the attachment and outside the execution, which is where
+ * a suite installs the things a document cannot: a replaced Repository context,
+ * public Git-host routing middleware, a shadowing registration.
+ */
+export function runWorkflowDocument(
+  database: WorkflowRunDatabase,
+  source: string,
+  options: WorkflowWorkspaceOptions = {},
+  around: (execute: () => Operation<Json>) => Operation<Json> = (execute) => execute(),
+): Operation<Json> {
+  return scoped(function* () {
+    return yield* withWorkflowWorkspace(
+      database,
+      scoped(function* () {
+        return yield* around(function* () {
+          return yield* collect(
+            yield* executeInstalled({ ...inlineSource(source), stream: database.journal }, [
+              retainedWorkflowInstallation({
+                runId: database.record.runId,
+                base: database.record.base,
+                pinnedCommit: database.record.definition.objectId,
+              }),
+            ]),
+          );
+        });
+      }),
+      options,
+    );
+  });
+}
+
+/** Every Git-host effect event this run journaled, in order. */
+export function* gitHostEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+  const events = yield* database.journal.readAll();
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === GIT_HOST_EFFECT,
+  );
+}
+
+/** What one Git-host effect settled as, and what it retained when it settled `ok`. */
+export interface GitHostOutcomeRecord {
+  readonly status: string;
+  readonly name: string;
+  readonly message: string;
+  readonly record: unknown;
+}
+
+export function* gitHostOutcomes(database: WorkflowRunDatabase): Operation<GitHostOutcomeRecord[]> {
+  return (yield* gitHostEvents(database)).map((event) => {
+    const result = Object(Reflect.get(event, "result"));
+    const error = Object(Reflect.get(result, "error"));
+    return {
+      status: String(Reflect.get(result, "status")),
+      name: String(Reflect.get(error, "name") ?? ""),
+      message: String(Reflect.get(error, "message") ?? ""),
+      record: Reflect.get(result, "value"),
+    };
   });
 }
 
@@ -348,6 +420,59 @@ export function* inCheckout<T>(
       }
       return outcome.stdout;
     });
+  });
+}
+
+/**
+ * What one retained checkout's own Git configuration holds, key by key.
+ *
+ * An absent key answers `undefined` rather than failing, which is the whole
+ * point when a suite is proving that upstream tracking was never established:
+ * `branch.<name>.remote` being unset is the observation.
+ */
+export function* checkoutConfig(
+  database: WorkflowRunDatabase,
+  workspacePath: string,
+  keys: readonly string[],
+): Operation<Map<string, string | undefined>> {
+  return yield* scoped(function* () {
+    const host = denoRepositoryHost();
+    const root = yield* host.useDirectory();
+    const exported = yield* transactWorkspaceRoots(database, function* (workspace) {
+      const [repository] = workspace.metadata.readRepositories();
+      if (repository === undefined) {
+        throw new Error("the run retains no repository to read configuration from");
+      }
+      const repositoryDirectory = yield* exportTree(
+        workspace.filesystem,
+        root,
+        repository.record.checkoutPath,
+        "inspection",
+      );
+      const worktrees: string[] = [];
+      for (const worktree of workspace.metadata.readWorktreesForRepository(
+        repository.record.name,
+      )) {
+        worktrees.push(
+          yield* exportTree(workspace.filesystem, root, worktree.checkoutPath, "inspection"),
+        );
+      }
+      yield* localizeAdministration(root, repositoryDirectory, worktrees, "inspection");
+      return `${root}${workspacePath}`;
+    });
+    if (!exported.ok) {
+      throw exported.error;
+    }
+    const found = new Map<string, string | undefined>();
+    for (const key of keys) {
+      const outcome = yield* host.git({
+        args: ["config", "--get", key],
+        cwd: exported.value,
+        home: root,
+      });
+      found.set(key, outcome.code === 0 ? outcome.stdout.trim() : undefined);
+    }
+    return found;
   });
 }
 

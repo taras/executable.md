@@ -98,6 +98,8 @@ const CONFIGURATION: readonly string[] = [
   "commit.gpgSign=false",
   "-c",
   "tag.gpgSign=false",
+  "-c",
+  "push.gpgSign=false",
 ];
 
 /** Who a workflow run's Git state is written by, on every host. */

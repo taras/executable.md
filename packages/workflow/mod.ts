@@ -126,6 +126,39 @@ export type {
   GitSwitchRequest,
   GitSwitchResult,
 } from "./src/composition/git-records.ts";
+export {
+  destinationRefFor,
+  filteredRepositoryIdentity,
+  GIT_PUSH,
+  gitPushInputsJson,
+  gitPushNaturalKeyJson,
+  gitPushObservationsJson,
+  gitPushPreStateJson,
+  gitPushRepositoryIdentityJson,
+  gitPushResultJson,
+  parseGitPushInputs,
+  parseGitPushNaturalKey,
+  parseGitPushObservations,
+  parseGitPushPreState,
+  parseGitPushRecord,
+  parseGitPushRepositoryIdentity,
+  parseGitPushResult,
+  PUSH_REMOTE,
+  pushExpectation,
+  refspecFor,
+  sameRepositoryIdentity,
+} from "./src/composition/git-push-records.ts";
+export type {
+  GitPushExpectation,
+  GitPushInputs,
+  GitPushNaturalKey,
+  GitPushObservations,
+  GitPushOutcome,
+  GitPushPreState,
+  GitPushRepositoryIdentity,
+  GitPushRequest,
+  GitPushResult,
+} from "./src/composition/git-push-records.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";

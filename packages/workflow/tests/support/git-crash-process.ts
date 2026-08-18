@@ -51,6 +51,25 @@ export function addDocument(locator: string): string {
  * begins, so what the kill interrupts is the commit alone — and a recovered
  * database must hold the staged file and a branch that never moved.
  */
+/** The branch the killed process publishes, and whose result it never records. */
+export const PUSH_BRANCH = "publish/1.4";
+
+/**
+ * The push half: a branch, and one publication of it.
+ *
+ * The switch commits in its own effect before the push begins, so what the kill
+ * interrupts is the publication alone — and the remote must hold the branch
+ * while the recovered database holds no result for it.
+ */
+export function pushDocument(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Git.Switch branch="${PUSH_BRANCH}" />`,
+    `<Git.Push />`,
+    "</Repository>",
+  ].join("\n");
+}
+
 export function commitDocument(locator: string): string {
   return [
     `<Repository name="project" url="${locator}">`,

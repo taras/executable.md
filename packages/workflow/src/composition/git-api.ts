@@ -26,6 +26,7 @@ import type {
   GitSwitchRequest,
   GitSwitchResult,
 } from "./git-records.ts";
+import type { GitPushOutcome, GitPushRequest } from "./git-push-records.ts";
 
 export interface GitCompositionApi {
   /**
@@ -54,6 +55,23 @@ export interface GitCompositionApi {
    * result: replay writes no object, reads no clock and spawns no Git.
    */
   commitIndex(request: GitCommitRequest): Operation<GitCommitResult>;
+
+  /**
+   * Publish the selected checkout's current branch to its origin.
+   *
+   * The one operation here whose outcome a local transaction cannot enclose.
+   * It observes the destination ref before it mutates and performs at most
+   * once, so an interrupted attempt that already reached the remote is adopted
+   * on the next execution rather than repeated; a completed one restores its
+   * retained record without contacting the remote at all.
+   *
+   * Routed through this Api like the other three, and for the same reason: a
+   * document names a checkout by writing an element inside one, and what that
+   * observation selects is the installed provider's to decide. Observation is
+   * all this carries — the provider still authenticates the record, the
+   * directory and the objects it publishes against what this run retained.
+   */
+  pushCurrentBranch(request: GitPushRequest): Operation<GitPushOutcome>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -70,6 +88,10 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *commitIndex(_request: GitCommitRequest): Operation<GitCommitResult> {
       throw new GitCompositionProviderError("<Git.Commit>");
+    },
+    // deno-lint-ignore require-yield
+    *pushCurrentBranch(_request: GitPushRequest): Operation<GitPushOutcome> {
+      throw new GitCompositionProviderError("<Git.Push>");
     },
   },
 );

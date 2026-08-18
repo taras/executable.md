@@ -62,6 +62,7 @@ Existing documents and code get aligned to this section retroactively.
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation |
 | XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is retained as an ordinary durable observation. It is distinct from an Agent's own network authority, which it does not grant, and from a reconciled mutating external effect, which it does not claim: an interruption before its record commits may repeat the read |
+| object-source attachment | adapter-private composition data the trusted host builds for exactly one external-effect reconciliation, giving the selected provider authorized live access to local state the frozen request cannot describe — the Git objects a push publishes, and the retained locator it is authorized to reach. It is authenticated against the durable identity it belongs to and proven contained before its first use — the local state behind one can name further state, so the graph a provider could traverse through it is validated rather than assumed — held in that provider's own closure, disposed with the invocation, and is never durable, never part of a natural key and never visible to routing middleware |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
 | loaded copy | one independently evaluated instance of a package, such as the copy bundled into the binary or a separately installed dependency |
@@ -1025,6 +1026,43 @@ request, so a changed kind, input or natural key diverges rather than consuming
 the result retained at the same position, and the provider's answer is parsed at
 the terminal before the durable executor returns, so a raw payload becomes a
 fixed protocol failure rather than journal content.
+
+Some effects need live local state the frozen request cannot describe, and that
+travels as an object-source attachment rather than as an input. A push needs the
+Git objects its commit is made of and the destination it may reach; both are
+built by the trusted host for one reconciliation, authenticated against the
+retained identity they belong to, and held in the selected provider's closure.
+Nothing about an attachment reaches the durable request, the natural key or the
+routing surface, so what discriminates the effect stays the filtered identity a
+journal may hold while what performs it stays where no replaceable code can
+address it.
+
+What an attachment grants access to is authenticated separately from where it
+came from, because local state can name further local state: a Git object
+database names further ones through its alternates chain, and a symbolic link
+under it redirects a read before Git reports anything about it. Such a graph is
+read in the consuming tool's own grammar rather than as text: Git unquotes a
+C-style quoted alternates entry before resolving it, so a containment proof that
+compared spellings could be satisfied by a decoy of that literal name while the
+traversal went elsewhere. The graph a
+provider could traverse is therefore proven contained on the live provider's
+first use of the attachment — before any external observation, and on no other
+path, so a completed replay reaches no provider and performs no such proof. A
+graph that leaves what the run authenticated is a boundary failure: it publishes
+no outcome, repeats no authored path, and activates fail-stop. It is rejected
+rather than repaired, because editing authored state to make it acceptable would
+publish from state the run wrote on the author's behalf. The Workspace transaction such an effect opens is read-only and is
+closed before the host is observed: no transaction is claimed across the
+Workspace and the external service, and reconciliation rather than a distributed
+transaction is what makes an interrupted attempt reach the host once.
+
+A provider that needs a program must also not inherit configuration the run
+merely stores. A checkout's `.git/config` is retained document data, and several
+ordinary settings in one name a destination or a program — a push URL, a URL
+rewrite, a hook, a credential helper, a signing program. The Deno push provider
+therefore runs its transport in a disposable repository of its own that reads
+the selected checkout's object database through a read-only alternate, and aims
+it at the exact private retained locator rather than at a configured remote.
 
 Only an answer the terminal accepted decides the effect. A conflict, a permanent
 ambiguity and a temporary unavailability so accepted publish the effect's failed
@@ -2225,7 +2263,7 @@ Status is measured against main.
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
-| shared Git-host reconciliation | reconciles Git push, pull-request creation and issue creation through one provider-neutral state machine journaled as `git_host_effect` — Prompt is not a consumer and keeps its own Agent-provider contract: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, temporary unavailability as its own ordinary failure, and a provider free to support only some kinds; routing is one request-only contextual operation carrying no completion authority, and only an answer the invocation's own terminal accepted can author a journaled outcome | built on the #297 stack; `Git.Push`, pull request and issue components are its consumers, unbuilt (#370, #295, #296) |
+| shared Git-host reconciliation | reconciles Git push, pull-request creation and issue creation through one provider-neutral state machine journaled as `git_host_effect` — Prompt is not a consumer and keeps its own Agent-provider contract: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, temporary unavailability as its own ordinary failure, and a provider free to support only some kinds; routing is one request-only contextual operation carrying no completion authority, and only an answer the invocation's own terminal accepted can author a journaled outcome | built on the #297 stack; `Git.Push` is its first consumer, built on the #370 stack, while pull request and issue components remain unbuilt (#295, #296) |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
@@ -2242,6 +2280,7 @@ Status is measured against main.
 | implicit workflow Workspace | retains provider-neutral filesystem, repository and attachment state by run ID | document filesystem built on the #366 stack and Repository/Worktree composition on the #293 stack; process capabilities unbuilt (#218) |
 | `<Repository>` / `<Worktree>` / `<Dir>` composition | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes | built on the #293 stack, Deno provider only |
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation carries authority — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of authority, of retained state or of an unrecognized native condition fails the run instead of publishing a result | built on the #294 stack, Deno provider only |
+| `Git.Push` | publishes the selected checkout's exact current named branch and commit to the same branch on the retained Repository's canonical `origin`, reconciled through the shared Git-host state machine rather than through a Workspace transaction: no props and no component result, no force, no upstream mutation and no implicit staging or committing; the durable request and record carry the Repository's filtered identity without its checkout path, and the transport runs in a provider-owned isolated control repository reading the checkout's objects through an object-source attachment whose alternates chain and object tree are proven contained before the first remote observation, aimed at the exact private retained locator | built on the #370 stack, Deno provider only |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |

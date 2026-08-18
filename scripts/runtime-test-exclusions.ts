@@ -217,6 +217,24 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
+    path: "packages/workflow/tests/git-push.test.ts",
+    reason:
+      "drives <Git.Push> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter, a real local bare remote and a real `git` subprocess that observes and pushes; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/370",
+  },
+  {
+    path: "packages/workflow/tests/git-push-durability.test.ts",
+    reason:
+      "replays and cancels a push against a real node:sqlite WorkflowRun database, halts a real blocked `git` child and imports a physical copy of the Api module through the Deno module loader; both the store and the subprocess are the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/370",
+  },
+  {
+    path: "packages/workflow/tests/git-push-crash.test.ts",
+    reason:
+      "kills a real Deno child with SIGKILL after native Git updated the remote and before the result was appended, then reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/370",
+  },
+  {
     path: "packages/workflow/tests/git-switch.test.ts",
     reason:
       "drives <Git.Switch> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and imports a physical copy of the Api module through the Deno module loader; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
