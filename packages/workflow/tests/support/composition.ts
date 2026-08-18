@@ -23,6 +23,7 @@ import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
 import {
   WORKSPACE_GIT_ADD,
+  WORKSPACE_GIT_COMMIT,
   WORKSPACE_GIT_SWITCH,
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
@@ -169,7 +170,8 @@ export function* gitEvents(database: WorkflowRunDatabase): Operation<DurableEven
     (event) =>
       event.type === "yield" &&
       (event.description.type === WORKSPACE_GIT_SWITCH ||
-        event.description.type === WORKSPACE_GIT_ADD),
+        event.description.type === WORKSPACE_GIT_ADD ||
+        event.description.type === WORKSPACE_GIT_COMMIT),
   );
 }
 
@@ -297,13 +299,27 @@ export function* stagedPaths(
   database: WorkflowRunDatabase,
   workspacePath: string,
 ): Operation<string[]> {
+  return yield* inCheckout(database, workspacePath, function* (git) {
+    // `-z` because Git quotes a path holding anything outside ASCII by default,
+    // and what a suite compares has to be the name the Workspace holds.
+    const stdout = yield* git(["diff", "--cached", "--name-only", "-z"]);
+    return stdout.split("\0").filter((name) => name !== "");
+  });
+}
+
+/** Run commands with one retained checkout exported the way the provider does. */
+export function* inCheckout<T>(
+  database: WorkflowRunDatabase,
+  workspacePath: string,
+  body: (git: (args: readonly string[]) => Operation<string>) => Operation<T>,
+): Operation<T> {
   return yield* scoped(function* () {
     const host = denoRepositoryHost();
     const root = yield* host.useDirectory();
     const exported = yield* transactWorkspaceRoots(database, function* (workspace) {
       const [repository] = workspace.metadata.readRepositories();
       if (repository === undefined) {
-        throw new Error("the run retains no repository to read an index from");
+        throw new Error("the run retains no repository to read a checkout from");
       }
       const repositoryDirectory = yield* exportTree(
         workspace.filesystem,
@@ -325,17 +341,64 @@ export function* stagedPaths(
     if (!exported.ok) {
       throw exported.error;
     }
-    // `-z` because Git quotes a path holding anything outside ASCII by default,
-    // and what a suite compares has to be the name the Workspace holds.
-    const outcome = yield* host.git({
-      args: ["diff", "--cached", "--name-only", "-z"],
-      cwd: exported.value,
-      home: root,
+    return yield* body(function* (args: readonly string[]): Operation<string> {
+      const outcome = yield* host.git({ args, cwd: exported.value, home: root });
+      if (outcome.code !== 0) {
+        throw new Error(`git ${args[0]} exited ${outcome.code}: ${outcome.stderr}`);
+      }
+      return outcome.stdout;
     });
-    if (outcome.code !== 0) {
-      throw new Error(`git diff --cached exited ${outcome.code}: ${outcome.stderr}`);
+  });
+}
+
+/**
+ * The commit one retained checkout is on, read out of the object itself.
+ *
+ * `cat-file commit` rather than a pretty format: what a message claim is about
+ * is the bytes in the object, and reading them through the same formatting the
+ * provider uses would prove only that one command agrees with itself.
+ */
+export interface CheckoutCommit {
+  readonly commit: string;
+  readonly branch: string;
+  readonly tree: string;
+  readonly parents: readonly string[];
+  /** The seconds-and-offset field of the author line, verbatim. */
+  readonly authorTime: string;
+  readonly committerTime: string;
+  /** The message bytes the object holds. */
+  readonly message: string;
+}
+
+export function* headCommit(
+  database: WorkflowRunDatabase,
+  workspacePath: string,
+): Operation<CheckoutCommit> {
+  return yield* inCheckout(database, workspacePath, function* (git) {
+    const commit = (yield* git(["rev-parse", "HEAD"])).trim();
+    const branch = (yield* git(["symbolic-ref", "--short", "HEAD"])).trim();
+    const raw = yield* git(["cat-file", "commit", commit]);
+    const separator = raw.indexOf("\n\n");
+    if (separator < 0) {
+      throw new Error("the commit object has no message");
     }
-    return outcome.stdout.split("\0").filter((name) => name !== "");
+    const headers = raw.slice(0, separator).split("\n");
+    const field = (name: string): string => {
+      const line = headers.find((header) => header.startsWith(`${name} `));
+      return line === undefined ? "" : line.slice(name.length + 1);
+    };
+    const stamp = (line: string): string => line.slice(line.lastIndexOf(">") + 2);
+    return {
+      commit,
+      branch,
+      tree: field("tree"),
+      parents: headers
+        .filter((header) => header.startsWith("parent "))
+        .map((header) => header.slice("parent ".length)),
+      authorTime: stamp(field("author")),
+      committerTime: stamp(field("committer")),
+      message: raw.slice(separator + 2),
+    };
   });
 }
 

@@ -199,6 +199,24 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/294",
   },
   {
+    path: "packages/workflow/tests/git-commit.test.ts",
+    reason:
+      "drives <Git.Commit> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess that receives its message on standard input; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/294",
+  },
+  {
+    path: "packages/workflow/tests/git-commit-durability.test.ts",
+    reason:
+      "replays and cancels a commit against a real node:sqlite WorkflowRun database and halts a real blocked `git` child; both the store and the subprocess are the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/294",
+  },
+  {
+    path: "packages/workflow/tests/git-commit-crash.test.ts",
+    reason:
+      "kills a real Deno child with SIGKILL mid-commit and reads the recovered node:sqlite WorkflowRun database it leaves behind; the child runs under the Deno executable and node:sqlite remains behind --experimental-sqlite on Node 22",
+    issue: "https://github.com/taras/executable.md/issues/294",
+  },
+  {
     path: "packages/workflow/tests/git-switch.test.ts",
     reason:
       "drives <Git.Switch> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and imports a physical copy of the Api module through the Deno module loader; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

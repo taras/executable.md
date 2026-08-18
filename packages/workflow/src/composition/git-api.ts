@@ -21,6 +21,8 @@ import { GitCompositionProviderError } from "./errors.ts";
 import type {
   GitAddRequest,
   GitAddResult,
+  GitCommitRequest,
+  GitCommitResult,
   GitSwitchRequest,
   GitSwitchResult,
 } from "./git-records.ts";
@@ -42,6 +44,16 @@ export interface GitCompositionApi {
    * the document wrote one.
    */
   addPaths(request: GitAddRequest): Operation<GitAddResult>;
+
+  /**
+   * Record exactly what the index holds, as one durable effect.
+   *
+   * Nothing is staged for it and nothing is amended: the index is the whole of
+   * what a commit is made from, and an index that already matches HEAD is
+   * refused rather than committed empty. A completed one restores its retained
+   * result: replay writes no object, reads no clock and spawns no Git.
+   */
+  commitIndex(request: GitCommitRequest): Operation<GitCommitResult>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -54,6 +66,10 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *addPaths(_request: GitAddRequest): Operation<GitAddResult> {
       throw new GitCompositionProviderError("<Git.Add>");
+    },
+    // deno-lint-ignore require-yield
+    *commitIndex(_request: GitCommitRequest): Operation<GitCommitResult> {
+      throw new GitCompositionProviderError("<Git.Commit>");
     },
   },
 );

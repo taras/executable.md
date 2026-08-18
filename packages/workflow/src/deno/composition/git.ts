@@ -54,15 +54,23 @@ export class GitRefusal extends Error {
  * The root is also `HOME`, so Git reads no configuration belonging to whoever
  * happens to be running the host.
  */
+/** The two things one command may need beyond its arguments and its directory. */
+export interface GitCommand {
+  /** Bytes handed to the command on standard input. */
+  readonly input?: string;
+  /** The whole Unix second an object-writing command records. */
+  readonly committedAt?: number;
+}
+
 export interface GitSession {
-  run(args: readonly string[], cwd: string): Operation<GitOutcome>;
+  run(args: readonly string[], cwd: string, command?: GitCommand): Operation<GitOutcome>;
   read(args: readonly string[], cwd: string): Operation<string | undefined>;
 }
 
 export function gitSession(host: RepositoryHost, root: string): GitSession {
   return {
-    run(args, cwd) {
-      return host.git({ args, cwd, home: root });
+    run(args, cwd, command = {}) {
+      return host.git({ args, cwd, home: root, ...command });
     },
 
     *read(args, cwd): Operation<string | undefined> {
@@ -584,4 +592,115 @@ export function* commonDirectory(
     return undefined;
   }
   return reported.startsWith("/") ? reported : `${directory}/${reported}`;
+}
+
+/**
+ * What one commit of the index needs, beyond the session it runs in.
+ *
+ * The message travels as bytes on standard input rather than as an argument:
+ * an argument list is not a boundary authored prose of any length crosses
+ * unchanged, and `--cleanup=verbatim` is what says those bytes are the message.
+ * Nothing is staged, nothing is amended, nothing is signed and no path is named
+ * — the index is the whole of what this commits.
+ *
+ * `committedAt` is the provider's own second, bound to both author and
+ * committer time, so what a commit records is an instant this run captured
+ * rather than whatever the clock said by the time Git got around to reading it.
+ */
+export interface IndexCommit {
+  /** The component this is performed for, as a document writes it. */
+  readonly operation: string;
+  /** Where the command runs. */
+  readonly workingDirectory: string;
+  /** The canonical message bytes, exactly as they are to be committed. */
+  readonly message: string;
+  readonly committedAt: number;
+}
+
+/**
+ * Commit exactly what the index holds.
+ *
+ * There is no refusal to select here. The one condition a document can act on —
+ * an index that already matches HEAD — is decided from the checkout's own state
+ * before this runs, so a command that got this far and still failed reported
+ * something this provider has no word for.
+ */
+export function* commitIndex(git: GitSession, request: IndexCommit): Operation<void> {
+  const outcome = yield* git.run(
+    ["commit", "--cleanup=verbatim", "--file", "-"],
+    request.workingDirectory,
+    { input: request.message, committedAt: request.committedAt },
+  );
+  if (outcome.code !== 0) {
+    throw new GitOperationInfrastructureError(
+      request.operation,
+      "native Git refused it in a way this provider has no word for",
+    );
+  }
+}
+
+/** What a commit object holds, read back out of the repository that wrote it. */
+export interface CommitFacts {
+  readonly parents: readonly string[];
+  readonly tree: string;
+  readonly authoredAt: number;
+  readonly committedAt: number;
+}
+
+/**
+ * Read one commit's own facts back.
+ *
+ * The parent list comes last in the format because a commit may have none, and
+ * an empty line at the end is one this reading drops rather than one that shifts
+ * every other value up by a line.
+ */
+export function* readCommit(
+  git: GitSession,
+  directory: string,
+  commit: string,
+): Operation<CommitFacts | undefined> {
+  const reported = yield* git.read(
+    ["log", "-1", "--pretty=format:%T%n%at%n%ct%n%P", commit, "--"],
+    directory,
+  );
+  if (reported === undefined) {
+    return undefined;
+  }
+  const [tree, authored, committed, parents] = reported.split("\n");
+  const authoredAt = wholeSeconds(authored);
+  const committedAt = wholeSeconds(committed);
+  if (tree === undefined || tree === "" || authoredAt === undefined || committedAt === undefined) {
+    return undefined;
+  }
+  return {
+    parents: (parents ?? "").split(" ").filter((parent) => parent !== ""),
+    tree,
+    authoredAt,
+    committedAt,
+  };
+}
+
+function wholeSeconds(value: string | undefined): number | undefined {
+  if (value === undefined || !/^[0-9]+$/.test(value)) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  return Number.isSafeInteger(seconds) ? seconds : undefined;
+}
+
+/**
+ * The exact bytes of one commit's message.
+ *
+ * `--pretty=format:` rather than `--format:`, which is `tformat:` and terminates
+ * every record with a newline of its own — so what came back would be the
+ * message plus a byte nobody committed, and a byte-for-byte comparison would
+ * fail on every well-formed commit.
+ */
+export function* readCommitMessage(
+  git: GitSession,
+  directory: string,
+  commit: string,
+): Operation<string | undefined> {
+  const outcome = yield* git.run(["log", "-1", "--pretty=format:%B", commit, "--"], directory);
+  return outcome.code === 0 ? outcome.stdout : undefined;
 }

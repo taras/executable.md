@@ -15,6 +15,9 @@ export const RELEASE_CONTENT = "release\n";
 /** The pathspec the killed staging names, and the file it stages. */
 export const CRASH_PATH = "added.txt";
 
+/** The message the killed commit composes, and never records. */
+export const CRASH_MESSAGE = "recorded by the crash child";
+
 export function crashDocument(locator: string): string {
   return [
     `<Repository name="project" url="${locator}">`,
@@ -37,6 +40,25 @@ export function addDocument(locator: string): string {
     "fresh",
     "</File>",
     `<Git.Add paths="${CRASH_PATH}" />`,
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * The commit half: a file, a staging, and one commit of what they produced.
+ *
+ * The write and the staging each commit in their own effect before the commit
+ * begins, so what the kill interrupts is the commit alone — and a recovered
+ * database must hold the staged file and a branch that never moved.
+ */
+export function commitDocument(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<File path="${CRASH_PATH}">`,
+    "fresh",
+    "</File>",
+    `<Git.Add paths="${CRASH_PATH}" />`,
+    `<Git.Commit message="${CRASH_MESSAGE}" as="recorded" />`,
     "</Repository>",
   ].join("\n");
 }

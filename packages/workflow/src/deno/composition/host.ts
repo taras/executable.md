@@ -45,6 +45,21 @@ export interface GitInvocation {
   readonly cwd: string;
   /** The materialization root, which is also what Git sees as `HOME`. */
   readonly home: string;
+  /**
+   * Bytes handed to the command on standard input, or none.
+   *
+   * A commit message is authored text of any length, and an argument list is
+   * neither the place to put one nor a boundary that carries one unchanged.
+   */
+  readonly input?: string;
+  /**
+   * The whole Unix second a commit is authored and committed at.
+   *
+   * Two named variables rather than an environment a caller may fill: what a
+   * run's Git state is written by is fixed, and the one thing an operation
+   * decides for itself is when. Absent for every command that writes no object.
+   */
+  readonly committedAt?: number;
 }
 
 export interface RepositoryHost {
@@ -58,9 +73,17 @@ const IDENTITY_NAME = "Executable.md workflow";
 const IDENTITY_EMAIL = "workflow@executable.md.invalid";
 
 /** The variables Git may see, and nothing else. */
-function environment(home: string): Record<string, string> {
+function environment(home: string, committedAt: number | undefined): Record<string, string> {
   const path = process.env.PATH;
   return {
+    // A fixed offset beside the second, so the instant a commit records is the
+    // instant that was captured wherever the host happens to be standing.
+    ...(committedAt === undefined
+      ? {}
+      : {
+          GIT_AUTHOR_DATE: `${committedAt} +0000`,
+          GIT_COMMITTER_DATE: `${committedAt} +0000`,
+        }),
     ...(path === undefined ? {} : { PATH: path }),
     HOME: home,
     // A config file that exists and holds nothing, so Git neither reads a
@@ -87,16 +110,16 @@ function environment(home: string): Record<string, string> {
 
 export function denoRepositoryHost(): RepositoryHost {
   return {
-    *git({ args, cwd, home }: GitInvocation): Operation<GitOutcome> {
+    *git({ args, cwd, home, input, committedAt }: GitInvocation): Operation<GitOutcome> {
       // `node:child_process` rather than the runtime's own global: this adapter
       // is selected by the host, not written against one, and `spawn` replaces
       // the child's environment outright when `env` is given — which is the
       // whole point of building one above rather than inheriting it.
-      const child = spawnChild("git", [...args], {
-        cwd,
-        env: environment(home),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const options = { cwd, env: environment(home, committedAt) };
+      const child =
+        input === undefined
+          ? spawnChild("git", [...args], { ...options, stdio: ["ignore", "pipe", "pipe"] })
+          : spawnChild("git", [...args], { ...options, stdio: ["pipe", "pipe", "pipe"] });
 
       // Registered with no suspension point between spawning and registering,
       // so a halt cannot land between the two and leave a Git process running
@@ -122,6 +145,17 @@ export function denoRepositoryHost(): RepositoryHost {
       });
 
       const outcome = withResolvers<GitOutcome>();
+      if (input !== undefined && child.stdin !== null) {
+        // A pipe the command stops reading is the command's answer, and its
+        // exit status is what says so — but the write still fails, and an
+        // unhandled stream error would take the process down rather than this
+        // operation. Reporting it here lets `close` settle first when there is
+        // an exit to report.
+        child.stdin.on("error", (error: Error) => {
+          outcome.reject(error);
+        });
+        child.stdin.end(input, "utf8");
+      }
       let stdout = "";
       let stderr = "";
       child.stdout.setEncoding("utf8");
