@@ -62,7 +62,8 @@ export function* installTestingComponents(options?: { verbose?: boolean }): Oper
 
 /**
  * Install a specific handler set. Internal seam: tests inject handlers built
- * with a short timeout; the public path always uses the fixed 20 seconds.
+ * with a short timeout; the public path always defaults to 20 seconds, and a
+ * `timeout=` on the element declares that one test's own bound.
  */
 export function* installHandlers(
   handlers: TestHandlers,
