@@ -64,7 +64,12 @@ export interface SuspensionNotice {
 }
 
 export interface SuspensionControllerOptions {
-  /** The run whose retained history decides whether a wait may be entered. */
+  /**
+   * The run whose retained history is read as evidence for a wait.
+   *
+   * Evidence, not admission: what the journal shows is checked, and the entry
+   * the real `suspendFor()` armed is what admits.
+   */
   readonly database: WorkflowRunDatabase;
   /**
    * Run while this execution is tearing down, for observing what a caller sees

@@ -698,19 +698,30 @@ lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
 execution-owned suspension controller. Context may select the workflow provider;
-it authorizes nothing. The authority to enter a wait is the current execution
-being at it: only the execution that has just published its request, standing at
-the durable coroutine position it published from, may report that wait. The
-controller derives the identifier for the position immediately behind the
-caller's own and requires the presented one to equal it, then confirms that the
-retained yield at that exact position is this request and describes what is
-presented.
+it authorizes nothing. The authority to enter a wait is the `suspendFor()`
+operation itself. Immediately before calling the controller it arms a one-use
+private entry naming the wait it is entering, and the controller takes that entry
+once. The entry is unreachable outside the package that defines it, so nothing a
+document can import or reconstruct can arm one, and an attempt that is refused
+consumes it rather than leaving it for a later caller.
 
-Retained history is evidence, never authority on its own. A resumed run already
-holds the previous execution's request, so a caller running before replay reaches
-it would otherwise present that identifier and be believed. Possessing or
-deriving an identifier, reconstructing the provider's public name, and a matching
-row earlier or later in the journal each authorize nothing. With no delivered input, the controller
+Position and retained history are necessary evidence and are checked, but neither
+is authority. The controller derives the identifier for the position immediately
+behind the caller's own, requires the presented one to equal it, and confirms
+that the retained yield at that exact position is this request and describes what
+is presented — and then still requires the entry the real operation armed.
+
+Both halves are load-bearing because either alone is reachable. A resumed run
+already holds the previous execution's request, so a caller running ahead of
+replay could present that identifier. And durable replay identity compares a
+type and a name, both public, so a durable operation built with the
+`suspension_request` type and a retained wait's name replays that row and arrives
+at exactly the position the real operation would — without having called
+`suspendFor()`, and so without having passed the request admission that decides
+what a wait may be for. Such an operation must not authorize entry, at that
+position or any other. Possessing or deriving an identifier, reconstructing the
+provider's public name, a matching row earlier or later in the journal, and a
+public durable operation wearing the request's shape each authorize nothing. With no delivered input, the controller
 reports the request to the workflow executor and remains pending while that
 executor initiates an orderly halt. The operation throws no ordinary error and produces no value; the
 halt leaves the root without a Close. The executor observes the authenticated
