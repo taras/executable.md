@@ -3,7 +3,14 @@ import { expect } from "@executablemd/test-support/expect";
 import { sleep } from "effection";
 import type { Operation } from "effection";
 
-import { applicable, BATTERY, line, verify } from "../lib/verify.ts";
+import {
+  applicable,
+  BATTERY,
+  COMMAND_TIMEOUT_MILLISECONDS,
+  commandTimeout,
+  line,
+  verify,
+} from "../lib/verify.ts";
 import type { CommandSpec, Settled, VerifyHost, VerifyOptions } from "../lib/verify.ts";
 import type { TrackedEntry, TrackedState } from "../lib/tracked.ts";
 
@@ -267,5 +274,82 @@ describe("line", () => {
   it("writes a site command with its directory", function* () {
     const site = BATTERY.find((command) => command.id === "site:build")!;
     expect(line(site)).toEqual("(cd site && deno task build)");
+  });
+});
+
+/**
+ * The battery's commands are not the same size, and #482 is what happens when
+ * one ceiling pretends they are: the complete Deno suite reported zero failed
+ * tests and was killed anyway, twice in a row on `main`.
+ *
+ * The race that fires cannot be exercised here — twenty and thirty minutes are
+ * not durations a test waits out — so what these hold is the single function
+ * both the race and the report read. A second source of truth is exactly the
+ * defect: a report naming a deadline that is not the one that settles the
+ * command is worse than no report.
+ */
+describe("commandTimeout", () => {
+  const command = (id: string): CommandSpec => BATTERY.find((entry) => entry.id === id)!;
+
+  it("gives the complete Deno suite thirty minutes", function* () {
+    expect(commandTimeout(command("test"), NO_SITE)).toEqual(30 * 60 * 1000);
+    expect(command("test").timeout).toEqual(30 * 60 * 1000);
+  });
+
+  it("leaves every other command at twenty minutes", function* () {
+    const others = BATTERY.filter((entry) => entry.id !== "test");
+    expect(others.length).toBeGreaterThan(5);
+    for (const entry of others) {
+      expect(commandTimeout(entry, NO_SITE)).toEqual(COMMAND_TIMEOUT_MILLISECONDS);
+      expect(entry.timeout).toBeUndefined();
+    }
+  });
+
+  it("lets an explicit coordinator timeout override every command's own", function* () {
+    const explicit: VerifyOptions = { site: "off", timeout: 25 };
+    for (const entry of BATTERY) {
+      expect(commandTimeout(entry, explicit)).toEqual(25);
+    }
+  });
+});
+
+describe("deadline reporting", () => {
+  it("names the commands whose deadline differs instead of claiming one", function* () {
+    const { host, lines } = recorder({});
+    yield* verify(host, NO_SITE);
+    expect(lines[0]).toContain("20m deadline each except test 30m");
+  });
+
+  it("claims one deadline only when there is one", function* () {
+    const { host, lines } = recorder({});
+    yield* verify(host, { site: "off", timeout: 20 * 60 * 1000 });
+    expect(lines[0]).toContain("20m deadline each");
+    expect(lines[0]).not.toContain("except");
+  });
+
+  /**
+   * Every deadline the first line announces has to be a deadline some command
+   * actually runs under, or the announcement is decoration.
+   */
+  it("announces exactly the deadlines the battery will apply", function* () {
+    const { host, lines } = recorder({});
+    yield* verify(host, NO_SITE);
+
+    const announcement = lines[0] ?? "";
+    for (const entry of BATTERY.filter((command) => !command.site)) {
+      const deadline = commandTimeout(entry, NO_SITE);
+      const stated =
+        deadline === COMMAND_TIMEOUT_MILLISECONDS ? "20m deadline each" : `${entry.id} 30m`;
+      expect(announcement).toContain(stated);
+    }
+  });
+
+  it("reports the deadline that settled the command it settled", function* () {
+    const { host, lines } = recorder({ delays: { test: 60_000 } });
+    yield* verify(host, { site: "off", timeout: 25 });
+
+    const announced = lines[0]?.match(/(\S+) deadline each/)?.[1];
+    expect(announced).toEqual("0m");
+    expect(lines.join("\n")).toContain(`timed out after ${announced}`);
   });
 });
