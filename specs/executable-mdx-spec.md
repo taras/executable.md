@@ -6534,6 +6534,13 @@ description contains that ID, request and schema. The existing secret gate sees
 the complete event before persistence. A successful result says the request was
 retained; it does not say the wait has an answer.
 
+A stable contextual route lets the operation reach the workflow executor when
+the component and binary loaded separate copies of the workflow package. The
+route carries a notice rather than answer authority. Middleware may refuse or
+suppress a descendant's route, but a value it returns cannot make an unanswered
+`suspendFor()` continue. The executor accepts the notice only when the matching
+retained request is at the execution's exact current durable position.
+
 With no delivered input, the operation remains pending while the trusted host
 halts the document execution. It raises no document error and returns no value.
 Structured teardown releases every live child and attachment; the root records

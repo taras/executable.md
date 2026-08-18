@@ -248,6 +248,13 @@ response schema after the existing journal security filter. The event's result
 means the request was published; it never means the wait was answered. The
 run's stop reason references that event instead of copying its request.
 
+The operation reaches the workflow executor across separately loaded package
+copies through stable contextual routing. That route carries a suspension
+notice, not an answer: a middleware handler may refuse or suppress its own
+descendant's call, but returning a value cannot make an unanswered
+`suspendFor()` continue. The executor accepts a notice only at the exact current
+durable position of the matching retained request.
+
 With no delivered input, `suspendFor()` remains pending while the workflow host
 halts the document execution as structured control flow. It throws no document
 failure and creates no root Close. After every child and live attachment has

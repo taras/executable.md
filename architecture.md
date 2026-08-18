@@ -697,42 +697,41 @@ that already-filtered event by ID, so request text is never duplicated into
 lifecycle state. No third protocol event and no pending-request table is added.
 
 After live publication or replay of that Yield, the operation invokes an
-execution-owned suspension controller — and reaches it directly, not through a
-contextual provider. A contextual API composes: a public handler may answer an
-operation without delegating, which for a durable wait would mean returning a
-value from a wait that never happened, or suppressing one the run has already
-published a request for. Composition is the right default for a provider a
-document may legitimately replace; a durable wait is not one, so the controller a
-live execution installed is the only thing that can receive it. The authority to
-enter a wait is the `suspendFor()` operation itself. Immediately before calling the controller it arms a one-use
-private entry naming the wait it is entering, and the controller takes that entry
-once. The entry is unreachable outside the package that defines it, so nothing a
-document can import or reconstruct can arm one, and an attempt that is refused
-consumes it rather than leaving it for a later caller.
+execution-owned suspension controller through a stable contextual API. That
+named route is what lets a component's separately loaded workflow package reach
+the controller installed by the binary's bundled copy. It is composition, not
+authority: middleware may refuse or suppress the route for its descendants, but
+no value it returns is a suspension answer and it cannot make `suspendFor()`
+continue past an unanswered wait.
 
-Position and retained history are necessary evidence and are checked, but neither
-is authority. The controller derives the identifier for the position immediately
-behind the caller's own, requires the presented one to equal it, and confirms
-that the retained yield at that exact position is this request and describes what
-is presented — and then still requires the entry the real operation armed.
+The retained request at the execution's exact current durable position is what
+authorizes entry. The controller derives the identifier for the position
+immediately behind the caller's own, requires the presented one to equal it,
+reads the Yield at that exact position, parses it as a suspension request and
+requires it to describe what is presented. An identifier from a request earlier
+or later in the journal, a reconstructed contextual API name, or a matching row
+without the exact current position authorizes nothing.
 
-Both halves are load-bearing because either alone is reachable. A resumed run
-already holds the previous execution's request, so a caller running ahead of
-replay could present that identifier. And durable replay identity compares a
-type and a name, both public, so a durable operation built with the
-`suspension_request` type and a retained wait's name replays that row and arrives
-at exactly the position the real operation would — without having called
-`suspendFor()`, and so without having passed the request admission that decides
-what a wait may be for. Such an operation must not authorize entry, at that
-position or any other. Possessing or deriving an identifier, reconstructing the
-provider's public name, a matching row earlier or later in the journal, and a
-public durable operation wearing the request's shape each authorize nothing. With no delivered input, the controller
-reports the request to the workflow executor and remains pending while that
-executor initiates an orderly halt. The operation throws no ordinary error and produces no value; the
-halt leaves the root without a Close. The executor observes the authenticated
-suspension notice as its separate settlement candidate, waits for complete
-scope teardown, then atomically finishes the document-execution record and
-publishes `suspended` before releasing the executor lock.
+Durable replay identity compares a type and a name, both public, so another
+durable operation can reproduce the retained request and arrive at the same
+position. Once the controller has validated the exact retained request, that
+operation is observationally the same request to wait: it gains no authority
+that calling `suspendFor()` with that request would not have. Package-instance
+identity therefore does not take part in suspension authority. Requiring it
+would make the public operation fail when the binary and a repository component
+load separate copies of `@executablemd/workflow`.
+
+With no delivered input, the controller reports the request to the workflow
+executor and remains pending while that executor initiates an orderly halt.
+`suspendFor()` also accepts no returned value as an answer in this state, so a
+middleware handler that suppresses the controller can only leave its descendant
+pending, as document code can already do; it cannot publish `suspended`, supply
+an answer or continue past the wait. The operation throws no ordinary error and
+produces no value; the halt leaves the root without a Close. The executor
+observes the validated suspension notice as its separate settlement candidate,
+waits for complete scope teardown, then atomically finishes the
+document-execution record and publishes `suspended` before releasing the
+executor lock.
 
 A root without Close is valid partial history. On resume, earlier durable
 effects and the request-publication Yield restore without executing or
@@ -745,12 +744,12 @@ record may settle `suspended`; the request remains singular.
 Issue #300 owns input delivery and scheduling. Its boundary is the suspension
 ID and retained response schema. A host may offer one value for that exact ID
 only after validating it against the retained schema. On a resumed execution,
-the suspension controller returns that validated value, and `suspendFor()`
-publishes a separate ordinary durable answer Yield before returning it to the
-caller. Delivery remains pending until answer publication commits, so a crash
-cannot consume input without retaining the answer; duplicates, mismatched IDs
-and late delivery are refused. None of that transport or scheduling behavior is
-part of #367.
+only authenticated retained answer state may let `suspendFor()` publish a
+separate ordinary durable answer Yield and return its value; a contextual
+handler's return value is never answer authority. Delivery remains pending until
+answer publication commits, so a crash cannot consume input without retaining
+the answer; duplicates, mismatched IDs and late delivery are refused. None of
+that transport or scheduling behavior is part of #367.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
