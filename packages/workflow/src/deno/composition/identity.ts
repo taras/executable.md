@@ -10,6 +10,7 @@
  */
 import { RepositoryStaleStateError } from "../../composition/errors.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
+import type { GitCheckoutIdentity } from "../../composition/git-records.ts";
 import type { StoredRepository } from "../workspace/repositories.ts";
 import { admitLocator, locatorFingerprint } from "./locator.ts";
 import { repositoryCheckoutPath, worktreeCheckoutPath } from "./placement.ts";
@@ -108,6 +109,35 @@ export function agreedStored(stored: StoredRepository, subject: string): StoredR
   agreedRepository(stored.record, subject);
   agreedLocator(stored, subject);
   return stored;
+}
+
+/**
+ * Whether this checkout identity is the one this run's placement gives that name.
+ *
+ * The half of a retained result the shared protocol cannot check. Placement is a
+ * function of identity and the function is this provider's, so a name and a path
+ * that arrive together have to still be the pair placement produces: a result
+ * naming one Worktree at another's path, or naming a Worktree at all where the
+ * path is the Repository's own, is describing a checkout this run never had.
+ *
+ * Recomputed rather than looked up, so a replayed result is held to it without
+ * reading anything — which is what makes it answerable on the path that performs
+ * no effect at all.
+ */
+export function placedCheckout(
+  identity: GitCheckoutIdentity,
+  repository: RepositoryRecord,
+): boolean {
+  if (
+    identity.repositoryName !== repository.name ||
+    repository.checkoutPath !== repositoryCheckoutPath(repository.name)
+  ) {
+    return false;
+  }
+  return identity.worktreeName === null
+    ? identity.checkoutPath === repositoryCheckoutPath(identity.repositoryName)
+    : identity.checkoutPath ===
+        worktreeCheckoutPath(identity.repositoryName, identity.worktreeName);
 }
 
 export function repositorySubject(name: string): string {

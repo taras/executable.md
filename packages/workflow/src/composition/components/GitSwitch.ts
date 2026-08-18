@@ -22,14 +22,21 @@
  * a document already wrote would only invite reading it back as though it were
  * an answer.
  *
- * Failure policy is `<Repository>`'s. A refusal this recognizes — no Repository
- * in scope, a working directory that is not one of this run's checkouts, a base
- * that names no commit, a branch another checkout holds, local changes Git would
- * overwrite — arrives as a fixed `GitOperationError` and then fails the operation
- * it is part of. An authored `<PrintErrors>` region decides otherwise, for its
- * whole region. A stale-state failure travels past every printing boundary,
- * because retained state disagreeing with what is there is not something the
- * document did.
+ * ## Two kinds of failure, and only one of them is the document's
+ *
+ * A refusal is something the document asked for and did not get: a base that
+ * names no commit, a branch another checkout holds, local changes Git would
+ * overwrite. Each arrives as a fixed `GitOperationError` and then fails the
+ * operation it is part of, and an authored `<PrintErrors>` region decides
+ * otherwise for its whole region.
+ *
+ * Authority is not that. No Repository in scope, a Repository this run does not
+ * retain, a working directory inside none of its checkouts, retained state that
+ * has stopped agreeing with the identity naming it — none of these is an outcome
+ * a document could have avoided by asking for something else, and continuing
+ * past one would run later siblings as though a branch had moved. They travel as
+ * `GitOperationAuthorityError`, past every printing boundary, and nothing is
+ * published for them.
  */
 
 import { cwd } from "@executablemd/runtime";
@@ -38,7 +45,7 @@ import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
 import { currentRepository } from "../context.ts";
-import { GitOperationError } from "../errors.ts";
+import { GitOperationAuthorityError, GitOperationError } from "../errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const SWITCH = "<Git.Switch>";
@@ -83,11 +90,10 @@ export default function* GitSwitch(props: Record<string, Json>): Operation<strin
 
   const repository = yield* currentRepository();
   if (repository === undefined) {
-    throw new GitOperationError(
+    throw new GitOperationAuthorityError(
       SWITCH,
-      "no-repository-context",
-      `${SWITCH} is invalid outside a lexical <Repository>: a branch is a branch of one, and ` +
-        "there is none in scope here.",
+      "it is written outside a lexical <Repository>, so there is no repository in scope for a " +
+        "branch to be a branch of",
     );
   }
 

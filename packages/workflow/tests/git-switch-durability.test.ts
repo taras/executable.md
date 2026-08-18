@@ -65,6 +65,33 @@ function source(locator: string): string {
   ].join("\n");
 }
 
+/** A switch of a linked Worktree, so a suite can damage the pairing it retains. */
+function worktreeSource(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+    "<Dir path={worktree}>",
+    `<Git.Switch branch="release" />`,
+    `<File path="which.txt" as="which" />`,
+    "",
+    "after: {which}",
+    "</Dir>",
+    "</Repository>",
+  ].join("\n");
+}
+
+/** A switch to the branch the checkout is already on, which moves nothing. */
+function unchangedSource(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Git.Switch branch="main" />`,
+    `<File path="which.txt" as="which" />`,
+    "",
+    "after: {which}",
+    "</Repository>",
+  ].join("\n");
+}
+
 function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
   return value instanceof GitOperationProtocolError;
 }
@@ -238,6 +265,89 @@ describe("workflow Git.Switch durability", () => {
       });
     });
   }
+
+  /**
+   * A retained Worktree identity is a name *and* the place that name is given.
+   *
+   * Placement is a function of identity, so the two travel together and have to
+   * still be the pair placement produces. A result naming one Worktree at
+   * another's path, or at a path no name is given, describes a checkout this run
+   * never had — and nothing about the shape of it says so.
+   */
+  const WORKTREE_DAMAGE: { name: string; damage: (record: Record<string, unknown>) => void }[] = [
+    {
+      name: "names a Worktree that is not the one placed at its path",
+      damage: (record) => {
+        Object(record.checkout).worktreeName = "forged";
+      },
+    },
+    {
+      name: "names a path this run's placement gives no Worktree",
+      damage: (record) => {
+        Object(record.checkout).checkoutPath = "/worktrees";
+      },
+    },
+  ];
+
+  for (const { name, damage } of WORKTREE_DAMAGE) {
+    it(`fails a replay whose retained result ${name}`, function* () {
+      const root = yield* useStorageRoot();
+      const remote = yield* useBareRemote(REMOTE);
+      const path = runPath(root, "release-1.4");
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        expect(String(yield* runDocument(database, worktreeSource(remote.locator)))).toContain(
+          "after: release",
+        );
+
+        dropRootClose(path);
+        damageSwitchResult(path, damage);
+
+        const counting = countingHost();
+        const failure = yield* raised(
+          runDocument(database, worktreeSource(remote.locator), countingOptions(counting)),
+        );
+
+        expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
+        expect(subcommands(counting.counters)).not.toContain("switch");
+      });
+    });
+  }
+
+  it("fails a replay whose no-op transition staged something", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // Switching to the branch the checkout is already on moves nothing, so a
+      // retained index digest that changed across it is describing a transition
+      // this component does not make.
+      expect(String(yield* runDocument(database, unchangedSource(remote.locator)))).toContain(
+        "after: main",
+      );
+      const [outcome] = yield* gitOutcomes(database);
+      const before = Object(Reflect.get(Object(outcome?.record), "before"));
+      const after = Object(Reflect.get(Object(outcome?.record), "after"));
+      expect(before.branch).toBe(after.branch);
+      expect(before.indexTree).toBe(after.indexTree);
+
+      dropRootClose(path);
+      damageSwitchResult(path, (record) => {
+        Object(record.after).indexTree = "0".repeat(40);
+      });
+
+      const counting = countingHost();
+      const failure = yield* raised(
+        runDocument(database, unchangedSource(remote.locator), countingOptions(counting)),
+      );
+
+      expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
+      expect(subcommands(counting.counters)).not.toContain("switch");
+    });
+  });
 
   it("leaves the frontier untouched when a blocked switch is halted", function* () {
     const root = yield* useStorageRoot();

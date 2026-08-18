@@ -780,20 +780,25 @@ directory belongs to, and that directory is only where the operation runs.
 Neither observation carries authority. The Repository is compared with the row
 the run retained under that name, member for member, and the working directory
 has to be a real directory inside one of the checkouts the run retains for it.
-A Repository that is not the retained one, a directory inside no retained
-checkout, and retained state that no longer agrees with the identity naming it
-are failures of the run rather than outcomes: no Git runs, nothing is published,
-and `<PrintErrors>` cannot print them. The same is true of a native Git failure
-the provider has no word for — the refusals are a closed set, and an
-unrecognized one is infrastructure rather than the nearest word.
+No enclosing `<Repository>` at all, a Repository that is not the retained one, a
+directory inside no retained checkout, and retained state that no longer agrees
+with the identity naming it are failures of the run rather than outcomes: no Git
+runs, nothing is published, and `<PrintErrors>` cannot print them. The same is
+true of a native Git failure the provider has no word for — the refusals are a
+closed set, and an unrecognized one is infrastructure rather than the nearest
+word.
 
 Switch renders nothing, binds nothing and takes no content. What it retains is
 evidence: the checkout it ran in, the requested and resolved branch, the
 requested base and the commit a created branch actually started from, and the
-branch, commit, HEAD tree and index tree the checkout held before and after. A
-retained result is read back for the invocation that recorded it, and one whose
-identity, branch, base or transition does not describe that invocation is
-damage rather than history.
+branch, commit, HEAD tree and index tree the checkout held before and after.
+
+A retained result is read back for the invocation that recorded it, and one whose
+identity, branch, base or transition does not describe that invocation is damage
+rather than history. A Worktree's name and its path are one identity, held to the
+placement that produced them; and switching to the branch a checkout is already
+on moves nothing, so a result whose commit, HEAD tree or index tree changed
+across it describes a transition Switch does not make.
 
 ### 7.2 Add
 

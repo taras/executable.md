@@ -131,7 +131,6 @@ export class RepositoryCompositionProtocolError extends WorkflowStorageError {
  * what it printed.
  */
 export type GitFailureReason =
-  | "no-repository-context"
   | "invalid-invocation"
   | "invalid-branch"
   | "unresolved-base"

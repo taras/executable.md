@@ -49,7 +49,6 @@ const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
 ] as const);
 
 const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
-  ["no-repository-context", "there is no enclosing <Repository>."],
   ["invalid-invocation", "it is not written the way that component is written."],
   ["invalid-branch", "the branch it names cannot be used as one."],
   ["unresolved-base", "its base does not name a commit in that repository."],

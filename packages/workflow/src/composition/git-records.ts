@@ -172,7 +172,12 @@ export interface GitSwitchExpectation {
  * branch or base is not the one the request asked for, and whose two readings do
  * not describe a switch: a created branch ends at the commit it was created
  * from and cannot be the branch the checkout was already on, and a checkout that
- * ends on the branch it began on cannot have moved.
+ * ends on the branch it began on cannot have moved — not its commit, not its
+ * HEAD tree, and not its index.
+ *
+ * What it cannot decide is where a name is placed. A checkout path is a function
+ * of identity, and whose function it is belongs to the provider, so the caller
+ * holds the parsed identity to its own placement before using it.
  */
 export function parseGitSwitchResult(
   value: unknown,
@@ -225,10 +230,16 @@ export function parseGitSwitchResult(
   if (created && (after.commit !== resolvedBase || before.branch === after.branch)) {
     return undefined;
   }
+  // Switching to the branch a checkout is already on moves nothing: no reset,
+  // no reference change, and nothing staged or unstaged. A retained result whose
+  // commit, HEAD tree or index tree changed across it describes a transition
+  // Switch does not make.
   if (
     !created &&
     before.branch === after.branch &&
-    (before.commit !== after.commit || before.headTree !== after.headTree)
+    (before.commit !== after.commit ||
+      before.headTree !== after.headTree ||
+      before.indexTree !== after.indexTree)
   ) {
     return undefined;
   }

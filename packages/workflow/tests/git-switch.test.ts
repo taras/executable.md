@@ -86,6 +86,9 @@ const REMOTE = {
   ],
 } as const;
 
+/** Text a suite looks for to say whether work after a failure still ran. */
+const LATER = "later sibling ran";
+
 function isGitFailure(value: unknown): value is GitOperationError {
   return value instanceof GitOperationError;
 }
@@ -644,16 +647,32 @@ describe("workflow Git.Switch selection", () => {
     });
   });
 
-  it("fails outside a Repository rather than choosing one", function* () {
+  it("fails outside a Repository rather than choosing one, past every region", function* () {
     const root = yield* useStorageRoot();
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       const failure = yield* raised(runDocument(database, `<Git.Switch branch="release" />`));
 
-      const refusal = causedBy(failure, isGitFailure);
-      expect(refusal?.reason).toBe("no-repository-context");
+      // No repository in scope is missing authority, not an outcome a document
+      // asked for and did not get.
+      expect(causedBy(failure, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(causedBy(failure, isGitFailure)).toBe(undefined);
       expect(yield* gitEvents(database)).toHaveLength(0);
+
+      // And an authored region cannot decide otherwise: a printed one would let
+      // the siblings after it run as though a branch had moved.
+      const printing = yield* createRun({ runId: "printing" });
+      const printed = yield* raised(
+        runDocument(
+          printing,
+          ["<PrintErrors>", `<Git.Switch branch="release" />`, "", LATER, "</PrintErrors>"].join(
+            "\n",
+          ),
+        ),
+      );
+      expect(causedBy(printed, isAuthorityFailure)).toBeInstanceOf(GitOperationAuthorityError);
+      expect(yield* gitEvents(printing)).toHaveLength(0);
     });
   });
 
