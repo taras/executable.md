@@ -887,18 +887,18 @@ Unlike Switch and Add it produces a value, so it renders nothing and is written
 with `as`: the binding is the full object id of the commit.
 
 **The message.** With only `message`, that string is the whole message. With only
-content, its rendered text is. With both, `message` comes first and the rendered
-text follows after one blank line. The blank lines a renderer leaves in front of
-content are layout rather than text and are dropped, so content that renders
-nothing — a staging child — contributes nothing and leaves a `message` prop the
-whole message. A message with no text in it is refused.
+content, the rendered child text is. With both, `message` comes first, one blank
+line separates them, and the non-empty rendered child text follows. Content that
+renders no text — a staging child — contributes nothing, so a `message` prop
+written beside one is the whole message. A message with no text in it is refused.
 
-The composed message is then canonicalized once: CRLF and bare CR become LF,
-whitespace at the very end is removed, and exactly one final newline is added.
-Leading and interior text is preserved exactly, because a commit message is
-authored prose. Those bytes are what Git commits, verbatim — Git's own message
-cleanup is disabled — and what it wrote is read back and compared before anything
-is published.
+The child text is never trimmed on its own. The composed message is canonicalized
+once, and once only: CRLF and bare CR become LF, whitespace is removed from the
+end of the complete message, and exactly one final newline is added. Everything
+before that end survives unchanged — including the blank lines a rendered body
+begins with, which are part of what that content is. Those bytes are what Git
+commits, verbatim — Git's own message cleanup is disabled — and what it wrote is
+read back and compared before anything is published.
 
 A message must be well-formed text, on the same terms and for the same reason as
 a pathspec in §7.2, and a message that is not already canonical is refused where

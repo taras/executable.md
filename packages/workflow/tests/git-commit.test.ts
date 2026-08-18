@@ -11,6 +11,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { scoped, sleep } from "effection";
@@ -340,13 +341,15 @@ describe("workflow Git.Commit message", () => {
         ),
       );
 
+      // The line break after the opening element is part of the text that
+      // content is, and only the end of the composed message is trimmed.
       const object = yield* headCommit(database, yield* checkout(database));
-      expect(object.message).toBe("written as content\n");
+      expect(object.message).toBe("\nwritten as content\n");
 
       const [, outcome] = yield* gitOutcomes(database);
       const retained = parseGitCommitResult(
         outcome?.record,
-        yield* expectation(database, "written as content\n", "children"),
+        yield* expectation(database, "\nwritten as content\n", "children"),
       );
       expect(retained?.messageSource).toBe("children");
     });
@@ -373,9 +376,11 @@ describe("workflow Git.Commit message", () => {
         ),
       );
 
+      // One blank line separates the prop from the content, and the blank
+      // lines the content itself begins with follow it unchanged.
       const object = yield* headCommit(database, yield* checkout(database));
       expect(object.message).toBe(
-        "prepare the release\n\nGenerated from validated release metadata.\n",
+        "prepare the release\n\n\n\n\nGenerated from validated release metadata.\n",
       );
 
       const [, outcome] = yield* gitOutcomes(database);
@@ -457,6 +462,15 @@ describe("workflow Git.Commit message", () => {
     });
     expect(composeCommitMessage("subject", "body\n")).toEqual({
       message: "subject\n\nbody\n",
+      source: "both",
+    });
+    // Leading blank lines belong to the content that has them.
+    expect(composeCommitMessage(undefined, "\n\nchild")).toEqual({
+      message: "\n\nchild\n",
+      source: "children",
+    });
+    expect(composeCommitMessage("subject", "\n\nchild")).toEqual({
+      message: "subject\n\n\n\nchild\n",
       source: "both",
     });
 
@@ -565,6 +579,190 @@ describe("workflow Git.Commit message", () => {
       });
     });
   }
+});
+
+/**
+ * The bytes a document's own content is, with nothing taken off the front.
+ *
+ * A rendered body is text the document produced, and where it begins is part of
+ * it. These drive an exact body through a component rather than through prose,
+ * because what is under test is which bytes survive composition — and a body
+ * spelled out in the test is the only way to say that without describing a
+ * renderer's layout instead.
+ *
+ * Written inline, so the content of the element is exactly what the component
+ * returned: `<Git.Commit as="sha"><Body /></Git.Commit>` on one line adds
+ * nothing around it.
+ */
+describe("workflow Git.Commit leading content", () => {
+  /** A component whose rendering is exactly these bytes. */
+  function body(text: string): ComponentRegistration {
+    return {
+      name: "Body",
+      origin: "test",
+      props: { type: "object", additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        return text;
+      },
+    };
+  }
+
+  /** Run one document with `<Body />` registered for it. */
+  function withBody(database: WorkflowRunDatabase, text: string, source: string): Operation<Json> {
+    return scoped(function* () {
+      return yield* withWorkflowWorkspace(
+        database,
+        scoped(function* () {
+          yield* registerComponents([body(text)]);
+          return yield* collect(
+            yield* execute({ ...inlineSource(source), stream: database.journal }),
+          );
+        }),
+      );
+    });
+  }
+
+  /** What the effect's own identity says this commit was, for one message. */
+  function* configuration(
+    database: WorkflowRunDatabase,
+    source: GitCommitMessageSource,
+    message: string,
+  ): Operation<string> {
+    const [repository] = yield* retainedRepositories(database);
+    const record = repository?.record;
+    if (record === undefined) {
+      throw new Error("the run retained no repository");
+    }
+    return gitOperationFingerprint([
+      record.name,
+      record.locatorFingerprint,
+      record.requestedBase,
+      record.creationCommit,
+      record.primaryBranch,
+      record.objectFormat,
+      record.checkoutPath,
+      record.checkoutPath,
+      source,
+      message,
+    ]);
+  }
+
+  it("commits a content body's own leading blank lines", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const message = "\n\nchild\n";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* withBody(
+        database,
+        "\n\nchild",
+        document(
+          remote.locator,
+          `<File path="added.txt">`,
+          "fresh",
+          "</File>",
+          `<Git.Add paths="added.txt" />`,
+          `<Git.Commit as="sha"><Body /></Git.Commit>`,
+        ),
+      );
+
+      // Native Git holds exactly those bytes.
+      const object = yield* headCommit(database, yield* checkout(database));
+      expect(object.message).toBe(message);
+
+      // And the evidence describes exactly those bytes.
+      const evidence = gitCommitMessageEvidence(message);
+      const [, outcome] = yield* gitOutcomes(database);
+      const retained = parseGitCommitResult(
+        outcome?.record,
+        yield* expectation(database, message, "children"),
+      );
+      expect(retained?.messageSource).toBe("children");
+      expect(retained?.messageDigest).toBe(evidence.digest);
+      expect(retained?.messageLength).toBe(evidence.length);
+      expect(retained?.messageLength).toBe(8);
+
+      // The identity is the identity of the bytes that were preserved, and not
+      // the identity the trimmed message would have had.
+      const [, event] = yield* gitEvents(database);
+      const named = event?.type === "yield" ? event.description.configuration : undefined;
+      expect(named).toBe(yield* configuration(database, "children", message));
+      expect(named).not.toBe(yield* configuration(database, "children", "child\n"));
+    });
+  });
+
+  it("keeps one separator and the content's own leading lines after it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const message = "subject\n\n\n\nchild\n";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* withBody(
+        database,
+        "\n\nchild",
+        document(
+          remote.locator,
+          `<File path="added.txt">`,
+          "fresh",
+          "</File>",
+          `<Git.Add paths="added.txt" />`,
+          `<Git.Commit message="subject" as="sha"><Body /></Git.Commit>`,
+        ),
+      );
+
+      const object = yield* headCommit(database, yield* checkout(database));
+      expect(object.message).toBe(message);
+
+      const evidence = gitCommitMessageEvidence(message);
+      const [, outcome] = yield* gitOutcomes(database);
+      const retained = parseGitCommitResult(
+        outcome?.record,
+        yield* expectation(database, message, "both"),
+      );
+      expect(retained?.messageSource).toBe("both");
+      expect(retained?.messageDigest).toBe(evidence.digest);
+      expect(retained?.messageLength).toBe(evidence.length);
+
+      const [, event] = yield* gitEvents(database);
+      const named = event?.type === "yield" ? event.description.configuration : undefined;
+      expect(named).toBe(yield* configuration(database, "both", message));
+      expect(named).not.toBe(yield* configuration(database, "both", "subject\n\nchild\n"));
+    });
+  });
+
+  it("gives content that renders no text no paragraph of its own", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* withBody(
+        database,
+        "",
+        document(
+          remote.locator,
+          `<File path="added.txt">`,
+          "fresh",
+          "</File>",
+          `<Git.Commit message="only the prop" as="sha"><Git.Add paths="added.txt" /><Body /></Git.Commit>`,
+        ),
+      );
+
+      // No separator, no empty second paragraph: the prop is the whole message.
+      const object = yield* headCommit(database, yield* checkout(database));
+      expect(object.message).toBe("only the prop\n");
+
+      const [, outcome] = yield* gitOutcomes(database);
+      const retained = parseGitCommitResult(
+        outcome?.record,
+        yield* expectation(database, "only the prop\n", "prop"),
+      );
+      expect(retained?.messageSource).toBe("prop");
+    });
+  });
 });
 
 describe("workflow Git.Commit selection", () => {

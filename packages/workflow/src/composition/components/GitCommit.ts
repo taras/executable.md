@@ -95,30 +95,6 @@ function lineFeeds(source: string): string {
   return source.replace(/\r\n?/g, "\n");
 }
 
-/**
- * Rendered content, with the blank lines a renderer put in front of it gone.
- *
- * Where content begins in a document is layout, not text: `<Git.Commit>` on one
- * line and its prose on the next renders a leading newline that nobody wrote.
- * A commit message whose first line is empty has no subject, so those lines are
- * not part of what a document said. Indentation on the first line that does hold
- * text survives, and so does everything after it.
- */
-function contentText(body: string): string {
-  const lines = lineFeeds(body);
-  let start = 0;
-  for (;;) {
-    let scan = start;
-    while (lines.charAt(scan) === " " || lines.charAt(scan) === "\t") {
-      scan += 1;
-    }
-    if (lines.charAt(scan) !== "\n") {
-      return lines.slice(start);
-    }
-    start = scan + 1;
-  }
-}
-
 /** A composed message and where its text came from. */
 export interface ComposedCommitMessage {
   readonly message: string;
@@ -131,24 +107,28 @@ export interface ComposedCommitMessage {
  * Content that renders nothing is content that says nothing: a `<Git.Add>` child
  * renders the empty string, so an element written with staging inside it and a
  * message beside it is a `prop` message rather than a `both` message with an
- * empty half. Whether text was contributed is decided by canonicalizing it, so
- * a renderer's trailing newline does not count as a paragraph.
+ * empty half. Whether text was contributed is asked of a canonicalized copy and
+ * decided there; the body that goes on to be composed is the rendered body
+ * itself, unread and unedited.
+ *
+ * Nothing here trims. A blank line the content begins with is part of the
+ * message that content is, and the one place whitespace is removed is the end of
+ * the whole composed message — once, below.
  */
 export function composeCommitMessage(
   message: string | undefined,
   body: string,
 ): ComposedCommitMessage {
-  const text = contentText(body);
-  const contributes = canonicalCommitMessage(text) !== BLANK;
+  const contributes = canonicalCommitMessage(body) !== BLANK;
   if (message === undefined) {
     if (!contributes) {
       invalid(
         "needs a message. Write one as a message prop, as content that renders text, or as both.",
       );
     }
-    return composed(text, "children");
+    return composed(body, "children");
   }
-  return contributes ? composed(`${message}\n\n${text}`, "both") : composed(message, "prop");
+  return contributes ? composed(`${message}\n\n${body}`, "both") : composed(message, "prop");
 }
 
 function composed(text: string, source: GitCommitMessageSource): ComposedCommitMessage {
