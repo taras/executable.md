@@ -19,8 +19,9 @@ import type { ComponentRegistration } from "@executablemd/core";
 import { collect, execute, inlineSource } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { ensure, scoped, until } from "effection";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { scoped, until } from "effection";
+import { readTextFile, writeTextFile } from "@effectionx/fs";
+import { useTempDirectory } from "@executablemd/test-support/temp";
 import { pathToFileURL } from "node:url";
 import { cwd } from "@executablemd/runtime";
 import type { Operation } from "effection";
@@ -163,8 +164,10 @@ function loadedGitApi(value: unknown): value is LoadedGitApi {
  * exactly the variable under test.
  */
 function* physicalGitApiCopy(): Operation<LoadedGitApi> {
-  const directory = yield* until(Deno.makeTempDir({ prefix: "xmd-git-api-copy-" }));
-  yield* ensure(() => rm(directory, { recursive: true, force: true }));
+  // The shared fixture rather than the runtime's own temporary-directory API:
+  // this file only *runs* under Deno, and it is typechecked under the Node
+  // project like every other source here.
+  const directory = yield* useTempDirectory("xmd-git-api-copy-");
   const source = new URL("../src/composition/", import.meta.url);
   const text = (yield* readTextFile(new URL("git-api.ts", source)))
     .replace('"./errors.ts"', JSON.stringify(new URL("errors.ts", source).href))
