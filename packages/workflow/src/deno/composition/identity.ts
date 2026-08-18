@@ -75,6 +75,13 @@ export function agreedRepository(record: RepositoryRecord, subject: string): Rep
   return record;
 }
 
+export function agreedWorktree(record: WorktreeRecord, subject: string): WorktreeRecord {
+  if (record.checkoutPath !== worktreeCheckoutPath(record.repositoryName, record.name)) {
+    throw stale(subject, "placement");
+  }
+  return record;
+}
+
 /**
  * The locator retained for a Repository, once it is still the one it names.
  *
@@ -105,6 +112,10 @@ export function agreedStored(stored: StoredRepository, subject: string): StoredR
 
 export function repositorySubject(name: string): string {
   return `repository ${JSON.stringify(name)}`;
+}
+
+export function worktreeSubject(name: string): string {
+  return `worktree ${JSON.stringify(name)}`;
 }
 
 /**

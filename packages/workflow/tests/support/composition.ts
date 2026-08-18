@@ -17,12 +17,13 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../mod.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
-import { WORKSPACE_REPOSITORY } from "../../src/deno/composition/provider.ts";
+import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "../../src/deno/composition/provider.ts";
 import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../src/deno/workspace/private.ts";
 import { importTree } from "../../src/deno/composition/materialize.ts";
 import type { StoredRepository } from "../../src/deno/workspace/repositories.ts";
+import type { WorktreeRecord } from "../../src/composition/records.ts";
 
 /** What one execution did, at the boundaries a claim can be made about. */
 export interface CompositionCounters {
@@ -141,7 +142,10 @@ export function causedBy<T>(
 export function* compositionEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
   const events = yield* database.journal.readAll();
   return events.filter(
-    (event) => event.type === "yield" && event.description.type === WORKSPACE_REPOSITORY,
+    (event) =>
+      event.type === "yield" &&
+      (event.description.type === WORKSPACE_REPOSITORY ||
+        event.description.type === WORKSPACE_WORKTREE),
   );
 }
 
@@ -150,6 +154,19 @@ export function* retainedRepositories(
 ): Operation<StoredRepository[]> {
   const read = yield* transactWorkspaceRoots(database, function* (workspace) {
     return workspace.metadata.readRepositories();
+  });
+  if (!read.ok) {
+    throw read.error;
+  }
+  return read.value;
+}
+
+export function* retainedWorktrees(
+  database: WorkflowRunDatabase,
+  repositoryName: string,
+): Operation<WorktreeRecord[]> {
+  const read = yield* transactWorkspaceRoots(database, function* (workspace) {
+    return workspace.metadata.readWorktreesForRepository(repositoryName);
   });
   if (!read.ok) {
     throw read.error;

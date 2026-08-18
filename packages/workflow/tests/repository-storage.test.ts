@@ -1,5 +1,5 @@
 /**
- * Tier WF — what a Repository retains, and what it refuses.
+ * Tier WF — what a Repository and a Worktree retain, and what they refuse.
  *
  * Every remote here is a real local bare repository and every Git command is
  * the real one. That is deliberate: what is under test is whether a run can be
@@ -20,6 +20,7 @@ import {
   countingHost,
   countingOptions,
   retainedRepositories,
+  retainedWorktrees,
   runDocument,
   subcommands,
   workspaceEntry,
@@ -45,8 +46,10 @@ describe("workflow Repository retention", () => {
         database,
         [
           `<Repository name="api" url="${api.locator}">`,
+          `<Worktree name="candidate" branch="api/candidate" as="apiWorktree" />`,
           "</Repository>",
           `<Repository name="sdk" url="${sdk.locator}">`,
+          `<Worktree name="candidate" branch="sdk/candidate" as="sdkWorktree" />`,
           "</Repository>",
         ].join("\n"),
       );
@@ -54,8 +57,21 @@ describe("workflow Repository retention", () => {
       const repositories = yield* retainedRepositories(database);
       expect(repositories.map((entry) => entry.record.name)).toEqual(["api", "sdk"]);
 
-      const paths = [repositories[0]?.record.checkoutPath, repositories[1]?.record.checkoutPath];
-      expect(new Set(paths).size).toBe(2);
+      const apiWorktrees = yield* retainedWorktrees(database, "api");
+      const sdkWorktrees = yield* retainedWorktrees(database, "sdk");
+
+      const paths = [
+        repositories[0]?.record.checkoutPath,
+        repositories[1]?.record.checkoutPath,
+        apiWorktrees[0]?.checkoutPath,
+        sdkWorktrees[0]?.checkoutPath,
+      ];
+      expect(new Set(paths).size).toBe(4);
+
+      // The same Worktree name in two repositories is two identities, and the
+      // provider placed them apart rather than letting one land on the other.
+      expect(apiWorktrees[0]?.name).toBe("candidate");
+      expect(sdkWorktrees[0]?.name).toBe("candidate");
 
       expect(
         yield* workspaceText(database, `${repositories[0]?.record.checkoutPath}/service.txt`),
@@ -63,6 +79,9 @@ describe("workflow Repository retention", () => {
       expect(
         yield* workspaceText(database, `${repositories[1]?.record.checkoutPath}/client.txt`),
       ).toBe("sdk client\n");
+      expect(yield* workspaceText(database, `${apiWorktrees[0]?.checkoutPath}/service.txt`)).toBe(
+        "api service\n",
+      );
       expect(repositories[0]?.record.creationCommit).toBe(api.heads.get("main"));
       expect(repositories[1]?.record.creationCommit).toBe(sdk.heads.get("main"));
     });
@@ -285,7 +304,11 @@ describe("workflow Repository retention", () => {
       const counting = countingHost();
       yield* runDocument(
         database,
-        [`<Repository name="project" url="${remote.locator}" as="repository" />`].join("\n"),
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "</Repository>",
+        ].join("\n"),
         countingOptions(counting),
       );
 
@@ -293,7 +316,7 @@ describe("workflow Repository retention", () => {
       // that existed rather than one the suite guessed at.
       expect(counting.counters.roots.length).toBeGreaterThan(0);
 
-      for (const prefix of ["/repositories"]) {
+      for (const prefix of ["/repositories", "/worktrees"]) {
         for (const [path, bytes] of yield* workspaceTree(database, prefix)) {
           const content = decoder.decode(bytes);
           expect({ path, holdsTempRoot: content.includes("xmd-workflow-git-") }).toEqual({
@@ -302,6 +325,226 @@ describe("workflow Repository retention", () => {
           });
         }
       }
+    });
+  });
+});
+
+describe("workflow Worktree retention", () => {
+  const REMOTE = {
+    commits: [
+      { message: "first", entries: [{ path: "which.txt", content: "first\n" }] },
+      {
+        message: "on feature",
+        branch: "feature/existing",
+        entries: [{ path: "which.txt", content: "feature\n" }],
+      },
+    ],
+  } as const;
+
+  it("creates a missing branch from the primary checkout's current commit", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      expect(worktree?.requestedBranch).toBe("feature/new");
+      expect(worktree?.requestedBase).toBe(null);
+      expect(worktree?.creationCommit).toBe(remote.heads.get("main"));
+      expect(yield* workspaceText(database, `${worktree?.checkoutPath}/which.txt`)).toBe("first\n");
+    });
+  });
+
+  it("creates a missing branch from an explicit base", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" base="feature/existing" as="w" />`,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      expect(worktree?.requestedBase).toBe("feature/existing");
+      expect(worktree?.creationCommit).toBe(remote.heads.get("feature/existing"));
+      expect(yield* workspaceText(database, `${worktree?.checkoutPath}/which.txt`)).toBe(
+        "feature\n",
+      );
+    });
+  });
+
+  it("checks out an existing branch rather than recreating it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="a" branch="feature/existing" as="first" />`,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      // The existing branch's commit, not the primary checkout's: the branch
+      // was used rather than recreated at HEAD.
+      expect(worktree?.creationCommit).toBe(remote.heads.get("feature/existing"));
+    });
+  });
+
+  it("refuses a branch another checkout already holds", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          "<PrintErrors>",
+          `<Worktree name="first" branch="feature/existing" as="a" />`,
+          `<Worktree name="second" branch="feature/existing" as="b" />`,
+          "</PrintErrors>",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain("already checked out by another worktree");
+      expect(String(output)).toContain(
+        "Nothing was moved, reset or detached to make room for this one",
+      );
+
+      // The first one survives untouched; the refusal added nothing.
+      const worktrees = yield* retainedWorktrees(database, "project");
+      expect(worktrees.map((entry) => entry.name)).toEqual(["first"]);
+    });
+  });
+
+  it("refuses the primary checkout's own branch", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          "<PrintErrors>",
+          `<Worktree name="implementation" branch="main" as="worktree" />`,
+          "</PrintErrors>",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain("already checked out by another worktree");
+      expect(yield* retainedWorktrees(database, "project")).toHaveLength(0);
+    });
+  });
+
+  it("reuses a compatible Worktree name", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="first" />`,
+          `<Worktree name="implementation" branch="feature/new" as="second" />`,
+          "",
+          "first: {first}",
+          "second: {second}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const rendered = String(output);
+      const [worktree] = yield* retainedWorktrees(database, "project");
+      expect(rendered).toContain(`first: ${worktree?.checkoutPath}`);
+      expect(rendered).toContain(`second: ${worktree?.checkoutPath}`);
+      expect(yield* retainedWorktrees(database, "project")).toHaveLength(1);
+    });
+  });
+
+  it("refuses a reused Worktree name whose branch changed", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          "<PrintErrors>",
+          `<Worktree name="implementation" branch="feature/new" as="first" />`,
+          `<Worktree name="implementation" branch="feature/other" as="second" />`,
+          "</PrintErrors>",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(String(output)).toContain(
+        "that name is already this repository's, for a different branch or base",
+      );
+
+      // The refusal moved nothing: the retained Worktree is the first one, on
+      // the branch it was created for.
+      const worktrees = yield* retainedWorktrees(database, "project");
+      expect(worktrees).toHaveLength(1);
+      expect(worktrees[0]?.requestedBranch).toBe("feature/new");
+    });
+  });
+
+  it("keeps the repository and its worktree usable as one Git repository", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const [repository] = yield* retainedRepositories(database);
+      const [worktree] = yield* retainedWorktrees(database, "project");
+
+      // The two administration files that carry an absolute path hold Workspace
+      // paths, which is what makes the pair relocatable to another host.
+      const pointer = yield* workspaceText(database, `${worktree?.checkoutPath}/.git`);
+      expect(pointer).toContain(`gitdir: ${repository?.record.checkoutPath}/.git/worktrees/`);
+
+      const administration = pointer.trim().slice("gitdir: ".length);
+      expect(yield* workspaceText(database, `${administration}/gitdir`)).toBe(
+        `${worktree?.checkoutPath}/.git\n`,
+      );
     });
   });
 });
@@ -317,16 +560,23 @@ describe("workflow composition retention across the run", () => {
       const database = yield* createRun();
       yield* runDocument(
         database,
-        [`<Repository name="project" url="${remote.locator}" as="repository" />`].join("\n"),
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "</Repository>",
+        ].join("\n"),
       );
 
       // The document finished and every live materialization is gone. What the
       // run holds is what it retained, and no deletion happened on the way out.
       const [repository] = yield* retainedRepositories(database);
+      const [worktree] = yield* retainedWorktrees(database, "project");
       expect(repository?.record.name).toBe("project");
+      expect(worktree?.name).toBe("implementation");
       expect(yield* workspaceText(database, `${repository?.record.checkoutPath}/which.txt`)).toBe(
         "first\n",
       );
+      expect(yield* workspaceText(database, `${worktree?.checkoutPath}/which.txt`)).toBe("first\n");
     });
   });
 });

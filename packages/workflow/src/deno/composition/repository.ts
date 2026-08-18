@@ -153,6 +153,7 @@ export function* performRepository(
   }
 
   return yield* attempted(
+    "repository",
     request.name,
     repositorySubject(request.name),
     retainRepository(context, host, request, locator, identity),
@@ -239,6 +240,7 @@ export function* createRepository(
 ): Operation<RepositoryRecord> {
   const admitted = admitLocator(request.locator);
   const outcome = yield* settled(
+    "repository",
     request.name,
     database,
     yield* describeRepository(request, admitted === undefined ? "" : locatorFingerprint(admitted)),

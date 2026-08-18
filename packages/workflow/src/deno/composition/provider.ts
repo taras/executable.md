@@ -1,9 +1,9 @@
 /**
  * The Deno-local Repository composition provider.
  *
- * This is the wiring: it installs one Api whose operations belong to the
- * component's own module. `repository.ts` owns what a `<Repository>` creates
- * and attaches;
+ * This is the wiring: it installs one Api whose four operations belong to the
+ * two components' own modules. `repository.ts` and `worktree.ts` own what a
+ * `<Repository>` and a `<Worktree>` respectively create and attach;
  * `effects.ts` owns the durable envelope both perform inside; `refusals.ts`
  * owns the words a refusal travels in; `identity.ts` owns holding a retained
  * record to the identity that names it.
@@ -26,21 +26,22 @@
 
 import { type Operation } from "effection";
 import { RepositoryComposition } from "../../composition/api.ts";
-import type { RepositoryRecord } from "../../composition/records.ts";
+import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
 import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
-import { WORKSPACE_REPOSITORY } from "./effects.ts";
+import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 import { stale, type Attached, type StaleReason } from "./identity.ts";
 import {
   createRepository,
   prepareRepositoryAttachment,
   repositoryDisagreement,
 } from "./repository.ts";
+import { createWorktree, prepareWorktreeAttachment, worktreeDisagreement } from "./worktree.ts";
 
-export { WORKSPACE_REPOSITORY } from "./effects.ts";
+export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 
 /**
  * What a provider may observe about itself, for suites that count.
@@ -122,6 +123,28 @@ export function useRepositoryComposition(
             ),
           (git, attached) =>
             repositoryDisagreement(git, attached, record.objectFormat, record.creationCommit),
+        );
+      },
+
+      *createWorktree([request]): Operation<WorktreeRecord> {
+        observe.effect?.("worktree", request.name);
+        return yield* createWorktree(database, host, request);
+      },
+
+      *attachWorktree([record]): Operation<void> {
+        observe.attachment?.("worktree", record.name);
+        yield* attach(
+          database,
+          host,
+          `worktree ${JSON.stringify(record.name)}`,
+          (workspace, root) =>
+            prepareWorktreeAttachment(
+              workspace,
+              root,
+              record,
+              `worktree ${JSON.stringify(record.name)}`,
+            ),
+          (git, attached) => worktreeDisagreement(git, attached, record),
         );
       },
     },

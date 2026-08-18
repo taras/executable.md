@@ -30,10 +30,15 @@ import {
   refusalReason,
   repositoryRefusal,
   repositoryRefused,
+  worktreeRefusal,
+  worktreeRefused,
 } from "./refusals.ts";
 
 /** The effect type a Repository's creation identity is recorded under. */
 export const WORKSPACE_REPOSITORY = "workspace_repository";
+
+/** The effect type a Worktree's creation identity is recorded under. */
+export const WORKSPACE_WORKTREE = "workspace_worktree";
 
 /**
  * What one composition effect recorded when it recorded a checkout.
@@ -110,6 +115,7 @@ export function parentOf(path: string): string {
  * document asked for.
  */
 export function* attempted(
+  kind: "repository" | "worktree",
   name: string,
   subject: string,
   work: Operation<Json>,
@@ -118,7 +124,9 @@ export function* attempted(
     return created(yield* savepoint(work));
   } catch (error) {
     if (error instanceof GitRefusal) {
-      repositoryRefused(name, error.reason);
+      return kind === "repository"
+        ? repositoryRefused(name, error.reason)
+        : worktreeRefused(name, error.reason);
     }
     if (isJournalableWorkspaceFailure(error)) {
       throw new RepositoryRetentionError(subject, error);
@@ -149,6 +157,7 @@ function* compositionEffect(
  * stays cancellation.
  */
 export function* settled(
+  kind: "repository" | "worktree",
   name: string,
   database: WorkflowRunDatabase,
   description: EffectDescription,
@@ -161,11 +170,11 @@ export function* settled(
   try {
     value = yield* compositionEffect(database, description, perform);
   } catch (error) {
-    const reason = refusalReason(error);
+    const reason = refusalReason(error, kind);
     if (reason === undefined) {
       throw error;
     }
-    throw repositoryRefusal(name, reason);
+    throw kind === "repository" ? repositoryRefusal(name, reason) : worktreeRefusal(name, reason);
   }
   const outcome = parseOutcome(value);
   if (outcome === undefined) {

@@ -1,5 +1,5 @@
 /**
- * Tier WF — `<Repository>` and `<Dir>` as a document writes them.
+ * Tier WF — `<Repository>`, `<Worktree>` and `<Dir>` as a document writes them.
  *
  * These drive the real component definitions through `execute()` against a real
  * run database and a real local remote, because what is under test is the
@@ -28,7 +28,7 @@ import {
   retainedRepositories,
   runDocument,
 } from "./support/composition.ts";
-import { RepositoryCompositionError } from "../src/composition/errors.ts";
+import { RepositoryCompositionError, WorktreeCompositionError } from "../src/composition/errors.ts";
 import { admitLocator, locatorFingerprint } from "../src/deno/composition/locator.ts";
 
 function isProviderError(value: unknown): value is RepositoryCompositionProviderError {
@@ -37,6 +37,10 @@ function isProviderError(value: unknown): value is RepositoryCompositionProvider
 
 function isRepositoryRefusal(value: unknown): value is RepositoryCompositionError {
   return value instanceof RepositoryCompositionError;
+}
+
+function isWorktreeRefusal(value: unknown): value is WorktreeCompositionError {
+  return value instanceof WorktreeCompositionError;
 }
 
 describe("workflow Repository composition", () => {
@@ -91,6 +95,38 @@ describe("workflow Repository composition", () => {
     });
   });
 
+  it("runs the self-closing Worktree plus lexical Dir spelling", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "base\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="worktree" />`,
+          "<Dir path={worktree}>",
+          `<File path="README.md" as="readme" />`,
+          "",
+          "inside: {readme}",
+          "</Dir>",
+          "</Repository>",
+        ].join("\n"),
+        countingOptions(counting),
+      );
+
+      const rendered = String(output);
+      expect(rendered).toContain("inside: base");
+      // The self-closing Worktree binds a path and renders nothing of its own.
+      expect(rendered).not.toContain("/worktrees/");
+      expect(counting.counters.effects).toEqual(["repository:project", "worktree:implementation"]);
+    });
+  });
+
   it("restores the enclosing working directory after Dir", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote({
@@ -129,6 +165,36 @@ describe("workflow Repository composition", () => {
     });
   });
 
+  it("keeps a lexical Worktree written with `as` an ordinary capture", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "README.md", content: "base\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runDocument(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="feature/new" as="captured">`,
+          "rendered inside",
+          "</Worktree>",
+          "",
+          "captured: {captured}",
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      const rendered = String(output);
+      // Ordinary generic capture: the content is captured and suppressed, and
+      // the binding is that content rather than the checkout path.
+      expect(rendered).toContain("rendered inside");
+      expect(rendered).not.toContain("/worktrees/");
+      expect(rendered.indexOf("rendered inside")).toBe(rendered.lastIndexOf("rendered inside"));
+    });
+  });
+
   it("passes expression values as names and inputs", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote({
@@ -137,9 +203,9 @@ describe("workflow Repository composition", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      // The locator arrives as a root-prop expression rather than a literal,
-      // which is what makes it an input rather than a key into something the
-      // provider looks up.
+      // The locator and the Worktree name arrive as root-prop expressions
+      // rather than as literals, which is what makes them inputs rather than
+      // keys into something the provider looks up.
       const output = yield* runDocument(
         database,
         [
@@ -148,15 +214,20 @@ describe("workflow Repository composition", () => {
           "  repository:",
           "    type: string",
           `    default: ${remote.locator}`,
+          "  candidate:",
+          "    type: string",
+          "    default: implementation",
           "---",
           "",
-          `<Repository name="project" url={props.repository} as="repository" />`,
+          `<Repository name="project" url={props.repository}>`,
+          `<Worktree name={props.candidate} branch="feature/new" as="worktree" />`,
           "",
-          "checkout: {repository}",
+          "worktree: {worktree}",
+          "</Repository>",
         ].join("\n"),
       );
 
-      expect(String(output)).toContain("checkout: /repositories/project-");
+      expect(String(output)).toContain("worktree: /worktrees/");
       const retained = yield* retainedRepositories(database);
       expect(retained[0]?.locator).toBe(remote.locator);
     });
@@ -166,8 +237,9 @@ describe("workflow Repository composition", () => {
 describe("workflow composition refusal vocabulary", () => {
   it("names a fixed reason on each failure class", function* () {
     const repository = new RepositoryCompositionError("project", "invalid-locator", "why");
-
+    const worktree = new WorktreeCompositionError("implementation", "unresolved-base", "why");
     expect(repository.reason).toBe("invalid-locator");
+    expect(worktree.reason).toBe("unresolved-base");
   });
 });
 
@@ -300,6 +372,68 @@ describe("workflow composition failure policy", () => {
     });
   });
 
+  it("fails the run on a Worktree with no Repository and runs no later sibling", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [`<Worktree name="implementation" branch="feature" as="w" />`, "", LATER].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(WorktreeCompositionError);
+      expect(String(error)).toContain("invalid outside a lexical <Repository>");
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
+  it("prints a Worktree with no Repository once inside <PrintErrors>", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [
+          "<PrintErrors>",
+          `<Worktree name="implementation" branch="feature" as="w" />`,
+          "",
+          LATER,
+          "</PrintErrors>",
+        ].join("\n"),
+      );
+
+      expect(error).toBe(undefined);
+      expect(printed(rendered)).toHaveLength(1);
+      expect(rendered).toContain("invalid outside a lexical <Repository>");
+      expect(rendered).toContain(LATER);
+    });
+  });
+
+  it("fails the run on a recognized Worktree refusal inside a Repository", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote({
+      commits: [{ message: "first", entries: [{ path: "which.txt", content: "first\n" }] }],
+    });
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const { error, rendered } = yield* failureOf(
+        database,
+        [
+          `<Repository name="project" url="${remote.locator}">`,
+          `<Worktree name="implementation" branch="main" as="w" />`,
+          "",
+          LATER,
+          "</Repository>",
+        ].join("\n"),
+      );
+
+      expect(error).toBeInstanceOf(WorktreeCompositionError);
+      expect(String(error)).toContain("already checked out by another worktree");
+      expect(rendered).not.toContain(LATER);
+    });
+  });
+
   /**
    * A failure that is not a refusal must not arrive as one.
    *
@@ -368,8 +502,8 @@ describe("workflow composition failure policy", () => {
   /**
    * A failure of projected content belongs to the region it is written in.
    *
-   * Through both boundaries, because each expands content and neither may
-   * decide what a failure of somebody else's text means.
+   * Through all three boundaries, because each one expands content and none of
+   * them may decide what a failure of somebody else's text means.
    */
   it("leaves a projected-content failure to the region that wrote it", function* () {
     const root = yield* useStorageRoot();
@@ -379,7 +513,8 @@ describe("workflow composition failure policy", () => {
 
     const inside = [
       `<Repository name="project" url="${remote.locator}">`,
-      `<Dir path="nested">`,
+      `<Worktree name="implementation" branch="feature/new" as="w" />`,
+      "<Dir path={w}>",
       "<Bogus />",
       "</Dir>",
       "</Repository>",
@@ -390,6 +525,7 @@ describe("workflow composition failure policy", () => {
       const { error } = yield* failureOf(plain, inside);
       expect(error).not.toBe(undefined);
       expect(causedBy(error, isRepositoryRefusal)).toBe(undefined);
+      expect(causedBy(error, isWorktreeRefusal)).toBe(undefined);
 
       const printing = yield* createRun({ runId: "printing" });
       const { error: none, rendered } = yield* failureOf(
