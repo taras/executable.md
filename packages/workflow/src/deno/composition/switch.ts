@@ -39,13 +39,17 @@ export const WORKSPACE_GIT_SWITCH = "workspace_git_switch";
 /**
  * How one switch is identified.
  *
+ * Takes the admitted snapshot, like everything below it: `createGitSwitch()` is
+ * the only door, so nothing here can be handed a request whose values may still
+ * change underneath it.
+ *
  * The expansion makes two elements different effects and one element the same
  * effect across replays; the configuration fingerprint makes a document edited
  * to name another branch, base or checkout diverge rather than replaying the
  * previous one's retained result. Durable identity is type and name, so the
  * fingerprint belongs in the name rather than beside it.
  */
-export function* describeSwitch(request: GitSwitchRequest): Operation<EffectDescription> {
+function* describeSwitch(admitted: GitSwitchRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
   // The whole observation, not only what it asked for. The record a document was
   // written against is part of what this effect is: replaying a result recorded
@@ -53,20 +57,20 @@ export function* describeSwitch(request: GitSwitchRequest): Operation<EffectDesc
   // transition that never described this invocation — and the encoding is
   // injective, so no two observations can arrive at one name.
   const configuration = gitOperationFingerprint([
-    request.repository.name,
-    request.repository.locatorFingerprint,
-    request.repository.requestedBase,
-    request.repository.creationCommit,
-    request.repository.primaryBranch,
-    request.repository.objectFormat,
-    request.repository.checkoutPath,
-    request.workingDirectory,
-    request.branch,
-    request.base ?? null,
+    admitted.repository.name,
+    admitted.repository.locatorFingerprint,
+    admitted.repository.requestedBase,
+    admitted.repository.creationCommit,
+    admitted.repository.primaryBranch,
+    admitted.repository.objectFormat,
+    admitted.repository.checkoutPath,
+    admitted.workingDirectory,
+    admitted.branch,
+    admitted.base ?? null,
   ]);
   return {
     type: WORKSPACE_GIT_SWITCH,
-    name: `${expansion.id}:${request.repository.name}:${configuration}`,
+    name: `${expansion.id}:${admitted.repository.name}:${configuration}`,
     configuration,
     ...sourceDescription(expansion.position),
   };
@@ -118,23 +122,23 @@ function* performSwitch(
   return { resolvedBase: start };
 }
 
-export function performGitSwitch(
+function performGitSwitch(
   context: MutationContext,
   host: RepositoryHost,
-  request: GitSwitchRequest,
+  admitted: GitSwitchRequest,
 ): Operation<CompositionOutcome> {
   return performGitOperation(
     context,
     host,
     SWITCH,
-    { repository: request.repository, workingDirectory: request.workingDirectory },
-    (checkout) => performSwitch(checkout, request.branch, request.base),
+    { repository: admitted.repository, workingDirectory: admitted.workingDirectory },
+    (checkout) => performSwitch(checkout, admitted.branch, admitted.base),
     (checkout, before: GitCheckoutState, after: GitCheckoutState, performed: Switched): Json =>
       gitSwitchResultJson({
         checkout: checkout.identity,
-        requestedBranch: request.branch,
+        requestedBranch: admitted.branch,
         resolvedBranch: after.branch,
-        requestedBase: request.base ?? null,
+        requestedBase: admitted.base ?? null,
         resolvedBase: performed.resolvedBase,
         before,
         after,
@@ -148,20 +152,34 @@ export function* createGitSwitch(
   host: RepositoryHost,
   request: GitSwitchRequest,
 ): Operation<GitSwitchResult> {
+  // Admission takes a snapshot, and the snapshot is what the operation runs on.
+  // A caller's request and the record inside it are its own objects, and this
+  // operation has suspension points — a transaction, several Git commands, an
+  // import — across which whoever handed them over can still change them.
+  // Reading them again later would let an effect identify one branch change,
+  // hand Git a second and retain a third, against a Repository it never
+  // authenticated.
+  const admitted: GitSwitchRequest = Object.freeze({
+    repository: Object.freeze({ ...request.repository }),
+    workingDirectory: request.workingDirectory,
+    branch: request.branch,
+    base: request.base,
+  });
+
   const outcome = yield* settled(
     "git",
     SWITCH,
     database,
-    yield* describeSwitch(request),
-    (filesystem, metadata) => performGitSwitch({ filesystem, metadata }, host, request),
+    yield* describeSwitch(admitted),
+    (filesystem, metadata) => performGitSwitch({ filesystem, metadata }, host, admitted),
   );
   // Read for this request rather than merely read: a result that does not
   // describe the checkout, branch, base and transition this invocation asked for
   // is not this invocation's result, whatever else it is. The identity it names
   // is then held to this provider's own placement, which is the half of it the
   // shared protocol has no way to decide.
-  const result = parseGitSwitchResult(outcome, request);
-  if (result === undefined || !placedCheckout(result.checkout, request.repository)) {
+  const result = parseGitSwitchResult(outcome, admitted);
+  if (result === undefined || !placedCheckout(result.checkout, admitted.repository)) {
     throw new GitOperationProtocolError(SWITCH);
   }
   return result;
