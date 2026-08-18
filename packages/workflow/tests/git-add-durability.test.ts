@@ -22,6 +22,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { cwd } from "@executablemd/runtime";
 import {
   GitOperationAuthorityError,
+  GitOperationError,
   GitOperationProtocolError,
 } from "../src/composition/errors.ts";
 import { currentRepository } from "../src/composition/context.ts";
@@ -60,6 +61,7 @@ const REMOTE = {
       entries: [
         { path: "which.txt", content: "main\n" },
         { path: "nested/note.md", content: "note\n" },
+        { path: ".gitignore", content: "ignored.txt\n" },
       ],
     },
   ],
@@ -84,6 +86,10 @@ function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
 
 function isAuthorityFailure(value: unknown): value is GitOperationAuthorityError {
   return value instanceof GitOperationAuthorityError;
+}
+
+function isGitFailure(value: unknown): value is GitOperationError {
+  return value instanceof GitOperationError;
 }
 
 /** Every table this run's database holds, as another connection sees them. */
@@ -300,6 +306,74 @@ describe("workflow Git.Add durability", () => {
       });
     });
   }
+
+  /**
+   * A refusal is one failed durable outcome, and replaying it repeats nothing.
+   *
+   * The ignored-path case is the sharp one: native Git stages what it matched
+   * before refusing, so what makes this all-or-none is the effect — the throw
+   * lands before anything is imported, the materialization goes with the scope,
+   * and the failed result describes a root that did not move.
+   */
+  it("publishes one failed result against the unchanged root, and replays it", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    const refused = [
+      `<Repository name="project" url="${remote.locator}">`,
+      `<File path="added.txt">`,
+      "fresh",
+      "</File>",
+      `<File path="ignored.txt">`,
+      "ignored content",
+      "</File>",
+      `<Git.Add paths={["added.txt", "ignored.txt"]} />`,
+      "</Repository>",
+    ].join("\n");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const live = countingHost();
+      const failure = yield* raised(runDocument(database, refused, countingOptions(live)));
+
+      expect(causedBy(failure, isGitFailure)?.reason).toBe("ignored-pathspec");
+      expect(subcommands(live.counters)).toContain("add");
+
+      // One failed outcome, the root where the file writes left it, and no
+      // trace of what the command had already applied.
+      const [outcome] = yield* gitOutcomes(database);
+      expect(outcome?.status).toBe("err");
+      expect(committedRoot(path)).toBe(latestRoot(path));
+      expect(yield* stagedPaths(database, yield* checkoutOf(database))).toEqual([]);
+
+      // Nothing Git printed, nowhere it ran, and nothing it found.
+      const retained = `${outcome?.name} ${outcome?.message}`;
+      expect(retained).toContain("ignored-pathspec");
+      expect(retained).not.toContain("ignored.txt");
+      expect(retained).not.toContain("gitignore");
+      expect(retained).not.toContain("hint:");
+      expect(retained).not.toContain(tmpdir());
+      for (const materialization of live.counters.roots) {
+        expect(retained).not.toContain(materialization);
+      }
+
+      const published = publishedRoots(path);
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const replayed = countingHost();
+      const again = yield* raised(runDocument(database, refused, countingOptions(replayed)));
+
+      // The same refusal, assembled from what the journal holds.
+      expect(causedBy(again, isGitFailure)?.reason).toBe("ignored-pathspec");
+      expect(String(causedBy(again, isGitFailure))).toBe(String(causedBy(failure, isGitFailure)));
+      expect(subcommands(replayed.counters)).not.toContain("add");
+      expect(yield* gitEvents(database)).toHaveLength(1);
+      expect(publishedRoots(path)).toBe(published);
+      expect(yield* stagedPaths(database, yield* checkoutOf(database))).toEqual([]);
+    });
+  });
 
   it("leaves the frontier untouched when a blocked staging is halted", function* () {
     const root = yield* useStorageRoot();

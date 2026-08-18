@@ -135,7 +135,11 @@ export type GitFailureReason =
   | "invalid-branch"
   | "unresolved-base"
   | "branch-checked-out-elsewhere"
-  | "overwrites-local-changes";
+  | "overwrites-local-changes"
+  | "unmatched-pathspec"
+  | "ignored-pathspec"
+  | "outside-checkout-pathspec"
+  | "invalid-pathspec-magic";
 
 /** A Git operation the document asked for and did not get. */
 export class GitOperationError extends Error {

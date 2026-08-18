@@ -16,7 +16,8 @@ import { collect, execute, inlineSource } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
-import { scoped, until } from "effection";
+import { scoped } from "effection";
+import { tmpdir } from "node:os";
 import type { Operation } from "effection";
 import { readTextFile, writeTextFile } from "@effectionx/fs";
 import { pathToFileURL } from "node:url";
@@ -71,6 +72,7 @@ const REMOTE = {
         { path: "shared.txt", content: "shared\n" },
         { path: "nested/note.md", content: "note\n" },
         { path: "nested/deep/leaf.md", content: "leaf\n" },
+        { path: ".gitignore", content: "ignored.txt\n" },
       ],
     },
   ],
@@ -637,6 +639,112 @@ describe("workflow Git.Add selection", () => {
       expect(String(output)).toContain("shadowed");
       expect(yield* gitEvents(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("add");
+    });
+  });
+});
+
+describe("workflow Git.Add refusals", () => {
+  /**
+   * The four conditions a document can act on, driven through real Git.
+   *
+   * Each is something the pathspecs themselves caused, and each arrives as a
+   * fixed word rather than as whatever Git printed: the sentence a document sees
+   * names the condition and never the path that produced it.
+   */
+  const REFUSALS = [
+    {
+      name: "a pathspec that matched nothing",
+      written: `<Git.Add paths="missing.txt" />`,
+      reason: "unmatched-pathspec",
+      sentence: "matched no files",
+    },
+    {
+      name: "a pathspec the repository ignores",
+      written: `<Git.Add paths="ignored.txt" />`,
+      reason: "ignored-pathspec",
+      sentence: "no force control",
+    },
+    {
+      name: "a pathspec outside the checkout",
+      written: `<Git.Add paths="../escape.txt" />`,
+      reason: "outside-checkout-pathspec",
+      sentence: "leave the checkout",
+    },
+    {
+      name: "a pathspec whose magic is invalid",
+      written: `<Git.Add paths=":(bogus)which.txt" />`,
+      reason: "invalid-pathspec-magic",
+      sentence: "invalid Git pathspec magic",
+    },
+  ];
+
+  for (const { name, written, reason, sentence } of REFUSALS) {
+    it(`refuses ${name}`, function* () {
+      const root = yield* useStorageRoot();
+      const remote = yield* useBareRemote(REMOTE);
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const counting = countingHost();
+        const failure = yield* raised(
+          runDocument(
+            database,
+            document(
+              remote.locator,
+              `<File path="ignored.txt">`,
+              "ignored content",
+              "</File>",
+              written,
+            ),
+            countingOptions(counting),
+          ),
+        );
+
+        const refusal = causedBy(failure, isGitFailure);
+        expect(refusal?.reason).toBe(reason);
+        expect(refusal?.operation).toBe("<Git.Add>");
+        expect(String(refusal)).toContain(sentence);
+        // The sentence says which condition happened, not what was written or
+        // what Git found.
+        expect(String(refusal)).not.toContain("fatal");
+        expect(String(refusal)).not.toContain(tmpdir());
+
+        // A refusal is the effect's failed outcome, and Git really ran.
+        expect(subcommands(counting.counters)).toContain("add");
+        const [outcome] = yield* gitOutcomes(database);
+        expect(outcome?.status).toBe("err");
+        expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
+      });
+    });
+  }
+
+  it("keeps nothing a refused command had already staged", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      // Native Git stages what it matched before refusing an ignored path, so
+      // this is the case where all-or-none is the effect's doing rather than
+      // Git's: the file that would have been staged must not be.
+      const failure = yield* raised(
+        runDocument(
+          database,
+          document(
+            remote.locator,
+            `<File path="added.txt">`,
+            "fresh",
+            "</File>",
+            `<File path="ignored.txt">`,
+            "ignored content",
+            "</File>",
+            `<Git.Add paths={["added.txt", "ignored.txt"]} />`,
+          ),
+        ),
+      );
+
+      expect(causedBy(failure, isGitFailure)?.reason).toBe("ignored-pathspec");
+      expect(yield* stagedPaths(database, yield* checkout(database))).toEqual([]);
     });
   });
 });

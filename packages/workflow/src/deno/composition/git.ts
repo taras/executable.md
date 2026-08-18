@@ -402,15 +402,19 @@ export function* switchBranch(git: GitSession, request: BranchSwitch): Operation
  *
  * One command for the whole array. `--` separates the pathspecs from the
  * options, so an entry that reads as a flag is still a pathspec, and Git's own
- * magic keeps its ordinary meaning. Git applies the whole command or none of it:
- * a pathspec it refuses leaves the index exactly as it was, so there is no
- * partial staging for this provider to take back.
+ * magic keeps its ordinary meaning.
  *
- * Every refusal is infrastructure for now. The conditions a document could act
- * on — a pathspec that matched nothing, one the repository ignores, one outside
- * the checkout, one whose magic is invalid — are recognizable, but which of them
- * becomes a durable refusal is a product decision this slice does not make on an
- * author's behalf.
+ * **Native Git is not all-or-none here.** A command naming an ignored path
+ * stages everything else it matched and *then* refuses, so the index it leaves
+ * behind holds part of what was asked for. What makes an Add all-or-none is the
+ * effect around it: this throws before anything is imported, the disposable
+ * materialization Git worked in is discarded with the scope, and the effect's
+ * savepoint takes back the attempt — so the Workspace never holds a partial
+ * staging, and the failed result describes a root that did not move.
+ *
+ * Four conditions are refusals a document can act on, and the set is closed. Any
+ * other nonzero exit is infrastructure: naming it the nearest refusal would
+ * publish a durable result claiming this run knows what happened.
  */
 export function* addPaths(
   git: GitSession,
@@ -422,11 +426,42 @@ export function* addPaths(
 ): Operation<void> {
   const outcome = yield* git.run(["add", "--", ...request.paths], request.workingDirectory);
   if (outcome.code !== 0) {
-    throw new GitOperationInfrastructureError(
-      request.operation,
-      "native Git refused it in a way this provider has no word for",
-    );
+    const refusal = addFailure(outcome);
+    if (refusal === undefined) {
+      throw new GitOperationInfrastructureError(
+        request.operation,
+        "native Git refused it in a way this provider has no word for",
+      );
+    }
+    throw new GitRefusal(refusal);
   }
+}
+
+/**
+ * Which condition a refused `add` reported, or `undefined` for none of them.
+ *
+ * The exit status and the message together, because each of these conditions is
+ * reported with both and matching one alone would let a later Git version's
+ * unrelated failure wear a word this run does not mean. `LC_ALL=C` is what makes
+ * the message stable; it selects a word and is then discarded.
+ */
+function addFailure(outcome: GitOutcome): GitFailureReason | undefined {
+  if (outcome.code === 1 && /^The following paths are ignored by/m.test(outcome.stderr)) {
+    return "ignored-pathspec";
+  }
+  if (outcome.code !== 128) {
+    return undefined;
+  }
+  if (/did not match any files/.test(outcome.stderr)) {
+    return "unmatched-pathspec";
+  }
+  if (/is outside repository/.test(outcome.stderr)) {
+    return "outside-checkout-pathspec";
+  }
+  if (/Invalid pathspec magic/.test(outcome.stderr)) {
+    return "invalid-pathspec-magic";
+  }
+  return undefined;
 }
 
 /**

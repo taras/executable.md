@@ -834,10 +834,18 @@ index tree may have moved or not — staging what is already staged changes
 nothing. What Git matched is not enumerated: naming files it discovered would put
 content beyond the document's own pathspecs into retained history.
 
-Failure follows §7.1. A native failure this provider has no word for — a
-pathspec that matched nothing, one the repository ignores, one outside the
-checkout, one whose magic is invalid — is infrastructure: the run fails, the
-index is untouched and no result is published.
+Failure follows §7.1, with four refusals of its own. A pathspec that matched no
+files, one that selects an ignored path — Add has no force control — one that
+leaves the checkout, and one whose Git pathspec magic is invalid are each
+something the document asked for and did not get, so each is a failed durable
+result against a Workspace root that did not move, replayed exactly. Any other
+native failure is infrastructure: the run fails and nothing is published.
+
+Native Git is not all-or-none here. A command naming an ignored path stages
+everything else it matched before refusing, so an Add is all-or-none because the
+effect makes it so: nothing is imported, the materialization is discarded, and
+the attempt is rolled back, leaving no partial staging in the Workspace. No
+refusal names a path, quotes Git, or reports a file Git discovered.
 
 ### 7.3 Commit
 

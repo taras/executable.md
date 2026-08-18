@@ -46,6 +46,10 @@ const GIT_REASONS: ReadonlyMap<string, GitFailureReason> = new Map([
   ["unresolved-base", "unresolved-base"],
   ["branch-checked-out-elsewhere", "branch-checked-out-elsewhere"],
   ["overwrites-local-changes", "overwrites-local-changes"],
+  ["unmatched-pathspec", "unmatched-pathspec"],
+  ["ignored-pathspec", "ignored-pathspec"],
+  ["outside-checkout-pathspec", "outside-checkout-pathspec"],
+  ["invalid-pathspec-magic", "invalid-pathspec-magic"],
 ] as const);
 
 const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
@@ -62,6 +66,18 @@ const GIT_SENTENCES: ReadonlyMap<GitFailureReason, string> = new Map([
     "changes in the checkout would be overwritten by it. Nothing was discarded, stashed or " +
       "forced to make it apply.",
   ],
+  // A pathspec is a document's own text, and so is anything Git matched with
+  // one. These sentences say which condition happened and nothing about what
+  // was written or found.
+  ["unmatched-pathspec", "one or more of its pathspecs matched no files."],
+  [
+    "ignored-pathspec",
+    "one or more of its pathspecs selected ignored paths, and this component has no force " +
+      "control. Nothing was staged: whatever the command had already applied was discarded " +
+      "with the rest of the attempt.",
+  ],
+  ["outside-checkout-pathspec", "one or more of its pathspecs leave the checkout it ran in."],
+  ["invalid-pathspec-magic", "one or more of its pathspecs use invalid Git pathspec magic."],
 ]);
 
 const REPOSITORY_SENTENCES: ReadonlyMap<RepositoryFailureReason, string> = new Map([
