@@ -573,7 +573,9 @@ describe("workflow Git.Switch durability", () => {
  * the encoding, which is what makes every other arrangement of values safe too.
  * Absence, a separator, a length prefix and the empty string are all ordinary
  * content somewhere — a branch may be named `1:a`, a base may contain any
- * character — so none of them may be readable as structure.
+ * character — so none of them may be readable as structure. Nor may any of them
+ * be *lost*: an unpaired surrogate is a string a document can hold, and a digest
+ * taken over UTF-8 would collapse it onto U+FFFD.
  */
 describe("workflow Git operation identity", () => {
   it("gives distinct values distinct fingerprints", function* () {
@@ -597,6 +599,14 @@ describe("workflow Git operation identity", () => {
       ["2:ab c"],
       ["main", null],
       [null, "main"],
+      // A JavaScript string is code units, not text. An unpaired surrogate is a
+      // value a document can hold, and encoding one as UTF-8 would replace it
+      // with the character below.
+      ["\ud800"],
+      ["\udc00"],
+      ["\ufffd"],
+      ["a\ud800b"],
+      ["a\ufffdb"],
     ];
 
     const fingerprints = arrangements.map((values) => gitOperationFingerprint(values));

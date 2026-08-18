@@ -112,6 +112,15 @@ import { worktreeDisagreement } from "./worktree.ts";
  * would reserve — and a length prefix says exactly how much of what follows
  * belongs to this value, so no arrangement of values can be read as another.
  *
+ * The bytes that are hashed are the string's own code units, two at a time.
+ * A JavaScript string is a sequence of UTF-16 code units and is not required to
+ * be well-formed text: an unpaired surrogate is a value a document can hold and
+ * a column can retain, and encoding one as UTF-8 replaces it with U+FFFD — so a
+ * digest taken over UTF-8 would collapse it onto the string that already held
+ * that character. Hashing the units themselves keeps the encoding injective
+ * over every string, well-formed or not, and the length prefix counts the same
+ * units the encoding writes.
+ *
  * This is deliberately its own encoding rather than a change to
  * `fingerprintOf()`, whose digests are already part of retained Repository and
  * Worktree identity in this run's history.
@@ -120,7 +129,18 @@ export function gitOperationFingerprint(values: readonly (string | null)[]): str
   const canonical = values
     .map((value) => (value === null ? "-" : `${value.length}:${value}`))
     .join("");
-  return createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 16);
+  return createHash("sha256").update(codeUnits(canonical)).digest("hex").slice(0, 16);
+}
+
+/** One string's UTF-16 code units, big-endian, two bytes each. */
+function codeUnits(value: string): Uint8Array {
+  const bytes = new Uint8Array(value.length * 2);
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    bytes[index * 2] = unit >> 8;
+    bytes[index * 2 + 1] = unit & 0xff;
+  }
+  return bytes;
 }
 
 /** What a component supplies about where its operation belongs. */
