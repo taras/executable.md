@@ -171,20 +171,37 @@ const TARGETS = [
 ];
 
 describe("Tier RM — README dogfood", () => {
-  it("RM1: the document addresses the developer path, once each, in source order", function* () {
-    const listed = yield* invoke(["xmd", "targets", "README.md"]);
+  it("RM1: the document describes the developer path, once each, in source order", function* () {
+    const listed = yield* invoke(["xmd", "run", "README.md", "--help"]);
     expect(listed.code).toBe(0);
 
-    const lines = listed.stdout.split("\n").filter((line) => line.length > 0);
+    const section = listed.stdout.slice(listed.stdout.indexOf("Targets in README.md"));
+    expect(section.length).toBeGreaterThan(0);
+    const rows = section
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("README.md#"));
 
     // The whole catalog, exactly. This is a development guide, so what it
     // addresses is what a developer runs and nothing else — a section that
     // drifted back into product documentation, or a prose heading that would
-    // inherit the preamble's setup, shows up here as an extra line.
-    expect(lines).toEqual(TARGETS);
+    // inherit the preamble's setup, shows up here as an extra row.
+    expect(rows).toEqual(TARGETS);
 
-    // Discovery runs nothing.
+    // Every target says what selecting it does. A section whose first block
+    // stopped being static prose loses its description and fails here.
+    for (const target of TARGETS) {
+      const at = section.indexOf(`  ${target}\n`);
+      const [, described = ""] = section.slice(at).split("\n");
+      expect({ target, described: described.trim().length > 0 }).toEqual({
+        target,
+        described: true,
+      });
+    }
+
+    // Describing runs nothing.
     expect(listed.tasks).toEqual([]);
+    expect(listed.npmCalls).toEqual([]);
   });
 
   it("RM2: Setup runs setup and nothing else", function* () {

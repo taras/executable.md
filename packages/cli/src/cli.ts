@@ -4,7 +4,6 @@
  * Usage:
  *   xmd run <document-reference> [options]
  *   xmd <document-reference> [options]   (run is the default command)
- *   xmd targets <document.md>
  *   xmd workflow start <document.md> [options]
  *   xmd workflow resume <run-id>
  *   xmd workflow status|history <run-id> [--json]
@@ -18,7 +17,6 @@
  *   xmd run packages/core/examples/hello-world.md
  *   xmd packages/core/examples/hello-world.md --verbose
  *   xmd run packages/core/examples/hello-world.md --journal events.jsonl
- *   xmd targets README.md
  *   xmd run README.md#Release/Publish
  *   xmd workflow start --id=release-1.4 flows/prepare-release.md
  *   xmd workflow resume release-1.4
@@ -70,7 +68,7 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { DocumentInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
+import type { DocumentTargetInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
@@ -233,20 +231,6 @@ const testConfig = object({
   secretDetection: SECRET_DETECTION_FIELD,
 });
 
-/**
- * `xmd targets` takes one document and nothing else.
- *
- * The argument is optional so `xmd targets --help` renders the command rather
- * than failing the parse; a missing reference is reported by the command with
- * its own diagnostic.
- */
-const targetsConfig = object({
-  path: {
-    description: "markdown document whose targets to list",
-    ...field(z.string().optional(), cli.argument()),
-  },
-});
-
 const testAgentConfig = object({
   connect: {
     description: "opaque controller route (controller-launched workers only)",
@@ -261,7 +245,6 @@ const xmd = program({
     {
       run: runConfig,
       test: testConfig,
-      targets: targetsConfig,
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
     },
@@ -907,86 +890,6 @@ function readReference(reference: string): Result<FileRootDocument> {
   }
 }
 
-const TARGETS_MISSING_REFERENCE =
-  "xmd targets requires a document reference — `xmd targets <document.md>`";
-
-const TARGETS_FRAGMENT = "xmd targets accepts a document reference without a target selector";
-
-/**
- * Refuse anything `xmd targets` does not take.
- *
- * The argument parser ignores options it does not define rather than rejecting
- * them, so a run, test, journal, or service option written here would otherwise
- * be read as silence. Listing a catalog takes one reference and nothing else,
- * which makes the rule the simple one: no option, and no second argument.
- */
-function targetsGrammarError(args: string[]): string | undefined {
-  let seen = 0;
-  for (const arg of args) {
-    if (arg === "targets" && seen === 0) {
-      seen = 1;
-      continue;
-    }
-    if (arg === "--" || arg.startsWith("-")) {
-      return `unrecognized option for xmd targets: ${arg} — xmd targets takes a document reference and nothing else`;
-    }
-    seen += 1;
-    if (seen > 2) {
-      return `xmd targets accepts one document reference — remove ${arg}`;
-    }
-  }
-  return undefined;
-}
-
-/**
- * `xmd targets` — print every document reference this document addresses.
- *
- * Inspection only. Nothing here installs a service, creates a journal, imports
- * a component, expands the document, or performs an authored effect, so
- * discovering what a document offers is always free of what it does.
- *
- * Written with `process.stdout.write` so a document that addresses nothing
- * writes no bytes at all rather than a bare newline.
- */
-function* listTargets(reference: string | undefined): Operation<void> {
-  if (reference === undefined) {
-    console.error(TARGETS_MISSING_REFERENCE);
-    yield* exit(1);
-    return;
-  }
-  const parsed = readReference(reference);
-  if (!parsed.ok) {
-    console.error(describeError(parsed.error));
-    yield* exit(1);
-    return;
-  }
-  if (parsed.value.target !== undefined) {
-    console.error(TARGETS_FRAGMENT);
-    yield* exit(1);
-    return;
-  }
-
-  const inspected = yield* inspectCatalog(parsed.value);
-  if (!inspected.ok) {
-    console.error(describeError(inspected.error));
-    yield* exit(1);
-    return;
-  }
-
-  for (const target of inspected.value.targets) {
-    process.stdout.write(`${formatDocumentReference(inspected.value.path, target)}\n`);
-  }
-}
-
-/** Inspect a document for its catalog, reporting a failure rather than raising. */
-function* inspectCatalog(root: FileRootDocument): Operation<Result<DocumentInfo>> {
-  try {
-    return Ok(yield* inspectDocument(root));
-  } catch (error) {
-    return Err(error instanceof Error ? error : new Error(String(error)));
-  }
-}
-
 /**
  * A document that cannot be inspected — missing, malformed, or unreadable —
  * reports text, so execution produces the printed error rather than inspection.
@@ -1109,6 +1012,15 @@ interface PropsPhase {
   extraction?: Extraction;
   propsSchema?: unknown;
   declared?: string[];
+  /**
+   * What the inspected document addresses, described.
+   *
+   * Present only for a file-backed root that addresses something: an inline
+   * document is not a selectable reference, so it has no section to offer.
+   * Carried from the one inspection this phase already performs — help never
+   * reads the document a second time.
+   */
+  targetInfo?: readonly DocumentTargetInfo[];
   error?: string;
   /**
    * The immutable definition a `workflow start` established, when it did.
@@ -1209,6 +1121,7 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
     const document = yield* inspectDocument(root);
     const bindings = buildBindings(document.props);
     const extraction = extractPropsArgs(args, bindings);
+    const addressable = root.source === undefined && document.targetInfo.length > 0;
     return {
       args: extraction.rest,
       root: exactRoot(root, document.target),
@@ -1216,6 +1129,7 @@ function* preparePropsPhase(args: string[], evalFlags: EvalFlags): Operation<Pro
       extraction,
       propsSchema: document.props,
       declared: declaredProperties(document.props),
+      ...(addressable ? { targetInfo: document.targetInfo } : {}),
     };
   } catch (error) {
     return {
@@ -1425,15 +1339,15 @@ function workflowPositionals(
   return { action, target };
 }
 
-const COMMAND_NAMES = ["run", "test", "targets", "test-agent", "workflow"];
+const COMMAND_NAMES = ["run", "test", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
- * syntax. Both commands teach it, because both read one grammar.
+ * syntax, and where the sections it can select are listed.
  */
 const REFERENCE_GRAMMAR_HELP = [
-  "A selector must name exactly one section; `xmd targets <document.md>` lists",
-  "them. In a filename, write `#` as `%23` and a literal `%` as `%25`.",
+  "A selector must name exactly one section; `xmd run <document.md> --help`",
+  "lists them. In a filename, write `#` as `%23` and a literal `%` as `%25`.",
 ].join("\n");
 
 /**
@@ -1454,13 +1368,6 @@ const RUN_SOURCE_HELP = [
   REFERENCE_GRAMMAR_HELP,
 ].join("\n");
 
-const TARGETS_HELP = [
-  "Lists every section the document addresses, one full document reference per",
-  "line, in document order. The reference takes no target selector of its own.",
-  "",
-  REFERENCE_GRAMMAR_HELP,
-].join("\n");
-
 /**
  * Help for whichever command the arguments name. A command renders its
  * own help when `--help` is its first argument, so the flag removed
@@ -1477,15 +1384,38 @@ function renderHelp(phase: PropsPhase): string {
 
   const help = xmd.parse({ args: [command, "--help"] });
   const base = help.ok && help.value.config.help ? help.value.config.text : xmd.help({ args: [] });
-  const epilogue = command === "run" ? RUN_SOURCE_HELP : command === "targets" ? TARGETS_HELP : "";
+  const epilogue = command === "run" ? RUN_SOURCE_HELP : "";
   const withSource = epilogue === "" ? base : `${base}\n\n${epilogue}`;
 
-  // A document declaring only structured properties generates no
-  // individual binding, but it still accepts the aggregate ones.
-  if (!phase.root || !phase.declared?.length) {
+  if (!phase.root) {
     return withSource;
   }
-  return `${withSource}\n\n${formatProperties(rootSourcePath(phase.root), phase.bindings)}`;
+  const documentPath = rootSourcePath(phase.root);
+  // A document declaring only structured properties generates no
+  // individual binding, but it still accepts the aggregate ones.
+  const withProperties = phase.declared?.length
+    ? `${withSource}\n\n${formatProperties(documentPath, phase.bindings)}`
+    : withSource;
+  if (phase.targetInfo === undefined) {
+    return withProperties;
+  }
+  return `${withProperties}\n\n${formatTargets(documentPath, phase.targetInfo)}`;
+}
+
+/**
+ * The sections this document offers, each as the reference that selects it.
+ *
+ * Source order and duplicates are the catalog's, so two sections that
+ * canonicalize to one path appear twice — an ambiguity a caller can see rather
+ * than one a selector resolves arbitrarily. A section that states no
+ * description is listed all the same: it is still selectable.
+ */
+function formatTargets(documentPath: string, targets: readonly DocumentTargetInfo[]): string {
+  const entries = targets.map((entry) => {
+    const reference = `  ${formatDocumentReference(documentPath, entry.target)}`;
+    return entry.description === undefined ? reference : `${reference}\n      ${entry.description}`;
+  });
+  return [`Targets in ${documentPath}`, ...entries].join("\n\n");
 }
 
 function* resolveRunProps(
@@ -1641,32 +1571,6 @@ function* dispatch(
         }
         yield* exit(1);
       }
-      break;
-    }
-    case "targets": {
-      const timeoutFlag = findTimeoutFlag(evalFlags.rest);
-      if (timeoutFlag) {
-        console.error(
-          `unrecognized option for xmd targets: ${timeoutFlag} — timeout options are exclusive to xmd run`,
-        );
-        yield* exit(1);
-        break;
-      }
-      const agentFlag = findAgentOnlyFlag(evalFlags.rest);
-      if (agentFlag) {
-        console.error(
-          `unrecognized option for xmd targets: ${agentFlag} — agent options are exclusive to xmd run`,
-        );
-        yield* exit(1);
-        break;
-      }
-      const syntaxError = targetsGrammarError(propsPhase.args);
-      if (syntaxError) {
-        console.error(syntaxError);
-        yield* exit(1);
-        break;
-      }
-      yield* listTargets(command.config.path);
       break;
     }
     case "test": {

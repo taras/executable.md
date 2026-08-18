@@ -51,20 +51,16 @@ Success provides the prepared checkout every command in this guide reads from,
 including the source CLI the targets below run through.
 
 With that in place, this guide is itself an executable document: each section is
-a target you can select, and selecting one runs the commands it describes.
+a target you can select, and selecting one runs the commands it describes. Ask
+the document what it offers:
 
 ```bash
-deno task xmd targets README.md
+deno task xmd run README.md --help
 ```
 
-```text
-README.md#Setup
-README.md#Build
-README.md#Test
-README.md#Test/Focused
-README.md#Test/Complete
-README.md#Bootstrap
-```
+It answers with the properties this document declares and every target you can
+invoke, each named by the reference that selects it and described by what
+selecting it does.
 
 Preparation is common to all of them, so the block above is the document's own
 preamble: whichever target you select runs it first, and the checkout is
@@ -88,62 +84,64 @@ deno task verify    # the whole applicable battery, concurrently
 
 ## Setup
 
-Run this after changing a dependency, or whenever you want the checkout restored
-on its own without building or testing.
+Prepare both dependency layouts and the browser bundle, yielding a checkout
+ready for every build and verification command in this guide.
 
 ```bash
 deno task xmd run README.md#Setup
 ```
 
-It executes `deno task setup`, the preamble block above and the only thing in
-this repository that installs. Setup owns both dependency layouts —
-`node_modules/` and Deno's global cache — and prepares them in the order their
-union resolves in: Deno's frozen install and cached module graphs first, then
-pnpm's store beside it, then the browser bundle.
+Select it after changing a dependency, or whenever you want the checkout
+restored on its own without building or testing. It executes `deno task setup`,
+the preamble block above and the only thing in this repository that installs.
+Setup owns both dependency layouts — `node_modules/` and Deno's global cache —
+and prepares them in the order their union resolves in: Deno's frozen install
+and cached module graphs first, then pnpm's store beside it, then the browser
+bundle.
 
-Success provides a prepared checkout: both dependency layouts resolved for Deno,
-`tsc`, Bun, oxlint and the site, and the generated browser bundle the binary
-embeds. Builds and checks read what setup prepared and leave tracked files,
-`node_modules` and `deno.lock` as they found them, so they compose with one
-another.
+The prepared layouts resolve for Deno, `tsc`, Bun, oxlint and the site. Builds
+and checks read what setup prepared and leave tracked files, `node_modules` and
+`deno.lock` as they found them, so they compose with one another.
 
 ## Build
 
-Compile the standalone `xmd` binary.
+Compile the standalone `xmd` binary: prepare the checkout and then build,
+yielding `dist/xmd`, a self-contained executable for this host.
 
 ```bash
 deno task xmd run README.md#Build
 ```
 
-It prepares the checkout, then runs the build, which produces the browser bundle
-the binary embeds and compiles the CLI for this host.
+The build produces the browser bundle the binary embeds and compiles the CLI.
 
 ```bash exec
 deno task build
 ```
 
-Success provides `dist/xmd`: a self-contained executable you can run directly.
+Run `dist/xmd` directly once it reports success.
 
 ## Test
 
-Testing comes in two levels, and this heading is the parent of both. Focused is
-the evidence a change offers for review; Complete is the battery that decides
-whether it merges.
+Run Focused and then Complete, yielding implementation-feedback evidence and
+delivery verification from one invocation.
 
 ```bash
 deno task xmd run README.md#Test
 ```
 
-Selecting it runs Focused, then Complete, so one invocation produces both:
-implementation-feedback evidence, followed by delivery verification.
+Testing comes in two levels, and this heading is the parent of both: Focused is
+the evidence a change offers for review, and Complete is the battery that
+decides whether it merges.
 
 ### Focused
 
-The evidence an implementation offers with a feedback commit: enough to show the
-change is sound, in the time a feedback loop can afford. It runs the lint and
-format check, the typecheck, the JSR publishability dry run, and the tests this
-branch and worktree affect — each as its own block, so the first command to fail
-is where the run stops and what it stopped on is unambiguous.
+Run the lint and format check, the typecheck, the JSR publishability dry run,
+and the tests this branch and worktree affect, yielding the evidence a feedback
+commit is offered with.
+
+That is enough to show the change is sound, in the time a feedback loop can
+afford. Each check is its own block, so the first command to fail is where the
+run stops and what it stopped on is unambiguous.
 
 ```bash
 deno task verify:focused
@@ -174,30 +172,34 @@ describes what happens next.
 
 ### Complete
 
-The delivery battery — the same checks CI requires, started together.
+Run the complete applicable battery concurrently, yielding delivery
+verification and proof that the worktree it ran in is unchanged.
 
 ```bash
 deno task xmd run README.md#Test/Complete
 ```
 
-It runs `deno task verify`, which starts every applicable command at once,
-reports them in a fixed order however they finish, and prints the first
-failure's output in full.
+It runs `deno task verify`, the same checks CI requires: every applicable
+command starts at once, they are reported in a fixed order however they finish,
+and the first failure's output is printed in full.
 
 ```bash timeout=30m exec
 deno task verify
 ```
 
-Success provides delivery verification: the whole battery passed, and the
-worktree it ran in is unchanged — `verify` compares tracked files afterwards and
-fails if any command moved one, so a green result is also evidence that the
-battery left the repository exactly as it found it.
+`verify` compares tracked files afterwards and fails if any command moved one,
+so a green result is also evidence that the battery left the repository exactly
+as it found it.
 
 ## Bootstrap
 
-Adding a package to `packages/*` needs one manual step before CI can release it.
-A tagged release publishes to npm with OIDC, and OIDC can only publish a package
-that already exists — so the name is reserved by hand, once, per package.
+Validate and reserve a new workspace package name on npm, yielding the empty
+package a later tagged release publishes to.
+
+Adding a package to `packages/*` needs this one manual step before CI can
+release it: a tagged release publishes with OIDC, and OIDC can only publish a
+package that already exists, so the name is reserved by hand, once, per
+package.
 
 ```bash
 npm login

@@ -168,7 +168,11 @@ export {
   isCanonicalTarget as isCanonicalDocumentTarget,
   parseDocumentTargetFailure,
 } from "./src/document-targets.ts";
-export type { DocumentTargetErrorKind, DocumentTargetFailure } from "./src/document-targets.ts";
+export type {
+  DocumentTargetErrorKind,
+  DocumentTargetFailure,
+  DocumentTargetInfo,
+} from "./src/document-targets.ts";
 export { inspectComponent, inspectDocument } from "./src/inspect.ts";
 export type {
   ComponentInfo,

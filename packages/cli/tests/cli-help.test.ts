@@ -10,6 +10,52 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
+import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { ensure, scoped } from "effection";
+import type { Operation } from "effection";
+import { randomUUID } from "node:crypto";
+import * as os from "node:os";
+import * as path from "node:path";
+
+function* useFixture<T>(
+  files: Record<string, string>,
+  body: (dir: string) => Operation<T>,
+): Operation<T> {
+  const dir = path.join(os.tmpdir(), `xmd-ch-${randomUUID()}`);
+  yield* ensureDir(dir);
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    for (const [name, content] of Object.entries(files)) {
+      yield* writeTextFile(path.join(dir, name), content);
+    }
+    return yield* body(dir);
+  });
+}
+
+/** A document that addresses two sections and declares one property. */
+const DOCUMENT = [
+  "---",
+  "props:",
+  "  type: object",
+  "  properties:",
+  "    name: { type: string, description: Person to greet }",
+  "  required: [name]",
+  "  additionalProperties: false",
+  "---",
+  "",
+  "# Guide",
+  "",
+  "## Prepare",
+  "",
+  "Install what the later sections read from.",
+  "",
+  "## Verify",
+  "",
+  "```bash",
+  "echo verified",
+  "```",
+  "",
+].join("\n");
 
 describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false }, () => {
   it("CH1: program help lists the commands", function* () {
@@ -50,26 +96,60 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stderr).toContain("requires a document path or an inline document");
   });
 
-  it("CH6: program help lists targets beside the other commands", function* () {
+  it("CH6: no command named targets is registered", function* () {
     const { stdout } = yield* runCli(["--help"]).expect();
-    expect(stdout).toContain("targets");
+    expect(stdout).not.toContain("targets");
+    expect(stdout).not.toContain("xmd targets");
   });
 
-  it("CH7: xmd targets --help describes the command rather than failing", function* () {
-    const { stdout, stderr } = yield* runCli(["targets", "--help"]).expect();
-    expect(stdout).toContain("Usage: xmd targets [OPTIONS] [path]");
-    expect(stdout).toContain("markdown document whose targets to list");
-    expect(stdout).toContain("one full document reference per");
-    expect(stdout).toContain("write `#` as `%23` and a literal `%` as `%25`");
-    expect(stderr).not.toContain("requires a document reference");
+  it("CH7: a document named targets gets ordinary shorthand run help", function* () {
+    // Removing the command returns the word to the grammar that owns every
+    // other token in that position: it names a document, and nothing reserves
+    // it. Help therefore describes that document rather than a command.
+    yield* useFixture({ targets: DOCUMENT }, function* (dir) {
+      const { stdout, stderr } = yield* runCli(["targets", "--help"], { cwd: dir }).expect();
+      expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
+      expect(stdout).toContain("Properties declared by targets");
+      expect(stdout).toContain("Targets in targets");
+      expect(stdout).toContain("  targets#Prepare");
+      expect(stdout).not.toContain("Usage: xmd targets");
+      expect(stderr).toBe("");
+    });
   });
 
   it("CH8: run help teaches the document-reference grammar", function* () {
     const { stdout } = yield* runCli(["run", "--help"]).expect();
     expect(stdout).toContain("xmd run README.md#Release/Publish");
     expect(stdout).toContain("xmd README.md#Release/*");
-    expect(stdout).toContain("`xmd targets <document.md>` lists");
+    expect(stdout).toContain("`xmd run <document.md> --help`");
     expect(stdout).toContain("write `#` as `%23` and a literal `%` as `%25`");
+  });
+
+  it("CH10: generic run help reads no document and shows neither section", function* () {
+    yield* useFixture({ "doc.md": DOCUMENT }, function* (dir) {
+      const { stdout } = yield* runCli(["run", "--help"], { cwd: dir }).expect();
+      expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
+      // The fixture is the working directory, so a generic help that read
+      // anything would have this document to read.
+      expect(stdout).not.toContain("Targets in");
+      expect(stdout).not.toContain("Properties declared by");
+      expect(stdout).not.toContain("Install what the later sections read from.");
+    });
+  });
+
+  it("CH11: a file-backed form adds both contextual sections to the same run help", function* () {
+    yield* useFixture({ "doc.md": DOCUMENT }, function* (dir) {
+      const { stdout } = yield* runCli(["run", "doc.md", "--help"], { cwd: dir }).expect();
+      // The generic help is still all there; the document only adds to it.
+      expect(stdout).toContain("Usage: xmd run [OPTIONS] [path]");
+      expect(stdout).toContain("Exactly one root document is required");
+      expect(stdout).toContain("Properties declared by doc.md");
+      // Properties first, then targets: the order help has always composed in.
+      expect(stdout.indexOf("Properties declared by doc.md")).toBeLessThan(
+        stdout.indexOf("Targets in doc.md"),
+      );
+      expect(stdout).toContain(["Targets in doc.md", "", "  doc.md#Prepare"].join("\n"));
+    });
   });
 
   it("CH9: test help is unchanged by the reference grammar", function* () {

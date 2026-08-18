@@ -761,6 +761,30 @@ describe("Tier DT — inspection", () => {
     expect((caught as DocumentTargetError).data.selector).toBe("Nope");
   });
 
+  it("DT79: the structured catalog carries the same targets, in order, with duplicates", function* (): Operation<void> {
+    const info = yield* inspectDocument(inlineSource(DESCRIBED_DUPLICATES));
+    expect(info.targets).toEqual(["Same", "Same", "Plain"]);
+    expect(info.targetInfo).toEqual([
+      { target: "Same", description: "The first section under this canonical path." },
+      { target: "Same", description: "The second section under the very same path." },
+      { target: "Plain" },
+    ]);
+    // The identity surface is derived from the same entries, so the described
+    // catalog cannot address anything the canonical array does not.
+    expect(info.targetInfo.map(({ target }) => target)).toEqual(info.targets);
+  });
+
+  it("DT80: a selected inspection reports the exact target and the whole catalog", function* (): Operation<void> {
+    const info = yield* inspectDocument(inlineSource(DESCRIBED_DUPLICATES, { target: "Pl*" }));
+    expect(info.target).toBe("Plain");
+    expect(info.targets).toEqual(["Same", "Same", "Plain"]);
+    expect(info.targetInfo.map(({ target }) => target)).toEqual(info.targets);
+    expect(info.targetInfo[0]).toEqual({
+      target: "Same",
+      description: "The first section under this canonical path.",
+    });
+  });
+
   it("DT47: the error's data is frozen and rebuilt, not the parser's arrays", function* () {
     const error = refusal(SECTIONS, "**");
     expect(Object.isFrozen(error.data.matches)).toBe(true);
@@ -772,6 +796,123 @@ describe("Tier DT — inspection", () => {
     for (const line of error.message.split("\n").slice(1)) {
       expect(line).not.toMatch(/[\u0000-\u001F]/);
     }
+  });
+});
+
+/** Two sections that canonicalize alike, each stating its own description. */
+const DESCRIBED_DUPLICATES = [
+  "# Report",
+  "",
+  "## Same",
+  "",
+  "The first section under this canonical path.",
+  "",
+  "## Same",
+  "",
+  "The second section under the very same path.",
+  "",
+  "## Plain",
+  "",
+  "```bash",
+  "echo nothing",
+  "```",
+  "",
+].join("\n");
+
+/** The description a section states, or `undefined` when it states none. */
+function description(body: string, target: string): string | undefined {
+  const entry = outline(body).targetInfo.find((candidate) => candidate.target === target);
+  if (entry === undefined) {
+    throw new Error(`${target} is not addressed by this document`);
+  }
+  return entry.description;
+}
+
+/** A one-section document whose `## Work` holds exactly these blocks. */
+function section(...blocks: string[]): string {
+  return ["# Doc", "", "## Work", "", ...blocks.flatMap((block) => [block, ""])].join("\n");
+}
+
+/**
+ * A description is the section's own opening sentence, and nothing else.
+ *
+ * Every omission case below carries prose *after* the block that ends the
+ * search, so a rule that kept looking would find text and fail the case rather
+ * than pass it silently.
+ */
+describe("Tier DT — target descriptions", () => {
+  const described: readonly [string, string, string][] = [
+    ["DT67", "the first paragraph is the description", section("Prepare the checkout.")],
+    [
+      "DT68",
+      "blank lines and HTML comments before the prose are skipped",
+      section("<!-- an authoring note -->", "<!-- and another -->", "Prepare the checkout."),
+    ],
+  ];
+
+  for (const [id, behavior, body] of described) {
+    it(`${id}: ${behavior}`, function* () {
+      expect(description(body, "Work")).toBe("Prepare the checkout.");
+    });
+  }
+
+  it("DT69: the whole paragraph is kept, as visible text with whitespace collapsed", function* () {
+    const body = section(
+      "Run *every* check with `deno task verify`, as the\n" +
+        "[contribution guide](AGENTS.md)   describes, and read what it reports.",
+    );
+    expect(description(body, "Work")).toBe(
+      "Run every check with deno task verify, as the contribution guide describes, " +
+        "and read what it reports.",
+    );
+  });
+
+  const undescribed: readonly [string, string, string][] = [
+    ["DT70", "a fenced block", "```bash\necho hi\n```"],
+    ["DT71", "a component", '<File path="x.txt">written</File>'],
+    ["DT72", "a list", "- one\n- two"],
+    ["DT73", "a blockquote", "> quoted"],
+    ["DT74", "a child heading", "### Deeper"],
+  ];
+
+  for (const [id, first, block] of undescribed) {
+    it(`${id}: ${first} first ends the search, and later prose is not reached`, function* () {
+      const body = section(block, "Prose that follows the block above.");
+      expect(description(body, "Work")).toBe(undefined);
+    });
+  }
+
+  it("DT75: a section that states nothing has no description", function* () {
+    expect(description(section(), "Work")).toBe(undefined);
+  });
+
+  it("DT76: an interpolated paragraph is omitted whole, never as its static prefix", function* () {
+    const body = section("Greet {props.who} before the run begins.");
+    expect(description(body, "Work")).toBe(undefined);
+  });
+
+  it("DT77: a paragraph holding an inline component is omitted whole too", function* () {
+    const body = section("Prepare <Thing /> before the run begins.");
+    expect(description(body, "Work")).toBe(undefined);
+  });
+
+  it("DT78: a description belongs to its own section, not to the next one", function* () {
+    const body = [
+      "# Doc",
+      "",
+      "## First",
+      "",
+      "What the first section does.",
+      "",
+      "## Second",
+      "",
+      "```bash",
+      "echo nothing",
+      "```",
+      "",
+    ].join("\n");
+    expect(description(body, "First")).toBe("What the first section does.");
+    expect(description(body, "Second")).toBe(undefined);
   });
 });
 

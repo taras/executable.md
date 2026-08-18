@@ -5,7 +5,7 @@ import { parseFrontmatter } from "./frontmatter.ts";
 import { compilePropsSchema, compileReturnsSchema } from "./validate.ts";
 import { scanComponentSpans, scanSegments } from "./scanner.ts";
 import { findTarget, outlineDocument, retainedRanges, selectTarget } from "./document-targets.ts";
-import type { DocumentOutline } from "./document-targets.ts";
+import type { DocumentOutline, DocumentTargetInfo } from "./document-targets.ts";
 
 import matter from "gray-matter";
 
@@ -138,6 +138,8 @@ export interface ParsedRootDocument {
   definition: ComponentDefinition;
   /** Canonical encoded target fragments in document order, duplicates kept. */
   targets: readonly string[];
+  /** The same fragments, in the same order, each with its own description. */
+  targetInfo: readonly DocumentTargetInfo[];
   /** The exact canonical target selected, when one was requested. */
   target?: string;
 }
@@ -180,6 +182,7 @@ export function* parseRootMarkdownDefinition(
     return {
       definition: buildDefinition(name, path, frontmatter, bodySegments),
       targets: outline.targets,
+      targetInfo: outline.targetInfo,
     };
   }
 
@@ -199,6 +202,7 @@ export function* parseRootMarkdownDefinition(
   return {
     definition: buildDefinition(name, path, frontmatter, bodySegments),
     targets: outline.targets,
+    targetInfo: outline.targetInfo,
     target: entry.target,
   };
 }

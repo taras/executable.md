@@ -7,6 +7,7 @@ import {
   parseMarkdownDefinition,
   parseRootMarkdownDefinition,
 } from "./definition.ts";
+import type { DocumentTargetInfo } from "./document-targets.ts";
 import { Component } from "./component-api.ts";
 import { selectComponent } from "./components/select.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -54,6 +55,16 @@ export interface DocumentInfo {
   readonly targets: readonly string[];
 
   /**
+   * The same targets, in the same order and with the same duplicates, each
+   * carrying the description its section states — when it states one.
+   *
+   * Informational: `targets` remains the identity surface, and mapping this
+   * array back to its `target` members reproduces it exactly. A description
+   * decides nothing about selection, projection, execution, or replay.
+   */
+  readonly targetInfo: readonly DocumentTargetInfo[];
+
+  /**
    * The exact canonical target the requested selector resolved to. Present only
    * when a target was requested and resolved; it is never the caller's glob.
    */
@@ -92,6 +103,7 @@ export function* inspectDocument(options: InspectOptions): Operation<DocumentInf
     returns: definition.returns ?? TEXT_RETURN_SCHEMA,
     returnMode: definition.returns === undefined ? "text" : "value",
     targets: parsed.targets,
+    targetInfo: parsed.targetInfo,
     ...(parsed.target === undefined ? {} : { target: parsed.target }),
   };
 }

@@ -112,6 +112,31 @@ const REFERENCED = [
 
 const PLAIN = "PLAIN_MARKER\n";
 
+/** A required property and two sections, one of which states what it does. */
+const DESCRIBED = [
+  "---",
+  "props:",
+  "  type: object",
+  "  properties:",
+  "    name: { type: string, description: Person to greet }",
+  "  required: [name]",
+  "  additionalProperties: false",
+  "---",
+  "",
+  "# Greeter",
+  "",
+  "## Greeting",
+  "",
+  "Greet the person this run names, once.",
+  "",
+  "## Farewell",
+  "",
+  "```bash",
+  "echo bye",
+  "```",
+  "",
+].join("\n");
+
 const MARKER = [
   "---",
   "props:",
@@ -364,6 +389,45 @@ describe(
         expect(stdout).toContain("--props-loud[=<boolean>]");
         expect(stdout).toContain("Default: false");
         expect(stdout).toContain("--props <json>");
+      }
+    });
+
+    /**
+     * Properties and targets are one response, in every position that supplies
+     * a document — and neither section asks the run for anything. The required
+     * property is never supplied, and an environment value for it is set so a
+     * help that resolved current values would print it.
+     */
+    it("PC12a: help describes properties and targets together in every position", function* () {
+      for (const args of [
+        ["run", "described.md", "--help"],
+        ["run", "--help", "described.md"],
+        ["described.md", "--help"],
+      ]) {
+        const { code, stdout } = yield* useFixture(
+          { "described.md": DESCRIBED },
+          function* (fixture) {
+            return yield* runCli(args, {
+              cwd: fixture.dir,
+              env: { XMD_PROPS_NAME: "SHOULD_NOT_APPEAR" },
+            }).expect();
+          },
+        );
+        expect(code).toBe(0);
+        expect(stdout).toContain("Properties declared by described.md");
+        expect(stdout).toContain("--props-name <string>");
+        expect(stdout).toContain("Required");
+        expect(stdout).toContain(
+          [
+            "Targets in described.md",
+            "",
+            "  described.md#Greeting",
+            "      Greet the person this run names, once.",
+            "",
+            "  described.md#Farewell",
+          ].join("\n"),
+        );
+        expect(stdout).not.toContain("SHOULD_NOT_APPEAR");
       }
     });
 

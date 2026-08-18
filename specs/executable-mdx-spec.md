@@ -3394,29 +3394,77 @@ and never returns the retained terminal result. A journal with no retained
 terminal result is unaffected: it replays what it has and continues live, so a
 root import it does not contain is one this run performs.
 
+##### A section describes itself
+
+Each addressable heading may carry a **description**: the visible text of the
+first block after it, when that block is a paragraph the document states rather
+than computes. It is discovered by the same masked parse that discovers the
+headings, so a document is never parsed twice for it.
+
+The search reads only the direct root-flow blocks between that heading and the
+next root-flow heading — a child heading ends it exactly as a sibling does. Root
+HTML holding nothing but comments and whitespace is skipped, and blank lines have
+no node to skip. The first remaining block decides: anything other than a
+paragraph leaves the heading with no description at all, and later prose is never
+reached, because a paragraph below machinery describes that machinery.
+
+The paragraph has to be wholly static. One whose original source overlaps a
+scanned component span, holds an unescaped interpolation, or holds another
+non-static inline construct such as raw HTML is omitted **whole** — never as its
+static prefix, and never by evaluating it. A static paragraph converts to visible
+text through the Markdown AST: formatting markers and link destinations are
+dropped, visible labels and image alternative text are kept, every whitespace run
+collapses to one space, and the edges are trimmed. The whole paragraph is
+preserved; it is neither truncated nor reduced to a sentence, and neither target
+encoding nor label normalization applies to prose.
+
+**A description describes; it never identifies.** It takes no part in a target
+path, a selector match, a projection, an execution, failure data, a workflow
+definition identity, retained history, or a replay decision.
+
 ##### The command line addresses a document
 
-Two commands read the document-reference grammar, and both consume the model
-above rather than restating it. Neither scans headings, matches a selector,
-projects a body, or defines an error of its own.
+`xmd run` reads the document-reference grammar and consumes the model above
+rather than restating it. It scans no headings, matches no selector, projects no
+body, and defines no error of its own.
 
-`xmd targets <document-reference>` prints the catalog:
+**Help describes the document it is given.** `xmd run --help` is generic and
+reads nothing. Each of the three file-backed forms — `xmd run README.md --help`,
+`xmd run --help README.md`, and `xmd README.md --help` — inspects that document
+once and answers with the ordinary run help and source grammar, then the
+document-property section when it has one, then the target catalog when it
+addresses anything:
 
 ```text
-$ xmd targets README.md
-README.md#Test
-README.md#Test/Node
-README.md#Test/Bun
+Targets in README.md
+
+  README.md#Test
+      Run both runtime suites and report what each of them found.
+
+  README.md#Test/Node
+      Run the corpus under Node.
+
+  README.md#Test/Bun
 ```
 
-It takes exactly one file reference and nothing else — no target selector of its
-own, including the empty one after a bare `#`; no inline document, document
-property, agent flag, service option, run or test option; and no second
-argument. Each entry is `formatDocumentReference(path, target)` followed by a
-newline, in source order, duplicates retained, so a duplicate canonical path
-prints twice. A document that addresses nothing writes no bytes at all and exits
-zero. An unreadable reference, a missing or unreadable file, a parse or schema
-failure, and an unsupported invocation each exit nonzero.
+Each row is `formatDocumentReference(path, target)`, in source order, duplicates
+retained, so a duplicate canonical path appears twice with its own description.
+A section that states no description is listed all the same, because it is still
+selectable. There is no unqualified whole-document row. A targetless file and an
+inline document have no target section at all — an inline root is not a
+selectable document reference.
+
+A valid selector on the reference is validated and then the whole source
+catalog is described, not only the section it named. An unreadable reference, a
+missing or unreadable file, a parse or schema failure, and an invalid, unmatched
+or ambiguous selector each exit nonzero with the existing diagnostic and
+describe nothing.
+
+Help is inspection: it expands no body, evaluates no block, imports no body
+component, resolves no property value, checks no required property, installs or
+attaches no service, creates no journal, and performs no authored effect. No
+command named `targets` exists; a token spelled that way follows the ordinary
+shorthand-run grammar and may name a document.
 
 `xmd run` takes the same grammar in both of its forms:
 
@@ -3440,7 +3488,7 @@ would name `Beta`, the run fails on the absent `Alpha`; it never silently runs
 Where that refusal lands depends on which read discovered it, and **installing a
 provider is not using one**:
 
-- `xmd targets` never invokes the host's service installer at all.
+- Help never invokes the host's service installer at all.
 - A failure the preparation inspection or the value-mode inspection discovers
   stops the run before the installer is invoked.
 - A failure only the last read discovers — the document changed after both
@@ -3473,13 +3521,15 @@ starts escape syntax wherever it appears. This is a deliberate change to
 target selection can be written at all. `xmd test` is exempt and still reads its
 path literally.
 
-Tier CT — CLI document targets covers the catalog, its ordering and duplicates,
-the empty catalog's byte-empty output, discovery running nothing, every rejected
-invocation, encoded filenames, both run forms, wildcards, the failure
-diagnostics, the exact-before-execute replacement, exotic headings, and target
-failure outranking a schema failure. Tier CH covers the help surfaces, Tier PC
-targeted properties, Tier VR targeted value and `<Output>` roots, Tier IE inline
-exclusivity, and Tier DT the unchanged `xmd test` path grammar.
+Tier CT — CLI document targets covers the described catalog, its ordering and
+duplicates, an absent section for a targetless file, help running and installing
+nothing, encoded filenames, both run forms, wildcards, the failure diagnostics,
+the exact-before-execute replacement, exotic headings, and target failure
+outranking a schema failure. Tier CH covers the help surfaces and the absence of
+a `targets` command, Tier PC properties and targets in one response, Tier VR
+targeted value and `<Output>` roots, Tier IE an inline root's absent target
+section, and Tier DT description extraction, the catalog's agreement with the
+canonical target array, and the unchanged `xmd test` path grammar.
 
 ### 5.5 The Component Api
 
@@ -6703,6 +6753,12 @@ what it declares — without executing the document or creating a journal:
 - `targets` — every document target the root addresses, as canonical encoded
   fragments without the document path or a leading `#`, in document order,
   duplicates retained (§5.4).
+- `targetInfo` — the same targets, in the same order and with the same
+  duplicates, each as a `DocumentTargetInfo` carrying its `target` and, when the
+  section states one, its `description` (§5.4). Informational and additive:
+  `targets` remains the identity surface, and mapping this array to its `target`
+  members reproduces it exactly. The `description` member is absent rather than
+  empty when there is none.
 - `target` — the exact canonical target the requested selector resolved to.
   Present only when a target was requested and resolved, and never the caller's
   glob.
@@ -7166,8 +7222,8 @@ yield* runXmd(args, useDenoService);
 
 The installer is invoked only for `xmd run` and `xmd test`, immediately before
 `execute()`. Help, inspection and agent-worker paths never install or attach a
-service. `xmd targets` is one of those inspection paths and never invokes the
-installer.
+service. Document-aware `xmd run … --help` is one of those inspection paths and
+never invokes the installer.
 
 A `xmd run` that refuses its document target (§5.4) may or may not have reached
 the installer: the refusal comes before it when an inspection discovered the
@@ -8499,6 +8555,8 @@ Defined in [Workflow runs](./workflow-spec.md) §9.4 and §9.6–§9.7.
 | DT34–DT39 | Projection | Preamble, ancestor direct content and the selected subtree are retained; siblings are absent; a non-leaf keeps its descendants; a sole title stays |
 | DT40–DT43 | Positions | A retained element keeps its authored offset and line, CRLF included; frontmatter, props and return mode survive; the untargeted parse still scans the whole body |
 | DT44–DT47 | Inspection | The catalog is reported without selecting; a glob resolves to the exact target; an unresolvable target fails inspection; the failure's data is frozen and rebuilt |
+| DT67–DT78 | Descriptions | The first direct static paragraph describes its section, past blank lines and comment-only HTML, kept whole with formatting reduced and whitespace collapsed; a fence, component, list, quote or child heading first leaves no description and later prose is not reached; an interpolation or an inline component omits the paragraph whole rather than as a static prefix |
+| DT79/DT80 | Structured catalog | `targetInfo` carries the same targets, order and duplicates as `targets`, each with its own description, on the unselected path and beside an unchanged exact `target` on the selected one |
 | DT52/DT53 | Recognition | A failure from a separately loaded copy, and one built here, are read on the same terms |
 | DT54–DT56 | Reconstruction | The result is a fresh local error, never the candidate; a mutable nested list is copied and later mutation changes nothing; a revoked Proxy cannot reach through a result already built |
 | DT57 | Closed data | Enumerable, non-enumerable and symbol-keyed extras are refused |

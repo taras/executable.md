@@ -231,8 +231,10 @@ jobs:
           printf '%s\n%s\n' \
             'smoke-test/document-targets.md#Alpha' \
             'smoke-test/document-targets.md#Beta' > /tmp/targets.expected
-          ./dist/xmd targets smoke-test/document-targets.md > /tmp/targets.out
+          ./dist/xmd run smoke-test/document-targets.md --help > /tmp/help.out
+          grep -o 'smoke-test/document-targets\.md#[A-Za-z]*' /tmp/help.out > /tmp/targets.out
           diff /tmp/targets.expected /tmp/targets.out
+          grep -q 'ALPHA_DESCRIBED' /tmp/help.out
 
           ./dist/xmd run 'smoke-test/document-targets.md#Alpha' --raw > /tmp/targeted.out
           grep -q 'ALPHA_RAN' /tmp/targeted.out
