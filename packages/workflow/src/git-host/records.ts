@@ -1,6 +1,6 @@
 /**
- * What an external forge effect asks for, what a provider answers, and what the
- * journal keeps.
+ * What an external Git-host effect asks for, what a provider answers, and what
+ * the journal keeps.
  *
  * Every value here crosses a boundary this package does not own. A request is
  * composed from the run and the expansion and handed to a provider another
@@ -35,13 +35,13 @@ import { canonicalJson } from "../storage/record.ts";
  * has equality semantics and nothing else: it names no provider, no endpoint
  * and no resource.
  */
-export interface ForgeEffectIdentity {
+export interface GitHostEffectIdentity {
   readonly runId: string;
   readonly expansionId: string;
 }
 
-/** What one effect asks a forge to do, apart from where it sits. */
-export interface ForgeEffectRequest {
+/** What one effect asks a Git host to do, apart from where it sits. */
+export interface GitHostEffectRequest {
   /** The effect-specific operation, such as a push or a pull request. */
   readonly kind: string;
   /** The filtered inputs that operation acts on. Credentials are not inputs. */
@@ -51,8 +51,8 @@ export interface ForgeEffectRequest {
 }
 
 /** One effect's identity together with what it asks for. */
-export interface CompleteForgeEffectRequest extends ForgeEffectRequest {
-  readonly identity: ForgeEffectIdentity;
+export interface CompleteGitHostEffectRequest extends GitHostEffectRequest {
+  readonly identity: GitHostEffectIdentity;
 }
 
 /**
@@ -62,7 +62,7 @@ export interface CompleteForgeEffectRequest extends ForgeEffectRequest {
  * has not observed absence, and offering it as a fifth state would put a word
  * meaning "unknown" where the state machine reads "nothing is there".
  */
-export type ForgeObservation =
+export type GitHostObservation =
   | { readonly state: "absent"; readonly preState: Json }
   | {
       readonly state: "compatible";
@@ -74,13 +74,13 @@ export type ForgeObservation =
   | { readonly state: "ambiguous"; readonly preState: Json };
 
 /** What performing proved afterwards, and what it produced. */
-export interface ForgeCompletion {
+export interface GitHostCompletion {
   readonly observations: Json;
   readonly result: Json;
 }
 
 /** Whether the completion was already there or this attempt produced it. */
-export type ForgeDecision = "adopted" | "performed";
+export type GitHostDecision = "adopted" | "performed";
 
 /**
  * The complete successful record one external effect retains.
@@ -90,11 +90,11 @@ export type ForgeDecision = "adopted" | "performed";
  * is consumed by the effect that produced it rather than by whatever arrives at
  * the same journal position.
  */
-export interface ForgeReconciliationRecord {
-  readonly request: CompleteForgeEffectRequest;
+export interface GitHostReconciliationRecord {
+  readonly request: CompleteGitHostEffectRequest;
   readonly preState: Json;
   readonly observations: Json;
-  readonly decision: ForgeDecision;
+  readonly decision: GitHostDecision;
   readonly result: Json;
 }
 
@@ -218,7 +218,7 @@ export function detachJson(value: unknown): Json | undefined {
 }
 
 /** The effect identity this value describes, or `undefined`. */
-export function parseForgeEffectIdentity(value: unknown): ForgeEffectIdentity | undefined {
+export function parseGitHostEffectIdentity(value: unknown): GitHostEffectIdentity | undefined {
   const read = exactMembers(value, IDENTITY_MEMBERS);
   if (read === undefined) {
     return undefined;
@@ -232,14 +232,14 @@ export function parseForgeEffectIdentity(value: unknown): ForgeEffectIdentity | 
 }
 
 /** The complete detached request this value describes, or `undefined`. */
-export function parseCompleteForgeEffectRequest(
+export function parseCompleteGitHostEffectRequest(
   value: unknown,
-): CompleteForgeEffectRequest | undefined {
+): CompleteGitHostEffectRequest | undefined {
   const read = exactMembers(value, REQUEST_MEMBERS);
   if (read === undefined) {
     return undefined;
   }
-  const identity = parseForgeEffectIdentity(read["identity"]);
+  const identity = parseGitHostEffectIdentity(read["identity"]);
   const kind = text(read["kind"]);
   const inputs = detachJson(read["inputs"]);
   const naturalKey = detachJson(read["naturalKey"]);
@@ -255,7 +255,7 @@ export function parseCompleteForgeEffectRequest(
 }
 
 /** The observation this value describes, or `undefined` when it describes none. */
-export function parseForgeObservation(value: unknown): ForgeObservation | undefined {
+export function parseGitHostObservation(value: unknown): GitHostObservation | undefined {
   const state = readState(value);
   if (state === "compatible") {
     const read = exactMembers(value, COMPATIBLE_MEMBERS);
@@ -303,7 +303,7 @@ function readState(value: unknown): unknown {
 }
 
 /** The completion this value describes, or `undefined` when it describes none. */
-export function parseForgeCompletion(value: unknown): ForgeCompletion | undefined {
+export function parseGitHostCompletion(value: unknown): GitHostCompletion | undefined {
   const read = exactMembers(value, COMPLETION_MEMBERS);
   if (read === undefined) {
     return undefined;
@@ -317,14 +317,14 @@ export function parseForgeCompletion(value: unknown): ForgeCompletion | undefine
 }
 
 /** The reconciliation record this value describes, or `undefined`. */
-export function parseForgeReconciliationRecord(
+export function parseGitHostReconciliationRecord(
   value: unknown,
-): ForgeReconciliationRecord | undefined {
+): GitHostReconciliationRecord | undefined {
   const read = exactMembers(value, RECORD_MEMBERS);
   if (read === undefined) {
     return undefined;
   }
-  const request = parseCompleteForgeEffectRequest(read["request"]);
+  const request = parseCompleteGitHostEffectRequest(read["request"]);
   const preState = detachJson(read["preState"]);
   const observations = detachJson(read["observations"]);
   const decision = read["decision"];
@@ -342,7 +342,7 @@ export function parseForgeReconciliationRecord(
 }
 
 /** The request as the journal holds it. */
-export function completeForgeEffectRequestJson(request: CompleteForgeEffectRequest): Json {
+export function completeGitHostEffectRequestJson(request: CompleteGitHostEffectRequest): Json {
   return {
     identity: { runId: request.identity.runId, expansionId: request.identity.expansionId },
     kind: request.kind,
@@ -352,9 +352,9 @@ export function completeForgeEffectRequestJson(request: CompleteForgeEffectReque
 }
 
 /** The record as the journal holds it. */
-export function forgeReconciliationRecordJson(record: ForgeReconciliationRecord): Json {
+export function gitHostReconciliationRecordJson(record: GitHostReconciliationRecord): Json {
   return {
-    request: completeForgeEffectRequestJson(record.request),
+    request: completeGitHostEffectRequestJson(record.request),
     preState: record.preState,
     observations: record.observations,
     decision: record.decision,
@@ -362,14 +362,14 @@ export function forgeReconciliationRecordJson(record: ForgeReconciliationRecord)
   };
 }
 
-/** Whether two complete requests ask the same forge for the same thing. */
-export function sameCompleteForgeEffectRequest(
-  left: CompleteForgeEffectRequest,
-  right: CompleteForgeEffectRequest,
+/** Whether two complete requests ask the same Git host for the same thing. */
+export function sameGitHostEffectRequest(
+  left: CompleteGitHostEffectRequest,
+  right: CompleteGitHostEffectRequest,
 ): boolean {
   return (
-    canonicalJson(completeForgeEffectRequestJson(left)) ===
-    canonicalJson(completeForgeEffectRequestJson(right))
+    canonicalJson(completeGitHostEffectRequestJson(left)) ===
+    canonicalJson(completeGitHostEffectRequestJson(right))
   );
 }
 
@@ -384,8 +384,12 @@ export function sameCompleteForgeEffectRequest(
  * The platform's `crypto`, adapted with `until`: this is shared code, and it
  * names no host.
  */
-export function* forgeRequestFingerprint(request: CompleteForgeEffectRequest): Operation<string> {
-  const encoded = new TextEncoder().encode(canonicalJson(completeForgeEffectRequestJson(request)));
+export function* gitHostRequestFingerprint(
+  request: CompleteGitHostEffectRequest,
+): Operation<string> {
+  const encoded = new TextEncoder().encode(
+    canonicalJson(completeGitHostEffectRequestJson(request)),
+  );
   const digest = yield* until(crypto.subtle.digest("SHA-256", encoded));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

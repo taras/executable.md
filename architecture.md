@@ -35,6 +35,7 @@ Existing documents and code get aligned to this section retroactively.
 | expansion | one logical evaluation of an authored executable element within a document execution |
 | expansion ID | a deterministic identifier for one logical expansion; restoring or retrying that expansion preserves the ID, while a distinct evaluation requested by the document receives another |
 | Git capability | the contextual interface through which workflow infrastructure queries the Git repository associated with the current working directory |
+| Git host | an external service that owns remote Git repositories and associated collaboration objects such as branches, pull requests, and issues. GitHub is one Git-host adapter. A Git host is distinct from the local Git capability and the trusted workflow host |
 | printed error | an error printed into the document (`ErrorSegment`); data, not control flow |
 | failure | an error that propagates (`ComponentFailure`, `DocumentationError`) |
 | error mode | what an undecided error in a region becomes: `print` (printed into the document), `output` (fails the document execution; `<PrintErrors>` can print instead), `throw` (fails the document execution) |
@@ -813,7 +814,7 @@ data. The journal security policy filters a value before insertion. Training
 ingestion deliberately selects retained filtered history; it never receives the
 whole database merely because the database is retained.
 
-Repository, filesystem, process, forge and Agent behavior reaches production
+Repository, filesystem, process, Git-host and Agent behavior reaches production
 code through contextual APIs. A provider adapter installs host behavior; shared
 modules neither detect a runtime nor fall back to the caller's host when a
 workflow capability is absent.
@@ -921,39 +922,57 @@ absence and refuses conflicting or permanently ambiguous state. Temporary
 provider unavailability may be retried or suspended by explicit middleware; it
 never authorizes a duplicate effect while completion is unknown.
 
-Forge mutations — Git push, pull-request creation and issue creation — share one
-provider-neutral reconciliation of that boundary, so a new forge effect kind
-supplies a request and a provider rather than a replay policy of its own. Prompt
-is not one of them: it keeps its own Agent-provider contract. A live forge
-attempt observes before it mutates, adopts a proven compatible completion,
-performs a proven absence exactly once, and refuses conflict and permanent
-ambiguity.
+Git-host mutations — Git push, pull-request creation and issue creation — share
+one provider-neutral reconciliation of that boundary, so a new Git-host effect
+kind supplies a request and a provider rather than a replay policy of its own.
+Prompt is not one of them: it keeps its own Agent-provider contract. A live
+Git-host attempt observes before it mutates, adopts a proven compatible
+completion, performs a proven absence exactly once, and refuses conflict and
+permanent ambiguity. A Git host need not implement every kind; one that does not
+refuses from observation, before any remote work.
 
-That reconciliation reuses the capability-backed Workspace coordination shape
-without its transaction. A replaceable contextual API selects a provider and
-carries no completion authority. Each phase mints a one-use route and a separate
-opaque credential, routes only the route through the contextual call, and places
-the phase's evidence and its answer behind an execution-owned capability that
-accepts only that credential. The durable operation is named by a fingerprint of
-the complete detached request, so a changed kind, input or natural key diverges
-rather than consuming the result retained at the same position, and the
-provider's answer is parsed at that boundary before the durable executor
-returns, so a raw payload becomes a fixed protocol failure rather than journal
-content.
+Reconciliation is reached through exactly one stable contextual operation, and
+that is a deliberate correction rather than a simplification. An earlier design
+selected a provider on one surface and coordinated the invocation on a second;
+public middleware could read a credential from the first, take an invocation
+capability from the second, and answer a phase itself, and the journal then
+retained a completion no provider had produced. Two public surfaces that are
+individually harmless composed into completion authority.
 
-Only an answer accepted through that capability decides the effect. A conflict,
-a permanent ambiguity and a temporary unavailability so accepted publish the
-effect's failed result and replay as the same fixed local failure, rebuilt from
-its closed name rather than recognized by identity across loaded copies.
-Everything else that can raise before an answer is accepted — provider
-selection, routing middleware, the provider's own body — publishes nothing and
-activates fail-stop under one fixed cause-free failure that repeats none of what
-was raised. The attempt decides which of the two it has by the identity of the
-failure it authored itself, never by a name or a class received from replaceable
-code: otherwise a handler could retire an effect as conflicted without a
-provider ever being asked. Fail-stop rather than a bare refusal, because a live
-operation that appended nothing would leave the next one to append at its
-position.
+The single operation is request-only. Public middleware receives one frozen,
+one-use routing request describing the complete detached request; it may read
+it, refuse it, install narrower policy, or delegate it, and the value it returns
+is ignored. It receives no credential, no capability, no answer operation and no
+phase evidence, so there is nothing to combine. Each phase builds its own API
+descriptor under that same stable name: sharing the name shares the middleware
+chain, while owning the descriptor owns the default, and that default is the
+invocation's own terminal. The selected provider's handler is installed at the
+terminal end of the chain, so its continuation — a parameter of its own
+generator — is the only route to that terminal. Through it the handler asks the
+terminal to inspect the exact request, calls the provider, and submits the
+answer. A handler that short-circuits, forges a return, substitutes or replays
+the request, or reconstructs the stable name reaches the provider's handler or
+the public refusing default, never the terminal.
+
+The durable operation is named by a fingerprint of the complete detached
+request, so a changed kind, input or natural key diverges rather than consuming
+the result retained at the same position, and the provider's answer is parsed at
+the terminal before the durable executor returns, so a raw payload becomes a
+fixed protocol failure rather than journal content.
+
+Only an answer the terminal accepted decides the effect. A conflict, a permanent
+ambiguity and a temporary unavailability so accepted publish the effect's failed
+result and replay as the same fixed local failure, rebuilt from its closed name
+rather than recognized by identity across loaded copies. Everything else that
+can raise before an answer is accepted — routing middleware, the provider
+handler, the provider's own body, an unsupported effect kind — publishes nothing
+and activates fail-stop under one fixed cause-free failure that repeats none of
+what was raised. The attempt decides which of the two it has by the identity of
+the failure it authored itself, never by a name or a class received from
+replaceable code: otherwise a handler could retire an effect as conflicted
+without a Git host ever being asked. Fail-stop rather than a bare refusal,
+because a live operation that appended nothing would leave the next one to
+append at its position.
 
 Every committed journal event references the current logical Workspace root.
 Only committed event boundaries are checkpoints. A history fork cheaply retains
@@ -2128,7 +2147,7 @@ Status is measured against main.
 | caller-owned storage transaction | publishes several changes, including journal events, in one transaction nothing else enlists in | built on main |
 | live durable-operation coordinator | explicitly coordinates structured live execution with existing Yield publication while leaving replay and callback effects unchanged | built on the #365 stack |
 | Workspace coordination API | fails closed by default; replaceable context routes only a one-use provider selection, while the selected provider directly invokes an execution-owned credentialed capability for execution, publication and failure activation | built on the #365 stack; the Deno provider installs an adapter-private atomic handler |
-| shared forge reconciliation | reconciles Git push, pull-request creation and issue creation through one provider-neutral state machine — Prompt is not a consumer and keeps its own Agent-provider contract: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, and temporary unavailability as its own ordinary failure; provider selection is replaceable context, completion is an execution-owned capability, and only an accepted answer can author a journaled outcome | built on the #297 stack; `Git.Push`, pull request and issue components are its consumers, unbuilt (#370, #295, #296) |
+| shared Git-host reconciliation | reconciles Git push, pull-request creation and issue creation through one provider-neutral state machine journaled as `git_host_effect` — Prompt is not a consumer and keeps its own Agent-provider contract: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, temporary unavailability as its own ordinary failure, and a provider free to support only some kinds; routing is one request-only contextual operation carrying no completion authority, and only an answer the invocation's own terminal accepted can author a journaled outcome | built on the #297 stack; `Git.Push`, pull request and issue components are its consumers, unbuilt (#370, #295, #296) |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |

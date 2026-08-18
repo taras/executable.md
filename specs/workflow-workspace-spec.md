@@ -850,8 +850,11 @@ result commit in one effect transaction.
 
 `<Git.Push />` has no props or result initially. It requires a current named
 branch, pushes it to the Repository's primary remote and establishes upstream
-tracking when necessary. The same remote commit is compatible completion.
-Remote divergence fails; Push never force-pushes.
+tracking when necessary. The remote is a Git host, not the local Git capability
+that staged and committed: it owns the branch this publishes to, so Push
+reconciles through §10.2 rather than through the Workspace transaction. The same
+remote commit is compatible completion. Remote divergence fails; Push never
+force-pushes.
 
 Push is explicit. Neither Commit nor PullRequest publishes implicitly.
 
@@ -870,8 +873,8 @@ Prepared from commit {commit}.
 
 `title` is required. `base` defaults to the Repository's recorded initial
 branch, `draft` defaults to false and rendered children form the body. The
-contextual Repository selects the forge provider; its current named branch is
-head and must exist remotely at the current local commit. PullRequest never
+contextual Repository selects the Git-host provider; its current named branch
+is head and must exist remotely at the current local commit. PullRequest never
 pushes. It returns the request URL through `as`.
 
 There are initially no repository, head, provider, label, reviewer, merge or
@@ -1034,7 +1037,7 @@ durable observations and mutations restore.
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | Git.Add/Switch/Commit | restore transactional result |
-| Git.Push/PullRequest/Issue | restore the retained reconciliation record, or observe the forge again under the same external identity and adopt only a proven compatible completion |
+| Git.Push/PullRequest/Issue | restore the retained reconciliation record, or observe the Git host again under the same external identity and adopt only a proven compatible completion |
 
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
@@ -1088,29 +1091,43 @@ transaction is uncommitted either. Nested child effects finish before the
 parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary.
 
-### 10.2 External effects
+### 10.2 Git-host effects
+
+A **Git host** is an external service that owns remote Git repositories and
+associated collaboration objects such as branches, pull requests and issues.
+GitHub is one Git-host adapter. A Git host is distinct from the local Git
+capability of §7 and from the trusted workflow host.
 
 Prompt, Push, pull request and issue creation cannot place provider-owned state
 in SQLite. Each derives one stable effect identity from run and expansion,
 performs or observes the provider operation and commits one local result
 transaction.
 
-The three forge mutations — Push, pull-request creation and issue creation —
-share one reconciliation of that boundary. `reconcileForgeEffect(request)` is
-the state machine each runs through, so a new forge effect kind supplies a
+The three Git-host mutations — Push, pull-request creation and issue creation —
+share one reconciliation of that boundary. `reconcileGitHostEffect(request)` is
+the state machine each runs through, so a new Git-host effect kind supplies a
 request and a provider rather than a replay policy of its own. Prompt is not one
 of them: it derives identity the same way and commits its result the same way,
 but it reaches the Agent provider under §8's own contract and is unchanged by
 what follows.
+
+A Git host need not implement every kind. A plain Git server may support Push
+and support neither pull requests nor issues; it says so from observation,
+before any remote work, and the boundary refuses that effect without performing
+or recording anything. There is no capability discovery and no negotiation:
+routing selects among installed adapters, and an unsupported kind is a refusal
+like any other.
 
 **The request.** Identity is the run ID and the expansion ID, derived by the
 shared operation. Neither the document nor the provider supplies either member.
 The effect supplies a non-empty `kind`, JSON `inputs` and a JSON `naturalKey` —
 what the provider looks the effect up by when no local result exists.
 Credentials are not inputs and stay inside the provider. The durable operation
-is named by a SHA-256 fingerprint of the complete detached request, so a changed
-kind, input or natural key diverges rather than consuming the result retained at
-the same journal position.
+is journaled under the type `git_host_effect` and named by a SHA-256 fingerprint
+of the complete detached request, so a changed kind, input or natural key
+diverges rather than consuming the result retained at the same journal position.
+There is no schema change, migration or compatibility reader: the filtered Yield
+is the local record.
 
 **The decision.** One live attempt observes before it mutates:
 
@@ -1135,33 +1152,50 @@ unavailability publish the same effect's failed result and replay as the same
 fixed local failure, rebuilt from its closed name rather than recognized across
 loaded copies.
 
-**Provider routing.** The contextual forge surface selects a provider; it is not
-completion authority. Each phase mints a one-use route and a separate opaque
-credential, routes only the route through the contextual call, and places the
-phase's evidence and its answer behind a capability that accepts only the
-credential. A handler may observe, narrow or refuse a phase; a short circuit, a
-forged return, a substituted selection and a reused request complete nothing,
-and a throw after a real provider answered cannot replace that answer. A
-provider answers only the closed normalized shapes, parsed at that boundary
-before the durable operation returns.
+**Routing.** There is exactly one contextual operation,
+`executablemd.workflow.git-host`, and it routes. It is request-only: public
+middleware receives one frozen, one-use routing request describing the complete
+detached request, may read it, refuse by throwing, install narrower policy, or
+delegate that exact request, and the value it returns is ignored. It receives no
+credential, no capability, no answer operation and no phase evidence.
 
-**Who may author an outcome.** Only an answer accepted through that capability.
+There is one surface rather than two on purpose. A design that selected a
+provider on one surface and coordinated the invocation on a second let public
+middleware read a credential from the first, take an invocation capability from
+the second, and answer a phase itself — and the journal then retained a
+completion no provider had produced. Two individually harmless public surfaces
+composed into completion authority, so there is now nothing to compose.
+
+**Who may author an outcome.** Only an answer the invocation's own terminal
+accepted. Each phase builds its own API descriptor under that same stable name:
+sharing the name shares the middleware chain, while owning the descriptor owns
+the default, and that default is the terminal. The selected provider's handler
+is installed at the terminal end of the chain, so its own continuation is the
+only route to it; through that continuation the handler has the terminal inspect
+the exact request, calls the provider, and submits the answer, which the
+terminal parses before recording. A short circuit, a forged return, a
+substituted or replayed request, a look-alike private message and a
+reconstruction of the stable name all reach the provider's handler or the public
+refusing default, and complete nothing. A throw after an accepted answer cannot
+replace it.
+
 A conflict, an ambiguity or an unavailability so accepted is the effect's
-recorded failure. Everything else that can raise on the way — provider
-selection, routing middleware, the provider's own body — is the boundary
-failing: it publishes nothing, activates the run's fail-stop fence, and is
-reported as one fixed cause-free failure that repeats no message, payload, cause
-or stack from whatever raised it. Which of the two a raised failure is, is
-decided by the attempt's own record of what it authored, never by a name or a
-class received from replaceable code — otherwise a routing handler could raise a
-conflict and retire the effect as conflicted without a provider ever being
-asked. Fail-stop rather than a bare refusal, because a live operation that
-appended nothing would leave the next one to append at its journal position. A
-malformed value actually submitted through the capability remains the distinct
-local protocol failure, which likewise publishes nothing.
+recorded failure. Everything else that can raise on the way — routing
+middleware, the provider handler, the provider's own body, an unsupported effect
+kind — is the boundary failing: it publishes nothing, activates the run's
+fail-stop fence, and is reported as one fixed cause-free failure that repeats no
+message, payload, cause or stack from whatever raised it. Which of the two a
+raised failure is, is decided by the attempt's own record of what it authored,
+by object identity, never by a name or a class received from replaceable code —
+otherwise a routing handler could raise a conflict and retire the effect as
+conflicted without a Git host ever being asked. Fail-stop rather than a bare
+refusal, because a live operation that appended nothing would leave the next one
+to append at its journal position. A malformed value actually submitted to the
+terminal remains the distinct local protocol failure, which likewise publishes
+nothing.
 
 **Cancellation.** Cancellation tears down the provider call, publishes no
-invented completion, and is never reported as provider unavailability.
+invented completion, and is never reported as Git-host unavailability.
 
 **The journal.** Every description and result crosses the existing
 pre-persistence secret filter. There is no side journal, table, raw provider
