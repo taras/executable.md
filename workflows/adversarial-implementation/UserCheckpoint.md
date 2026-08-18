@@ -208,16 +208,18 @@ that already knows the answer — a test, a demo, a non-interactive region — w
 this component in an `<Answers>` region and supplies it with `<Answer>` matchers,
 which changes who answers without changing this file.
 
-Under `xmd workflow` the same question is to become a durable wait: the
-elicitation records its pending request and the Workspace frontier, the executor
-is released, and `xmd workflow resume <run-id>` continues once the answer is
+Under `xmd workflow` the same question becomes a durable wait: the elicitation
+records its pending request and the Workspace frontier, the executor lock is
+given back, and `xmd workflow resume <run-id>` continues once the answer is
 available — the process, the Workspace attachment, and the agent processes need
-not stay alive in between. `start` and `resume` are shipped (#366) and a resume
-already restores this component's journaled answer rather than asking again;
-the ownership that decides who may continue the run is shipped (#466);
-releasing the executor at the question is #367 and unbuilt. So today the
-question is answered inside the document execution that asked it, under either
-command.
+not stay alive in between. All of that is shipped: `start` and `resume` (#366),
+the ownership that decides who may continue a run (#466), the wait that releases
+the lock (#367), and typed delivery of an answer to a suspended run (#300). A
+resume restores this component's journaled answer rather than asking again.
+
+What is not shipped is anything that acts on a delivered answer: delivery
+executes nothing and no scheduler resumes a run, so continuing one stays an
+explicit act.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
 repair turn explicitly. It absorbs JSON syntax and schema-validation failures

@@ -305,8 +305,10 @@ next. Under a composed workflow that request becomes a durable suspension — th
 run records why it stopped and the material the user needs, releases its
 executor, and resumes only from explicit user direction, so neither exhaustion
 nor silence nor an unchanged verdict is ever read as approval. That lifecycle is
-#367's and is unbuilt; what this document owns is the boundary, and the boundary
-holds without it.
+shipped (#367): the run waits, gives its executor lock back, and continues when a
+typed answer is delivered and someone resumes it. Nothing schedules that, which
+is why this document still owns the boundary — and the boundary holds either
+way.
 
 Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
 is one durable operation, each `<Elicit>` answer is journaled against its

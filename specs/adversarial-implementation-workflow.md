@@ -65,7 +65,9 @@ what makes exhaustion a distinct outcome without a separate label, which is what
 #290 settled: an exhausted loop is neither convergence nor ordinary successful
 completion, it starts no implementation and no later durable effect, and it asks
 the user for direction rather than answering on the stage's own account. A
-composed workflow turns that request into a durable suspension (#367, unbuilt),
+composed workflow turns that request into a durable suspension, which is shipped
+(#367): the run waits, gives its executor lock back, and continues when a typed
+answer is delivered and someone resumes it. Nothing schedules that resumption,
 and resume never reads exhaustion, silence, or an unchanged verdict as
 approval.
 
@@ -142,25 +144,24 @@ from a second spelling of `<File>` or `<Git.Commit>`.
 
 What that root Workspace supplies today is the document's filesystem, and only
 that. A run's `<File>` and `<Glob>` operations resolve inside the run's own
-transactional filesystem, which starts empty: the repository, worktree, process,
-and Agent capabilities the stages use are the composition #293 and #302 still
-owe it. The definition is pinned to one committed Git object and a run passes no
-repository component search path, so a repository component beside the
-definition — every stage below — resolves to nothing under `xmd workflow start`
-and `xmd workflow resume`.
+transactional filesystem: the repository, worktree and lexical working directory
+are composed by the workflow host (#293, shipped), while the Agent capabilities
+the stages use are still #302's. The definition is pinned to one committed Git
+object and a run passes no generic repository component search path — a root
+reaches its stages by declaring them instead.
 
-Making them reachable is #301's. It owns the boundary between a run's retained
-workflow-definition identity and the component code that definition invokes:
-`InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning`, and
-`Implementation` are to become reachable under `start` and `resume` from code the
-trusted host authorized, with that code accounted for by workflow-definition
-identity and retained-history admission, so a resume or a replay cannot
-substitute current checkout content for retained component code and neither a
-document, public middleware, nor a checkout beside the retained root can widen
-what may execute. Ordinary `xmd run` resolution is unchanged, and workflow
-execution gains no generic repository component search path. What is stated here
-is the required authority and identity outcome; the mechanism is #301's to
-design and is subject to architecture review there.
+That declaration is a **component bundle**, and it is shipped (#493, delivering
+#301's component-bundle slice). A root names its authored stages in its own
+frontmatter; `start` and `resume` resolve exactly those names from the blobs the
+pinned commit holds. Each normalizes to a canonical repository-relative path and
+the blob's own object ID, and those entries participate in workflow-definition
+identity and retained-history admission — so a resume or a replay reconstructs
+the component from its retained source, a mutable checkout beside the definition
+substitutes nothing, and an undeclared name resolves to nothing at all. Ordinary
+`xmd run` resolution is unchanged.
+
+What #301 still owes is the supervised composition: scheduling the loop and
+continuing it unattended. Reaching the stage names is not running the workflow.
 
 The stages that run today therefore run under `xmd run`, in one document
 execution and one existing working directory, with the user inspecting each
@@ -182,11 +183,12 @@ would have been used without detecting or prioritizing them.
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
-`xmd workflow` the same question is to become a durable suspension that releases
-the executor and resumes later. The executor ownership that makes releasing one
-safe is shipped (#466); the release itself is not, so today the question is
-answered inside the document execution that asked it, under whichever command
-started it.
+`xmd workflow` the same question becomes a durable suspension that releases the
+executor and resumes later. Both halves are shipped — the ownership that makes
+releasing one safe (#466) and the wait that gives the lock back (#367) — and a
+typed answer can be delivered to a suspended run (#300). Delivery does not
+execute anything: it records the answer, and a resume is still an explicit act
+that someone performs. Nothing schedules it.
 
 ### Runtime intervention
 
@@ -825,11 +827,10 @@ checkout unless the user explicitly exports them.
 The exercise runs under `xmd run`, in one document execution and one existing
 working directory. The document logic — instruction discovery, the planner
 interview, plan convergence, the bounded repair turns, and the user gate — is
-executable on shipped syntax today. What a workflow run cannot yet give it is a
-checkout to work in and a way to reach these stages at all: the run's Workspace
-holds no repository until #293, and a pinned definition resolves no repository
-component beside it until #301 supplies authorized component code the retained
-definition's identity and admission account for.
+executable on shipped syntax today, and a workflow run can now give it both a
+checkout (#293) and its stage names, which the root declares as a component
+bundle resolved from the pinned commit (#493). What it cannot yet give is the
+supervision: scheduling the loop and continuing it unattended remain #301's.
 
 The exercise succeeds when:
 
