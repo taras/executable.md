@@ -1,8 +1,16 @@
 name: Main Health
 
-# CI on `main` is where some invariants are executed, and a red `main` blocks
-# nothing: the branch ruleset carries no required status checks. This turns that
-# silence into an issue with an owner, and closes it again when `main` recovers.
+# CI on `main` is where some invariants are executed, and a failure there would
+# otherwise be silent — found by whoever next opened the Actions tab. This turns
+# that silence into an issue with an owner, and closes it again when `main`
+# recovers.
+#
+# Reporting is the half that reaches a person. The half that stops the damage is
+# `ci.yml`'s `main-green` job, which withholds the required `green` check from an
+# ordinary pull request until CI has completed successfully for `main`'s exact
+# current head. The two read main health by the same rules — `main-green` calls
+# this workflow's own `selectAuthoritative()` — so a gate that blocks and an
+# issue that is open cannot describe different states of `main`.
 #
 # Every completed CI run wakes a reconciliation, and none of them is filtered on
 # its own conclusion — see the job below for why that matters.

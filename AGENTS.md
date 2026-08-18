@@ -64,12 +64,15 @@ verification may never move is tracked files, `node_modules`, `deno.lock`, and
 another invocation's temporary state.
 
 It verifies the commit, so commit before running it. CI runs the same harness in
-its `composability` job — **on `main` only**. The battery it runs spends most of
-its time on the three runtime suites, which `test-deno`, `test-node`, and
-`test-bun` already run in parallel on their own runners, so putting it on every
-pull request bought a 50% longer critical path and no new information. Run it
-locally before you push anything that could move dependency state; on `main` it
-is the post-merge proof, and a failure there opens a `ci-main-red` issue.
+its `composability` job — **on a `main` push, and on a `ci-main-red-fix` pull
+request**. The battery it runs spends most of its time on the three runtime
+suites, which `test-deno`, `test-node`, and `test-bun` already run in parallel on
+their own runners, so putting it on every pull request bought a 50% longer
+critical path and no new information. Run it locally before you push anything
+that could move dependency state; on `main` it is the post-merge proof, and a
+failure there opens a `ci-main-red` issue. A labelled repair pull request runs it
+because that pull request is excused the main-health gate below, and this is what
+it offers in its place.
 
 ## Verification
 
@@ -144,6 +147,33 @@ deno task verify          # add --no-site to skip the site pair
 The `green` check is the aggregate CI check required by the main branch ruleset.
 Every new CI job must be added to `green.needs`; the workflow regression test
 parses `ci.yml` and enforces that coverage.
+
+`green` requires each job to produce the result its event calls for, rather than
+accepting a skip from anything. A job that always runs must succeed — a skip
+there is an unproven job, which is what this check exists to catch. Two jobs are
+conditional, and each is required exactly where it runs:
+
+- `main-green` on a pull request, and skipped on a `main` push;
+- `composability` on a `main` push and on a `ci-main-red-fix` pull request, and
+  skipped on an ordinary one.
+
+**`main-green` is the main-health gate.** An ordinary pull request reaches `green`
+only once CI has completed successfully for `main`'s *exact* current head, which
+is what stops a branch proving itself against a base nothing proved. It reuses
+Main Health's own authoritative-run rules — current head, `push` to `main`,
+highest run number, then highest attempt — so the gate and the `ci-main-red`
+issue an operator is reading cannot disagree. A run for an earlier commit never
+satisfies it: that is exactly the state a red `main` is in one commit after it
+broke. The decision is `scripts/lib/main-green.ts`; the job that runs it holds
+`contents: read` and `actions: read` and nothing else.
+
+**Restoring a red `main` takes the `ci-main-red-fix` label.** A repair pull
+request cannot satisfy the gate by construction, because the base it would prove
+is the broken one. A maintainer applies that label to one pull request, and it
+buys only the remote main-health lookup: `composability` then runs, and `green`
+still fails if it fails or is skipped. Nothing else grants the exception — not an
+actor, a branch name, a commit message, or another label — and removing the label
+recomputes the check as an ordinary pull request.
 
 **The whole applicable battery is designed to run at once, after one setup.**
 That is a repository rule, not a convenience, and it has two halves:
@@ -284,7 +314,10 @@ here:
     `local/prefer-effection-result` Oxlint rule (`scripts/oxlint-rules/`),
     which autofixes the rebuild with `oxlint --fix`.
 14. Keep `main` green. Whoever breaks it gets a self-closing `ci-main-red`
-    issue; do not merge other work while one is open.
+    issue, and no other work can merge while `main` is red — the `main-green`
+    job withholds the required `green` check until CI has proven `main`'s exact
+    current head. Repairing it is a pull request a maintainer labels
+    `ci-main-red-fix`, which runs `composability` in the gate's place.
 15. State shared across loaded copies uses stable, namespaced names: plain
     structural values for composition data and a contextual Api for operations.
     Security enforcement, durable identity, and reconciliation never trust
