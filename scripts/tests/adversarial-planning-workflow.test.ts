@@ -10,8 +10,8 @@
  *
  * Nothing about the document under test changes. The component resolves from
  * the workflow directory exactly as `xmd test` resolves it, including the
- * test-local `Agent.AddDir` stub, and the loop bound is the one the workflow
- * ships.
+ * loop bound is the one the workflow ships. No stub stands in for a directory
+ * component, because #302 gives a workflow Agent none.
  *
  * What `start.md` does with the returned pair — placing `<Implementation>`
  * behind the same gate and reporting exhaustion as awaiting direction inside
@@ -26,6 +26,7 @@ import { ensure, scoped } from "effection";
 import type { Operation, Stream } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
+import { API, useHostFiles } from "@executablemd/runtime";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -48,13 +49,16 @@ const COMPONENT_DIRS = [path.join(WORKFLOW, "tests"), WORKFLOW];
 const MAX_ITERATIONS = 5;
 
 /** Which prompt a turn is, read from the text the document actually sent. */
-type Turn = "plan" | "verdict" | "assessment" | "revision" | "sentinel";
+type Turn = "discovery" | "plan" | "verdict" | "assessment" | "revision" | "sentinel";
 
 function classify(content: string): Turn {
   if (content.includes("Revise the implementation plan using this review:")) {
     return "revision";
   }
-  if (content.includes("Investigate the registered checkout.")) {
+  if (content.includes("Produce a user-validated design handoff")) {
+    return "discovery";
+  }
+  if (content.includes("amend the implementation theory against that material")) {
     return "plan";
   }
   if (content.includes("Review the plan against the handoff")) {
@@ -70,6 +74,42 @@ interface Call {
   readonly turn: Turn;
   readonly session: string;
   readonly content: string;
+  /** Everything the prompt carried besides its text. */
+  readonly options: Readonly<Record<string, unknown>>;
+  readonly agent: string;
+}
+
+/** The complete Agent-facing trace: what the factory, selections and prompts saw. */
+interface Trace {
+  readonly calls: Call[];
+  readonly factoryOptions: Record<string, unknown>[];
+  readonly agentSelections: (string | undefined)[];
+  readonly sessionSelections: (string | undefined)[];
+}
+
+/** Every string an Agent could have observed, flattened for boundary checks. */
+function agentFacingStrings(trace: Trace): string[] {
+  const out: string[] = [];
+  const walk = (value: unknown) => {
+    if (typeof value === "string") {
+      out.push(value);
+    } else if (Array.isArray(value)) {
+      value.forEach(walk);
+    } else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        out.push(k);
+        walk(v);
+      }
+    }
+  };
+  for (const call of trace.calls) {
+    out.push(call.content, call.session, call.agent);
+    walk(call.options);
+  }
+  trace.factoryOptions.forEach(walk);
+  trace.agentSelections.forEach((v) => v !== undefined && out.push(v));
+  trace.sessionSelections.forEach((v) => v !== undefined && out.push(v));
+  return out;
 }
 
 /** `PromptOptions.session` is `string | Session`; the union narrows on its own. */
@@ -88,6 +128,8 @@ function sessionName(options: PromptOptions | undefined): string {
  */
 function reply(turn: Turn, round: number): string {
   switch (turn) {
+    case "discovery":
+      return `HANDOFF-ROUND-${round} the route is /health.`;
     case "plan":
       return `PLAN-ROUND-${round}`;
     case "verdict":
@@ -111,17 +153,20 @@ function reply(turn: Turn, round: number): string {
   }
 }
 
-function stubProvider(calls: Call[]): AgentProviderFactory {
+function stubProvider(trace: Trace): AgentProviderFactory {
   const rounds = new Map<Turn, number>();
   return function* (options) {
+    trace.factoryOptions.push({ ...options });
     yield* Agent.around(
       {
         // deno-lint-ignore require-yield
         *agent([name]) {
+          trace.agentSelections.push(name);
           return name ?? options.defaultAgent;
         },
         // deno-lint-ignore require-yield
         *session([name]) {
+          trace.sessionSelections.push(name);
           return { sessionKey: `${name ?? "default"}`, cwd: "/" };
         },
         // deno-lint-ignore require-yield
@@ -129,7 +174,13 @@ function stubProvider(calls: Call[]): AgentProviderFactory {
           const turn = classify(content);
           const round = (rounds.get(turn) ?? 0) + 1;
           rounds.set(turn, round);
-          calls.push({ turn, session: sessionName(promptOptions), content });
+          trace.calls.push({
+            turn,
+            session: sessionName(promptOptions),
+            content,
+            options: { ...(promptOptions ?? {}) },
+            agent: String(promptOptions?.agent ?? options.defaultAgent),
+          });
           return stream(reply(turn, round), promptOptions);
         },
       },
@@ -183,7 +234,6 @@ returns:
   instructions="INSTRUCTIONS"
   planner="planner"
   implementor="implementor"
-  worktree="."
   as="planning"
 />
 
@@ -200,14 +250,15 @@ returns:
 }} />
 `;
 
-function* runPlanning(): Operation<{ value: JsonObject; calls: Call[] }> {
-  const calls: Call[] = [];
+function* runPlanning(): Operation<{ value: JsonObject; calls: Call[]; trace: Trace }> {
+  const trace: Trace = { calls: [], factoryOptions: [], agentSelections: [], sessionSelections: [] };
+  const calls = trace.calls;
   const dir = path.join(os.tmpdir(), `xmd-290-${randomUUID()}`);
   yield* ensureDir(dir);
   return yield* scoped(function* () {
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
     const options: AgentProviderOptions = { defaultAgent: "stub", permissionMode: "deny-all" };
-    yield* installAgentComponents({ rootProvider: { factory: stubProvider(calls), options } });
+    yield* installAgentComponents({ rootProvider: { factory: stubProvider(trace), options } });
 
     const root = path.join(dir, "exhaustion-root.md");
     yield* writeTextFile(root, ROOT);
@@ -228,7 +279,7 @@ function* runPlanning(): Operation<{ value: JsonObject; calls: Call[] }> {
     if (!isJsonObject(result.value)) {
       throw new Error(`the root returned ${JSON.stringify(result.value)}, not an object`);
     }
-    return { value: result.value, calls };
+    return { value: result.value, calls, trace };
   });
 }
 
@@ -273,5 +324,160 @@ describe("#290 criterion 6 — an exhausted planning loop", () => {
       expect(revision.content).toContain(`REVISE-${round}`);
       expect(revision.content).toContain(`ASSESSED-${round}`);
     });
+  });
+});
+
+/**
+ * The #302 boundary, proved over the same public root-provider seam.
+ *
+ * A root writes real instruction files, captures them with `InstructionFiles`,
+ * and passes that captured text into `Discovery` and `Planning`. What an Agent
+ * sees is then the whole question: the instruction paths and contents must
+ * arrive, and the absolute directory they were read from must not — nor any
+ * Workspace value, checkout path, directory registration or
+ * `additionalDirectories` field.
+ */
+const BOUNDARY_ROOT = `---
+returns:
+  handoff: { type: string }
+  plan: { type: string }
+---
+
+<InstructionFiles paths={["AGENTS.md", "nested/AGENTS.md"]} as="instructions" />
+
+<Discovery
+  instructions={instructions}
+  planner="planner"
+  request="Add a health endpoint"
+  as="handoff"
+/>
+
+<Planning
+  handoff={handoff}
+  handoffCheckpoint={{proceed: true, assessment: "HANDOFF-ASSESSED", response: "approved", rationale: "clear"}}
+  instructions={instructions}
+  planner="planner"
+  implementor="implementor"
+  as="planning"
+/>
+
+<Return value={{ handoff: handoff, plan: planning.plan }} />
+`;
+
+const ROOT_INSTRUCTION = "ROOT-INSTRUCTION prefer evidence over assertion.";
+const NESTED_INSTRUCTION = "NESTED-INSTRUCTION never edit a test to make it pass.";
+
+function* runBoundary(
+  inject?: (dir: string) => string,
+): Operation<{ trace: Trace; dir: string }> {
+  const trace: Trace = { calls: [], factoryOptions: [], agentSelections: [], sessionSelections: [] };
+  const dir = path.join(os.tmpdir(), `xmd-302-${randomUUID()}`);
+  yield* ensureDir(path.join(dir, "nested"));
+  return yield* scoped(function* () {
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    // The instructions are read relative to the contextual working directory,
+    // exactly as a workflow run's `<Dir>` would establish it — so the document
+    // names repository-relative paths and never an absolute one.
+    yield* API.Env.around({ *cwd() { return dir; } }, { at: "min" });
+    yield* useHostFiles();
+    yield* writeTextFile(path.join(dir, "AGENTS.md"), `${ROOT_INSTRUCTION}\n`);
+    yield* writeTextFile(path.join(dir, "nested", "AGENTS.md"), `${NESTED_INSTRUCTION}\n`);
+
+    const options: AgentProviderOptions = {
+      // A mutation point: a host that leaked its work directory here would put
+      // an absolute path in front of every Agent.
+      defaultAgent: inject ? inject(dir) : "stub",
+      permissionMode: "deny-all",
+    };
+    yield* installAgentComponents({ rootProvider: { factory: stubProvider(trace), options } });
+
+    const root = path.join(dir, "boundary-root.md");
+    yield* writeTextFile(root, BOUNDARY_ROOT);
+    const execution = yield* execute({
+      path: root,
+      stream: new InMemoryStream(),
+      componentDirs: COMPONENT_DIRS,
+    });
+    const subscription = yield* execution.output;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      next = yield* subscription.next();
+    }
+    const result = yield* execution;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return { trace, dir };
+  });
+}
+
+describe("#302 — an Agent reasons only over what a prompt renders", () => {
+  it("carries instruction paths and contents to Discovery and both Planning prompts", function* () {
+    const { trace } = yield* runBoundary();
+    const seen = (turn: Turn) => trace.calls.filter((call) => call.turn === turn);
+
+    // Discovery, the plan prompt and the verdict prompt each receive both
+    // repository-relative paths and both file contents, verbatim.
+    for (const turn of ["discovery", "plan", "verdict"] as Turn[]) {
+      const calls = seen(turn);
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) {
+        expect(call.content).toContain("AGENTS.md");
+        expect(call.content).toContain("nested/AGENTS.md");
+        expect(call.content).toContain(ROOT_INSTRUCTION);
+        expect(call.content).toContain(NESTED_INSTRUCTION);
+      }
+    }
+  });
+
+  it("lets no absolute directory, Workspace value or directory registration reach an Agent", function* () {
+    const { trace, dir } = yield* runBoundary();
+    const facing = agentFacingStrings(trace);
+
+    // The execution's own directory is where the instructions were read from.
+    // It must not appear anywhere an Agent could observe.
+    for (const value of facing) {
+      expect(value).not.toContain(dir);
+      expect(value).not.toContain(os.tmpdir());
+    }
+
+    // Nor any directory-registration surface, by name or by field.
+    const joined = facing.join("\n");
+    for (const forbidden of [
+      "additionalDirectories",
+      "AddDir",
+      "addDir",
+      "workspaceRoot",
+      "checkout",
+      "materializ",
+    ]) {
+      expect(joined).not.toContain(forbidden);
+    }
+
+    // Prompt options carry only what agent selection needs.
+    for (const call of trace.calls) {
+      expect(Object.keys(call.options).sort()).toEqual(["agent", "session"]);
+    }
+
+    // The repository-relative paths appear only inside the rendered
+    // instruction material, never as a standalone Agent-facing input.
+    const standalone = facing.filter((value) => value === "AGENTS.md" || value === "nested/AGENTS.md");
+    expect(standalone).toHaveLength(0);
+  });
+
+  it("trips the boundary guard when the execution's absolute directory is injected", function* () {
+    const { trace, dir } = yield* runBoundary((workDir) => `stub-${workDir}`);
+
+    // Apply the guard the clean case relies on, and prove it fails here. If it
+    // did not, the assertion above would be checking nothing.
+    const leaked = agentFacingStrings(trace).filter((value) => value.includes(dir));
+    expect(leaked.length).toBeGreaterThan(0);
+    expect(() => {
+      for (const value of agentFacingStrings(trace)) {
+        if (value.includes(dir)) {
+          throw new Error("absolute execution directory reached an Agent-facing input");
+        }
+      }
+    }).toThrow("absolute execution directory reached an Agent-facing input");
   });
 });

@@ -1,4 +1,4 @@
-<WhenPrompt as="plan1" template="{?a}Investigate the registered checkout.{?b}" />
+<WhenPrompt as="plan1" template="{?a}amend the implementation theory against that material{?b}" />
 
 PLAN-V1
 
@@ -11,7 +11,7 @@ The first plan, which the planner rejects.
 
 Acknowledged.
 
-<WhenPrompt as="plan2" template="{?a}Investigate the registered checkout.{?b}" />
+<WhenPrompt as="plan2" template="{?a}amend the implementation theory against that material{?b}" />
 
 PLAN-V2
 

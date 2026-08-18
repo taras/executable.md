@@ -180,10 +180,11 @@ because no decision was found.
 the choice itself. The caller passes the complete material to assess as the
 `material` prop rather than asking the agent to locate or read it.
 
-This checkpoint registers no directory with its agent. It assesses supplied
-material and needs no repository access, so no `<Agent.AddDir>` appears here —
-a read-only agent with nothing registered is the narrowest thing this workflow
-can ask for.
+This checkpoint's agent reads nothing. It assesses the material it was handed,
+which is all any workflow Agent gets: no checkout, no materialization, no
+Workspace or host path as cwd, and no directory registered with its session
+(#302). What the assessment can weigh is exactly what the `material` prop
+carries.
 
 `material` could equally be projected content: `<Content />` is substituted
 wherever a body writes it, including nested inside a `<Prompt>`

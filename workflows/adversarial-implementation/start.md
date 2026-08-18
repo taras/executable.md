@@ -68,7 +68,6 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
       instructions={instructions}
       planner={props.planner}
       request={props.request}
-      worktree={worktree}
       as="handoff"
     />
     <UserCheckpoint
@@ -83,7 +82,6 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
         instructions={instructions}
         planner={props.planner}
         implementor={props.implementor}
-        worktree={worktree}
         as="planning" />
       <If condition={planning.decision.proceed && planning.verdictPassed}>
         <Capture as="planReport">
@@ -107,7 +105,6 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
             instructions={instructions}
             planner={props.planner}
             implementor={props.implementor}
-            worktree={worktree}
             as="implementation" />
           <If condition={implementation.decision.proceed && implementation.verdictPassed}>
             <UserCheckpoint
@@ -242,10 +239,11 @@ its own name, locator, and base, and no transaction spans the two (#293, and
 every stage on one source revision even if the base branch moves.
 
 `<Dir>` is lexical cwd and nothing else. It registers nothing with an Agent:
-making a directory readable is `<Agent.AddDir>`, written inside the `<Agent>`
-that reads it, which is why each stage that runs an Agent still takes the
-`worktree` binding as a prop rather than inheriting access from cwd. The two are
-separate operations on purpose (#302).
+no Agent is made able to read anything by it. A workflow Agent gets no checkout,
+no materialization of one, no Workspace or host path as cwd, and no directory
+registered with its session (#302) — so no stage below takes the `worktree`
+binding, and `<Dir>` exists for XMD's own file effects rather than for an
+agent's benefit.
 
 ## Agents inspect; XMD mutates
 
@@ -378,8 +376,8 @@ creates no bare binding, so `{planner}` stays verbatim
 ([#305](https://github.com/taras/executable.md/issues/305), shipped).
 
 Authored bindings are the other half and stay bare. `as="worktree"` on
-`<Worktree>` creates the binding `worktree`, and `worktree={worktree}` passes it
-down. Bare `{name}` resolves an authored eval, capture, loop, or return binding;
+`<Worktree>` creates the binding `worktree`, and `<Dir path={worktree}>` is what
+consumes it. Bare `{name}` resolves an authored eval, capture, loop, or return binding;
 dotted `{props.name}` traverses the validated props namespace.
 
 ## Error modes in a stage
@@ -450,8 +448,8 @@ written entirely in shipped syntax: `<Glob>`, `<File>`, `<Parse>`,
 `<Prompt>` agent components. A caller that already knows an answer wraps a
 checkpoint in an `<Answers>` region instead of reaching a person.
 `InstructionFiles` and `UserCheckpoint` run as written; `Discovery` and
-`Planning` each name `<Agent.AddDir>`, which does not exist, so their bodies run
-only once that registration is supplied or removed.
+`Planning` run as written too: no stage reaches for a directory, because a
+workflow Agent is given none.
 
 **Composed by the workflow host.** `<Repository>`, `<Worktree>` and `<Dir>` are
 built and registered by `@executablemd/workflow/composition` (#293, shipped),
@@ -461,11 +459,10 @@ Registration is scope-local and the workflow host is what installs it, so plain
 where a document ran, not whether a component exists.
 
 **Not expressible.** Every component that performs a durable environmental
-effect. These five names resolve to nothing under either host:
+effect. These four names resolve to nothing under either host:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Agent.AddDir>` and the read-only Agent ceiling | #302 | unbuilt |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
 | `<Git.Push>` | #370 | unbuilt |
 | `<PullRequest>` | #295 | unbuilt |
@@ -474,8 +471,11 @@ effect. These five names resolve to nothing under either host:
 `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` have left that list:
 they are built as Workspace-local durable effects (#294, shipped), and the
 shared Git-host reconciliation the remote effects will need is shipped too
-(#297). What is still missing above them is the three components that reach a
-remote or a forge, the Agent ceiling, and the constrained evaluator.
+(#297). `<Agent.AddDir>` is not on it either, and never will be — #302 settles
+that a workflow Agent receives no checkout, no materialization, no Workspace or
+host path as cwd, and no registered directory, so there is no component here to
+build. What is still missing is the three components that reach a remote or a
+forge, and the constrained evaluator.
 
 So what remains non-executable is the implementation stage's remote and forge
 effects; the named checkouts the Workspace is composed from, and the local Git
