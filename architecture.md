@@ -1091,9 +1091,11 @@ identity it was written under, and the effect at a position the history already
 holds a record at is named by that identity, while every live attempt is named
 by the run performing it. The identity is established when the engine
 admits the run's retained snapshot and is published beside the run, so every
-physical copy of the workflow package reads one answer; a wrong answer is held
-to the record it consumed on replay and performs nothing if it reaches live
-execution. It belongs to the exact retained event it
+physical copy of the workflow package reads one answer. What authorizes live
+execution is not that answer: an effect standing where retained history already
+holds one, that did not replay it, performs nothing — the engine's own account
+of the position decides it — so removing or replacing the transported
+identities can only make the effect replay correctly or refuse. It belongs to the exact retained event it
 came from, at the position that event occupies: records are offered in order,
 a call may take only the next untaken one and only when it asks exactly what
 that record answers, and a request named by a retained record that reaches live

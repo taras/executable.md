@@ -1141,11 +1141,12 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(record?.request.identity.runId).toBe(RUN.runId);
   });
 
-  it("GH16: a retained identity is not borrowed when this position is not its own", function* () {
+  it("GH16: a live Git-host effect never stands on retained history", function* () {
     // Two retained records. The call being made asks what the *second* one
     // answers, while the record at this position is the first — and public
-    // divergence policy chooses to run live rather than refuse. Nothing about
-    // that may put the source's identity on a live request.
+    // divergence policy chooses to run live rather than refuse. Neither the
+    // source's identity nor a live provider call may come of that: the position
+    // holds a record of something that already happened outside this journal.
     const sourceRunId = "run-297-git-host-source";
     const second: GitHostEffectRequest = {
       kind: "git-push",
@@ -1193,22 +1194,17 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
       }
     });
 
-    // It ran live, and it ran as this run: the provider was asked under the
-    // executing identity and never under the source's.
-    expect(host.observed).toHaveLength(1);
-    expect(host.performed).toHaveLength(1);
-    expect(host.observed[0]?.identity.runId).toBe(RUN.runId);
-    expect(host.performed[0]?.identity.runId).toBe(RUN.runId);
-    expect(seen.records[0]?.request.identity.runId).toBe(RUN.runId);
-
-    // And what it appended says the same thing.
-    const appended = gitHostYields(stream.snapshot()).slice(inherited.length === 0 ? 0 : 2);
-    expect(appended).toHaveLength(1);
-    const record =
-      appended[0]?.type === "yield" && appended[0].result.status === "ok"
-        ? parseGitHostReconciliationRecord(appended[0].result.value)
-        : undefined;
-    expect(record?.request.identity.runId).toBe(RUN.runId);
+    // It borrowed nothing — the record at this position does not answer what it
+    // asks — and it did not perform either. Standing where retained history
+    // already holds a Git-host record and not replaying it means the effect
+    // that record describes has already happened at a service this journal does
+    // not enclose, so nothing is asked of the Git host and nothing is appended.
+    expect(host.observed).toEqual([]);
+    expect(host.performed).toEqual([]);
+    expect(seen.records).toEqual([]);
+    expect(String(seen.failures[0])).toContain("Nothing was asked of the Git host");
+    expect(gitHostYields(stream.snapshot())).toHaveLength(gitHostYields(inherited).length);
+    // And above all, the source's identity went nowhere near it.
     expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
       `"runId":"${sourceRunId}","expansionId":"${seen.expansions[0]}"` + `,"kind":"${second.kind}"`,
     );
@@ -1267,6 +1263,72 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     // Nothing was appended for it. The two Git-host events there are the two it
     // inherited, and the refusal added no third under anybody's identity.
     expect(gitHostYields(derailedStream.snapshot())).toHaveLength(gitHostYields(derailed).length);
+  });
+
+  it("GH17: erasing the shared identities cannot buy a live Git-host effect", function* () {
+    // The identities travel in a stable-named slot so a second physical copy of
+    // this package reads them. A component can bind that name: it can keep the
+    // run and erase what sits beside it, and then the reconciliation finds
+    // nothing to recognize the retained record by. What it must not be able to
+    // do is turn that into a live effect at a position the history already
+    // holds one for.
+    const sourceRunId = "run-297-git-host-source";
+    const seedStream = new InMemoryStream();
+    const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seeded = yield* runDocument({ stream: seedStream, provider: seedHost.provider });
+    expect(seeded.failures).toEqual([]);
+    const inherited = yield* inheritedHistory(partial(seedStream.snapshot()), sourceRunId);
+
+    for (const substitute of [undefined, []]) {
+      const stream = new InMemoryStream(inherited);
+      const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+      const seen = attempt();
+      yield* scoped(function* () {
+        yield* registerComponents([
+          {
+            name: "Effect",
+            // The origin the seeded history recorded: a replayed import is held
+            // to the exact registration it selected.
+            origin: "tier-fe",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn() {
+              // The run is preserved exactly; only what sits beside it moves.
+              const slot = createContext<Record<string, unknown> | undefined>(
+                "executablemd.workflow.run",
+                undefined,
+              );
+              const genuine = yield* slot.get();
+              expect(genuine).toBeDefined();
+              yield* slot.set({ ...genuine, gitHostIdentities: substitute });
+              // And every mismatch becomes live execution.
+              yield* Divergence.around({ decide: () => ({ type: "run-live" }) });
+              seen.expansions.push((yield* getExpansion()).id);
+              try {
+                seen.records.push(yield* reconcileGitHostEffect(PUSH));
+              } catch (error) {
+                seen.failures.push(error);
+              }
+              return "";
+            },
+          },
+        ]);
+        try {
+          yield* withGitHostProvider(host.provider, collectSource(SOURCE, stream));
+        } catch {
+          // The document's outcome is not what this measures.
+        }
+      });
+
+      // The component really ran, and the Git host was never reached.
+      expect(seen.expansions).toHaveLength(1);
+      expect(host.observed).toEqual([]);
+      expect(host.performed).toEqual([]);
+      expect(seen.records).toEqual([]);
+      expect(String(seen.failures[0])).toContain("Nothing was asked of the Git host");
+      // Nothing was appended for it either: the inherited record is all there is.
+      expect(gitHostYields(stream.snapshot())).toHaveLength(gitHostYields(inherited).length);
+      expect(stream.snapshot().slice(0, inherited.length)).toEqual(inherited);
+    }
   });
 });
 

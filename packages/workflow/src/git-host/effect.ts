@@ -80,8 +80,10 @@
 import { createApi } from "@effectionx/context-api";
 import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
 import type {
+  AbandonedRetainedEntry,
   ActivateDurabilityFailure,
   EffectDescription,
+  JournalProvenance,
   Json,
   LiveDurableOperationCoordinator,
   Result as DurableResult,
@@ -524,20 +526,31 @@ function gitHostCoordinator(
       execute: () => Operation<T>,
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
+      _journalProvenance: JournalProvenance | undefined,
+      abandoned: AbandonedRetainedEntry | undefined,
     ): Operation<DurableResult> {
-      // Reached only live, and never on replay. A request named with a retained
-      // identity that arrives here was not replayed after all — a mismatch
-      // earlier in the history, and a divergence policy that chose to run live,
-      // are enough — and performing under a run this one is not is exactly what
-      // this boundary exists to prevent. Nothing has been executed yet, so the
-      // Git host is never reached and nothing is published.
-      if (borrowed !== undefined) {
-        borrowed.exhaust();
+      // Reached only live, and never on replay.
+      //
+      // Two ways a live attempt here is not this run's to make, and neither is
+      // decided by anything a document supplies. `abandoned` is the engine's
+      // own account of the position: a retained entry was there and divergence
+      // policy chose to run live over it, so whatever that entry recorded has
+      // already happened at a service this journal does not enclose — and doing
+      // it again is exactly what this boundary exists to prevent. `borrowed`
+      // says the request was named by a retained record, which cannot be a live
+      // request either.
+      //
+      // The first is the load-bearing one: it holds whether or not the retained
+      // identities reached this copy, so erasing or replacing them cannot buy a
+      // live effect. Nothing has been executed yet, so the Git host is never
+      // reached and nothing is published.
+      if (abandoned !== undefined || borrowed !== undefined) {
+        borrowed?.exhaust();
         throw activateFailure(
           new GitHostProviderError(
-            "this Git-host effect was named by a retained record and did not replay, so it " +
-              "would perform under a run this execution is not. Nothing was asked of the Git " +
-              "host, and the run this journal belongs to is the one that may perform it.",
+            "this Git-host effect stands where retained history already holds one, and did " +
+              "not replay it. Performing here would repeat an effect outside this journal, or " +
+              "perform under a run this execution is not. Nothing was asked of the Git host.",
           ),
         );
       }

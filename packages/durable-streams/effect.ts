@@ -39,6 +39,7 @@ import { ReplayGuard } from "./replay-guard.ts";
 import { consumable, observeEvent } from "./retained.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import { advanceDurablePosition } from "./position.ts";
+import type { YieldEntry } from "./replay-index.ts";
 import type {
   CoroutineView,
   DurableEffect,
@@ -79,7 +80,21 @@ type ReplayResult<T> =
       path: "replayed";
       teardown: (resolve: Resolve<EffectionResult<void>>) => void;
     }
-  | { path: "live" };
+  | {
+      path: "live";
+      /**
+       * The retained entry this live path stepped over, when it stepped over
+       * one.
+       *
+       * Present only when replay had an entry at this position and divergence
+       * policy chose to run live rather than refuse. An effect whose live work
+       * is not repeatable — one that reaches a service outside this journal —
+       * reads it to decide whether running live here is something it may do at
+       * all, and reads it from here rather than from anything a document can
+       * supply.
+       */
+      abandoned?: YieldEntry;
+    };
 
 /**
  * Shared replay logic for both createDurableEffect and createDurableOperation.
@@ -96,6 +111,7 @@ function checkReplay<T>(
   ctx: DurableContext,
 ): ReplayResult<T> {
   const entry = ctx.replayIndex.peekYield(ctx.coroutineId);
+  let abandoned: YieldEntry | undefined;
 
   // ── REPLAY PATH ──
   // Use a labeled block so that divergence decisions of type "run-live"
@@ -130,6 +146,7 @@ function checkReplay<T>(
 
         // decision.type === "run-live"
         ctx.replayIndex.disableReplay(ctx.coroutineId);
+        abandoned = entry;
         break replay;
       }
 
@@ -204,7 +221,7 @@ function checkReplay<T>(
     }
   } // end replay block
 
-  return { path: "live" };
+  return abandoned === undefined ? { path: "live" } : { path: "live", abandoned };
 }
 
 /**
@@ -397,6 +414,7 @@ export function createDurableOperation<T extends Json>(
             },
             activateFailure,
             getJournalProvenance(ctx.stream),
+            replay.abandoned,
           );
           resolve(protocolToEffection<T>(result));
         } catch (err) {

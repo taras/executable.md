@@ -1878,11 +1878,14 @@ diverged for another would accept different history depending on which module
 object asked.
 
 What makes an answer safe is not where it came from but what happens to a wrong
-one. On replay the record consumed is held to the request being made, so an
-identity that is not that record's own is a refusal; and a request named by a
-retained record that reaches live execution performs nothing. A substituted
-answer can therefore deny one effect. It cannot make it observe, perform or
-journal under another run.
+one, and what authorizes live execution is not that answer at all. A Git-host
+effect standing where retained history already holds one, that did not replay
+it, performs nothing: it asks the Git host nothing and appends nothing. The
+engine's own account of the position decides that, so removing, replacing or
+forging the transported identities cannot buy a live effect — it can only make
+the effect replay correctly or refuse. On replay the record consumed is
+additionally held to the request being made, so an identity that is not that
+record's own is a refusal too.
 
 It belongs to the exact retained event it came from, at the position that event
 occupies. One element may ask for more than one Git-host effect, so the records
