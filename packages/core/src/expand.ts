@@ -2973,7 +2973,11 @@ function* expandFunctionComponent(
     if (!TestHarnessComponentDefinition.own(definition.fn)) {
       printsOwnFailures = printsErrors(definition.fn);
     }
-    const produced = printsOwnFailures
+    // Run the invocation here, before the ledger is read again: what the
+    // component did to the run's record is the thing being asked about, and a
+    // check made against an operation that has not run yet can only ever see
+    // the record it started from.
+    const produced = yield* printsOwnFailures
       ? scoped(function* () {
           yield* usePrintErrors("component");
           return yield* invoke();
@@ -2983,7 +2987,7 @@ function* expandFunctionComponent(
     if (suffered !== undefined && suffered !== before) {
       return [yield* raise(suffered)];
     }
-    return yield* produced;
+    return produced;
   }
   return yield* accepted();
 }
