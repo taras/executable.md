@@ -1870,13 +1870,12 @@ by the identity the record holds, while every live attempt is named by the run
 performing it. That is what keeps the fork the authority for what it does next
 without making it the author of what it inherited.
 
-That identity is read from the retained entry itself, in the replay index built
-from the snapshot the engine admitted, and from nowhere else. There is no
-binding to install and no name to substitute: a component, a middleware and a
-separately loaded copy have nothing to replace, because nothing consults one. A
-position that retains no entry — every live one — borrows nothing, so an
-inherited identity can never reach an observation, a performance or an appended
-event.
+That identity is established once, when the engine admits the run's retained
+snapshot, and held against the run it admitted rather than published anywhere a
+name can reach. No context, middleware, component or separately loaded copy can
+choose it: there is no binding to replace and no setter to call. A position the
+snapshot holds no record for — every live one — borrows nothing, so an inherited
+identity can never reach an observation, a performance or an appended event.
 
 A Git-host event that settled into no such record is the other case. The run
 stopped without establishing what happened at the remote, so continuing across

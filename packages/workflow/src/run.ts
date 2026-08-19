@@ -65,6 +65,7 @@ import type {
 } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import { revParse } from "./git.ts";
+import { rememberRetainedGitHostIdentities } from "./git-host/identities.ts";
 import {
   admitWorkflowRunHistory,
   baseMismatch,
@@ -289,6 +290,12 @@ function admits(preparation: RunPreparation): JournalAdmission {
     if (admitted === undefined) {
       return;
     }
+    // The one place both halves are in hand: the run canonical core just
+    // admitted, and the snapshot it admitted it from. A Git-host effect at a
+    // position this history already holds a record at is named by the identity
+    // that record holds, and this is where that association is established —
+    // out of reach of every name a document could bind.
+    rememberRetainedGitHostIdentities(admitted, retained);
     yield* publish(admitted);
   };
 }

@@ -1022,59 +1022,61 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(unsupported.snapshot().map(serializeDurableEvent).join("")).not.toContain(FORGED_MARKER);
   });
 
-  it("GH14: a retained record's identity comes from the journal, not from a binding", function* () {
+  it("GH14: a counterfeit context cannot choose a Git-host identity", function* () {
     // A fork's journal holds records its source wrote, so the effect at a
-    // retained position is named by the identity that record holds. What
-    // chooses it is the replay index canonical core built from the snapshot it
-    // admitted — and a counterfeit that reaches for a name cannot substitute
-    // one, because nothing here consults a binding at all.
+    // retained position is named by the identity that record holds. What must
+    // never choose it is a binding: `DurableContext` is a public stable name,
+    // and a stateful replacement can forge one replay-index answer and delegate
+    // the rest.
     const inheritedRunId = "run-297-git-host-source";
     const seedStream = new InMemoryStream();
     const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
     const seeded = yield* runDocument({ stream: seedStream, provider: seedHost.provider });
     expect(seeded.failures).toEqual([]);
 
-    // The same history, rewritten as a *source* run's: this is what a fork
-    // inherits, and the identity in it is not this run's.
-    // Truncated, so the run continues into the component rather than reusing a
-    // recorded terminal result without entering the durable body at all.
+    // The same history as a *source* run's, truncated so the run continues into
+    // the component rather than reusing a recorded terminal result.
     const inherited = yield* inheritedHistory(partial(seedStream.snapshot()), inheritedRunId);
 
-    // Replayed under this run, with a counterfeit installed from inside the
-    // execution and no provider at all: a completed record replays
-    // provider-free, and the identity it carries is the one it was written
-    // under rather than the counterfeit's.
+    // Uncounterfeited: a completed inherited record replays provider-free,
+    // under the identity it was written with rather than this run's.
     const replayStream = new InMemoryStream(inherited);
-    const replayed = yield* runDocument({
-      stream: replayStream,
-      around: (operation) => withCounterfeitIdentities(operation),
-    });
+    const replayed = yield* runDocument({ stream: replayStream });
 
     expect(replayed.failures).toEqual([]);
     expect(recordOf(replayed).request.identity.runId).toBe(inheritedRunId);
-    // Nothing was asked and no second Git-host event exists: the record was
-    // already there, and replaying it appended nothing of its own.
+    // Nothing was asked and no second Git-host event exists.
     expect(gitHostYields(replayStream.snapshot())).toHaveLength(1);
     expect(replayStream.snapshot().slice(0, inherited.length)).toEqual(inherited);
 
-    // Live, under the same counterfeit: the identity the provider is given and
-    // the identity the journal receives are this run's, because a live position
-    // retains nothing for an identity to be borrowed from.
+    // Counterfeited, on both paths. The replacement may break replay — that is
+    // its own business — but it can never put its run anywhere: not into what
+    // the provider is asked, not into what the effect produced, and not into
+    // what either journal holds.
+    const forged = yield* counterfeitRecord();
+
+    const forgedReplayStream = new InMemoryStream(inherited);
+    const forgedReplay = yield* counterfeitedRun({ stream: forgedReplayStream, forged });
+
     const liveStream = new InMemoryStream();
     const liveHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
-    const live = yield* runDocument({
+    const live = yield* counterfeitedRun({
       stream: liveStream,
       provider: liveHost.provider,
-      around: (operation) => withCounterfeitIdentities(operation),
+      forged,
     });
 
-    expect(live.failures).toEqual([]);
-    expect(liveHost.observed[0]?.identity.runId).toBe(RUN.runId);
-    expect(liveHost.performed[0]?.identity.runId).toBe(RUN.runId);
-    expect(recordOf(live).request.identity.runId).toBe(RUN.runId);
-    expect(liveStream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
-      COUNTERFEIT_RUN,
-    );
+    for (const request of [...liveHost.observed, ...liveHost.performed]) {
+      expect(request.identity.runId).toBe(RUN.runId);
+    }
+    for (const attempt of [forgedReplay, live]) {
+      expect(attempt.records.map((record) => record.request.identity.runId)).not.toContain(
+        COUNTERFEIT_RUN,
+      );
+    }
+    for (const stream of [forgedReplayStream, liveStream]) {
+      expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(COUNTERFEIT_RUN);
+    }
   });
 });
 
@@ -1082,27 +1084,103 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
 const COUNTERFEIT_RUN = "counterfeit-run";
 
 /**
- * Same-name bindings a component could install from inside an execution.
+ * One execution whose own component rebinds the durable machinery's context and
+ * then asks for a Git-host effect.
  *
- * Built through separately constructed descriptors, which is how a loaded copy
- * and a repository component reach a name: an Effection context is identified
- * by its name, so this is exactly the substitution a stable name permits. The
- * name is the one an earlier revision of this engine trusted for retained
- * Git-host identities; nothing reads it now, and the test is what says so.
+ * `DurableContext` is a public stable name — `"@effection/durable"` — so a
+ * separately constructed descriptor addresses the very context the engine runs
+ * on, and a component is where a repository component or a loaded copy would
+ * install one. The replacement is *stateful* and armed immediately before the
+ * effect: it forges one completed Git-host entry for the next `peekYield()` and
+ * delegates every later peek to the genuine index, so anything consulting the
+ * replay index for an identity at that moment sees a retained record while
+ * durable execution sees the real position.
+ *
+ * Nothing it does may change which identity the effect uses.
  */
-function withCounterfeitIdentities<T>(operation: Operation<T>): Operation<T> {
-  return scoped(function* () {
-    const retained = createContext<unknown>(
-      "executablemd.workflow.git-host.retained-identities",
-      undefined,
-    );
-    yield* retained.set({
-      identities: new Map([["expansion-1", COUNTERFEIT_RUN]]),
-      // Whatever shape a reader might have expected, answered for every key.
-      get: () => COUNTERFEIT_RUN,
-    });
-    return yield* operation;
+function* counterfeitedRun(options: {
+  readonly stream: DurableStream;
+  readonly provider?: GitHostProvider;
+  readonly forged: DurableEvent;
+}): Operation<Attempt> {
+  const seen = attempt();
+  const { forged } = options;
+  const entry =
+    forged.type === "yield"
+      ? { description: forged.description, result: forged.result }
+      : undefined;
+
+  yield* scoped(function* () {
+    yield* registerComponents([
+      {
+        name: "Effect",
+        origin: "tier-gh",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          const durable = createContext<Record<string, unknown>>("@effection/durable");
+          const genuine = yield* durable.expect();
+          const index = genuine["replayIndex"] as { peekYield(coroutineId: string): unknown };
+          let armed = true;
+          yield* durable.set({
+            ...genuine,
+            replayIndex: Object.create(index, {
+              peekYield: {
+                value(coroutineId: string): unknown {
+                  if (armed) {
+                    armed = false;
+                    return entry;
+                  }
+                  return index.peekYield(coroutineId);
+                },
+              },
+            }),
+          });
+
+          seen.expansions.push((yield* getExpansion()).id);
+          try {
+            seen.records.push(yield* reconcileGitHostEffect(PUSH));
+          } catch (error) {
+            seen.failures.push(error);
+          }
+          return "";
+        },
+      },
+    ]);
+    const execution = collectSource(SOURCE, options.stream);
+    try {
+      yield* options.provider === undefined
+        ? execution
+        : withGitHostProvider(options.provider, execution);
+    } catch {
+      // A document that fails is one of the outcomes under test.
+    }
   });
+  return seen;
+}
+
+/** A completed Git-host record naming a run nothing here is. */
+function* counterfeitRecord(): Operation<DurableEvent> {
+  const request: CompleteGitHostEffectRequest = {
+    identity: { runId: COUNTERFEIT_RUN, expansionId: "expansion-1" },
+    kind: PUSH.kind,
+    inputs: PUSH.inputs,
+    naturalKey: PUSH.naturalKey,
+  };
+  return {
+    type: "yield",
+    coroutineId: "root",
+    description: { type: GIT_HOST_EFFECT, name: yield* gitHostRequestFingerprint(request) },
+    result: {
+      status: "ok",
+      value: {
+        request,
+        preState: null,
+        observations: null,
+        decision: "performed",
+        result: null,
+      } as unknown as Json,
+    },
+  };
 }
 
 /**
