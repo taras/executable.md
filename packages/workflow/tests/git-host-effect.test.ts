@@ -1078,7 +1078,108 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
       expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(COUNTERFEIT_RUN);
     }
   });
+
+  it("GH15: an inherited identity answers one retained call, never the live one after it", function* () {
+    // `reconcileGitHostEffect()` is a public surface, so one expansion may reach
+    // it twice. A fork whose inherited prefix ends after the first of those
+    // calls must not lend the source's identity to the second: that call is
+    // live, and a live call is the fork's own.
+    const sourceRunId = "run-297-git-host-source";
+    const second: GitHostEffectRequest = {
+      kind: "git-push",
+      inputs: { remote: "origin", branch: "release-1.5", commit: "0e1d2c3" },
+      naturalKey: { remote: "origin", destinationRef: "refs/heads/release-1.5" },
+    };
+
+    // A source run that made both calls in one expansion.
+    const seedStream = new InMemoryStream();
+    const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seeded = yield* twiceRun({ stream: seedStream, provider: seedHost.provider, second });
+    expect(seeded.failures).toEqual([]);
+    expect(seeded.records).toHaveLength(2);
+    expect(gitHostYields(seedStream.snapshot())).toHaveLength(2);
+
+    // What a fork inherits: the prefix ending after the *first* record, written
+    // under the source's identity. The second call has nothing retained.
+    const rewritten = yield* inheritedHistory(partial(seedStream.snapshot()), sourceRunId);
+    const upTo = rewritten.findIndex(
+      (event) => event.type === "yield" && event.description.type === GIT_HOST_EFFECT,
+    );
+    const inherited = rewritten.slice(0, upTo + 1);
+    expect(gitHostYields(inherited)).toHaveLength(1);
+
+    const stream = new InMemoryStream(inherited);
+    const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const forked = yield* twiceRun({ stream, provider: host.provider, second });
+
+    expect(forked.failures).toEqual([]);
+    expect(forked.records).toHaveLength(2);
+
+    // The first call replays the inherited record, provider-free, under the
+    // identity it was written with.
+    expect(forked.records[0]?.request.identity.runId).toBe(sourceRunId);
+
+    // The second is live: the provider is asked exactly once, under the run
+    // executing now, and that is the identity the journal receives.
+    expect(host.observed).toHaveLength(1);
+    expect(host.performed).toHaveLength(1);
+    expect(host.observed[0]?.identity.runId).toBe(RUN.runId);
+    expect(host.performed[0]?.identity.runId).toBe(RUN.runId);
+    expect(host.observed[0]?.naturalKey).toEqual(second.naturalKey);
+    expect(forked.records[1]?.request.identity.runId).toBe(RUN.runId);
+
+    // Two Git-host events: the one inherited, and the one this run appended.
+    const yields = gitHostYields(stream.snapshot());
+    expect(yields).toHaveLength(2);
+    expect(stream.snapshot().slice(0, inherited.length)).toEqual(inherited);
+    const appended = yields[1];
+    const record =
+      appended?.type === "yield" && appended.result.status === "ok"
+        ? parseGitHostReconciliationRecord(appended.result.value)
+        : undefined;
+    expect(record?.request.identity.runId).toBe(RUN.runId);
+  });
 });
+
+/**
+ * One execution whose single expansion asks for two Git-host effects.
+ *
+ * Both calls are the same public surface from the same element, which is what
+ * makes an identity held per expansion too broad to be safe.
+ */
+function* twiceRun(options: {
+  readonly stream: DurableStream;
+  readonly provider: GitHostProvider;
+  readonly second: GitHostEffectRequest;
+}): Operation<Attempt> {
+  const seen = attempt();
+  yield* scoped(function* () {
+    yield* registerComponents([
+      {
+        name: "Effect",
+        origin: "tier-gh",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          seen.expansions.push((yield* getExpansion()).id);
+          for (const request of [PUSH, options.second]) {
+            try {
+              seen.records.push(yield* reconcileGitHostEffect(request));
+            } catch (error) {
+              seen.failures.push(error);
+            }
+          }
+          return "";
+        },
+      },
+    ]);
+    try {
+      yield* withGitHostProvider(options.provider, collectSource(SOURCE, options.stream));
+    } catch {
+      // A document that fails is one of the outcomes under test.
+    }
+  });
+  return seen;
+}
 
 /** A run id only a counterfeit could put anywhere. */
 const COUNTERFEIT_RUN = "counterfeit-run";

@@ -1873,9 +1873,15 @@ without making it the author of what it inherited.
 That identity is established once, when the engine admits the run's retained
 snapshot, and held against the run it admitted rather than published anywhere a
 name can reach. No context, middleware, component or separately loaded copy can
-choose it: there is no binding to replace and no setter to call. A position the
-snapshot holds no record for — every live one — borrows nothing, so an inherited
-identity can never reach an observation, a performance or an appended event.
+choose it: there is no binding to replace and no setter to call.
+
+It belongs to the exact retained event it came from. One element may ask for
+more than one Git-host effect, so each retained record answers for a request
+that matches it exactly and only until something has taken it. A request the
+inherited prefix holds no unclaimed record for is one this run is making itself
+— so reaching a live position is enough to be named by the run making it, and
+an inherited identity can never reach an observation, a performance or an
+appended event.
 
 A Git-host event that settled into no such record is the other case. The run
 stopped without establishing what happened at the remote, so continuing across
