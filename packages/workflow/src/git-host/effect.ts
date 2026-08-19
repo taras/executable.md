@@ -90,7 +90,7 @@ import type {
 import { Err, ensure, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { getExpansion } from "@executablemd/core";
-import { getWorkflowRun } from "../run.ts";
+import { getWorkflowRun, retainedGitHostIdentitiesHere } from "../run.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
 import { claimRetainedGitHostIdentity, exhaustRetainedGitHostIdentities } from "./identities.ts";
 
@@ -629,7 +629,8 @@ export function* reconcileGitHostEffect(
   // The live form first, because what a retained record has to match is the
   // request being made — and the run id is the one member being decided.
   const live = completeRequest(run.runId, expansion.id, request);
-  const retainedIdentity = claimRetainedGitHostIdentity(run, live);
+  const held = yield* retainedGitHostIdentitiesHere();
+  const retainedIdentity = claimRetainedGitHostIdentity(held, live);
   const complete =
     retainedIdentity === undefined
       ? live
@@ -639,7 +640,7 @@ export function* reconcileGitHostEffect(
   const borrowed: BorrowedIdentity | undefined =
     retainedIdentity === undefined
       ? undefined
-      : { exhaust: () => exhaustRetainedGitHostIdentities(run) };
+      : { exhaust: () => exhaustRetainedGitHostIdentities(held) };
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),

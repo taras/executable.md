@@ -1871,9 +1871,18 @@ performing it. That is what keeps the fork the authority for what it does next
 without making it the author of what it inherited.
 
 That identity is established once, when the engine admits the run's retained
-snapshot, and held against the run it admitted rather than published anywhere a
-name can reach. No context, middleware, component or separately loaded copy can
-choose it: there is no binding to replace and no setter to call.
+snapshot, and published beside the run itself — where every physical copy of the
+workflow package reads it. A second copy loaded from disk reconciles through the
+same operation name, and a fork whose Git-host history replayed for one copy and
+diverged for another would accept different history depending on which module
+object asked.
+
+What makes an answer safe is not where it came from but what happens to a wrong
+one. On replay the record consumed is held to the request being made, so an
+identity that is not that record's own is a refusal; and a request named by a
+retained record that reaches live execution performs nothing. A substituted
+answer can therefore deny one effect. It cannot make it observe, perform or
+journal under another run.
 
 It belongs to the exact retained event it came from, at the position that event
 occupies. One element may ask for more than one Git-host effect, so the records

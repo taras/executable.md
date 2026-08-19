@@ -65,7 +65,8 @@ import type {
 } from "@executablemd/durable-streams";
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import { revParse } from "./git.ts";
-import { rememberRetainedGitHostIdentities } from "./git-host/identities.ts";
+import { retainedGitHostIdentities } from "./git-host/identities.ts";
+import type { RetainedIdentity } from "./git-host/identities.ts";
 import {
   admitWorkflowRunHistory,
   baseMismatch,
@@ -110,6 +111,22 @@ const CurrentWorkflowRun: Context<RunSlot | undefined> = createContext<RunSlot |
  */
 interface RunSlot {
   run?: WorkflowRun;
+  /**
+   * The identity every Git-host record in this run's admitted history holds.
+   *
+   * Beside the run because a Git-host effect is named by a digest that includes
+   * the run id, so a record a fork inherited has to be recognized by the
+   * identity it was written under — and because a second physical copy of this
+   * package reconciles through the same stable name and must see the same
+   * answer. Nothing durable rests on it: a wrong answer is held to the record
+   * it consumed, and one that reaches live execution performs nothing.
+   */
+  gitHostIdentities?: RetainedIdentity[];
+}
+
+/** The Git-host identities this execution's admitted history holds. */
+export function* retainedGitHostIdentitiesHere(): Operation<RetainedIdentity[] | undefined> {
+  return (yield* CurrentWorkflowRun.get())?.gitHostIdentities;
 }
 
 /** The frozen run of the current document execution; throws outside one. */
@@ -295,9 +312,23 @@ function admits(preparation: RunPreparation): JournalAdmission {
     // position this history already holds a record at is named by the identity
     // that record holds, and this is where that association is established —
     // out of reach of every name a document could bind.
-    rememberRetainedGitHostIdentities(admitted, retained);
+    yield* publishGitHostIdentities(retained);
     yield* publish(admitted);
   };
+}
+
+/**
+ * Publish the identities this run's admitted history holds.
+ *
+ * Beside the run, in the same slot, so every physical copy of this package sees
+ * one answer rather than one per module object.
+ */
+function* publishGitHostIdentities(retained: readonly DurableEvent[]): Operation<void> {
+  const slot = yield* CurrentWorkflowRun.get();
+  if (slot === undefined) {
+    return;
+  }
+  slot.gitHostIdentities = retainedGitHostIdentities(retained);
 }
 
 /**

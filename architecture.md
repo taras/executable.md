@@ -1090,8 +1090,10 @@ so a fork inherits it and the remote is mutated once; the record keeps the
 identity it was written under, and the effect at a position the history already
 holds a record at is named by that identity, while every live attempt is named
 by the run performing it. The identity is established when the engine
-admits the run's retained snapshot and is held against that run, never published
-under a name a document could bind. It belongs to the exact retained event it
+admits the run's retained snapshot and is published beside the run, so every
+physical copy of the workflow package reads one answer; a wrong answer is held
+to the record it consumed on replay and performs nothing if it reaches live
+execution. It belongs to the exact retained event it
 came from, at the position that event occupies: records are offered in order,
 a call may take only the next untaken one and only when it asks exactly what
 that record answers, and a request named by a retained record that reaches live

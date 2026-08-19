@@ -15,12 +15,21 @@
  * chosen that way would reach a live observation, a live performance and the
  * journal.
  *
- * So the association is held here, in a table this module closes over. It is
- * keyed by the exact frozen `WorkflowRun` canonical core admitted, and it is
- * written in one place: the retained-run installation's admission, inside
- * core's own trusted journal read, from the snapshot core admitted. There is no
- * name to bind, no value to substitute, and no setter anything outside this
- * package's own installation can reach.
+ * So the table is built in one place — the retained-run installation's
+ * admission, inside core's own trusted journal read, from the snapshot core
+ * admitted — and published beside the run itself, where every physical copy of
+ * this package reads it. A second copy loaded from disk reconciles through the
+ * same stable operation name (Tier DLG), and it must see the same retained
+ * identities: a fork whose Git-host history replayed for one copy and diverged
+ * for another would accept different history depending on which module object
+ * asked.
+ *
+ * What makes an answer safe is not where it came from but what happens to a
+ * wrong one. On replay the shared reconciliation holds the record it consumed
+ * to the request being made, so an identity that is not that record's own is a
+ * refusal. And a request named by a retained record that reaches live execution
+ * performs nothing at all. A substituted answer can therefore deny this effect;
+ * it cannot make it observe, perform or journal under another run.
  *
  * ## One record, one position, in order
  *
@@ -53,65 +62,28 @@
  */
 
 import type { DurableEvent } from "@executablemd/durable-streams";
-import type { WorkflowRun } from "../journal.ts";
 import { canonicalJson } from "../storage/record.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
 import { parseGitHostReconciliationRecord } from "./records.ts";
 import type { CompleteGitHostEffectRequest } from "./records.ts";
 
 /** One retained record's identity, and what it was a record of. */
-interface RetainedIdentity {
+export interface RetainedIdentity {
   readonly runId: string;
   /** The request it answers for, with the run it was written under left out. */
   readonly asked: string;
   claimed: boolean;
 }
 
-const retainedIdentities = (() => {
-  // Canonical-module-local, on the same terms as journal provenance: a loaded
-  // copy cannot read this copy's associations or add to them.
-  const byRun = new WeakMap<WorkflowRun, RetainedIdentity[]>();
-
-  return {
-    remember(run: WorkflowRun, identities: RetainedIdentity[]): void {
-      byRun.set(run, identities);
-    },
-    claim(run: WorkflowRun, asked: string): string | undefined {
-      const held = byRun.get(run);
-      if (held === undefined) {
-        return undefined;
-      }
-      const next = held.find((identity) => !identity.claimed);
-      // In order, and only the next one. A call that does not ask what the
-      // record at this position answers is past the inherited prefix, and every
-      // later record goes with it rather than waiting to be matched by shape.
-      if (next === undefined || next.asked !== asked) {
-        exhaust(held);
-        return undefined;
-      }
-      next.claimed = true;
-      return next.runId;
-    },
-    exhaust(run: WorkflowRun): void {
-      const held = byRun.get(run);
-      if (held !== undefined) {
-        exhaust(held);
-      }
-    },
-  };
-})();
-
 /**
- * Associate one admitted run with the Git-host identities its history holds.
+ * The identities one admitted history holds, in the order it holds them.
  *
- * Called by the retained-run installation's admission and by nothing else, with
- * the run canonical core admitted and the snapshot it admitted it from.
+ * Built by the retained-run installation's admission, from the snapshot
+ * canonical core admitted, and published where every physical copy of this
+ * package reads it.
  */
-export function rememberRetainedGitHostIdentities(
-  run: WorkflowRun,
-  retained: readonly DurableEvent[],
-): void {
-  retainedIdentities.remember(run, identitiesIn(retained));
+export function retainedGitHostIdentities(retained: readonly DurableEvent[]): RetainedIdentity[] {
+  return identitiesIn(retained);
 }
 
 /**
@@ -120,8 +92,10 @@ export function rememberRetainedGitHostIdentities(
  * Called when a call has run live: replay has left the prefix, and a later
  * record must not be borrowed by whatever happens next.
  */
-export function exhaustRetainedGitHostIdentities(run: WorkflowRun): void {
-  retainedIdentities.exhaust(run);
+export function exhaustRetainedGitHostIdentities(held: RetainedIdentity[] | undefined): void {
+  if (held !== undefined) {
+    exhaust(held);
+  }
 }
 
 /**
@@ -131,10 +105,22 @@ export function exhaustRetainedGitHostIdentities(run: WorkflowRun): void {
  * Nothing is the ordinary answer, and it is what every live position gives.
  */
 export function claimRetainedGitHostIdentity(
-  run: WorkflowRun,
+  held: RetainedIdentity[] | undefined,
   request: CompleteGitHostEffectRequest,
 ): string | undefined {
-  return retainedIdentities.claim(run, asked(request));
+  if (held === undefined) {
+    return undefined;
+  }
+  const next = held.find((identity) => !identity.claimed);
+  // In order, and only the next one. A call that does not ask what the record
+  // at this position answers is past the inherited prefix, and every later
+  // record goes with it rather than waiting to be matched by shape.
+  if (next === undefined || next.asked !== asked(request)) {
+    exhaust(held);
+    return undefined;
+  }
+  next.claimed = true;
+  return next.runId;
 }
 
 /**
