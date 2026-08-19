@@ -258,6 +258,17 @@ about either. Without `as` there is nothing to assert about, so a settled `Err`
 fails the owning test rather than passing vacuously. A host refusal before a
 child exists raises directly and binds nothing.
 
+The outcome is readable throughout the content written inside the element —
+expression props and conditions, text and code-block interpolation, the regions
+and components written there, an `eval` block, and the caller's content
+projected through a component invoked there. It is not readable in that
+component's own body, in the child document, or from another authorized
+`<Execution>` written inside this one. Every other name resolves exactly as it
+would elsewhere in the document, and a binding written under the same name
+inside the body — a `<Capture as="…">`, an eval export — does not displace the
+outcome for the reads that follow it. After `</Execution>` the ordinary `as`
+binding applies, as it does for any other component.
+
 ### Declarations
 
 `<DiagnosticJournal>`, `<CollectOutput>` and `<CollectJournal>` are declarations,
@@ -313,6 +324,14 @@ engine. It reports only whether this exact invocation has `as`, and publishes
 the exact child outcome once before assertions expand. The channel exposes no
 binding name or environment and does not travel through the public `Component`
 Api, Context, props, component metadata or stable names.
+
+Publication goes to engine-owned state, never to a binding environment: an
+environment is composed by public middleware that may answer with a fresh one on
+every read, and publishing there would leave the assertions reading whatever
+that middleware decided. The engine lays the published outcome over the composed
+environment at each read the body performs instead. Public middleware therefore
+cannot fabricate a completion for the assertions to read, and the read the body
+performs is of the outcome the trusted provider reported.
 
 ## Test API
 

@@ -67,6 +67,7 @@ import type { Operation } from "effection";
 import { env, raise } from "./component-api.ts";
 import { renderSegments } from "./render.ts";
 import { evaluateExpression } from "./expand.ts";
+import type { ProjectionBinding } from "./projection-binding.ts";
 import { elementFrame, elementSite } from "./expansion.ts";
 import type { ExpansionFrame } from "./expansion.ts";
 import { Elicitation } from "./elicitation-api.ts";
@@ -149,6 +150,13 @@ export function* expandAnswers(
   expand: ExpandSegments,
   /** The region the answered body renders into. */
   owner: Segment[],
+  /**
+   * The projection binding this region reads through, or none.
+   *
+   * The region is the caller's own text, so a `value` or `delegate` expression
+   * written in it reads exactly what the element that opened it could read.
+   */
+  binding: ProjectionBinding | undefined,
 ): Operation<Segment[]> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "delegate") {
@@ -159,7 +167,7 @@ export function* expandAnswers(
       ];
     }
   }
-  const delegate = yield* readDelegate(element);
+  const delegate = yield* readDelegate(element, binding);
   if (delegate.error) {
     return [yield* raise(configError(ANSWERS, delegate.error, element))];
   }
@@ -168,7 +176,7 @@ export function* expandAnswers(
   const matchers: Matcher[] = [];
   for (const [index, child] of element.children.entries()) {
     if (isAnswer(child)) {
-      const parsed = yield* readAnswer(child, expand, index);
+      const parsed = yield* readAnswer(child, expand, index, binding);
       if (isErrorSegment(parsed)) {
         // The region cannot be trusted to answer anything, so it does not
         // expand a body that would ask. The printed error is returned rather than
@@ -271,6 +279,8 @@ function* readAnswer(
   element: ComponentElement,
   expand: ExpandSegments,
   index: number,
+  /** The projection binding this matcher's `value` expression reads through. */
+  binding: ProjectionBinding | undefined,
 ): Operation<Matcher | ErrorSegment> {
   for (const name of Object.keys({ ...element.props, ...element.expressions })) {
     if (name !== "template" && name !== "value") {
@@ -320,7 +330,7 @@ function* readAnswer(
   if (!("value" in element.props) && !("value" in element.expressions)) {
     return yield* refuse(element, 'requires a "value" prop.');
   }
-  const value = yield* readValue(element);
+  const value = yield* readValue(element, binding);
   if (value.error) {
     return yield* refuse(element, value.error);
   }
@@ -338,12 +348,21 @@ function* refuse(element: ComponentElement, message: string): Operation<ErrorSeg
  * Read here rather than where it is consumed, so a malformed one is reported at
  * the matcher that wrote it instead of surfacing later as a provider failure.
  */
-function* readValue(element: ComponentElement): Operation<{ parsed: Json; error?: string }> {
+function* readValue(
+  element: ComponentElement,
+  binding: ProjectionBinding | undefined,
+): Operation<{ parsed: Json; error?: string }> {
   const expression = element.expressions.value;
   if (expression !== undefined) {
     let evaluated: unknown;
     try {
-      evaluated = yield* evaluateExpression(expression, ANSWER, "value", element.projectedEnv);
+      evaluated = yield* evaluateExpression(
+        expression,
+        ANSWER,
+        "value",
+        binding,
+        element.projectedEnv,
+      );
     } catch (error) {
       return { parsed: null, error: error instanceof Error ? error.message : String(error) };
     }
@@ -387,12 +406,21 @@ function read(value: unknown): { parsed: Json; error?: string } {
  * only an identifier or member expression reaches `expressions` and needs
  * evaluating here.
  */
-function* readDelegate(element: ComponentElement): Operation<{ value: boolean; error?: string }> {
+function* readDelegate(
+  element: ComponentElement,
+  binding: ProjectionBinding | undefined,
+): Operation<{ value: boolean; error?: string }> {
   const expression = element.expressions.delegate;
   if (expression !== undefined) {
     let evaluated: unknown;
     try {
-      evaluated = yield* evaluateExpression(expression, ANSWERS, "delegate", element.projectedEnv);
+      evaluated = yield* evaluateExpression(
+        expression,
+        ANSWERS,
+        "delegate",
+        binding,
+        element.projectedEnv,
+      );
     } catch (error) {
       return { value: false, error: error instanceof Error ? error.message : String(error) };
     }

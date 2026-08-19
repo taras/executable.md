@@ -65,7 +65,9 @@ describe("a function component's printed error", () => {
         },
         { at: "min" },
       );
-      return renderSegments(yield* expandSegments(scanSegments("<Broken />"), {}, {}, new Set()));
+      return renderSegments(
+        yield* expandSegments(scanSegments("<Broken />"), {}, {}, new Set(), undefined, undefined),
+      );
     });
 
     expect(raised).toEqual(["broken thing"]);

@@ -84,7 +84,7 @@ function expandWithBindings(
     yield* useTestComponents(components);
     const testEnv = { values: bindings };
     yield* Component.around({ env: () => testEnv }, { at: "min" });
-    const expanded = yield* expandSegments(segments, meta, props, new Set());
+    const expanded = yield* expandSegments(segments, meta, props, new Set(), undefined, undefined);
     return renderSegments(expanded);
   });
 }
@@ -100,7 +100,7 @@ function expandWithoutEnv(
 ): Operation<string> {
   return scoped(function* () {
     yield* useTestComponents(components);
-    const expanded = yield* expandSegments(segments, meta, props, new Set());
+    const expanded = yield* expandSegments(segments, meta, props, new Set(), undefined, undefined);
     return renderSegments(expanded);
   });
 }
@@ -293,7 +293,7 @@ describe("Text interpolation — eval bindings in text segments", () => {
         },
         { at: "min" },
       );
-      return yield* expandSegments(segments, {}, {}, new Set());
+      return yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
     });
     // The code block content should have been interpolated
     expect(captured[0]).toBe("echo 8080\n");

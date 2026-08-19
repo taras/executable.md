@@ -54,6 +54,15 @@ export interface StubHostOptions {
    * chunk happens; a document cannot be asked to emit on cue without a timer.
    */
   readonly emit?: (chunk: (text: string) => Operation<void>) => Operation<void>;
+  /**
+   * Settle every child this way instead of running a document.
+   *
+   * A test about whose answer the assertions read needs the trusted provider's
+   * answer to be one nothing else would produce, and needs it to be a failure
+   * — a fabricated success is only distinguishable from an authoritative one
+   * when the authoritative one says something different.
+   */
+  readonly settle?: () => ChildSettlement;
 }
 
 export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
@@ -63,6 +72,9 @@ export function stubExecutionHost(options: StubHostOptions): StubExecutionHost {
     *runChild(invocation: ChildInvocation): Operation<ChildSettlement> {
       const request = invocation.request;
       log.requests.push(request);
+      if (options.settle !== undefined) {
+        return options.settle();
+      }
       // Installed here, in the child's own isolated scope: the harness detached
       // it from this document's, so the child reads nothing this document
       // installed.

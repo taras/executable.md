@@ -1598,6 +1598,9 @@ function* runValueRoot(
         validatedProps,
         new Set(),
         counter,
+        // A root is nobody's projected content: there is no invocation above it
+        // and nothing published for it to read.
+        undefined,
         undefined,
         path,
         0,
@@ -1775,6 +1778,7 @@ function* documentWorkflow(
         validatedProps,
         new Set(),
         counter,
+        undefined,
         produced,
         rootPath,
         0,

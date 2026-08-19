@@ -123,7 +123,14 @@ function expand(
   return scoped(function* () {
     yield* useTestComponents(components, opts.codeResult);
     yield* useTestEnv({ values: {} });
-    const expanded = yield* expandSegments(segments, opts.meta ?? {}, opts.props ?? {}, new Set());
+    const expanded = yield* expandSegments(
+      segments,
+      opts.meta ?? {},
+      opts.props ?? {},
+      new Set(),
+      undefined,
+      undefined,
+    );
     return renderSegments(expanded);
   });
 }
@@ -153,7 +160,7 @@ function expandToSegments(
   return scoped(function* () {
     yield* useTestComponents(components, codeResult);
     yield* useTestEnv({ values: {} });
-    return yield* expandSegments(segments, {}, {}, new Set());
+    return yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
   });
 }
 
@@ -169,7 +176,7 @@ function expandWithEnv(
     // A checked command failure ends the expansion (#441). The environment is
     // still this frame's, so what the run did or did not bind stays readable.
     try {
-      const expanded = yield* expandSegments(segments, {}, {}, new Set());
+      const expanded = yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
       return { output: renderSegments(expanded), env: testEnv.values, failure: undefined };
     } catch (error) {
       return {
@@ -570,7 +577,7 @@ function recordingExpand(
     yield* useTestComponents(components);
     const execCalls = yield* useRecordingModifiers(codeResult);
     yield* useTestEnv({ values: {} });
-    const expanded = yield* expandSegments(segments, {}, {}, new Set());
+    const expanded = yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
     return { output: renderSegments(expanded), execCalls };
   });
 }

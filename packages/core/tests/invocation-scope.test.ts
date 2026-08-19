@@ -303,7 +303,14 @@ describe("Tier O — Eval scope hierarchy", () => {
     const expanded = yield* scoped(function* () {
       yield* useHarness(definitions, timeline);
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      return yield* expandSegments(scanSegments("<Wrap>middle</Wrap>"), {}, {}, new Set());
+      return yield* expandSegments(
+        scanSegments("<Wrap>middle</Wrap>"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     const output = renderSegments(expanded);
@@ -322,7 +329,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       yield* useHarness(definitions, timeline);
       yield* Component.around({ evalScope: () => root }, { at: "min" });
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      yield* expandSegments(scanSegments("<Holder />"), {}, {}, new Set());
+      yield* expandSegments(scanSegments("<Holder />"), {}, {}, new Set(), undefined, undefined);
       // Still inside the parent scope: the invocation is already dismantled.
       expect(timeline).toEqual(["start:own", "stop:own"]);
     });

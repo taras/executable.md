@@ -48,7 +48,7 @@ function expandRaw(
       },
       { at: "min" },
     );
-    return yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    return yield* expandSegments(scanSegments(source), {}, {}, new Set(), undefined, undefined);
   });
 }
 

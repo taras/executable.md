@@ -71,6 +71,7 @@ Existing documents and code get aligned to this section retroactively.
 | testing harness | the testing-only construct through which one canonical `<Test>` invocation runs another document as a real document execution under a selected host profile; it is not component composition and is unavailable to any element core did not recognize as its own `<Test>` |
 | host profile | a named production assembly a trusted host offers a testing harness — `run` today — reused after argument parsing rather than restated; a host that cannot offer one refuses rather than approximating it |
 | execution outcome | what one nested document execution ended as, as the harness publishes it: a settlement carrying the exact completion `Result`, or, for a workflow attempt, a durable suspension carrying the run and suspension identities. A suspension is neither success nor failure |
+| projection binding | the value one authorized invocation publishes for the caller-authored content written inside it, held in engine-owned state rather than in a binding environment and laid over what ordinary composition produced at each read that content performs. It keeps the authored name privately, accepts one publication, is carried as an argument along the content it belongs to, and is never handed to a component or to middleware |
 | trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
@@ -2186,6 +2187,36 @@ metadata or a stable name. Public component middleware therefore cannot turn an
 unbound failed child into test data, suppress publication, or make assertions
 observe a synthetic completion.
 
+What it publishes to is a **projection binding** the engine owns, and not a
+binding environment. An environment is composed by public `Component.env`
+middleware; an outermost handler answers ahead of every engine provider however
+deeply nested, and a handler answering with a *fresh* environment on every read
+would leave publication in a throwaway while the assertions read the
+fabrication — a trusted host returning `Err` and the test passing anyway. So the
+value never enters an environment. Expansion carries the binding as a required
+argument along the caller-authored content the element encloses, and lays the
+one authored name over whatever ordinary composition produced at each point a
+read happens: text interpolation, code-block interpolation, expression props and
+conditions, and the built-in `eval` terminal. Ordinary composition is otherwise
+untouched — every other name resolves exactly as middleware decided, and writes
+and eval exports still land in the environment they always did. The overlay is
+reapplied per read rather than defended as a slot, so a write under the same
+name cannot displace the published outcome while the assertion body is active,
+and does not survive it.
+
+The binding follows what the caller wrote and stops everywhere else. It reaches
+the regions written inside the element, their expressions, interpolation and
+code blocks, and the caller's content projected through a component invoked
+there — the projection handle retains it in the caller frame and clears it in
+the authored one. It does not reach the component's own body or dynamic
+Markdown, the child document, a root execution, or another authorized
+invocation, each of which passes no binding explicitly rather than by default.
+The built-in `eval` terminal reads it from the block context canonical core
+issued, where a private field keeps it out of every handler composed around
+`Component.applyModifiers`; a handler that answers `codeBlock()` with a context
+of its own has replaced the block, which is the pre-existing modifier boundary
+and not something an overlay restores.
+
 The child's scope does not descend from the document that ran it. That is not
 isolation for its own sake: a child is a *root* execution, and everything the
 outer document installed — its testing session and its one-execution guard, its
@@ -2350,7 +2381,7 @@ Status is measured against main.
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
-| testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
+| testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer, then read by the assertion body through engine-owned state laid over the composed environment rather than through a binding written into it | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; generated-XMD admission of the pinned identity remains unbuilt (#369) |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |

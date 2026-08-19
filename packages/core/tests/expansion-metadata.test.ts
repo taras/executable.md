@@ -53,6 +53,8 @@ function run(
       {},
       {},
       new Set(),
+      undefined,
+      undefined,
     );
   });
 }
@@ -122,7 +124,7 @@ describe("Tier IM — what an expanding element knows about itself", () => {
         children: [],
         selfClosing: true,
       };
-      return yield* expandSegments([element], {}, {}, new Set());
+      return yield* expandSegments([element], {}, {}, new Set(), undefined, undefined);
     });
 
     expect(seen?.name).toBe("Probe");

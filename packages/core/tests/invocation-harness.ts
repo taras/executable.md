@@ -123,7 +123,7 @@ export function expandAll(
     // by `as` would be invisible to the next sibling that reads it.
     const rootEnv = { values: {} };
     yield* Component.around({ env: () => rootEnv }, { at: "min" });
-    return yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    return yield* expandSegments(scanSegments(source), {}, {}, new Set(), undefined, undefined);
   });
 }
 

@@ -154,7 +154,14 @@ function run(
     const origin =
       options.path === undefined ? undefined : { path: options.path, baseOffset: 0, baseLine: 1 };
     try {
-      const segments = yield* expandSegments(scanSegments(source, origin), {}, {}, new Set());
+      const segments = yield* expandSegments(
+        scanSegments(source, origin),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
       return { outcome: Ok(segments), observed, offered, output: renderSegments(segments) };
     } catch (error) {
       // Nothing is lost if expansion ever throws a bare value: the original

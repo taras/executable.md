@@ -10,12 +10,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, scoped, withResolvers } from "effection";
+import { createContext, ensure, Err, scoped, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { Component, TestBehavior } from "@executablemd/core";
+import { Component, TestBehavior, useDataUriCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
@@ -26,6 +26,7 @@ import type { ExecutionHostProvider, ExecutionHostRequest } from "../src/executi
 import type { TestResult } from "../src/test-api.ts";
 import { stubExecutionHost } from "./execution-host-stub.ts";
 import type { StubHostLog, StubHostOptions } from "./execution-host-stub.ts";
+import type { ChildSettlement } from "../src/execution-host.ts";
 
 interface HarnessRun {
   readonly output: string;
@@ -39,6 +40,7 @@ interface RunOptions {
   /** Extra installs, run after the testing session and before the document. */
   readonly around?: () => Operation<void>;
   readonly emit?: StubHostOptions["emit"];
+  readonly settle?: StubHostOptions["settle"];
   /** Called for each chunk the outer document emits, as it arrives. */
   readonly onChunk?: (chunk: string) => Operation<void>;
 }
@@ -53,6 +55,7 @@ function* runHarness(
     const stub = stubExecutionHost({
       files,
       ...(options.emit === undefined ? {} : { emit: options.emit }),
+      ...(options.settle === undefined ? {} : { settle: options.settle }),
     });
     const log = stub.log;
     if (options.around) {
@@ -531,6 +534,33 @@ describe("authority", () => {
     expect(only(run).error?.message).toContain("another <Execution> issued");
   });
 
+  it("refuses a structural copy of a request", function* () {
+    const run = yield* runHarness(
+      {
+        "README.md": doc(
+          '<Test name="copied">',
+          '<Execution host="run" target="child.md" as="child" />',
+          "</Test>",
+        ),
+        "child.md": doc("child"),
+      },
+      {
+        *around() {
+          yield* ExecutionHost.around({
+            *run([request]: [ExecutionHostRequest], next) {
+              // Every member the request publishes, on an object this handler
+              // built. What it does not carry is what canonical core kept.
+              yield* next({ ...request });
+            },
+          });
+        },
+      },
+    );
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.message).toContain("no <Execution> issued");
+    expect(run.log.requests).toEqual([]);
+  });
+
   it("refuses a declaration written outside <Execution>", function* () {
     const run = yield* runHarness({
       "README.md": doc('<Test name="loose">', '<CollectOutput as="output" />', "</Test>"),
@@ -812,5 +842,250 @@ describe("the authority path", () => {
     expect(arguments_.length).toBe(1);
     expect(arguments_[0]?.length).toBe(1);
     expect(arguments_[0]?.[0]).toEqual({ name: "behavior" });
+  });
+});
+
+describe("publication is the engine's, not the environment's", () => {
+  /** What the trusted provider answers, and what nothing else could invent. */
+  const AUTHORITATIVE = "authoritative child failure";
+
+  function failingChild(): ChildSettlement {
+    return {
+      outcome: { kind: "settled", result: Err(new Error(AUTHORITATIVE)) },
+      output: "",
+    };
+  }
+
+  /**
+   * Public `Component.env` middleware answering with a fresh environment that
+   * already contains a successful child outcome.
+   *
+   * Fresh on every read is the whole attack: publication into the environment
+   * would land in a throwaway, and the assertion would read this one. Nothing
+   * here mutates the engine — it only answers the question the engine asks.
+   */
+  function* fabricateSuccess(binding: string): Operation<void> {
+    yield* Component.around({
+      env: () => ({
+        values: { [binding]: { kind: "settled", result: { ok: true, value: "synthetic" } } },
+      }),
+    });
+  }
+
+  const ASSERTS_FAILURE = doc(
+    '<Test name="authoritative">',
+    '<Execution host="run" target="child.md" as="run">',
+    "<AssertEquals actual={run.result.ok} expected={false} />",
+    `<AssertEquals actual={run.result.error.message} expected="${AUTHORITATIVE}" />`,
+    "</Execution>",
+    "</Test>",
+  );
+
+  it("binds the provider's exact failure, not middleware's fabricated success", function* () {
+    const run = yield* runHarness(
+      { "README.md": ASSERTS_FAILURE, "child.md": doc("child") },
+      { settle: failingChild, around: () => fabricateSuccess("run") },
+    );
+    // Both halves matter. The provider ran once, so the child is real; and the
+    // assertions read what it answered, so the fabrication reached nothing.
+    expect(run.log.requests.length).toBe(1);
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("keeps the published value when middleware changes environments afterwards", function* () {
+    let reads = 0;
+    const run = yield* runHarness(
+      { "README.md": ASSERTS_FAILURE, "child.md": doc("child") },
+      {
+        settle: failingChild,
+        *around() {
+          // A different fresh environment on every read, so an implementation
+          // that published into one and looked up in another cannot happen to
+          // agree. Publication precedes the assertion pass, and what the
+          // assertions read is the engine's copy either way.
+          yield* Component.around({
+            env: () => {
+              reads += 1;
+              return {
+                values: {
+                  run: { kind: "settled", result: { ok: true, value: `synthetic-${reads}` } },
+                },
+              };
+            },
+          });
+        },
+      },
+    );
+    expect(reads).toBeGreaterThan(1);
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("still fails the owning test when a failing child is not bound", function* () {
+    // The unbound path publishes nothing, so this is the case the overlay must
+    // not have quietly rescued.
+    const run = yield* runHarness(
+      {
+        "README.md": doc(
+          '<Test name="unbound-under-fabrication">',
+          '<Execution host="run" target="child.md" />',
+          "</Test>",
+        ),
+        "child.md": doc("child"),
+      },
+      { settle: failingChild, around: () => fabricateSuccess("run") },
+    );
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.message).toContain(AUTHORITATIVE);
+  });
+});
+
+/**
+ * Every test here reads `run` from inside the element, where the engine has
+ * bound nothing yet: the invocation has not returned, so the only thing that
+ * can answer is what it published. A read that resolves at all is the evidence;
+ * what it resolves to only says which read it was.
+ */
+describe("what the assertion body reads", () => {
+  const CHILD = doc("child body");
+
+  function* readsBody(body: string[], options: RunOptions = {}): Operation<HarnessRun> {
+    return yield* runHarness(
+      {
+        "README.md": doc(
+          '<Test name="reads">',
+          '<Execution host="run" target="child.md" as="run">',
+          // First, so the declaration scan stops here — at an import, before any
+          // expression is evaluated — rather than part-way into the assertions.
+          '<AssertEquals actual={run.kind} expected="settled" />',
+          ...body,
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": CHILD,
+        "components/Wrapper.md": doc("caller: <Content />", "", "authored: {run.kind}"),
+      },
+      options,
+    );
+  }
+
+  it("resolves an expression prop, a condition, and interpolated text", function* () {
+    const run = yield* readsBody([
+      "<If condition={run.result.ok}>",
+      '<Capture as="line">kind={run.kind}</Capture>',
+      "</If>",
+      '<AssertEquals actual={line} expected="kind=settled" />',
+    ]);
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("resolves in an eval block, and in what that block exports", function* () {
+    const run = yield* readsBody(
+      [
+        "```js eval",
+        "const seen = run.kind;",
+        "```",
+        '<AssertEquals actual={seen} expected="settled" />',
+      ],
+      // Eval needs a compiler, which the production hosts install and this
+      // harness does not; the data-URI one compiles without a filesystem.
+      { around: () => useDataUriCompiler() },
+    );
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("follows content projected through a component, and stops at its body", function* () {
+    const run = yield* readsBody([
+      '<Capture as="wrapped">',
+      "<Wrapper>projected {run.kind}</Wrapper>",
+      "</Capture>",
+      // The caller's text reads the outcome wherever the component renders it.
+      '<AssertEquals actual={wrapped.includes("projected settled")} expected={true} />',
+      // The component's own text is not written inside the element, so the
+      // reference stands unresolved exactly as it would in any other document.
+      '<AssertEquals actual={wrapped.includes("authored: settled")} expected={false} />',
+      '<AssertStringIncludes actual={wrapped} expected="authored:" />',
+    ]);
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("leaves every other name to ordinary composition", function* () {
+    const run = yield* runHarness({
+      "README.md": doc(
+        '<Capture as="topic">unrelated</Capture>',
+        '<Test name="unrelated">',
+        '<Execution host="run" target="child.md" as="run">',
+        '<AssertEquals actual={run.kind} expected="settled" />',
+        // Composed by the ordinary rules and reached through them: the overlay
+        // is one name laid over that answer, not a replacement for it.
+        '<AssertEquals actual={topic} expected="unrelated" />',
+        "</Execution>",
+        "</Test>",
+      ),
+      "child.md": CHILD,
+    });
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("binds the outcome in the ordinary way after the element", function* () {
+    const run = yield* runHarness({
+      "README.md": doc(
+        '<Test name="after">',
+        '<Execution host="run" target="child.md" as="run">',
+        '<AssertEquals actual={run.kind} expected="settled" />',
+        "</Execution>",
+        // Outside the element the projection is over. What answers here is the
+        // binding the engine makes from what the invocation returned, as it
+        // does for any component invoked with `as`.
+        '<AssertEquals actual={run.kind} expected="settled" />',
+        "</Test>",
+      ),
+      "child.md": CHILD,
+    });
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("keeps the published value against a write under the same name", function* () {
+    const run = yield* readsBody([
+      // An ordinary binding write, of the kind any document may make. It lands
+      // where it always did; the next read lays the published value over it.
+      '<Capture as="run">usurped</Capture>',
+      '<AssertEquals actual={run.kind} expected="settled" />',
+    ]);
+    expect(only(run).status).toBe("pass");
+  });
+});
+
+describe("cancellation", () => {
+  it("tears the child down when the owning test is cancelled", function* () {
+    let torndown = 0;
+    const run = yield* runHarness(
+      {
+        "README.md": doc(
+          '<Test name="cancelled" timeout="150ms">',
+          '<Execution host="run" target="child.md" as="run">',
+          '<AssertEquals actual={run.kind} expected="settled" />',
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child"),
+      },
+      {
+        // A child that is alive and settling nothing. Registered before the
+        // suspension, on the scope the harness created for this child, so
+        // whether it was torn down is observable rather than inferred.
+        *emit() {
+          yield* ensure(() => {
+            torndown += 1;
+          });
+          yield* suspend();
+        },
+      },
+    );
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.kind).toBe("timeout");
+    // Exactly once, and by the time the run is over: the outer test owns the
+    // child, so a test that stops takes the child it started with it rather
+    // than leaving one running against a document that has finished.
+    expect(torndown).toBe(1);
   });
 });

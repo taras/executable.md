@@ -336,7 +336,14 @@ function run(source: string, opts: RunOptions = {}): Operation<CaptureRun> {
     if (opts.throwing) {
       yield* ErrorMode.set("throw");
     }
-    const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    const segments = yield* expandSegments(
+      scanSegments(source),
+      {},
+      {},
+      new Set(),
+      undefined,
+      undefined,
+    );
     return { segments, output: renderSegments(segments), trace: log };
   });
 }

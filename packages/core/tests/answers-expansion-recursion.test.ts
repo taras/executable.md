@@ -100,6 +100,8 @@ function render(
       options.meta ?? {},
       options.props ?? {},
       new Set(),
+      undefined,
+      undefined,
     );
     return renderSegments(expanded);
   });

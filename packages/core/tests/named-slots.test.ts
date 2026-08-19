@@ -81,7 +81,7 @@ function expandAll(
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* useTestComponents(components);
-    return yield* expandSegments(segments, {}, {}, new Set());
+    return yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
   });
 }
 

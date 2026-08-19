@@ -201,7 +201,7 @@ function expandUnder(
       { at: "min" },
     );
     yield* ErrorMode.set(mode);
-    return yield* expandSegments(scanSegments(source), {}, {}, new Set());
+    return yield* expandSegments(scanSegments(source), {}, {}, new Set(), undefined, undefined);
   });
 }
 

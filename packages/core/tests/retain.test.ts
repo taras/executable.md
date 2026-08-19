@@ -121,7 +121,7 @@ describe("Tier RT — Retained resources", () => {
         yield* useHarness(definitions, timeline);
         yield* Component.around({ evalScope: () => root }, { at: "min" });
         yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-        yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set());
+        yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set(), undefined, undefined);
         throw new Error("site failed");
       });
     } catch (error) {
@@ -143,7 +143,7 @@ describe("Tier RT — Retained resources", () => {
         yield* useHarness(definitions, timeline);
         yield* Component.around({ evalScope: () => root }, { at: "min" });
         yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-        yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set());
+        yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set(), undefined, undefined);
         yield* suspend();
       }),
       sleep(50),
@@ -207,7 +207,14 @@ describe("Tier RT — Retained resources", () => {
     const expanded = yield* scoped(function* () {
       yield* useHarness(definitions, timeline);
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      return yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set());
+      return yield* expandSegments(
+        scanSegments(`<Holder />`),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     expect(renderSegments(expanded)).toContain("invocation-site eval scope");
@@ -237,7 +244,14 @@ describe("Tier RT — Retained resources", () => {
       );
       yield* useHarness(definitions, timeline);
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      return yield* expandSegments(scanSegments(`<Holder />`), {}, {}, new Set());
+      return yield* expandSegments(
+        scanSegments(`<Holder />`),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     expect(renderSegments(expanded)).toContain("invocation-site eval scope");

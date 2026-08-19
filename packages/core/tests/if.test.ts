@@ -56,7 +56,14 @@ function runIf(
     );
     const testEnv = { values: { ...(opts.env ?? {}) } };
     yield* Component.around({ env: () => testEnv }, { at: "min" });
-    const segments = yield* expandSegments(scanSegments(source, opts.origin), {}, {}, new Set());
+    const segments = yield* expandSegments(
+      scanSegments(source, opts.origin),
+      {},
+      {},
+      new Set(),
+      undefined,
+      undefined,
+    );
     return {
       segments,
       output: renderSegments(segments),
@@ -434,7 +441,7 @@ describe("Tier IF — printed errors carry source positions", () => {
     };
     const segments = yield* scoped(function* () {
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      return yield* expandSegments([element], {}, {}, new Set());
+      return yield* expandSegments([element], {}, {}, new Set(), undefined, undefined);
     });
     const message = errorMessages(segments)[0] ?? "";
     expect(message).toBe('<If> requires a "condition" prop.');
@@ -773,7 +780,14 @@ describe("Tier IF — error observation", () => {
         },
         { at: "min" },
       );
-      const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      const segments = yield* expandSegments(
+        scanSegments(source),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
       return { observed, output: renderSegments(segments) };
     });
   }

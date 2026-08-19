@@ -52,7 +52,14 @@ function runEach(
     // A checked command failure ends the expansion (#441); the environment is
     // this frame's either way, so what a run bound stays readable.
     try {
-      const segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      const segments = yield* expandSegments(
+        scanSegments(source),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
       return { segments, output: renderSegments(segments), env: envValues, failure: undefined };
     } catch (error) {
       return {

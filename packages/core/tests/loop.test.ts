@@ -82,7 +82,14 @@ function runLoop(
     );
     const testEnv = { values: { ...(opts.env ?? {}) } };
     yield* Component.around({ env: () => testEnv }, { at: "min" });
-    const segments = yield* expandSegments(scanSegments(source, opts.origin), {}, {}, new Set());
+    const segments = yield* expandSegments(
+      scanSegments(source, opts.origin),
+      {},
+      {},
+      new Set(),
+      undefined,
+      undefined,
+    );
     return {
       segments,
       output: renderSegments(segments),
@@ -533,7 +540,14 @@ describe("Tier BREAK — validation", () => {
     const run = yield* runLoop("<Loop max={3}><Wrap />|</Loop>", {
       components: {
         Wrap: function* () {
-          const inner = yield* expandSegments(scanSegments("<Break />"), {}, {}, new Set());
+          const inner = yield* expandSegments(
+            scanSegments("<Break />"),
+            {},
+            {},
+            new Set(),
+            undefined,
+            undefined,
+          );
           return renderSegments(inner);
         },
       },
@@ -681,7 +695,7 @@ describe("Tier LOOP — printed errors carry source positions", () => {
     };
     const segments = yield* scoped(function* () {
       yield* Component.around({ env: () => ({ values: {} }) }, { at: "min" });
-      return yield* expandSegments([element], {}, {}, new Set());
+      return yield* expandSegments([element], {}, {}, new Set(), undefined, undefined);
     });
     expect(errorMessages(segments)[0]).toBe(
       '<Loop> requires a "max" prop (a positive integer). Repetition is always bounded — ' +

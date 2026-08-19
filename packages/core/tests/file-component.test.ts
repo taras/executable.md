@@ -222,7 +222,14 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     let segments: Segment[] = [];
     let thrown: unknown;
     try {
-      segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      segments = yield* expandSegments(
+        scanSegments(source),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     } catch (error) {
       thrown = error;
     }

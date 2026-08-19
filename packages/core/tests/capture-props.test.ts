@@ -59,6 +59,8 @@ describe("Tier CP — capture props", () => {
         {},
         {},
         new Set(),
+        undefined,
+        undefined,
       );
     });
     expect(seen.hasActual).toBe(true);
@@ -96,6 +98,8 @@ describe("Tier CP — capture props", () => {
         {},
         {},
         new Set(),
+        undefined,
+        undefined,
       );
     });
 
@@ -137,7 +141,14 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      yield* expandSegments(scanSegments("<Lazy boom={detonate()} />\n"), {}, {}, new Set());
+      yield* expandSegments(
+        scanSegments("<Lazy boom={detonate()} />\n"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     // Deferred: the expression is not evaluated during prop resolution, so a
@@ -181,7 +192,14 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      yield* expandSegments(scanSegments("<Asking actual={detonate()} />\n"), {}, {}, new Set());
+      yield* expandSegments(
+        scanSegments("<Asking actual={detonate()} />\n"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     // The component owns the failure: it caught it, rather than the engine
@@ -223,7 +241,14 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      yield* expandSegments(scanSegments("<Ordinary n={nothing} />\n"), {}, {}, new Set());
+      yield* expandSegments(
+        scanSegments("<Ordinary n={nothing} />\n"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     // Undeclared as a capture, so it still meets the gate that rejects a
@@ -255,7 +280,14 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      yield* expandSegments(scanSegments('<Verdict as="v" />\n'), {}, {}, new Set());
+      yield* expandSegments(
+        scanSegments('<Verdict as="v" />\n'),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     // Before this became the default, `as` bound the stringified text.
@@ -296,7 +328,14 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      return yield* expandSegments(scanSegments("<Texty />\n\n<Objecty />\n"), {}, {}, new Set());
+      return yield* expandSegments(
+        scanSegments("<Texty />\n\n<Objecty />\n"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
     });
 
     const text = rendered

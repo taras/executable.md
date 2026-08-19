@@ -215,6 +215,8 @@ describe("Tier FA — Fatal error discovery", () => {
         {},
         {},
         new Set(),
+        undefined,
+        undefined,
       );
     });
 

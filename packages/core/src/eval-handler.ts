@@ -26,6 +26,8 @@ import {
   validateLiveOverlay,
 } from "./live-env.ts";
 import { EphemeralEval, EphemeralEvalOutputError } from "./modifiers/ephemeral.ts";
+import { blockBinding, readThrough } from "./projection-binding.ts";
+import type { ProjectionBinding } from "./projection-binding.ts";
 import { sourceDescription } from "./source-position.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 
@@ -34,6 +36,8 @@ function* runEphemeralEval(
   evalEnv: EvalEnv,
   persist: boolean,
   mode: import("./errors.ts").ErrorMode,
+  /** What the invocation this block sits inside published, or none. */
+  projection: ProjectionBinding | undefined,
 ): Operation<CodeBlockResult> {
   const live = liveEnvironment(evalEnv);
   validateLiveOverlay(evalEnv, live);
@@ -44,10 +48,13 @@ function* runEphemeralEval(
     throw new EphemeralEvalOutputError("ephemeral eval cannot produce document output");
   };
 
-  const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(merged));
+  // Applied last, over everything ordinary composition produced, so the block
+  // sees the published outcome under its authored name whatever else carries it.
+  const visible = readThrough({ values: merged }, projection)?.values ?? merged;
+  const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(visible));
   validateLiveExports(transformed.exports, evalEnv);
   const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
-  const blockEnv = evaluationEnv(merged, mode);
+  const blockEnv = evaluationEnv(visible, mode);
 
   let returnValue: unknown;
   if (persist) {
@@ -123,6 +130,9 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         `eval block "${ctx.blockId}" requires a binding environment; none is in scope.`,
       );
     }
+    // Read from the context canonical core issued this block with. Nothing on
+    // the public chain carries it, and nothing on the chain can be handed it.
+    const projection = blockBinding(ctx);
     const persist = yield* ephemeral(persistent);
     const reconstruct = yield* ephemeral(EphemeralEval.get());
     // Captured here, on the expansion frame, where the block's documentation or
@@ -131,7 +141,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
     const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
 
     if (reconstruct) {
-      return yield* ephemeral(runEphemeralEval(ctx, evalEnv, persist, mode));
+      return yield* ephemeral(runEphemeralEval(ctx, evalEnv, persist, mode, projection));
     }
 
     // Inject output() function into env so eval blocks can produce
@@ -146,7 +156,14 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
       outputRef.text = String(text);
     };
 
-    const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(evalEnv.values));
+    // The names and values this block can see: what the environment holds, with
+    // the published outcome laid over it. Taken again inside the durable
+    // operation, after the journaled bindings are merged back, so the overlay
+    // is what a restored value would have to displace and never the reverse.
+    const visible = (): Record<string, unknown> =>
+      readThrough(evalEnv, projection)?.values ?? evalEnv.values;
+
+    const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(visible()));
     validateDurableExports(transformed.exports, liveEnvironment(evalEnv));
 
     const bindings = serializeExports(evalEnv.values, transformed.imports);
@@ -165,7 +182,7 @@ export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
         // A snapshot of the bindings as they stand now, with this block's
         // error mode bound into its projection closures. The block writes its
         // exports here; they are published below once it succeeds.
-        const blockEnv = evaluationEnv(evalEnv.values, mode);
+        const blockEnv = evaluationEnv(visible(), mode);
 
         if (persist) {
           // Persist mode: run the compiled block inside the eval scope

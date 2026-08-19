@@ -192,7 +192,14 @@ describe("Tier OBS — construct error observation", () => {
         },
         { at: "min" },
       );
-      const segments: Segment[] = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      const segments: Segment[] = yield* expandSegments(
+        scanSegments(source),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
       return { observed, raised, segments, output: renderSegments(segments), values };
     });
   }
@@ -434,7 +441,7 @@ describe("Tier OBS — construct error observation", () => {
         { at: "min" },
       );
       try {
-        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set(), undefined, undefined);
       } catch (error) {
         thrown = error;
       }
@@ -498,7 +505,7 @@ describe("Tier OBS — construct error observation", () => {
         { at: "min" },
       );
       try {
-        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set());
+        yield* expandSegments(scanSegments("<Boom />"), {}, {}, new Set(), undefined, undefined);
       } catch (error) {
         thrown = error;
       }
@@ -544,7 +551,14 @@ describe("Tier OBS — construct error observation", () => {
         },
         { at: "min" },
       );
-      const segments = yield* expandSegments(scanSegments("<Boom />TAIL"), {}, {}, new Set());
+      const segments = yield* expandSegments(
+        scanSegments("<Boom />TAIL"),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+      );
       return { segments, output: renderSegments(segments) };
     });
 

@@ -59,7 +59,7 @@ function expand(
       },
       { at: "min" },
     );
-    const expanded = yield* expandSegments(segments, meta, props, new Set());
+    const expanded = yield* expandSegments(segments, meta, props, new Set(), undefined, undefined);
     return renderSegments(expanded);
   });
 }

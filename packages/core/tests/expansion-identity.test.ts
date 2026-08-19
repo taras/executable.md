@@ -97,6 +97,8 @@ function expand(
       {},
       {},
       new Set(),
+      undefined,
+      undefined,
     );
   });
 }
@@ -181,7 +183,7 @@ function* collectFrom(segments: Segment[]): Operation<string[]> {
       },
       { at: "min" },
     );
-    return yield* expandSegments(segments, {}, {}, new Set());
+    return yield* expandSegments(segments, {}, {}, new Set(), undefined, undefined);
   });
   return seen;
 }
@@ -211,7 +213,7 @@ function* expandedBody(bodySegments: Segment[]): Operation<string[]> {
       },
       { at: "min" },
     );
-    return yield* expandSegments([element("Host")], {}, {}, new Set());
+    return yield* expandSegments([element("Host")], {}, {}, new Set(), undefined, undefined);
   });
   return seen;
 }
@@ -298,7 +300,7 @@ describe("Tier XP — expansion identity", () => {
         },
         { at: "min" },
       );
-      return yield* expandSegments([element(), element()], {}, {}, new Set());
+      return yield* expandSegments([element(), element()], {}, {}, new Set(), undefined, undefined);
     });
 
     expect(seen).toHaveLength(2);
@@ -563,7 +565,7 @@ describe("Tier XP — expansion identity", () => {
           },
           { at: "min" },
         );
-        return yield* expandSegments([branch(), branch()], {}, {}, new Set());
+        return yield* expandSegments([branch(), branch()], {}, {}, new Set(), undefined, undefined);
       });
       return seen;
     }
@@ -625,7 +627,7 @@ describe("Tier XP — expansion identity", () => {
           },
           { at: "min" },
         );
-        return yield* expandSegments([branch(condition)], {}, {}, new Set());
+        return yield* expandSegments([branch(condition)], {}, {}, new Set(), undefined, undefined);
       });
       return seen;
     }
@@ -698,7 +700,7 @@ describe("Tier XP — expansion identity", () => {
           },
           { at: "min" },
         );
-        return yield* expandSegments([region()], {}, {}, new Set());
+        return yield* expandSegments([region()], {}, {}, new Set(), undefined, undefined);
       });
       return ids;
     }

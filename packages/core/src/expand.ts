@@ -87,6 +87,7 @@ import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
 import { liveEnvironment, validateBindingName } from "./live-env.ts";
+import { ProjectionBinding, blockContext, readThrough } from "./projection-binding.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -180,6 +181,8 @@ function expandChildrenScoped(
   props: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** The projection binding this content reads through, or none. */
+  binding: ProjectionBinding | undefined,
   /** Where this expansion accumulates — its caller's region, or a private buffer. */
   owner: Segment[],
   path: string,
@@ -203,6 +206,7 @@ function expandChildrenScoped(
       props,
       hideSet,
       counter,
+      binding,
       owner,
       path,
       0,
@@ -251,6 +255,15 @@ interface ProjectionState {
 
 interface ProjectionFrame {
   env: EvalEnv | undefined;
+  /**
+   * The projection binding this frame's content reads through.
+   *
+   * Kept beside the environment rather than in it, and selected on the same
+   * caller-versus-authored boundary as the content itself: what the caller
+   * wrote inside an authorized invocation reads that invocation's outcome,
+   * and the component's own dynamic Markdown reads nothing.
+   */
+  binding: ProjectionBinding | undefined;
   meta: Record<string, unknown>;
   props: Record<string, Json>;
   hideSet: Set<string>;
@@ -327,6 +340,8 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     segments: Segment[];
     mode: ErrorMode;
     env: EvalEnv | undefined;
+    /** The projection binding this content reads through, or none. */
+    binding: ProjectionBinding | undefined;
     meta: Record<string, unknown>;
     props: Record<string, Json>;
     hideSet: Set<string>;
@@ -372,6 +387,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             options.props,
             options.hideSet,
             state.counter,
+            options.binding,
             rendered,
             options.path,
             0,
@@ -467,6 +483,10 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             frame.props,
             frame.hideSet,
             state.counter,
+            // Selected with the frame: projected content is the caller's text
+            // and reads what the caller could read; dynamic Markdown is the
+            // component's own and reads nothing.
+            frame.binding,
             rendered,
             path,
             0,
@@ -505,6 +525,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
         segments: element.children,
         mode,
         env: layerProjectedContentEnvironment(state.caller.env, state.authored.env),
+        binding: state.caller.binding,
         meta: state.caller.meta,
         props: state.caller.props,
         hideSet: state.caller.hideSet,
@@ -579,6 +600,19 @@ export function* expandSegments(
   hideSet: Set<string>,
   counter: BlockCounter = createBlockCounter(),
   /**
+   * The one binding an authorized `<Execution>` published for the assertion
+   * content it is expanding, or `undefined` everywhere else.
+   *
+   * Required, and required before every defaulted parameter, so a call site
+   * that forgets to decide is a type error rather than a silent `undefined`.
+   * It follows caller-authored assertion content — the regions written inside
+   * it, its expressions, interpolations and code blocks, and the content it
+   * projects through the components it invokes — and stops at a component's
+   * own body and dynamic Markdown, at the child document, at a root, and at
+   * another authorized invocation, which publishes its own.
+   */
+  binding: ProjectionBinding | undefined,
+  /**
    * The output owner: the accumulator belonging to the region whose text
    * renders into the document. Expansion appends as it goes, so a caller
    * holding the same array still has everything produced before a failure —
@@ -631,6 +665,7 @@ export function* expandSegments(
         parentProps,
         hideSet,
         counter,
+        binding,
         owner,
         path,
         indexBase,
@@ -657,7 +692,9 @@ export function* expandSegments(
         // Runs synchronously — no yield, no journal entry
         const healed = healSegment(segment.content);
         const protectedEscapes = healed.replaceAll("\\{", ESCAPED_BRACE_PLACEHOLDER);
-        const textEvalEnv = yield* env;
+        // The read view, taken after ordinary composition: an unrelated name
+        // still resolves however middleware decided this environment.
+        const textEvalEnv = readThrough(yield* env, binding);
         const textProps =
           textEvalEnv !== undefined && "props" in textEvalEnv.values
             ? textEvalEnv.values.props
@@ -729,6 +766,7 @@ export function* expandSegments(
               parentProps,
               hideSet,
               counter,
+              binding,
               elementPath,
               checkedFailures,
               bundle,
@@ -747,6 +785,7 @@ export function* expandSegments(
               parentProps,
               hideSet,
               counter,
+              binding,
               result,
               elementPath,
               checkedFailures,
@@ -767,6 +806,7 @@ export function* expandSegments(
             parentProps,
             hideSet,
             counter,
+            binding,
             result,
             elementPath,
             checkedFailures,
@@ -793,6 +833,7 @@ export function* expandSegments(
             parentProps,
             hideSet,
             counter,
+            binding,
             result,
             elementPath,
             checkedFailures,
@@ -810,6 +851,7 @@ export function* expandSegments(
             parentProps,
             hideSet,
             counter,
+            binding,
             result,
             elementPath,
             checkedFailures,
@@ -834,6 +876,7 @@ export function* expandSegments(
                   parentProps,
                   hideSet,
                   counter,
+                  binding,
                   into,
                   frame === undefined ? elementPath : extendPath(elementPath, frame),
                   0,
@@ -841,6 +884,7 @@ export function* expandSegments(
                   bundle,
                 ),
               result,
+              binding,
             )),
           );
           break;
@@ -876,6 +920,7 @@ export function* expandSegments(
           segment.selfClosing,
           hideSet,
           counter,
+          binding,
           segment.projectedEnv,
           segment.position,
           parentMeta,
@@ -911,25 +956,36 @@ export function* expandSegments(
         // Skip interpolation for eval blocks — they access bindings directly
         // via the env preamble (const { name } = env;). Interpolating would
         // mangle JS template literals like `${name}` into `$<value>`.
+        // Composed once, and read through the projection separately: a bound
+        // command's outcome is written to the environment the caller composed,
+        // while what the block's text interpolates is the read view.
         const evalEnv = yield* env;
+        const readEnv = readThrough(evalEnv, binding);
         const lastModifier = segment.modifiers[segment.modifiers.length - 1];
         const isEvalTerminal = lastModifier !== undefined && lastModifier.name === "eval";
         const interpolatedContent =
-          evalEnv && !isEvalTerminal
-            ? interpolateEvalBindings(segment.content, evalEnv.values)
+          readEnv && !isEvalTerminal
+            ? interpolateEvalBindings(segment.content, readEnv.values)
             : segment.content;
 
         // Compose modifier chain from info string and run it.
         // blockId uses counter.next() for deterministic IDs that
         // survive per-segment expansion (see spec §6.1 Block ID counter).
-        const context: CodeBlockContext = {
-          language: segment.language,
-          content: interpolatedContent,
-          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
-          componentName: parentMeta["componentName"] as string | undefined,
-          routing: yield* declaredRouting(),
-          ...(segment.position === undefined ? {} : { position: segment.position }),
-        };
+        // The built-in `eval` terminal reads the projection through the
+        // context canonical core issued it with — an ordinary block context to
+        // everything that handles one, carrying the binding where only core can
+        // read it back (projection-binding.ts).
+        const context: CodeBlockContext = blockContext(
+          {
+            language: segment.language,
+            content: interpolatedContent,
+            blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
+            componentName: parentMeta["componentName"] as string | undefined,
+            routing: yield* declaredRouting(),
+            ...(segment.position === undefined ? {} : { position: segment.position }),
+          },
+          binding,
+        );
 
         if (bindingName !== undefined) {
           if (!evalEnv) {
@@ -1183,6 +1239,8 @@ function* expandCapture(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** What this region reads through: it is the caller's own text (§6.3). */
+  binding: ProjectionBinding | undefined,
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
@@ -1233,6 +1291,7 @@ function* expandCapture(
       parentProps,
       hideSet,
       counter,
+      binding,
       undefined,
       path,
       0,
@@ -1299,6 +1358,8 @@ function* expandEach(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** What this region reads through: it is the caller's own text (§6.3). */
+  binding: ProjectionBinding | undefined,
   /** The region a rendering iteration writes into; a captured one keeps its own. */
   owner: Segment[],
   path: string,
@@ -1350,6 +1411,7 @@ function* expandEach(
         {},
         { in: segment.expressions.in },
         "Each",
+        binding,
         segment.projectedEnv,
       );
       items = resolved.in;
@@ -1385,6 +1447,7 @@ function* expandEach(
       parentProps,
       hideSet,
       counter,
+      binding,
       out,
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
@@ -1645,6 +1708,8 @@ function* expandIf(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** What this region reads through: it is the caller's own text (§6.3). */
+  binding: ProjectionBinding | undefined,
   /** The region this renders into: the selected branch writes there directly. */
   owner: Segment[],
   path: string,
@@ -1686,6 +1751,7 @@ function* expandIf(
         segment.expressions.condition,
         "If",
         "condition",
+        binding,
         segment.projectedEnv,
       );
     } catch (error) {
@@ -1720,6 +1786,7 @@ function* expandIf(
     parentProps,
     hideSet,
     counter,
+    binding,
     owner,
     branchPath,
     0,
@@ -1748,7 +1815,11 @@ const LOOP_PROPS = new Set(["max", "name"]);
  * The bound a `<Loop>` runs to, or why the prop rejects it. The caller turns
  * the failure into a positioned printed error, because it is the one that raises.
  */
-function* loopBound(segment: ComponentElement): Operation<Result<number>> {
+function* loopBound(
+  segment: ComponentElement,
+  /** The projection binding a `max` expression reads through, or none. */
+  binding: ProjectionBinding | undefined,
+): Operation<Result<number>> {
   let max: Json;
   if ("max" in segment.props) {
     max = segment.props.max;
@@ -1758,6 +1829,7 @@ function* loopBound(segment: ComponentElement): Operation<Result<number>> {
         {},
         { max: segment.expressions.max },
         "Loop",
+        binding,
         segment.projectedEnv,
       );
       max = resolved.max;
@@ -1820,6 +1892,8 @@ function* expandLoop(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** What this region reads through: it is the caller's own text (§6.3). */
+  binding: ProjectionBinding | undefined,
   /** The region this renders into: each iteration writes there as it runs. */
   owner: Segment[],
   path: string,
@@ -1853,7 +1927,7 @@ function* expandLoop(
     return;
   }
 
-  const bound = yield* loopBound(segment);
+  const bound = yield* loopBound(segment, binding);
   if (!bound.ok) {
     owner.push(yield* raise(loopError(segment, bound.error.message)));
     return;
@@ -1883,6 +1957,7 @@ function* expandLoop(
           parentProps,
           hideSet,
           counter,
+          binding,
           owner,
           extendPath(path, { f: "iter", i: iteration }),
           0,
@@ -2006,6 +2081,8 @@ function* expandPrintErrors(
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /** What this region reads through: it is the caller's own text (§6.3). */
+  binding: ProjectionBinding | undefined,
   /** The region this renders into: it writes there rather than returning. */
   owner: Segment[],
   path: string,
@@ -2034,6 +2111,7 @@ function* expandPrintErrors(
       parentProps,
       hideSet,
       counter,
+      binding,
       owner,
       path,
       0,
@@ -2052,6 +2130,15 @@ function* expandComponent(
   selfClosing: boolean,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /**
+   * The projection binding the element that invoked this reads through.
+   *
+   * The invocation's own expressions are caller-authored and resolve through
+   * it, and it is retained for the content the caller projects. The component's
+   * authored body reads nothing: what it wrote is not written inside the
+   * authorized element.
+   */
+  binding: ProjectionBinding | undefined,
   projectedEnv?: EvalEnv,
   position?: SourcePosition,
   /** The invoking frame's meta and props, for content this element projects. */
@@ -2136,6 +2223,7 @@ function* expandComponent(
       imported,
       hideSet,
       counter,
+      binding,
       projectedEnv,
       position,
       callerMeta,
@@ -2173,7 +2261,7 @@ function* expandComponent(
   // values can be type-checked. See spec §5.1 (expression prop evaluation).
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(props, expressions, name, projectedEnv);
+    resolvedProps = yield* resolveExpressionProps(props, expressions, name, binding, projectedEnv);
   } catch (error) {
     return [
       yield* raise({
@@ -2190,11 +2278,11 @@ function* expandComponent(
   let validatedProps: Record<string, Json>;
   let asBinding: string | undefined;
   try {
-    const binding = validateBindingName(resolvedProps.as);
-    if (!binding.ok) {
-      throw new Error(`Prop "as" on <${name} /> ${binding.error.message}`);
+    const asProp = validateBindingName(resolvedProps.as);
+    if (!asProp.ok) {
+      throw new Error(`Prop "as" on <${name} /> ${asProp.error.message}`);
     }
-    asBinding = binding.value;
+    asBinding = asProp.value;
 
     const { slot: _slot, as: _as, ...propsForValidation } = resolvedProps;
     validatedProps = yield* validateProps(name, propsForValidation, definition.props);
@@ -2278,12 +2366,16 @@ function* expandComponent(
       children,
       caller: {
         env: capturedCallerEnv,
+        binding,
         meta: callerMeta,
         props: callerProps,
         hideSet,
       },
       authored: {
         env: componentEnv,
+        // The component's own text is not written inside the authorized
+        // element, so it reads nothing the element published.
+        binding: undefined,
         meta: definition.meta,
         props: validatedProps,
         hideSet: newHideSet,
@@ -2540,6 +2632,14 @@ function* expandFunctionComponent(
   definition: FunctionComponentDefinition,
   hideSet: Set<string>,
   counter: BlockCounter,
+  /**
+   * The projection binding the element that invoked this reads through.
+   *
+   * An authorized invocation replaces it for the content it projects — that
+   * content is about this invocation's outcome — and every other invocation
+   * hands it on unchanged.
+   */
+  binding: ProjectionBinding | undefined,
   projectedEnv?: EvalEnv,
   position?: SourcePosition,
   /** The invoking frame's meta and props, for content this component projects. */
@@ -2604,7 +2704,13 @@ function* expandFunctionComponent(
   // Resolve expression props
   let resolvedProps: Record<string, Json>;
   try {
-    resolvedProps = yield* resolveExpressionProps(openProps, openExpressions, name, projectedEnv);
+    resolvedProps = yield* resolveExpressionProps(
+      openProps,
+      openExpressions,
+      name,
+      binding,
+      projectedEnv,
+    );
   } catch (error) {
     return [
       yield* raise({
@@ -2671,23 +2777,33 @@ function* expandFunctionComponent(
 
   const expansion = snapshot(path, name, position);
 
+  // What this invocation publishes for the content it projects, when it is one
+  // of the constructs canonical core authorized and it was written with `as`.
+  //
+  // Held here rather than written to the environment: the assertions are about
+  // an outcome the invocation has not returned yet, and an environment is
+  // composed by public middleware that may answer with a fresh one on every
+  // read — publication into it would land where nothing looks (§6.3).
+  const projection =
+    asBinding !== undefined && TestHarnessComponentDefinition.own(definition.fn)
+      ? new ProjectionBinding(asBinding)
+      : undefined;
+
   let publishedBinding = false;
-  const binding: TestHarnessBinding = {
+  const harnessBinding: TestHarnessBinding = {
     has(): boolean {
       return asBinding !== undefined;
     },
+    // deno-lint-ignore require-yield
     *publish(value: unknown): Operation<void> {
       if (publishedBinding) {
         throw new Error(`<${name} /> published its invocation binding more than once.`);
       }
       publishedBinding = true;
-      if (asBinding === undefined) {
-        return;
-      }
-      if (siteEnv === undefined) {
-        throw new Error(`Prop "as" on <${name} /> requires a parent evaluation environment.`);
-      }
-      siteEnv.values[asBinding] = value;
+      // Without `as` there is nothing to publish to and nothing to read it:
+      // the invocation's outcome reaches the document as its return value, as
+      // any other component's does.
+      projection?.publish(value);
     },
   };
 
@@ -2704,12 +2820,17 @@ function* expandFunctionComponent(
           children,
           caller: {
             env: undefined,
+            // An authorized invocation's own outcome, for the assertions the
+            // caller wrote inside it; anywhere else, whatever the invoking
+            // element itself was reading.
+            binding: projection ?? binding,
             meta: callerMeta,
             props: callerProps,
             hideSet,
           },
           authored: {
             env: undefined,
+            binding: undefined,
             meta: callerMeta,
             props: callerProps,
             hideSet,
@@ -2786,7 +2907,7 @@ function* expandFunctionComponent(
               // Evaluated here, not during prop resolution: the component asked
               // for it, and owns whatever the expression does. Against the site
               // environment resolved before the invocation began.
-              return yield* evaluateExpression(expression, name, captureName, {
+              return yield* evaluateExpression(expression, name, captureName, binding, {
                 values: captureEnv,
               });
             },
@@ -2824,7 +2945,7 @@ function* expandFunctionComponent(
         }
         try {
           if (TestHarnessComponentDefinition.own(definition.fn)) {
-            return yield* definition.fn.invoke(validatedProps, binding);
+            return yield* definition.fn.invoke(validatedProps, harnessBinding);
           }
           return yield* definition.fn(validatedProps);
         } catch (error) {
@@ -2972,7 +3093,11 @@ function* expandFunctionComponent(
     if (!TestHarnessComponentDefinition.own(definition.fn)) {
       printsOwnFailures = printsErrors(definition.fn);
     }
-    const produced = printsOwnFailures
+    // Run the invocation here, before the ledger is read again: what the
+    // component did to the run's record is the thing being asked about, and a
+    // check made against an operation that has not run yet can only ever see
+    // the record it started from.
+    const produced = yield* printsOwnFailures
       ? scoped(function* () {
           yield* usePrintErrors("component");
           return yield* invoke();
@@ -2982,7 +3107,7 @@ function* expandFunctionComponent(
     if (suffered !== undefined && suffered !== before) {
       return [yield* raise(suffered)];
     }
-    return yield* produced;
+    return produced;
   }
   return yield* accepted();
 }
@@ -3017,6 +3142,8 @@ function* resolveExpressionProps(
   props: Record<string, Json>,
   expressions: Record<string, string>,
   componentName: string,
+  /** The projection binding these expressions read through, or none. */
+  binding: ProjectionBinding | undefined,
   explicitEnv?: EvalEnv,
 ): Operation<Record<string, Json>> {
   // Start with already-resolved props
@@ -3027,7 +3154,12 @@ function* resolveExpressionProps(
     return resolved;
   }
 
-  const evalEnv = yield* expressionEnv(componentName, Object.keys(expressions), explicitEnv);
+  const evalEnv = yield* expressionEnv(
+    componentName,
+    Object.keys(expressions),
+    binding,
+    explicitEnv,
+  );
 
   for (const [propName, expression] of Object.entries(expressions)) {
     const result = evaluateIn(evalEnv, expression, componentName, propName);
@@ -3072,15 +3204,19 @@ export function* evaluateExpression(
   expression: string,
   componentName: string,
   propName: string,
+  /** The projection binding this expression reads through, or none. */
+  binding: ProjectionBinding | undefined,
   explicitEnv?: EvalEnv,
 ): Operation<unknown> {
-  const evalEnv = yield* expressionEnv(componentName, [propName], explicitEnv);
+  const evalEnv = yield* expressionEnv(componentName, [propName], binding, explicitEnv);
   return evaluateIn(evalEnv, expression, componentName, propName);
 }
 
 function* expressionEnv(
   componentName: string,
   names: string[],
+  /** The projection binding this expression reads through, or none. */
+  binding: ProjectionBinding | undefined,
   explicitEnv?: EvalEnv,
 ): Operation<EvalEnv> {
   const contextEnv = yield* env;
@@ -3090,7 +3226,9 @@ function* expressionEnv(
   // (contextEnv). The component's env takes priority because its eval
   // blocks run before <Content /> and may define bindings that children
   // reference. The caller's env provides fallback bindings from the
-  const evalEnv = layerEnvironments(explicitEnv, contextEnv);
+  // The read view, taken after the ordinary layering above, so an expression
+  // that names anything else resolves exactly as it did.
+  const evalEnv = readThrough(layerEnvironments(explicitEnv, contextEnv), binding);
 
   if (!evalEnv) {
     throw new Error(
@@ -3697,6 +3835,11 @@ export function* expandBody(
       props,
       hideSet,
       counter,
+      // A definition body is the component's own text, written outside whatever
+      // element invoked it, so it reads no projection binding. The caller's
+      // content inside it is expanded through the projection handle, which
+      // restores the caller's frame and its binding with it.
+      undefined,
       owner,
       path,
       0,
@@ -3718,6 +3861,7 @@ export function* expandBody(
         props,
         hideSet,
         counter,
+        undefined,
         output,
         chunkPath,
         0,
@@ -3733,6 +3877,7 @@ export function* expandBody(
           props,
           hideSet,
           counter,
+          undefined,
           output,
           chunkPath,
           0,
@@ -3750,6 +3895,7 @@ export function* expandBody(
           props,
           hideSet,
           counter,
+          undefined,
           undefined,
           chunkPath,
           chunkBase,
@@ -3791,6 +3937,8 @@ function runDocumentation(
       props,
       hideSet,
       counter,
+      // Documentation in a definition body: the component's own text again.
+      undefined,
       undefined,
       path,
       indexBase,
@@ -3816,6 +3964,9 @@ export function* resolveReturnValue(
           segment.expressions.value,
           componentName,
           "value",
+          // A `<Return>` belongs to the definition that declares it, so its
+          // expression reads the component's own environment and nothing else.
+          undefined,
           segment.projectedEnv,
         )
       : segment.props.value;
