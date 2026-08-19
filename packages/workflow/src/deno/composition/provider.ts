@@ -36,6 +36,10 @@ import type {
   GitSwitchResult,
 } from "../../composition/git-records.ts";
 import type { GitPushOutcome, GitPushRequest } from "../../composition/git-push-records.ts";
+import type {
+  PullRequestOutcome,
+  PullRequestRequest,
+} from "../../composition/pull-request-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -55,6 +59,8 @@ import { createGitSwitch } from "./switch.ts";
 import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
 import { createGitPush } from "./push.ts";
+import { upsertPullRequest } from "./pull-request.ts";
+import type { GitHubAccess } from "./github.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
@@ -76,6 +82,16 @@ export interface CompositionObserver {
 export interface CompositionProviderOptions {
   readonly host?: RepositoryHost;
   readonly observe?: CompositionObserver;
+  /**
+   * The Git host `<PullRequest>` reaches, when it is not the platform's own.
+   *
+   * Adapter-private, and deliberately not a contextual surface: a suite drives
+   * the whole adapter against a local server or a fake without there being
+   * anything for a document, a middleware or another package to install,
+   * observe or route through. Absent, the provider builds the default access,
+   * which reaches `api.github.com` and the process environment.
+   */
+  readonly gitHub?: GitHubAccess;
 }
 
 /**
@@ -206,6 +222,11 @@ export function useGitComposition(
       *pushCurrentBranch([request]: [GitPushRequest]): Operation<GitPushOutcome> {
         observe.effect?.("git", "push");
         return yield* createGitPush(database, host, request);
+      },
+
+      *upsertPullRequest([request]: [PullRequestRequest]): Operation<PullRequestOutcome> {
+        observe.effect?.("git", "pull-request");
+        return yield* upsertPullRequest(database, host, request, options.gitHub);
       },
     },
     { at: "min" },

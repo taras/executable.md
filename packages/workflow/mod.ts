@@ -73,6 +73,7 @@ export {
   GitCompositionProviderError,
   GitOperationError,
   GitOperationProtocolError,
+  PullRequestAuthorityError,
   RepositoryCompositionError,
   RepositoryCompositionProtocolError,
   RepositoryCompositionProviderError,
@@ -81,6 +82,7 @@ export {
 } from "./src/composition/errors.ts";
 export type {
   GitFailureReason,
+  PullRequestAuthorityReason,
   RepositoryFailureReason,
   WorktreeFailureReason,
 } from "./src/composition/errors.ts";
@@ -159,6 +161,45 @@ export type {
   GitPushRequest,
   GitPushResult,
 } from "./src/composition/git-push-records.ts";
+export {
+  OPEN,
+  parsePullRequestInputs,
+  parsePullRequestNaturalKey,
+  parsePullRequestObservations,
+  parsePullRequestPreState,
+  parsePullRequestRecord,
+  parsePullRequestResult,
+  parsePullRequestSnapshot,
+  PULL_REQUEST,
+  pullRequestAgrees,
+  pullRequestMode,
+  pullRequestInputsJson,
+  pullRequestNaturalKey,
+  pullRequestNaturalKeyJson,
+  pullRequestNumber,
+  pullRequestObservationsJson,
+  pullRequestPreStateJson,
+  pullRequestResultJson,
+  pullRequestResultOf,
+  pullRequestSnapshotJson,
+  sameNaturalKey,
+  samePullRequestIdentity,
+} from "./src/composition/pull-request-records.ts";
+export type {
+  PullRequestCreateKey,
+  PullRequestExpectation,
+  PullRequestInputs,
+  PullRequestMode,
+  PullRequestNaturalKey,
+  PullRequestObservations,
+  PullRequestOutcome,
+  PullRequestPreState,
+  PullRequestRequest,
+  PullRequestResult,
+  PullRequestSnapshot,
+  PullRequestUpdateKey,
+} from "./src/composition/pull-request-records.ts";
+export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";

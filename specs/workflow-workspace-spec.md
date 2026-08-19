@@ -1144,53 +1144,111 @@ decision agrees with the pre-state — `performed` follows proven absence and
 ### 7.5 Pull request
 
 ```md
-<PullRequest
-  number={props.pullRequestNumber}
-  title="Prepare release 1.4"
-  base="main"
-  draft={true}
-  as="pullRequest"
->
+<Repository name="project" url={props.repository}>
+  <Git.Push />
+  <PullRequest
+    number={props.pullRequestNumber}
+    title="Prepare release 1.4"
+    base="main"
+    draft={true}
+    as="pullRequest"
+  >
 Prepared from commit {commit}.
-</PullRequest>
+  </PullRequest>
+</Repository>
 ```
 
-`title` is required. `number` defaults to undefined, `base` defaults to the
-Repository's recorded initial branch, `draft` defaults to false and rendered
-children form the body. The contextual Repository selects the Git-host provider;
-its current named branch is head. PullRequest never pushes, and direct remote
-observation is not a substitute for authorization to create or update one: the
-run must already hold a compatible `Git.Push` result for the same Repository
-identity, head branch, full destination ref and head SHA. A missing, conflicting
-or unreadable Push result fails before pull-request creation or update is
-observed.
+`title` is required. `number` defaults to none, `base` defaults to the
+Repository's recorded initial branch, `draft` defaults to false and the rendered
+content is the body, verbatim — nothing trims or reflows what a document wrote,
+and content that renders nothing is an empty body. Which checkout the pull
+request belongs to is decided the way §7.1 decides it, so the head is the branch
+that checkout is on and there are no `repository`, `head`, `remote`, `provider`,
+`token`, `label`, `reviewer`, `merge` or implicit-push controls.
 
-PullRequest is an upsert over one explicit pull-request identity. When `number`
-is undefined, the effect creates a pull request for the current head and base;
-if an interrupted earlier attempt already created that same request, the
-compatible remote pull request is adopted instead of duplicated. When `number`
-is present, the effect updates that exact pull request's mutable fields to the
-requested title, body, draft state and base; its existing head must already be
-the current head, and if those fields already match, it records a no-op result.
-A supplied number whose existing pull request belongs to another Repository,
-head or base is a conflict rather than a rewrite to unrelated state.
+Content expands first and completely. A body that never finished rendering stops
+everything this component owns, before a Repository is observed, a checkout is
+selected, retained history is read or a Git host exists in the story.
 
-The `as` result is stable creation/update evidence, not a live pull-request snapshot.
-It includes the filtered Repository identity, the provider's stable pull-request
-identity, number, URL, state, head SHA and base SHA. Reviews, comments, checks,
-labels, reviewers, merge state and later title, body, draft or branch movement
-are separate reads or effects rather than freshness smuggled into the creation
-result.
+**PullRequest is an upsert over one explicit pull-request identity.** Without a
+number the document asks for a pull request from this head to this base: one is
+created, or the compatible one an interrupted earlier attempt already created is
+adopted rather than duplicated. With a number it asks for that exact pull
+request: its title, body, draft state and base are brought to what the
+invocation says, and when they already say it the effect records a no-op. The
+head is never rewritten — a numbered pull request whose head is not already this
+run's head branch and commit is a conflict, as is one that belongs to another
+repository, was opened from a fork, or is no longer open. Nothing is reopened,
+merged, closed or commented on.
 
-There are initially no repository, head, provider, label, reviewer, merge or
-implicit-push controls. The natural key identifies either the supplied
-Repository pull-request number or, when no number was supplied, the Repository's
-creation request for that head branch and base branch; the complete request
-fingerprint still discriminates title, body, draft and number changes. Uncertain
-creation adopts only one compatible request identified by stable effect
-provenance and head/base identity. Uncertain update adopts only the supplied
-pull-request number when it already reflects the requested state. It never
-rewrites or adopts an unrelated incompatible request.
+**PullRequest never pushes.** Direct remote observation is not a substitute for
+authorization to create or update one: the run must already hold its own
+successful `Git.Push` result for the same Repository identity, head branch, full
+destination ref and head SHA. That admission reads this run's own successful
+Git-host records and is closed — a record of another kind and a Push of another
+Repository or destination are ignored; a relevant Push at another commit is
+conflicting; and a successful Git-host record whose natural key, inputs and
+result do not describe one publication is unreadable, because a record that
+cannot be read as one whole thing cannot be shown to be about something else.
+Missing, conflicting and unreadable evidence are three fixed local refusals:
+each names its category and, where there is one, its remedy, quotes no journal
+content, and happens before the Git host is observed. So do a missing or
+replaced Repository context, a working directory inside no retained checkout,
+and a checkout whose HEAD names no branch. None of them is printable: a later
+sibling must not run as though a pull request had been opened or updated.
+
+**The `as` result is stable evidence of what the effect settled on**, not a live
+pull-request snapshot. It is exactly the filtered Repository identity — name,
+locator fingerprint, requested base, creation commit, primary branch and object
+format — the provider's own stable pull-request identity, the number, the URL,
+the state `open`, and the head and base SHAs of the snapshot the reconciliation
+finished at. Reviews, comments, checks, labels, reviewers, merge state and later
+title, body, draft or branch movement are separate reads or effects rather than
+freshness smuggled into the result. Once the local record commits, later
+movement cannot change what it retains, and a completed replay hands it back
+without contacting a provider.
+
+**Reconciliation.** The natural key is one of two shapes, because the two modes
+name different external resources:
+
+```text
+{ mode: "create", repository, headBranch, baseBranch }
+{ mode: "update", repository, number }
+```
+
+The complete request fingerprint covers every input, so a changed title, body,
+draft flag, base, head commit or number diverges at the durable position rather
+than consuming the result retained for another question. In create mode, a
+branch pair with no open pull request and no closed or merged one is absent and
+is created once; one whose single open pull request agrees with every field the
+request names is adopted; one that disagrees, or holds a closed or merged pull
+request, is a conflict; more than one open pull request is ambiguous, even if
+one of them fits. In update mode, the numbered pull request is fetched exactly:
+one that already holds every requested field is adopted as a no-op, and one that
+differs in a mutable field is the requested completion being absent, with the
+existing pull request retained as the pre-state that a performed update
+describes itself against.
+
+**The first adapter** works over `github.com`, on direct same-repository pull
+requests. It is selected from the private retained locator — the admitted
+credential-free HTTPS, SSH-URL and `git@github.com:owner/repository` forms, with
+an optional terminal `.git` — and a Repository this adapter does not recognize
+is refused as an unsupported effect kind from observation, before any remote
+work. The credential is read from `GH_TOKEN`, then `GITHUB_TOKEN`, only after
+local authority succeeds; stored `gh auth` credentials are not read and no
+credential is inherited by a child process. Creation is one REST creation; an
+update is one REST field change and, when the draft state differs, one GraphQL
+draft transition, each issued at most once per attempt and followed by exactly
+one observation that decides the outcome. A rejected mutation, a partial
+multi-call update, a transport failure and an unreadable answer are all
+temporary unavailability rather than failure of the effect: nothing is repeated
+inside the attempt, and a later explicit attempt observes what is now there and
+finishes only what is left. A page walk that cannot be completed — a next
+relation this adapter will not follow or cannot read — is unavailability too,
+and never an empty candidate set. The locator, the endpoint, the credential and
+every raw response stay inside the per-invocation provider closure: public
+routing middleware receives the frozen JSON request of §10.2 and nothing else,
+and the journal holds the normalized record alone.
 
 ### 7.6 Multiple repositories are explicit composition
 

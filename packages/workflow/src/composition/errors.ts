@@ -188,6 +188,48 @@ export class GitOperationAuthorityError extends StaleInputError {
 }
 
 /**
+ * A word from the fixed vocabulary a `<PullRequest>` authority refusal speaks.
+ *
+ * Every one of them is decided locally, before a Git host is observed. A pull
+ * request is a public statement about a branch that exists somewhere else, and
+ * the run has to be able to prove it put that branch there before it makes one.
+ */
+export type PullRequestAuthorityReason =
+  | "no-repository-context"
+  | "unnamed-branch"
+  | "missing-push-evidence"
+  | "conflicting-push-evidence"
+  | "unreadable-push-evidence";
+
+/**
+ * `<PullRequest>` is not authorized by what this run retained.
+ *
+ * A `StaleInputError`, on the same terms as {@link GitOperationAuthorityError}:
+ * a document cannot avoid a Repository context that was replaced or a retained
+ * Push result that stopped being readable, and later siblings must not run as
+ * though a pull request had been opened. None of these is a Git-host answer —
+ * every one of them is decided before anything is observed — so none of them is
+ * printable and none of them is journaled as an effect outcome.
+ *
+ * The sentence names the category and, where there is one, the remedy. It
+ * quotes no journal content, no retained record and nothing a caller presented:
+ * the evidence this refuses to read is exactly the evidence it must not repeat.
+ */
+export class PullRequestAuthorityError extends StaleInputError {
+  override name = "PullRequestAuthorityError";
+
+  readonly reason: PullRequestAuthorityReason;
+
+  constructor(reason: PullRequestAuthorityReason, sentence: string) {
+    super(
+      `<PullRequest> is not authorized against this run's retained state: ${sentence} Nothing ` +
+        "was observed at the Git host, and no pull request was created.",
+    );
+    this.reason = reason;
+  }
+}
+
+/**
  * Native Git failed in a way this provider does not recognize.
  *
  * A refusal is a condition a document can act on, and the set of them is closed.
