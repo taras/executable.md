@@ -40,6 +40,7 @@ import { consumable, observeEvent } from "./retained.ts";
 import { protocolToEffection, serializeError } from "./serialize.ts";
 import { advanceDurablePosition } from "./position.ts";
 import type { YieldEntry } from "./replay-index.ts";
+import type { AbandonedRetainedHistory } from "./live-coordinator.ts";
 import type {
   CoroutineView,
   DurableEffect,
@@ -93,7 +94,7 @@ type ReplayResult<T> =
        * all, and reads it from here rather than from anything a document can
        * supply.
        */
-      abandoned?: YieldEntry;
+      abandoned: AbandonedRetainedHistory;
     };
 
 /**
@@ -221,7 +222,15 @@ function checkReplay<T>(
     }
   } // end replay block
 
-  return abandoned === undefined ? { path: "live" } : { path: "live", abandoned };
+  return {
+    path: "live",
+    abandoned: {
+      ...(abandoned === undefined ? {} : { entry: abandoned }),
+      // The index's own account, not this call's: it stays true for every
+      // operation after the one that diverged.
+      steppedOver: ctx.replayIndex.abandonedHistory(ctx.coroutineId),
+    },
+  };
 }
 
 /**

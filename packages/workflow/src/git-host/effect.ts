@@ -80,7 +80,7 @@
 import { createApi } from "@effectionx/context-api";
 import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
 import type {
-  AbandonedRetainedEntry,
+  AbandonedRetainedHistory,
   ActivateDurabilityFailure,
   EffectDescription,
   JournalProvenance,
@@ -527,29 +527,31 @@ function gitHostCoordinator(
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
       _journalProvenance: JournalProvenance | undefined,
-      abandoned: AbandonedRetainedEntry | undefined,
+      abandoned: AbandonedRetainedHistory,
     ): Operation<DurableResult> {
       // Reached only live, and never on replay.
       //
       // Two ways a live attempt here is not this run's to make, and neither is
-      // decided by anything a document supplies. `abandoned` is the engine's
-      // own account of the position: a retained entry was there and divergence
-      // policy chose to run live over it, so whatever that entry recorded has
-      // already happened at a service this journal does not enclose — and doing
-      // it again is exactly what this boundary exists to prevent. `borrowed`
-      // says the request was named by a retained record, which cannot be a live
-      // request either.
+      // decided by anything a document supplies. `steppedOver` is the engine's
+      // own account of the coroutine: it walked away from retained history it
+      // never consumed, so records still ahead of it describe work that already
+      // happened at a service this journal does not enclose — and doing any of
+      // it again is exactly what this boundary exists to prevent. It stays true
+      // for every operation after the one that diverged, which is the whole
+      // point: guarding only the diverging position leaves every position after
+      // it open. `borrowed` says the request was named by a retained record,
+      // which cannot be a live request either.
       //
       // The first is the load-bearing one: it holds whether or not the retained
       // identities reached this copy, so erasing or replacing them cannot buy a
       // live effect. Nothing has been executed yet, so the Git host is never
       // reached and nothing is published.
-      if (abandoned !== undefined || borrowed !== undefined) {
+      if (abandoned.steppedOver || borrowed !== undefined) {
         borrowed?.exhaust();
         throw activateFailure(
           new GitHostProviderError(
-            "this Git-host effect stands where retained history already holds one, and did " +
-              "not replay it. Performing here would repeat an effect outside this journal, or " +
+            "this run walked away from retained history it never consumed, so a Git-host " +
+              "effect here would repeat work that already happened outside this journal, or " +
               "perform under a run this execution is not. Nothing was asked of the Git host.",
           ),
         );

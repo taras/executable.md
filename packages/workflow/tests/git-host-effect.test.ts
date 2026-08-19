@@ -18,6 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { createContext, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import {
+  createDurableOperation,
   Divergence,
   DivergenceError,
   InMemoryStream,
@@ -1259,7 +1260,7 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     // The component really ran, so the emptiness above is a refusal rather
     // than a document that never reached the effect.
     expect(derailedSeen.expansions).toHaveLength(1);
-    expect(String(derailedSeen.failures[0])).toContain("did not replay");
+    expect(String(derailedSeen.failures[0])).toContain("Nothing was asked of the Git host");
     // Nothing was appended for it. The two Git-host events there are the two it
     // inherited, and the refusal added no third under anybody's identity.
     expect(gitHostYields(derailedStream.snapshot())).toHaveLength(gitHostYields(derailed).length);
@@ -1330,7 +1331,97 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
       expect(stream.snapshot().slice(0, inherited.length)).toEqual(inherited);
     }
   });
+
+  it("GH18: a coroutine that stepped over retained history performs no Git-host effect", function* () {
+    // The divergence is not at the Git-host position at all. An ordinary
+    // durable call ahead of it mismatches, run-live steps over the retained
+    // history, and the Git-host record is still sitting there unconsumed. A
+    // guard that only saw the position where replay gave up would let this one
+    // through — and erasing the shared identities is exactly how a caller would
+    // try to reach it.
+    const sourceRunId = "run-297-git-host-source";
+    const seedStream = new InMemoryStream();
+    const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seeded = yield* markedRun({ stream: seedStream, provider: seedHost.provider, mark: "a" });
+    expect(seeded.failures).toEqual([]);
+    const inherited = yield* inheritedHistory(partial(seedStream.snapshot()), sourceRunId);
+    expect(gitHostYields(inherited)).toHaveLength(1);
+
+    const stream = new InMemoryStream(inherited);
+    const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    // The generic call asks something else, so it is where replay gives up.
+    const seen = yield* markedRun({
+      stream,
+      provider: host.provider,
+      mark: "b",
+      erase: true,
+    });
+
+    // The Git-host effect ran, and refused: no observation, no mutation, and
+    // no Git-host event appended over the one the history already holds.
+    expect(host.observed).toEqual([]);
+    expect(host.performed).toEqual([]);
+    expect(seen.records).toEqual([]);
+    expect(String(seen.failures[0])).toContain("Nothing was asked of the Git host");
+    expect(gitHostYields(stream.snapshot())).toHaveLength(gitHostYields(inherited).length);
+    expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
+      '"by":"authorized-provider"',
+    );
+  });
 });
+
+/**
+ * One execution that makes an ordinary durable call and then a Git-host one.
+ *
+ * The generic call is what a later definition can disagree about without
+ * touching the Git-host request at all, which is the shape a divergence ahead
+ * of retained history has.
+ */
+function* markedRun(options: {
+  readonly stream: DurableStream;
+  readonly provider: GitHostProvider;
+  readonly mark: string;
+  readonly erase?: boolean;
+}): Operation<Attempt> {
+  const seen = attempt();
+  yield* scoped(function* () {
+    yield* registerComponents([
+      {
+        name: "Effect",
+        origin: "tier-gh",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn() {
+          if (options.erase === true) {
+            const slot = createContext<Record<string, unknown> | undefined>(
+              "executablemd.workflow.run",
+              undefined,
+            );
+            const genuine = yield* slot.get();
+            yield* slot.set({ ...genuine, gitHostIdentities: [] });
+            yield* Divergence.around({ decide: () => ({ type: "run-live" }) });
+          }
+          seen.expansions.push((yield* getExpansion()).id);
+          // An ordinary durable call, named by what this definition asks.
+          yield createDurableOperation({ type: "marker", name: options.mark }, function* () {
+            return { mark: options.mark };
+          });
+          try {
+            seen.records.push(yield* reconcileGitHostEffect(PUSH));
+          } catch (error) {
+            seen.failures.push(error);
+          }
+          return "";
+        },
+      },
+    ]);
+    try {
+      yield* withGitHostProvider(options.provider, collectSource(SOURCE, options.stream));
+    } catch {
+      // A document that fails is one of the outcomes under test.
+    }
+  });
+  return seen;
+}
 
 /**
  * One execution whose single expansion asks for two Git-host effects.

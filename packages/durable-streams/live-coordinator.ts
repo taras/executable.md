@@ -20,6 +20,21 @@ export interface AbandonedRetainedEntry {
   readonly result: Result;
 }
 
+/**
+ * What replay left behind in this coroutine, as the engine sees it.
+ *
+ * `entry` is the retained entry this very operation stepped over, when there
+ * was one. `steppedOver` is the wider fact and the load-bearing one: it stays
+ * true for every operation after the one that diverged, because disabling
+ * replay does not consume the history it walked away from. An effect that reads
+ * only `entry` would be safe at the position that diverged and unguarded at
+ * every position after it.
+ */
+export interface AbandonedRetainedHistory {
+  readonly entry?: AbandonedRetainedEntry;
+  readonly steppedOver: boolean;
+}
+
 /** Coordinates one live structured durable operation with its publication. */
 export interface LiveDurableOperationCoordinator {
   run<T extends Json>(
@@ -27,7 +42,7 @@ export interface LiveDurableOperationCoordinator {
     publish: (result: Result) => Operation<void>,
     activateFailure: ActivateDurabilityFailure,
     journalProvenance: JournalProvenance | undefined,
-    abandoned: AbandonedRetainedEntry | undefined,
+    abandoned: AbandonedRetainedHistory,
   ): Operation<Result>;
 }
 
@@ -38,7 +53,7 @@ export const defaultLiveDurableOperationCoordinator: LiveDurableOperationCoordin
     publish: (result: Result) => Operation<void>,
     _activateFailure: ActivateDurabilityFailure,
     _journalProvenance: JournalProvenance | undefined,
-    _abandoned: AbandonedRetainedEntry | undefined,
+    _abandoned: AbandonedRetainedHistory,
   ): Operation<Result> {
     let result: Result;
     try {

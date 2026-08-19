@@ -1092,10 +1092,11 @@ holds a record at is named by that identity, while every live attempt is named
 by the run performing it. The identity is established when the engine
 admits the run's retained snapshot and is published beside the run, so every
 physical copy of the workflow package reads one answer. What authorizes live
-execution is not that answer: an effect standing where retained history already
-holds one, that did not replay it, performs nothing — the engine's own account
-of the position decides it — so removing or replacing the transported
-identities can only make the effect replay correctly or refuse. It belongs to the exact retained event it
+execution is not that answer: a coroutine that walked away from retained history
+it never consumed performs no Git-host effect for the rest of its run — the
+engine's own account decides it, at every position after the divergence — so
+removing or replacing the transported identities can only make the effect replay
+correctly or refuse. It belongs to the exact retained event it
 came from, at the position that event occupies: records are offered in order,
 a call may take only the next untaken one and only when it asks exactly what
 that record answers, and a request named by a retained record that reaches live
