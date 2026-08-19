@@ -1089,7 +1089,9 @@ completed Git-host reconciliation record replays without contacting a provider,
 so a fork inherits it and the remote is mutated once; the record keeps the
 identity it was written under, and the effect at a position the history already
 holds a record at is named by that identity, while every live attempt is named
-by the run performing it. A Git-host event that settled into no such record
+by the run performing it. The identity is read from the retained entry in the
+replay index the engine admitted, never from a replaceable binding, and a
+position retaining no entry borrows none. A Git-host event that settled into no such record
 leaves the remote's state unestablished, and that checkpoint is not forkable.
 
 A fork inherits the source's normalized props as its baseline; explicit

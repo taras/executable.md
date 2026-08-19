@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
+import { createContext, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import {
   DivergenceError,
@@ -53,6 +53,10 @@ import {
   GitHostProviderError,
   GitHostUnavailableError,
 } from "../src/git-host/errors.ts";
+import {
+  gitHostRequestFingerprint,
+  parseGitHostReconciliationRecord,
+} from "../src/git-host/records.ts";
 import type {
   CompleteGitHostEffectRequest,
   GitHostCompletion,
@@ -1017,7 +1021,123 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
     expect(String(refusedRun.failures[0])).not.toContain(FORGED_MARKER);
     expect(unsupported.snapshot().map(serializeDurableEvent).join("")).not.toContain(FORGED_MARKER);
   });
+
+  it("GH14: a retained record's identity comes from the journal, not from a binding", function* () {
+    // A fork's journal holds records its source wrote, so the effect at a
+    // retained position is named by the identity that record holds. What
+    // chooses it is the replay index canonical core built from the snapshot it
+    // admitted — and a counterfeit that reaches for a name cannot substitute
+    // one, because nothing here consults a binding at all.
+    const inheritedRunId = "run-297-git-host-source";
+    const seedStream = new InMemoryStream();
+    const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seeded = yield* runDocument({ stream: seedStream, provider: seedHost.provider });
+    expect(seeded.failures).toEqual([]);
+
+    // The same history, rewritten as a *source* run's: this is what a fork
+    // inherits, and the identity in it is not this run's.
+    // Truncated, so the run continues into the component rather than reusing a
+    // recorded terminal result without entering the durable body at all.
+    const inherited = yield* inheritedHistory(partial(seedStream.snapshot()), inheritedRunId);
+
+    // Replayed under this run, with a counterfeit installed from inside the
+    // execution and no provider at all: a completed record replays
+    // provider-free, and the identity it carries is the one it was written
+    // under rather than the counterfeit's.
+    const replayStream = new InMemoryStream(inherited);
+    const replayed = yield* runDocument({
+      stream: replayStream,
+      around: (operation) => withCounterfeitIdentities(operation),
+    });
+
+    expect(replayed.failures).toEqual([]);
+    expect(recordOf(replayed).request.identity.runId).toBe(inheritedRunId);
+    // Nothing was asked and no second Git-host event exists: the record was
+    // already there, and replaying it appended nothing of its own.
+    expect(gitHostYields(replayStream.snapshot())).toHaveLength(1);
+    expect(replayStream.snapshot().slice(0, inherited.length)).toEqual(inherited);
+
+    // Live, under the same counterfeit: the identity the provider is given and
+    // the identity the journal receives are this run's, because a live position
+    // retains nothing for an identity to be borrowed from.
+    const liveStream = new InMemoryStream();
+    const liveHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const live = yield* runDocument({
+      stream: liveStream,
+      provider: liveHost.provider,
+      around: (operation) => withCounterfeitIdentities(operation),
+    });
+
+    expect(live.failures).toEqual([]);
+    expect(liveHost.observed[0]?.identity.runId).toBe(RUN.runId);
+    expect(liveHost.performed[0]?.identity.runId).toBe(RUN.runId);
+    expect(recordOf(live).request.identity.runId).toBe(RUN.runId);
+    expect(liveStream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
+      COUNTERFEIT_RUN,
+    );
+  });
 });
+
+/** A run id only a counterfeit could put anywhere. */
+const COUNTERFEIT_RUN = "counterfeit-run";
+
+/**
+ * Same-name bindings a component could install from inside an execution.
+ *
+ * Built through separately constructed descriptors, which is how a loaded copy
+ * and a repository component reach a name: an Effection context is identified
+ * by its name, so this is exactly the substitution a stable name permits. The
+ * name is the one an earlier revision of this engine trusted for retained
+ * Git-host identities; nothing reads it now, and the test is what says so.
+ */
+function withCounterfeitIdentities<T>(operation: Operation<T>): Operation<T> {
+  return scoped(function* () {
+    const retained = createContext<unknown>(
+      "executablemd.workflow.git-host.retained-identities",
+      undefined,
+    );
+    yield* retained.set({
+      identities: new Map([["expansion-1", COUNTERFEIT_RUN]]),
+      // Whatever shape a reader might have expected, answered for every key.
+      get: () => COUNTERFEIT_RUN,
+    });
+    return yield* operation;
+  });
+}
+
+/**
+ * One run's history as another run's, so it can be inherited.
+ *
+ * Only the Git-host record moves: its retained identity becomes the source's,
+ * and the durable operation is renamed to the digest that identity produces —
+ * which is exactly what the source itself wrote, and what a fork copies
+ * verbatim.
+ */
+function* inheritedHistory(
+  events: readonly DurableEvent[],
+  runId: string,
+): Operation<DurableEvent[]> {
+  const rewritten: DurableEvent[] = [];
+  for (const event of events) {
+    const record =
+      event.type === "yield" &&
+      event.description.type === GIT_HOST_EFFECT &&
+      event.result.status === "ok"
+        ? parseGitHostReconciliationRecord(event.result.value)
+        : undefined;
+    if (event.type !== "yield" || record === undefined) {
+      rewritten.push(event);
+      continue;
+    }
+    const request = { ...record.request, identity: { ...record.request.identity, runId } };
+    rewritten.push({
+      ...event,
+      description: { ...event.description, name: yield* gitHostRequestFingerprint(request) },
+      result: { status: "ok", value: { ...record, request } as unknown as Json },
+    });
+  }
+  return rewritten;
+}
 
 /** A journal that refuses exactly the Git-host effect's own publication. */
 function refusingGitHostAppends(inner: InMemoryStream): DurableStream {

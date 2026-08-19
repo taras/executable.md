@@ -62,7 +62,6 @@ export {
 export type { GitApi, GitObjectFormat } from "./src/git.ts";
 export { getWorkflowRun, retainedWorkflowInstallation, workflowInstallation } from "./src/run.ts";
 export { workflowBundleInstallation, WorkflowBundleHistoryError } from "./src/bundle.ts";
-export { gitHostReplayInstallation } from "./src/git-host/replay.ts";
 export type { WorkflowRun } from "./src/run.ts";
 export { useWorkflowServiceDenial, WorkflowServiceDeniedError } from "./src/service-denial.ts";
 

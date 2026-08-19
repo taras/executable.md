@@ -78,7 +78,11 @@
  */
 
 import { createApi } from "@effectionx/context-api";
-import { createDurableOperation, serializeError } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  DurableContext,
+  serializeError,
+} from "@executablemd/durable-streams";
 import type {
   ActivateDurabilityFailure,
   EffectDescription,
@@ -92,7 +96,6 @@ import type { Operation, Result } from "effection";
 import { getExpansion } from "@executablemd/core";
 import { getWorkflowRun } from "../run.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
-import { retainedGitHostIdentity } from "./replay.ts";
 import { GIT_HOST_API, GitHost } from "./api.ts";
 import type {
   GitHostApi,
@@ -559,6 +562,61 @@ function* attempt(
 }
 
 /**
+ * The identity the record already retained at this position was written under,
+ * or nothing when this position retains none.
+ *
+ * ## Why this is read here rather than supplied
+ *
+ * A fork's journal holds records its source wrote, and a Git-host effect is
+ * named by a digest that includes the run id — so an inherited record would
+ * compute a different name under the fork and replay would diverge before any
+ * provider question arose. What decides the name therefore has to know what is
+ * retained at this exact position.
+ *
+ * It is read from the replay index canonical core built from the snapshot it
+ * admitted, and from nowhere else. There is no binding to install, no map to
+ * publish and no name to counterfeit: a component, a public middleware, a
+ * loaded-copy descriptor and a same-name Context have nothing to substitute,
+ * because nothing here consults one.
+ *
+ * **A live operation is unaffected, by construction.** A position with no
+ * retained entry — every live one, and every position after replay is disabled
+ * — peeks nothing, so the identity is `getWorkflowRun()`'s. There is no path by
+ * which an inherited identity reaches a live observation, a live performance,
+ * or an appended event.
+ *
+ * The entry is peeked, never consumed: matching and consuming it stays the
+ * durable machinery's, and a borrowed identity that turns out to be wrong makes
+ * the name match nothing, which is a divergence rather than an adoption. The
+ * record must also name *this* expansion, so an identity is never borrowed from
+ * a record belonging somewhere else in the history.
+ */
+function* retainedIdentityHere(expansionId: string): Operation<string | undefined> {
+  const durable = yield* DurableContext.get();
+  if (durable === undefined) {
+    return undefined;
+  }
+  const entry = durable.replayIndex.peekYield(durable.coroutineId);
+  if (entry === undefined) {
+    return undefined;
+  }
+  try {
+    if (entry.description.type !== GIT_HOST_EFFECT || entry.result.status !== "ok") {
+      return undefined;
+    }
+    const record = parseGitHostReconciliationRecord(entry.result.value);
+    if (record === undefined || record.request.identity.expansionId !== expansionId) {
+      return undefined;
+    }
+    return record.request.identity.runId;
+  } catch {
+    // A retained entry that refuses to be read names no identity, and this
+    // position falls back to the run making the request.
+    return undefined;
+  }
+}
+
+/**
  * The complete request one call makes, or a refusal naming what is missing.
  *
  * The two identity members are the host's and the engine's; the three
@@ -600,10 +658,8 @@ export function* reconcileGitHostEffect(
   const run = yield* getWorkflowRun();
   const expansion = yield* getExpansion();
   // A position this run already retains a record at is named by the identity
-  // that record holds; everywhere else by this run's own. That is what lets a
-  // fork consume the completion it inherited without asking a provider
-  // anything, while every live attempt still performs under the run making it.
-  const retainedIdentity = yield* retainedGitHostIdentity(expansion.id);
+  // that record holds; everywhere else by this run's own.
+  const retainedIdentity = yield* retainedIdentityHere(expansion.id);
   const complete = completeRequest(retainedIdentity ?? run.runId, expansion.id, request);
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
