@@ -17,6 +17,7 @@ import { type Api, createApi, type Operations } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
+import { ModifierRunner } from "./modifier-runner.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
 import type {
   CodeBlockContext,
@@ -186,12 +187,18 @@ export const Component: Api<ComponentApi> = createApi<ComponentApi>("Component",
         `Component.around({ importComponent }, { at: "min" }) before expansion.`,
     );
   },
-  // deno-lint-ignore require-yield
-  *applyModifiers(_modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult> {
-    throw new Error(
-      `Component.applyModifiers() has no provider for block "${block.blockId}". Install one ` +
-        `with Component.around({ applyModifiers }, { at: "min" }) before expansion.`,
-    );
+  /**
+   * The default every direct caller reaches, after its own middleware composed.
+   *
+   * A component may run a block itself (spec §5.5), and the chain it composes
+   * belongs to the execution rather than to this shared descriptor, which closes
+   * over nothing. So the ordinary runner the running execution offers answers
+   * here — composition only, never a projection — and the missing-provider
+   * diagnostic comes back unchanged when there is no execution to ask
+   * (`modifier-runner.ts`).
+   */
+  *applyModifiers(modifiers: Modifier[], block: CodeBlockContext): Operation<CodeBlockResult> {
+    return yield* ModifierRunner.operations.invoke(modifiers, block);
   },
   // deno-lint-ignore require-yield
   *applyBoundModifiers(_modifiers: Modifier[], block: BoundExecRequest): Operation<void> {

@@ -108,6 +108,7 @@ import {
 import type { BoundExecChain, CodeBlockWorkflow, ModifierFactory } from "./modifiers.ts";
 import { evalFactory, projectedEvalFactory } from "./eval-handler.ts";
 import type { ModifierInvocation } from "./projection-binding.ts";
+import { ModifierRunner } from "./modifier-runner.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
@@ -121,7 +122,7 @@ import {
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
-import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
+import type { CodeBlockContext, CodeBlockResult, EvalEnv, Modifier } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
 import type { RootDocumentSource } from "./root-source.ts";
 import { useEvalScope } from "@effectionx/scope-eval";
@@ -1943,44 +1944,52 @@ function* executeDocument(
   /**
    * Run one code block, keeping the projection out of everything public.
    *
-   * The chain is the public one: `Component.applyModifiers` middleware composes
-   * around this call exactly as it always did, sees the ordinary modifier array
-   * and the ordinary block context, and may observe them, transform what it
-   * delegates, refuse by throwing, or answer without delegating at all.
+   * The terminal for this block and no other, and an instance default rather
+   * than middleware. A stable Api *name* shares the middleware context, so every
+   * public `applyModifiers` handler — at either position, installed anywhere,
+   * including through another loaded copy's descriptor — composes around this
+   * call exactly as it composes around the public descriptor's, and keeps every
+   * policy right it has: observe, transform what it delegates, refuse by
+   * throwing, or answer without delegating at all. What a name does not share is
+   * the default handler: each `createApi()` instance owns its own, and this one
+   * is closed over this block.
    *
-   * What it cannot reach is `projection`, which stays in this closure. The
-   * terminal installed here is this invocation's — nested inside the
-   * execution's own provider at the same position, so it answers first — and it
-   * composes whatever the chain delegated against the projection this block was
-   * expanded with. A structural copy of the modifiers or the context therefore
-   * changes what runs, which is the point of the public surface, and changes
-   * nothing about which outcome the built-in terminal reads.
+   * Installing the terminal as middleware instead would take those rights away.
+   * A handler installed at `{ at: "min" }` — the position the public
+   * missing-provider diagnostic names — is what an engine-adjacent provider
+   * uses, and middleware in a nested scope runs ahead of inherited middleware:
+   * a nested terminal that never delegates would answer first and an inherited
+   * refusal or override would never run at all.
    *
-   * The privilege is by factory identity, never by the word `eval`: a modifier
-   * registered over that name is a different factory, runs as an ordinary
-   * terminal, and reads no projection.
+   * So `projection` stays in this closure and reaches only the composition
+   * below. A structural copy of the modifiers or the block context therefore
+   * changes what runs, which is what the public surface is for, and changes
+   * nothing about which outcome the built-in terminal reads. The privilege is by
+   * factory identity, never by the word `eval`: a modifier registered over that
+   * name is a different factory, runs as an ordinary terminal, and reads no
+   * projection.
    */
-  const runModifiers: ModifierInvocation = (modifiers, context, projection) =>
-    scoped(function* () {
-      yield* Component.around(
-        {
-          *applyModifiers([delegated, delegatedContext], _next) {
-            const chain = composeModifierChain(
-              delegated,
-              delegatedContext,
-              registry,
-              projection === undefined
-                ? undefined
-                : (factory) =>
-                    factory === evalFactory ? projectedEvalFactory(projection) : factory,
-            );
-            return yield* chain();
-          },
-        },
-        { at: "min" },
-      );
-      return yield* Component.operations.applyModifiers(modifiers, context);
+  const runModifiers: ModifierInvocation = (modifiers, context, projection) => {
+    const block = createApi<{
+      applyModifiers(modifiers: Modifier[], context: CodeBlockContext): Operation<CodeBlockResult>;
+    }>("Component", {
+      *applyModifiers(
+        delegated: Modifier[],
+        delegatedContext: CodeBlockContext,
+      ): Operation<CodeBlockResult> {
+        const chain = composeModifierChain(
+          delegated,
+          delegatedContext,
+          registry,
+          projection === undefined
+            ? undefined
+            : (factory) => (factory === evalFactory ? projectedEvalFactory(projection) : factory),
+        );
+        return yield* chain();
+      },
     });
+    return block.operations.applyModifiers(modifiers, context);
+  };
 
   // Replay-safe transport: late subscribers receive every chunk and the
   // close value, so subscription readiness before first emission is never
@@ -2057,10 +2066,13 @@ function* executeDocument(
             // to the value in between is visible rather than authoritative.
             return bundle === undefined ? definition : bundle.issue(name, definition);
           },
-          *applyModifiers([modifiers, context], _next) {
-            const chain = composeModifierChain(modifiers, context, registry);
-            return yield* chain();
-          },
+          // No `applyModifiers` provider here, and deliberately. Canonical
+          // expansion runs every block through `runModifiers` above, whose
+          // terminal is an instance default; an installed handler that answered
+          // without delegating would preempt that default and take the public
+          // chain's refusal and override rights away from every handler behind
+          // it. What a direct `applyModifiers()` call needs instead — this
+          // execution's registry — is offered below, one step further in.
           // The terminal for one bound block: it composes against the context
           // that block was issued with, so what a handler delegated decides
           // nothing about what runs, and the outcome goes back to the issuing
@@ -2074,6 +2086,21 @@ function* executeDocument(
             });
           },
           evalScope: () => rootEvalScope,
+        },
+        { at: "min" },
+      );
+
+      // What a component's own `applyModifiers()` composes against (spec §5.5).
+      // Reached from the exported descriptor's default, after every public
+      // handler has already composed, so the chain runs exactly once — and
+      // composed with no projection and no privileged terminal, because a
+      // direct call is ordinary block execution wherever it is written.
+      yield* ModifierRunner.around(
+        {
+          *invoke([modifiers, context], _next) {
+            const chain = composeModifierChain(modifiers, context, registry);
+            return yield* chain();
+          },
         },
         { at: "min" },
       );

@@ -13,12 +13,25 @@ import { expect } from "@executablemd/test-support/expect";
 import { call, createContext, ensure, Err, scoped, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
-import { InMemoryStream } from "@executablemd/durable-streams";
+import { ephemeral, InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { Component, TestBehavior, useDataUriCompiler } from "@executablemd/core";
+import {
+  applyModifiers,
+  Component,
+  env,
+  registerComponents,
+  TestBehavior,
+  useTempFileCompiler,
+} from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { CodeBlockContext, Json, Modifier, ModifierFactory } from "@executablemd/core";
+import type {
+  CodeBlockContext,
+  ComponentRegistration,
+  Json,
+  Modifier,
+  ModifierFactory,
+} from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
@@ -994,8 +1007,9 @@ describe("what the assertion body reads", () => {
         '<AssertEquals actual={seen} expected="settled" />',
       ],
       // Eval needs a compiler, which the production hosts install and this
-      // harness does not; the data-URI one compiles without a filesystem.
-      { around: () => useDataUriCompiler() },
+      // harness does not. The temp-file one, because the data-URI compiler
+      // asks the runtime's loader for a `data:` module and tsx answers none.
+      { around: () => useTempFileCompiler() },
     );
     expect(only(run).status).toBe("pass");
   });
@@ -1150,7 +1164,7 @@ describe("the eval terminal reads the published outcome", () => {
       {
         settle: failingChild,
         *around() {
-          yield* useDataUriCompiler();
+          yield* useTempFileCompiler();
           yield* fabricateSuccess();
           if (install) {
             yield* install();
@@ -1221,15 +1235,36 @@ describe("the eval terminal reads the published outcome", () => {
     expect(only(run).status).toBe("pass");
   });
 
-  it("leaves a refusing handler refusing, as the failure of the test", function* () {
+  it("leaves a refusing handler refusing, from the position a provider installs at", function* () {
+    let reached = 0;
+    let ran = 0;
     const run = yield* observed(function* () {
+      // `{ at: "min" }` is the position the public missing-provider diagnostic
+      // tells a provider to install at, and the position an engine-adjacent
+      // handler shares with canonical core. A terminal installed as middleware
+      // would answer ahead of an inherited handler here and this refusal would
+      // never run — which is why the canonical terminal is an instance default.
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *applyModifiers(_args, _next) {
+            reached += 1;
+            throw new Error("refused by middleware");
+          },
+        },
+        { at: "min" },
+      );
+      // Records whether anything downstream of the refusal ran the block.
       yield* Component.around({
-        // deno-lint-ignore require-yield
-        *applyModifiers(_args, _next) {
-          throw new Error("refused by middleware");
+        *applyModifiers([modifiers, context], next) {
+          const result = yield* next(modifiers, context);
+          ran += 1;
+          return result;
         },
       });
     });
+    expect(reached).toBeGreaterThan(0);
+    expect(ran).toBe(0);
     expect(only(run).status).toBe("fail");
     expect(only(run).error?.message).toContain("refused by middleware");
   });
@@ -1254,29 +1289,98 @@ describe("the eval terminal reads the published outcome", () => {
     expect(only(run).status).toBe("pass");
   });
 
-  it("gives a registered replacement named eval no projection authority", function* () {
-    // A separately loaded copy of core's own eval terminal: the same source, a
-    // different factory identity. It runs — a registered modifier always does —
-    // and reads the environment public middleware composed, because privilege
-    // follows the identity this execution registered and never the word.
-    const copy = yield* call(
-      () =>
-        import("../../core/src/eval-handler.ts?loaded-copy") as Promise<
-          typeof import("../../core/src/eval-handler.ts")
-        >,
+  /**
+   * The same source again, under a specifier the module map has not seen —
+   * which is what a second copy of a package is at runtime.
+   *
+   * The specifier is a variable on purpose: `tsc` resolves a literal one and
+   * has no notion of a query, while Deno keys the module by the whole URL.
+   */
+  function loadCopy<T>(specifier: string): Operation<T> {
+    return call(() => import(specifier) as Promise<T>);
+  }
+
+  it("runs a loaded copy's direct call on this execution's registry, with no projection", function* () {
+    // A component calling `applyModifiers()` itself (spec §5.5), through a
+    // second copy of core's public operation. The copy's descriptor is a
+    // different object under the same stable name, so it reaches the ordinary
+    // runner the active execution installed — and that runner composes an
+    // ordinary chain, which is the whole of what a direct call may have.
+    const copy = yield* loadCopy<{ applyModifiers: typeof applyModifiers }>(
+      "../../core/src/component-api.ts?loaded-copy",
     );
+    let observed: string | undefined;
+    const direct: ComponentRegistration = {
+      name: "DirectBlock",
+      origin: "execution-harness.test",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        const result = yield* copy.applyModifiers([{ name: "eval" }], {
+          language: "js",
+          content: "output(String(run.result.ok));",
+          blockId: "direct-eval",
+        });
+        observed = result.output;
+        return "";
+      },
+    };
+
+    const run = yield* runHarness(
+      {
+        "README.md": doc(
+          '<Test name="direct">',
+          '<Execution host="run" target="child.md" as="run">',
+          "<DirectBlock />",
+          "</Execution>",
+          "</Test>",
+        ),
+        "child.md": doc("child"),
+      },
+      {
+        settle: failingChild,
+        *around() {
+          yield* useTempFileCompiler();
+          yield* fabricateSuccess();
+          yield* registerComponents([direct]);
+        },
+      },
+    );
+    // It ran: an eval terminal from this execution's registry executed the
+    // block and produced its output.
+    expect(observed).toBe("true");
+    // And what it read is the ordinary environment — the fabrication — not the
+    // outcome the enclosing assertion projection published. A direct call never
+    // inherits a projection, wherever the component making it was written.
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("gives a registered replacement named eval no projection authority", function* () {
+    // A modifier registered under the built-in's name — which is all a second
+    // loaded copy of core's own terminal would be, and all any other terminal
+    // is. It runs, because the registry answers the word the document wrote.
+    let read: unknown;
+    const replacement: ModifierFactory = (_params) => (_args, _next) =>
+      (function* () {
+        read = (yield* ephemeral(env))?.values.run;
+        return { output: "", exitCode: 0, stderr: "" };
+      })();
+
     const run = yield* runHarness(
       { "README.md": OBSERVES_ERR, "child.md": doc("child") },
       {
         settle: failingChild,
-        modifiers: { eval: copy.evalFactory },
+        modifiers: { eval: replacement },
         *around() {
-          yield* useDataUriCompiler();
+          yield* useTempFileCompiler();
           yield* fabricateSuccess();
         },
       },
     );
-    expect(only(run).status).toBe("fail");
-    expect(only(run).error?.message).toContain("observed synthetic success");
+    // What it read is what public middleware composed, never the published
+    // outcome: privilege follows the factory identity this execution
+    // registered, and this is not that factory.
+    expect(read).toEqual({ kind: "settled", result: { ok: true, value: "synthetic" } });
+    // And the authored block never ran, so it asserted nothing.
+    expect(only(run).status).toBe("pass");
   });
 });

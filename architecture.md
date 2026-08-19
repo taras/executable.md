@@ -72,7 +72,7 @@ Existing documents and code get aligned to this section retroactively.
 | host profile | a named production assembly a trusted host offers a testing harness — `run` today — reused after argument parsing rather than restated; a host that cannot offer one refuses rather than approximating it |
 | execution outcome | what one nested document execution ended as, as the harness publishes it: a settlement carrying the exact completion `Result`, or, for a workflow attempt, a durable suspension carrying the run and suspension identities. A suspension is neither success nor failure |
 | projection binding | the value one authorized invocation publishes for the caller-authored content written inside it, held in engine-owned state rather than in a binding environment and laid over what ordinary composition produced at each read that content performs. It keeps the authored name privately, accepts one publication, is carried as an argument along the content it belongs to, and is never handed to a component or to middleware |
-| modifier invocation runner | the engine-owned function an execution supplies to canonical expansion for running one code block: it invokes the public `Component.applyModifiers` chain, hands middleware the ordinary modifiers and block context, and retains that block's projection binding in its own closure for the built-in terminal it privileges by registered factory identity |
+| modifier invocation runner | how an execution runs one code block against its own modifier registry. Canonical expansion receives one directly, closed over that block's projection binding, and its terminal is an instance-owned default no installed handler can preempt. A component's own `applyModifiers()` call reaches a second, contextual one the execution installs under a stable internal name — the same registry, an ordinary chain, and no projection. Both compose the public `Component.applyModifiers` middleware chain exactly once |
 | trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
@@ -2219,7 +2219,25 @@ built-in `eval` terminal by closure rather than by transport. The execution that
 owns the modifier registry supplies canonical expansion with a **modifier
 invocation runner**; expansion hands it the projection active where the block is
 written, and the runner keeps it in its own closure while invoking the ordinary
-public chain. `CodeBlockContext` carries public block data and nothing else, and
+public chain. Its terminal is an *instance-owned default* on a per-block
+descriptor sharing the public Api's name, never middleware: a stable name shares
+the middleware context, so every installed handler still composes, while the
+default belongs to the instance and no handler can answer in its place. An
+engine terminal installed as middleware would do the opposite — a nested one
+answers ahead of an inherited `{ at: "min" }` handler, which is the position the
+public missing-provider diagnostic names, and that handler's refusal and
+override would never run.
+
+A component may also call `applyModifiers()` itself (spec §5.5), and that call
+reaches the shared exported default, which closes over nothing. So the execution
+also installs a *contextual* ordinary runner under a stable internal name, and
+the exported default asks for it — after every public handler has composed, so
+the chain still runs exactly once. That route is composition and not authority:
+it is never handed a projection, canonical expansion never reaches it, and
+replacing it reaches ordinary block execution, which the public operation
+already was. Canonical expansion trusts its own runner and never this one.
+
+`CodeBlockContext` carries public block data and nothing else, and
 neither `applyModifiers` nor `codeBlock` selects which terminal is privileged:
 that is decided by the execution, on the factory identity it registered, so a
 modifier registered over the name `eval` is a different factory, runs as an

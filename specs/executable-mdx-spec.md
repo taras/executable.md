@@ -3643,6 +3643,21 @@ interface, and each operation is also exported directly:
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
+`applyModifiers(modifiers, block)` has two callers, and one contract. Canonical
+expansion runs every authored block through it, and a TypeScript component may
+call it for a block of its own. Both compose the same public middleware chain,
+exactly once, and a handler at either position may observe, transform what it
+delegates, refuse by throwing, or answer without delegating.
+
+What differs is what the chain ends in. Canonical expansion supplies its own
+terminal, which is where an assertion projection reaches the built-in `eval`
+terminal (`specs/testing-spec.md`); no installed handler can preempt it, and no
+handler is handed the projection. A direct call ends in the ordinary runner the
+running execution offers: the same registry, an ordinary chain, no privileged
+terminal, and no projection — so a block a component runs itself reads the
+environment ordinary composition produced, wherever that component was written.
+Outside an execution, a direct call reports the missing-provider error above.
+
 What an element can learn about its own expansion is not a Component Api
 operation, because there is no legitimate reason to intercept it: durable
 identities are derived from it. See §5.6.
@@ -9609,9 +9624,9 @@ timed.
 | NEX32–NEX34 | Publication | `Component.env` middleware answering with a fresh environment carrying a synthetic success changes neither what a bound assertion reads nor whether an unbound failing child fails the owning test |
 | NEX35–NEX40 | Projection reads | The published outcome resolves in an expression prop, an `<If>` condition, interpolated text inside a `<Capture>`, an `eval` block and what it exports, and in content projected through a component — and not in that component's own body; every other name still resolves through ordinary composition, a `<Capture>` under the same name does not displace it, and after the element the ordinary `as` binding answers |
 | NEX41–NEX42 | Request and lifetime | A structural copy of a request runs no child; a cancelled test tears its child down exactly once |
-| NEX43–NEX44 | Loaded copies | A separately loaded copy of core delivers no harness installers to this copy's `<Test>`, and that copy's own `eval` terminal — registered under the name `eval`, so it runs — reaches the private invocation route not at all and reads the environment public middleware composed |
-| NEX45–NEX47 | Code-block chain | Exact delegation runs the block and exposes the provider's exact `Err`; a `Component.codeBlock` handler that delegates and returns a structural copy of the context, and a `Component.applyModifiers` handler that delegates structural copies of the modifiers and the context, each change nothing about what the block reads — one child per case |
-| NEX48–NEX50 | Chain compatibility | An observing handler still observes both harness passes; a refusing handler's failure is still the owning test's; a handler that does not delegate still overrides the block completely, so it runs nothing and reads nothing |
+| NEX43–NEX45 | Loaded copies and direct calls | A separately loaded copy of core delivers no harness installers to this copy's `<Test>`; a modifier registered under the name `eval` runs as an ordinary terminal and reads only what public middleware composed; and a component calling a loaded copy's `applyModifiers()` inside an assertion body composes against the running execution's registry while reading no projection |
+| NEX46–NEX48 | Code-block chain | Exact delegation runs the block and exposes the provider's exact `Err`; a `Component.codeBlock` handler that delegates and returns a structural copy of the context, and a `Component.applyModifiers` handler that delegates structural copies of the modifiers and the context, each change nothing about what the block reads — one child per case |
+| NEX49–NEX51 | Chain compatibility | An observing handler still observes both harness passes; a handler refusing from `{ at: "min" }` — the position the public diagnostic names — is reached, fails the owning test, and nothing downstream runs the block; a handler that does not delegate still overrides it completely, so it runs nothing and reads nothing |
 | NEXH1–NEXH4 | Production assembly | Under `xmd test`, a child resolves `./dir/kebab-name.md` and `file.md#Target`, runs a foreground command through the entrypoint's own adapter, collects a diagnostic journal, leaves no file behind for inline source, and refuses `<WorkflowRun>` on a host with no workflow profile |
 
 
