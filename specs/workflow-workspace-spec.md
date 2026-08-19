@@ -1875,13 +1875,18 @@ snapshot, and held against the run it admitted rather than published anywhere a
 name can reach. No context, middleware, component or separately loaded copy can
 choose it: there is no binding to replace and no setter to call.
 
-It belongs to the exact retained event it came from. One element may ask for
-more than one Git-host effect, so each retained record answers for a request
-that matches it exactly and only until something has taken it. A request the
-inherited prefix holds no unclaimed record for is one this run is making itself
-— so reaching a live position is enough to be named by the run making it, and
-an inherited identity can never reach an observation, a performance or an
-appended event.
+It belongs to the exact retained event it came from, at the position that event
+occupies. One element may ask for more than one Git-host effect, so the records
+are offered in order: a call may take only the next one not yet taken, and only
+when that record asks exactly what the call asks. Anything else leaves the
+inherited prefix behind for good.
+
+Falling through to live is final in the same way. A request named by a retained
+record that reaches live execution — a mismatch earlier in the history, and a
+divergence policy that chose to run live, are enough — performs nothing. It asks
+the Git host nothing, appends nothing, and fails, because the run that may
+perform it is the one this journal belongs to. An inherited identity therefore
+never reaches an observation, a performance or an appended event.
 
 A Git-host event that settled into no such record is the other case. The run
 stopped without establishing what happened at the remote, so continuing across

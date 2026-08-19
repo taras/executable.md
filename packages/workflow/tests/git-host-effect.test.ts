@@ -18,6 +18,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { createContext, Err, Ok, scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import {
+  Divergence,
   DivergenceError,
   InMemoryStream,
   serializeDurableEvent,
@@ -1138,6 +1139,134 @@ describe("Tier GH — shared external Git-host effect reconciliation", () => {
         ? parseGitHostReconciliationRecord(appended.result.value)
         : undefined;
     expect(record?.request.identity.runId).toBe(RUN.runId);
+  });
+
+  it("GH16: a retained identity is not borrowed when this position is not its own", function* () {
+    // Two retained records. The call being made asks what the *second* one
+    // answers, while the record at this position is the first — and public
+    // divergence policy chooses to run live rather than refuse. Nothing about
+    // that may put the source's identity on a live request.
+    const sourceRunId = "run-297-git-host-source";
+    const second: GitHostEffectRequest = {
+      kind: "git-push",
+      inputs: { remote: "origin", branch: "release-1.5", commit: "0e1d2c3" },
+      naturalKey: { remote: "origin", destinationRef: "refs/heads/release-1.5" },
+    };
+
+    const seedStream = new InMemoryStream();
+    const seedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seeded = yield* twiceRun({ stream: seedStream, provider: seedHost.provider, second });
+    expect(seeded.failures).toEqual([]);
+    const inherited = yield* inheritedHistory(partial(seedStream.snapshot()), sourceRunId);
+    expect(gitHostYields(inherited)).toHaveLength(2);
+
+    // This run asks only for the second effect, so the record at the position
+    // it reaches is the first one and does not answer what it asks.
+    const stream = new InMemoryStream(inherited);
+    const host = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const seen = attempt();
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Effect",
+          origin: "tier-gh",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            // Public policy: every mismatch becomes live execution.
+            yield* Divergence.around({
+              decide: () => ({ type: "run-live" }),
+            });
+            seen.expansions.push((yield* getExpansion()).id);
+            try {
+              seen.records.push(yield* reconcileGitHostEffect(second));
+            } catch (error) {
+              seen.failures.push(error);
+            }
+            return "";
+          },
+        },
+      ]);
+      try {
+        yield* withGitHostProvider(host.provider, collectSource(SOURCE, stream));
+      } catch {
+        // The document's outcome is not what this measures.
+      }
+    });
+
+    // It ran live, and it ran as this run: the provider was asked under the
+    // executing identity and never under the source's.
+    expect(host.observed).toHaveLength(1);
+    expect(host.performed).toHaveLength(1);
+    expect(host.observed[0]?.identity.runId).toBe(RUN.runId);
+    expect(host.performed[0]?.identity.runId).toBe(RUN.runId);
+    expect(seen.records[0]?.request.identity.runId).toBe(RUN.runId);
+
+    // And what it appended says the same thing.
+    const appended = gitHostYields(stream.snapshot()).slice(inherited.length === 0 ? 0 : 2);
+    expect(appended).toHaveLength(1);
+    const record =
+      appended[0]?.type === "yield" && appended[0].result.status === "ok"
+        ? parseGitHostReconciliationRecord(appended[0].result.value)
+        : undefined;
+    expect(record?.request.identity.runId).toBe(RUN.runId);
+    expect(stream.snapshot().map(serializeDurableEvent).join("")).not.toContain(
+      `"runId":"${sourceRunId}","expansionId":"${seen.expansions[0]}"` + `,"kind":"${second.kind}"`,
+    );
+
+    // The other way replay can fall through: the call *does* ask what the
+    // record at this position answers, so its name comes from that record — and
+    // then a mismatch earlier in the history, under the same run-live policy,
+    // means it never replays. Performing under the source's identity is exactly
+    // what must not happen, so nothing is asked of the Git host at all.
+    // The record still answers what the call asks — so its identity is the one
+    // the name is built from — but the *stored* name no longer matches it, so
+    // replay cannot consume it and run-live sends the call live instead.
+    let first = true;
+    const derailed = inherited.map((event) => {
+      if (!first || event.type !== "yield" || event.description.type !== GIT_HOST_EFFECT) {
+        return event;
+      }
+      first = false;
+      return { ...event, description: { ...event.description, name: "0".repeat(64) } };
+    });
+    const derailedStream = new InMemoryStream(derailed);
+    const derailedHost = recordingProvider(answering(Ok(ABSENT)), answering(Ok(PERFORMED)));
+    const derailedSeen = attempt();
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Effect",
+          origin: "tier-gh",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            yield* Divergence.around({ decide: () => ({ type: "run-live" }) });
+            derailedSeen.expansions.push((yield* getExpansion()).id);
+            try {
+              derailedSeen.records.push(yield* reconcileGitHostEffect(PUSH));
+            } catch (error) {
+              derailedSeen.failures.push(error);
+            }
+            return "";
+          },
+        },
+      ]);
+      try {
+        yield* withGitHostProvider(derailedHost.provider, collectSource(SOURCE, derailedStream));
+      } catch {
+        // The document's outcome is not what this measures.
+      }
+    });
+
+    expect(derailedHost.observed).toEqual([]);
+    expect(derailedHost.performed).toEqual([]);
+    expect(derailedSeen.records).toEqual([]);
+    // The component really ran, so the emptiness above is a refusal rather
+    // than a document that never reached the effect.
+    expect(derailedSeen.expansions).toHaveLength(1);
+    expect(String(derailedSeen.failures[0])).toContain("did not replay");
+    // Nothing was appended for it. The two Git-host events there are the two it
+    // inherited, and the refusal added no third under anybody's identity.
+    expect(gitHostYields(derailedStream.snapshot())).toHaveLength(gitHostYields(derailed).length);
   });
 });
 

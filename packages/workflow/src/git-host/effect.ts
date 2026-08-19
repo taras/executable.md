@@ -92,7 +92,12 @@ import type { Operation, Result } from "effection";
 import { getExpansion } from "@executablemd/core";
 import { getWorkflowRun } from "../run.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
-import { claimRetainedGitHostIdentity } from "./identities.ts";
+import { claimRetainedGitHostIdentity, exhaustRetainedGitHostIdentities } from "./identities.ts";
+
+/** A request named by a retained record, and how to retire the rest of them. */
+interface BorrowedIdentity {
+  exhaust(): void;
+}
 import { GIT_HOST_API, GitHost } from "./api.ts";
 import type {
   GitHostApi,
@@ -510,13 +515,32 @@ function* reconcile(
  * an unpublished failure activates the run's existing fail-stop state instead
  * of quietly stepping aside.
  */
-function gitHostCoordinator(settlement: GitHostSettlement): LiveDurableOperationCoordinator {
+function gitHostCoordinator(
+  settlement: GitHostSettlement,
+  borrowed: BorrowedIdentity | undefined,
+): LiveDurableOperationCoordinator {
   return {
     *run<T extends Json>(
       execute: () => Operation<T>,
       publish: (result: DurableResult) => Operation<void>,
       activateFailure: ActivateDurabilityFailure,
     ): Operation<DurableResult> {
+      // Reached only live, and never on replay. A request named with a retained
+      // identity that arrives here was not replayed after all — a mismatch
+      // earlier in the history, and a divergence policy that chose to run live,
+      // are enough — and performing under a run this one is not is exactly what
+      // this boundary exists to prevent. Nothing has been executed yet, so the
+      // Git host is never reached and nothing is published.
+      if (borrowed !== undefined) {
+        borrowed.exhaust();
+        throw activateFailure(
+          new GitHostProviderError(
+            "this Git-host effect was named by a retained record and did not replay, so it " +
+              "would perform under a run this execution is not. Nothing was asked of the Git " +
+              "host, and the run this journal belongs to is the one that may perform it.",
+          ),
+        );
+      }
       let result: DurableResult;
       try {
         result = { status: "ok", value: yield* execute() };
@@ -548,13 +572,14 @@ function errorOf(value: unknown): Error {
 function* attempt(
   description: EffectDescription,
   request: CompleteGitHostEffectRequest,
+  borrowed: BorrowedIdentity | undefined,
 ): Workflow<unknown> {
   // One settlement per attempt, created here and reachable only from the two
   // halves of this operation. Nothing a document, a provider or a handler holds
   // can put a decision in it.
   const settlement: GitHostSettlement = {};
   return yield createDurableOperation(description, () => reconcile(request, settlement), {
-    coordinator: gitHostCoordinator(settlement),
+    coordinator: gitHostCoordinator(settlement, borrowed),
   });
 }
 
@@ -609,6 +634,12 @@ export function* reconcileGitHostEffect(
     retainedIdentity === undefined
       ? live
       : completeRequest(retainedIdentity, expansion.id, request);
+  // Carried into the live path so a name that came from a retained record
+  // cannot be the one a live attempt performs under.
+  const borrowed: BorrowedIdentity | undefined =
+    retainedIdentity === undefined
+      ? undefined
+      : { exhaust: () => exhaustRetainedGitHostIdentities(run) };
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),
@@ -616,7 +647,7 @@ export function* reconcileGitHostEffect(
 
   let retained: unknown;
   try {
-    retained = yield* attempt(description, complete);
+    retained = yield* attempt(description, complete, borrowed);
   } catch (error) {
     throw gitHostFailure(error);
   }

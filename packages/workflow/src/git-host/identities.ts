@@ -22,17 +22,27 @@
  * name to bind, no value to substitute, and no setter anything outside this
  * package's own installation can reach.
  *
- * ## One record, one position
+ * ## One record, one position, in order
  *
- * A retained identity belongs to the exact retained event it came from, not to
- * the expansion that produced it. `reconcileGitHostEffect()` is a public
+ * A retained identity belongs to the exact retained event it came from, and to
+ * the position that event occupies. `reconcileGitHostEffect()` is a public
  * surface, so one expansion may reach it more than once, and a fork whose
  * inherited prefix ends after the first of those calls must not lend the
  * source's identity to the second — that call is live, and a live call is the
- * fork's own. So each retained record is *claimed* once: it answers for a
- * request that matches it exactly, and only until something has taken it.
- * Everything after the inherited prefix runs out finds nothing, which is what
- * makes reaching a live position enough to be named by the run making it.
+ * fork's own.
+ *
+ * So the records are consumed **in order**. A call is offered the next one that
+ * has not been taken, and only when that record asks exactly what the call
+ * asks; anything else leaves the inherited prefix behind for good. Matching by
+ * shape alone was not enough: it let a call claim a *later* record while the
+ * record actually at this position was a different one, so a mismatch there —
+ * with public divergence policy choosing to run live — became live execution
+ * under a source identity.
+ *
+ * Falling through to live is final. Once a call runs live, replay has left the
+ * inherited prefix, and nothing after it may borrow: the reconciliation reports
+ * that back through {@link exhaustRetainedGitHostIdentities}, so a borrowed name
+ * that reaches the live path takes the rest of the prefix out of use with it.
  *
  * A caller holding a run object cannot enroll it, and a caller holding a
  * different object — a counterfeit run from a rebound slot — finds nothing and
@@ -67,12 +77,26 @@ const retainedIdentities = (() => {
       byRun.set(run, identities);
     },
     claim(run: WorkflowRun, asked: string): string | undefined {
-      const identity = byRun.get(run)?.find((held) => !held.claimed && held.asked === asked);
-      if (identity === undefined) {
+      const held = byRun.get(run);
+      if (held === undefined) {
         return undefined;
       }
-      identity.claimed = true;
-      return identity.runId;
+      const next = held.find((identity) => !identity.claimed);
+      // In order, and only the next one. A call that does not ask what the
+      // record at this position answers is past the inherited prefix, and every
+      // later record goes with it rather than waiting to be matched by shape.
+      if (next === undefined || next.asked !== asked) {
+        exhaust(held);
+        return undefined;
+      }
+      next.claimed = true;
+      return next.runId;
+    },
+    exhaust(run: WorkflowRun): void {
+      const held = byRun.get(run);
+      if (held !== undefined) {
+        exhaust(held);
+      }
     },
   };
 })();
@@ -91,12 +115,20 @@ export function rememberRetainedGitHostIdentities(
 }
 
 /**
- * Take the identity the retained record for exactly this request was written
- * under, if this run retains one nothing has taken yet.
+ * Take the rest of the inherited prefix out of use.
  *
- * Nothing is the ordinary answer, and it is what every live position gives: a
- * request the inherited prefix holds no unclaimed record for is one this run is
- * making itself, so it is named by the run making it.
+ * Called when a call has run live: replay has left the prefix, and a later
+ * record must not be borrowed by whatever happens next.
+ */
+export function exhaustRetainedGitHostIdentities(run: WorkflowRun): void {
+  retainedIdentities.exhaust(run);
+}
+
+/**
+ * Take the identity of the retained record at the next unconsumed position,
+ * when that record asks exactly what this request asks.
+ *
+ * Nothing is the ordinary answer, and it is what every live position gives.
  */
 export function claimRetainedGitHostIdentity(
   run: WorkflowRun,
@@ -112,6 +144,12 @@ export function claimRetainedGitHostIdentity(
  * expansion stays in, so a record never answers for a position somewhere else
  * in the document.
  */
+function exhaust(held: RetainedIdentity[]): void {
+  for (const identity of held) {
+    identity.claimed = true;
+  }
+}
+
 function asked(request: CompleteGitHostEffectRequest): string {
   return canonicalJson({
     expansionId: request.identity.expansionId,

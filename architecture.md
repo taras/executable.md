@@ -1092,8 +1092,10 @@ holds a record at is named by that identity, while every live attempt is named
 by the run performing it. The identity is established when the engine
 admits the run's retained snapshot and is held against that run, never published
 under a name a document could bind. It belongs to the exact retained event it
-came from: each record answers once, for a request matching it exactly, so a
-second call from the same element runs live under the executing run. A Git-host event that settled into no such record
+came from, at the position that event occupies: records are offered in order,
+a call may take only the next untaken one and only when it asks exactly what
+that record answers, and a request named by a retained record that reaches live
+execution performs nothing rather than performing under another run. A Git-host event that settled into no such record
 leaves the remote's state unestablished, and that checkpoint is not forkable.
 
 A fork inherits the source's normalized props as its baseline; explicit
