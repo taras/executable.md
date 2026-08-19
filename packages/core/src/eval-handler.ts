@@ -11,7 +11,7 @@ import type { Json } from "@executablemd/durable-streams";
 import { unbox } from "@effectionx/scope-eval";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import type { ModifierFactory } from "./modifiers.ts";
+import type { ModifierFactory, ModifierMiddleware } from "./modifiers.ts";
 import { useCodeBlock } from "./modifiers.ts";
 import { Component, env, evalScope, persistent } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
@@ -26,7 +26,7 @@ import {
   validateLiveOverlay,
 } from "./live-env.ts";
 import { EphemeralEval, EphemeralEvalOutputError } from "./modifiers/ephemeral.ts";
-import { blockBinding, readThrough } from "./projection-binding.ts";
+import { readThrough } from "./projection-binding.ts";
 import type { ProjectionBinding } from "./projection-binding.ts";
 import { sourceDescription } from "./source-position.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
@@ -121,126 +121,155 @@ function runBlock<T>(blockId: string, block: () => Operation<T>): Operation<T> {
   });
 }
 
-export const evalFactory: ModifierFactory = (_params) => (_args, _next) =>
-  (function* () {
-    const ctx = yield* useCodeBlock();
-    const evalEnv = yield* ephemeral(env);
-    if (!evalEnv) {
-      throw new Error(
-        `eval block "${ctx.blockId}" requires a binding environment; none is in scope.`,
-      );
-    }
-    // Read from the context canonical core issued this block with. Nothing on
-    // the public chain carries it, and nothing on the chain can be handed it.
-    const projection = blockBinding(ctx);
-    const persist = yield* ephemeral(persistent);
-    const reconstruct = yield* ephemeral(EphemeralEval.get());
-    // Captured here, on the expansion frame, where the block's documentation or
-    // <Output> error mode is ambient. A persist block runs on the invocation's
-    // eval-scope loop task, which predates that error mode and cannot inherit it.
-    const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
-
-    if (reconstruct) {
-      return yield* ephemeral(runEphemeralEval(ctx, evalEnv, persist, mode, projection));
-    }
-
-    // Inject output() function into env so eval blocks can produce
-    // rendered output. The function is a plain synchronous call:
-    //   output("some text")
-    // The mutable ref is block-local; serializeExports silently
-    // omits non-JSON values (functions), so output won't pollute
-    // the journal. The output text itself is journaled alongside
-    // exports as __output.
-    const outputRef = { text: "" };
-    evalEnv.values.output = (text: string) => {
-      outputRef.text = String(text);
-    };
-
-    // The names and values this block can see: what the environment holds, with
-    // the published outcome laid over it. Taken again inside the durable
-    // operation, after the journaled bindings are merged back, so the overlay
-    // is what a restored value would have to displace and never the reverse.
-    const visible = (): Record<string, unknown> =>
-      readThrough(evalEnv, projection)?.values ?? evalEnv.values;
-
-    const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(visible()));
-    validateDurableExports(transformed.exports, liveEnvironment(evalEnv));
-
-    const bindings = serializeExports(evalEnv.values, transformed.imports);
-    const result = (yield createDurableOperation<Json>(
-      {
-        type: "eval",
-        name: `eval:${ctx.blockId}`,
-        ...(ctx.language ? { language: ctx.language } : {}),
-        ...sourceDescription(ctx.position),
-      },
-      function* (): Operation<Json> {
-        // Merge incoming bindings snapshot into env before execution
-        Object.assign(evalEnv.values, bindings);
-
-        const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
-        // A snapshot of the bindings as they stand now, with this block's
-        // error mode bound into its projection closures. The block writes its
-        // exports here; they are published below once it succeeds.
-        const blockEnv = evaluationEnv(visible(), mode);
-
-        if (persist) {
-          // Persist mode: run the compiled block inside the eval scope
-          // so spawned resources are retained in the persistent EvalScope.
-          const scope = yield* evalScope;
-          if (!scope) {
-            throw new Error(
-              `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
-            );
-          }
-          // Installed inside the eval, on the loop task the block runs on —
-          // the expansion scope is not on its chain — and deliberately not in
-          // a nested scope: a `persist` block's spawned work and installed
-          // middleware belong to the loop task and must outlive the block.
-          // Every task that anchors here is durable eval work, and the
-          // invocation body's own provider is nested deeper, so it still wins
-          // for the component itself.
-          const blockResult = yield* scope.eval(function* () {
-            yield* rejectRetain(ctx.blockId);
-            return yield* fn(blockEnv);
-          });
-          const returnValue = unbox(blockResult);
-          if (!outputRef.text && returnValue != null) {
-            outputRef.text = String(returnValue);
-          }
-        } else {
-          // Normal mode: run the compiled block in the current scope.
-          // Resources are torn down when this operation completes.
-          const returnValue = yield* runBlock(ctx.blockId, () => fn(blockEnv));
-          if (!outputRef.text && returnValue != null) {
-            outputRef.text = String(returnValue);
-          }
-        }
-
-        // Publish first, so a later block — and any persistent work already
-        // holding a reference — sees live values the journal cannot carry.
-        commitExports(evalEnv.values, blockEnv, transformed.exports);
-
-        const exports = serializeExports(blockEnv, transformed.exports);
-
-        if (outputRef.text) {
-          (exports as Record<string, unknown>).__output = outputRef.text;
-        }
-
-        return { value: exports as unknown as Json } as Json;
-      },
-    )) as unknown as { value: Json };
-
-    if (result.value && typeof result.value === "object") {
-      const restored = result.value as Record<string, unknown>;
-      // Extract __output before merging into env
-      if (typeof restored.__output === "string") {
-        outputRef.text = restored.__output;
+/**
+ * The built-in `eval` terminal, for one invocation.
+ *
+ * `projection` is a lexical argument and reaches here from canonical modifier
+ * composition, which received it from expansion. Nothing on the public chain
+ * carries it: the block context this reads its language, content and blockId
+ * from crosses `Component.codeBlock`, so a handler may copy or replace it, and
+ * doing so changes nothing about which outcome this block reads.
+ */
+function evalTerminal(projection: ProjectionBinding | undefined): ModifierMiddleware {
+  return (_args, _next) =>
+    (function* () {
+      const ctx = yield* useCodeBlock();
+      const evalEnv = yield* ephemeral(env);
+      if (!evalEnv) {
+        throw new Error(
+          `eval block "${ctx.blockId}" requires a binding environment; none is in scope.`,
+        );
       }
-      // Remove __output from exports before assigning to env
-      const { __output: _, ...exports } = restored;
-      Object.assign(evalEnv.values, exports);
-    }
+      const persist = yield* ephemeral(persistent);
+      const reconstruct = yield* ephemeral(EphemeralEval.get());
+      // Captured here, on the expansion frame, where the block's documentation or
+      // <Output> error mode is ambient. A persist block runs on the invocation's
+      // eval-scope loop task, which predates that error mode and cannot inherit it.
+      const mode = (yield* ephemeral(ErrorMode.get())) ?? "print";
 
-    return { output: outputRef.text, exitCode: 0, stderr: "" };
-  })();
+      if (reconstruct) {
+        return yield* ephemeral(runEphemeralEval(ctx, evalEnv, persist, mode, projection));
+      }
+
+      // Inject output() function into env so eval blocks can produce
+      // rendered output. The function is a plain synchronous call:
+      //   output("some text")
+      // The mutable ref is block-local; serializeExports silently
+      // omits non-JSON values (functions), so output won't pollute
+      // the journal. The output text itself is journaled alongside
+      // exports as __output.
+      const outputRef = { text: "" };
+      evalEnv.values.output = (text: string) => {
+        outputRef.text = String(text);
+      };
+
+      // The names and values this block can see: what the environment holds, with
+      // the published outcome laid over it. Taken again inside the durable
+      // operation, after the journaled bindings are merged back, so the overlay
+      // is what a restored value would have to displace and never the reverse.
+      const visible = (): Record<string, unknown> =>
+        readThrough(evalEnv, projection)?.values ?? evalEnv.values;
+
+      const transformed = transformBlock(ctx.content, ctx.blockId, Object.keys(visible()));
+      validateDurableExports(transformed.exports, liveEnvironment(evalEnv));
+
+      const bindings = serializeExports(evalEnv.values, transformed.imports);
+      const result = (yield createDurableOperation<Json>(
+        {
+          type: "eval",
+          name: `eval:${ctx.blockId}`,
+          ...(ctx.language ? { language: ctx.language } : {}),
+          ...sourceDescription(ctx.position),
+        },
+        function* (): Operation<Json> {
+          // Merge incoming bindings snapshot into env before execution
+          Object.assign(evalEnv.values, bindings);
+
+          const fn = yield* compileBlock(transformed.code, transformed.userImports ?? []);
+          // A snapshot of the bindings as they stand now, with this block's
+          // error mode bound into its projection closures. The block writes its
+          // exports here; they are published below once it succeeds.
+          const blockEnv = evaluationEnv(visible(), mode);
+
+          if (persist) {
+            // Persist mode: run the compiled block inside the eval scope
+            // so spawned resources are retained in the persistent EvalScope.
+            const scope = yield* evalScope;
+            if (!scope) {
+              throw new Error(
+                `persist eval block "${ctx.blockId}" requires a component eval scope; none is in scope.`,
+              );
+            }
+            // Installed inside the eval, on the loop task the block runs on —
+            // the expansion scope is not on its chain — and deliberately not in
+            // a nested scope: a `persist` block's spawned work and installed
+            // middleware belong to the loop task and must outlive the block.
+            // Every task that anchors here is durable eval work, and the
+            // invocation body's own provider is nested deeper, so it still wins
+            // for the component itself.
+            const blockResult = yield* scope.eval(function* () {
+              yield* rejectRetain(ctx.blockId);
+              return yield* fn(blockEnv);
+            });
+            const returnValue = unbox(blockResult);
+            if (!outputRef.text && returnValue != null) {
+              outputRef.text = String(returnValue);
+            }
+          } else {
+            // Normal mode: run the compiled block in the current scope.
+            // Resources are torn down when this operation completes.
+            const returnValue = yield* runBlock(ctx.blockId, () => fn(blockEnv));
+            if (!outputRef.text && returnValue != null) {
+              outputRef.text = String(returnValue);
+            }
+          }
+
+          // Publish first, so a later block — and any persistent work already
+          // holding a reference — sees live values the journal cannot carry.
+          commitExports(evalEnv.values, blockEnv, transformed.exports);
+
+          const exports = serializeExports(blockEnv, transformed.exports);
+
+          if (outputRef.text) {
+            (exports as Record<string, unknown>).__output = outputRef.text;
+          }
+
+          return { value: exports as unknown as Json } as Json;
+        },
+      )) as unknown as { value: Json };
+
+      if (result.value && typeof result.value === "object") {
+        const restored = result.value as Record<string, unknown>;
+        // Extract __output before merging into env
+        if (typeof restored.__output === "string") {
+          outputRef.text = restored.__output;
+        }
+        // Remove __output from exports before assigning to env
+        const { __output: _, ...exports } = restored;
+        Object.assign(evalEnv.values, exports);
+      }
+
+      return { output: outputRef.text, exitCode: 0, stderr: "" };
+    })();
+}
+
+/**
+ * The `eval` terminal as the registry holds it.
+ *
+ * The identity an execution registers under the name, and the one it compares
+ * against when it decides which terminal its own composition may privilege. A
+ * modifier registered over this name is a different factory and gets this
+ * ordinary form: it runs, and it reads no projection.
+ */
+export const evalFactory: ModifierFactory = (_params) => evalTerminal(undefined);
+
+/**
+ * The same built-in terminal, with one invocation's projection retained.
+ *
+ * Built by canonical modifier composition, per invocation, and reachable no
+ * other way: the projection is the closure's, so what a chain hands the block
+ * cannot add it, remove it, or put a different one in its place.
+ */
+export function projectedEvalFactory(projection: ProjectionBinding): ModifierFactory {
+  return (_params) => evalTerminal(projection);
+}

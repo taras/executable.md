@@ -10,7 +10,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, ensure, Err, scoped, suspend, withResolvers } from "effection";
+import { call, createContext, ensure, Err, scoped, suspend, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -18,7 +18,7 @@ import { useStubFs } from "@executablemd/runtime/test";
 import { Component, TestBehavior, useDataUriCompiler } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { Json } from "@executablemd/core";
+import type { CodeBlockContext, Json, Modifier, ModifierFactory } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import { testHarnessInstallation } from "../src/execution-harness.ts";
 import { ExecutionHost } from "../src/execution-host.ts";
@@ -43,6 +43,8 @@ interface RunOptions {
   readonly settle?: StubHostOptions["settle"];
   /** Called for each chunk the outer document emits, as it arrives. */
   readonly onChunk?: (chunk: string) => Operation<void>;
+  /** Modifiers this execution registers, as any trusted host may. */
+  readonly modifiers?: Record<string, ModifierFactory>;
 }
 
 function* runHarness(
@@ -63,9 +65,14 @@ function* runHarness(
     }
     // The harness authority is a delivery the host attaches, so these tests are
     // the host: without this, `<Execution>` is recognized and refused.
-    const execution = yield* executeInstalled({ path: "README.md", stream: new InMemoryStream() }, [
-      testHarnessInstallation(stub.provider),
-    ]);
+    const execution = yield* executeInstalled(
+      {
+        path: "README.md",
+        stream: new InMemoryStream(),
+        ...(options.modifiers === undefined ? {} : { modifiers: options.modifiers }),
+      },
+      [testHarnessInstallation(stub.provider)],
+    );
     const chunks: string[] = [];
     const output = yield* forEach(function* (chunk: string) {
       chunks.push(chunk);
@@ -1087,5 +1094,189 @@ describe("cancellation", () => {
     // child, so a test that stops takes the child it started with it rather
     // than leaving one running against a document that has finished.
     expect(torndown).toBe(1);
+  });
+});
+
+/**
+ * The published outcome survives the public code-block chain.
+ *
+ * A block is the one assertion read that leaves canonical expansion: it runs
+ * through `Component.applyModifiers`, where a handler may transform what it
+ * delegates. These hold that transforming it changes what runs — which is what
+ * the surface is for — and changes nothing about which outcome the built-in
+ * terminal reads.
+ *
+ * The observation is a throw inside the block, deliberately. An eval *export*
+ * cannot discriminate here: the fabricating `Component.env` below answers with a
+ * fresh environment on every read, so an export lands in a throwaway and is
+ * unreadable whatever the terminal saw.
+ */
+describe("the eval terminal reads the published outcome", () => {
+  const AUTHORITATIVE = "authoritative child failure";
+
+  function failingChild(): ChildSettlement {
+    return {
+      outcome: { kind: "settled", result: Err(new Error(AUTHORITATIVE)) },
+      output: "",
+    };
+  }
+
+  /** Fresh on every read, and carrying a success the provider never produced. */
+  function* fabricateSuccess(): Operation<void> {
+    yield* Component.around({
+      env: () => ({
+        values: { run: { kind: "settled", result: { ok: true, value: "synthetic" } } },
+      }),
+    });
+  }
+
+  const OBSERVES_ERR = doc(
+    '<Test name="authoritative">',
+    '<Execution host="run" target="child.md" as="run">',
+    "```js eval",
+    'if (run.result.ok) { throw new Error("observed synthetic success"); }',
+    `if (run.result.error.message !== ${JSON.stringify(AUTHORITATIVE)}) {`,
+    '  throw new Error("observed " + JSON.stringify(run));',
+    "}",
+    "```",
+    "</Execution>",
+    "</Test>",
+  );
+
+  /** The whole hostile arrangement, with one code-block handler swapped in. */
+  function* observed(install?: () => Operation<void>): Operation<HarnessRun> {
+    return yield* runHarness(
+      { "README.md": OBSERVES_ERR, "child.md": doc("child") },
+      {
+        settle: failingChild,
+        *around() {
+          yield* useDataUriCompiler();
+          yield* fabricateSuccess();
+          if (install) {
+            yield* install();
+          }
+        },
+      },
+    );
+  }
+
+  it("exact delegation runs the block and exposes the provider's outcome", function* () {
+    const run = yield* observed();
+    expect(only(run).status).toBe("pass");
+    // Non-vacuous: the block ran (a fabricated read would have thrown) and the
+    // trusted provider produced exactly one child.
+    expect(run.log.requests.length).toBe(1);
+  });
+
+  it("survives a Component.codeBlock handler that copies the context", function* () {
+    let copies = 0;
+    const run = yield* observed(function* () {
+      yield* Component.around({
+        *codeBlock(_args, next): Operation<CodeBlockContext> {
+          const context = yield* next();
+          copies += 1;
+          // Every public member, on an object this handler built. What it does
+          // not carry is anything the terminal decides its projection from.
+          return { ...context };
+        },
+      });
+    });
+    expect(copies).toBeGreaterThan(0);
+    expect(only(run).status).toBe("pass");
+    expect(run.log.requests.length).toBe(1);
+  });
+
+  it("survives an applyModifiers handler that copies what it delegates", function* () {
+    let delegated = 0;
+    const run = yield* observed(function* () {
+      yield* Component.around({
+        *applyModifiers([modifiers, context], next) {
+          delegated += 1;
+          return yield* next(
+            modifiers.map((modifier: Modifier) => ({ ...modifier })),
+            { ...context },
+          );
+        },
+      });
+    });
+    expect(delegated).toBeGreaterThan(0);
+    expect(only(run).status).toBe("pass");
+    expect(run.log.requests.length).toBe(1);
+  });
+
+  it("leaves an observing handler observing, and the block running", function* () {
+    const seen: string[] = [];
+    const run = yield* observed(function* () {
+      yield* Component.around({
+        *applyModifiers([modifiers, context], next) {
+          seen.push(context.language);
+          return yield* next(modifiers, context);
+        },
+      });
+    });
+    // Twice: the harness reads its own children in two passes, and a public
+    // handler is composed around the declaration scan exactly as it is around
+    // the assertions. What it observed is the ordinary block context both times.
+    expect(seen).toEqual(["js", "js"]);
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("leaves a refusing handler refusing, as the failure of the test", function* () {
+    const run = yield* observed(function* () {
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *applyModifiers(_args, _next) {
+          throw new Error("refused by middleware");
+        },
+      });
+    });
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.message).toContain("refused by middleware");
+  });
+
+  it("leaves a handler that does not delegate in full override", function* () {
+    let overrode = 0;
+    const run = yield* observed(function* () {
+      yield* Component.around({
+        // deno-lint-ignore require-yield
+        *applyModifiers(_args, _next) {
+          overrode += 1;
+          return { output: "", exitCode: 0, stderr: "" };
+        },
+      });
+    });
+    // Once per pass, and both times the handler answered instead of the block:
+    // an override answers the scan too, so the scan runs to the end of the body
+    // rather than stopping at a block it never reached.
+    expect(overrode).toBe(2);
+    // The block never ran, so it observed nothing and threw nothing. That is the
+    // existing override behaviour, unchanged by anything the projection does.
+    expect(only(run).status).toBe("pass");
+  });
+
+  it("gives a registered replacement named eval no projection authority", function* () {
+    // A separately loaded copy of core's own eval terminal: the same source, a
+    // different factory identity. It runs — a registered modifier always does —
+    // and reads the environment public middleware composed, because privilege
+    // follows the identity this execution registered and never the word.
+    const copy = yield* call(
+      () =>
+        import("../../core/src/eval-handler.ts?loaded-copy") as Promise<
+          typeof import("../../core/src/eval-handler.ts")
+        >,
+    );
+    const run = yield* runHarness(
+      { "README.md": OBSERVES_ERR, "child.md": doc("child") },
+      {
+        settle: failingChild,
+        modifiers: { eval: copy.evalFactory },
+        *around() {
+          yield* useDataUriCompiler();
+          yield* fabricateSuccess();
+        },
+      },
+    );
+    expect(only(run).status).toBe("fail");
+    expect(only(run).error?.message).toContain("observed synthetic success");
   });
 });

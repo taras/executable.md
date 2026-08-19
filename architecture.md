@@ -72,6 +72,7 @@ Existing documents and code get aligned to this section retroactively.
 | host profile | a named production assembly a trusted host offers a testing harness — `run` today — reused after argument parsing rather than restated; a host that cannot offer one refuses rather than approximating it |
 | execution outcome | what one nested document execution ended as, as the harness publishes it: a settlement carrying the exact completion `Result`, or, for a workflow attempt, a durable suspension carrying the run and suspension identities. A suspension is neither success nor failure |
 | projection binding | the value one authorized invocation publishes for the caller-authored content written inside it, held in engine-owned state rather than in a binding environment and laid over what ordinary composition produced at each read that content performs. It keeps the authored name privately, accepts one publication, is carried as an argument along the content it belongs to, and is never handed to a component or to middleware |
+| modifier invocation runner | the engine-owned function an execution supplies to canonical expansion for running one code block: it invokes the public `Component.applyModifiers` chain, hands middleware the ordinary modifiers and block context, and retains that block's projection binding in its own closure for the built-in terminal it privileges by registered factory identity |
 | trusted host | the code that decides what an execution is for — a CLI entrypoint or a workflow runner — as distinct from the document, the components it expands, and the middleware packages composed around it |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
 
@@ -2211,11 +2212,26 @@ there — the projection handle retains it in the caller frame and clears it in
 the authored one. It does not reach the component's own body or dynamic
 Markdown, the child document, a root execution, or another authorized
 invocation, each of which passes no binding explicitly rather than by default.
-The built-in `eval` terminal reads it from the block context canonical core
-issued, where a private field keeps it out of every handler composed around
-`Component.applyModifiers`; a handler that answers `codeBlock()` with a context
-of its own has replaced the block, which is the pre-existing modifier boundary
-and not something an overlay restores.
+
+A code block is the one such read that leaves canonical expansion, because a
+block runs through the public `Component.applyModifiers` chain. It reaches the
+built-in `eval` terminal by closure rather than by transport. The execution that
+owns the modifier registry supplies canonical expansion with a **modifier
+invocation runner**; expansion hands it the projection active where the block is
+written, and the runner keeps it in its own closure while invoking the ordinary
+public chain. `CodeBlockContext` carries public block data and nothing else, and
+neither `applyModifiers` nor `codeBlock` selects which terminal is privileged:
+that is decided by the execution, on the factory identity it registered, so a
+modifier registered over the name `eval` is a different factory, runs as an
+ordinary terminal, and reads no projection. A handler may therefore observe,
+transform what it delegates — including structurally copying the modifiers or
+the block context — refuse by throwing, or answer without delegating at all, and
+none of it removes, replaces or fabricates the projection a running built-in
+terminal reads. What that terminal does with it is what every other projection
+read does: compose `Component.env` by the ordinary rules first, then overlay the
+authoritative value. Refusing a block outright, or overriding it completely,
+remains ordinary block policy — a block that never runs reads nothing, which is
+the same answer it has always given.
 
 The child's scope does not descend from the document that ran it. That is not
 isolation for its own sake: a child is a *root* execution, and everything the

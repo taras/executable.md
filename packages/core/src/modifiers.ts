@@ -127,6 +127,16 @@ export function composeModifierChain(
   modifiers: Modifier[],
   context: CodeBlockContext,
   registry: ModifierRegistry,
+  /**
+   * How this execution privileges a terminal of its own for this invocation.
+   *
+   * Applied to what the registry answered, so the decision is made on factory
+   * identity by the execution that registered it — never on the word the
+   * document wrote. The default privileges nothing, which is what an ordinary
+   * block composes under. A modifier registered over a built-in name is a
+   * different factory and is returned unchanged.
+   */
+  privilege: (factory: ModifierFactory) => ModifierFactory = (factory) => factory,
 ): () => CodeBlockWorkflow {
   // deno-lint-ignore require-yield
   const terminal: () => CodeBlockWorkflow = function* () {
@@ -166,7 +176,7 @@ export function composeModifierChain(
         throw new Error(`Unknown modifier: ${missingName}`);
       };
     }
-    middlewares.push(factory(mod.params));
+    middlewares.push(privilege(factory)(mod.params));
   }
 
   // Combine all middlewares into a single middleware

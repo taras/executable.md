@@ -261,7 +261,13 @@ child exists raises directly and binds nothing.
 The outcome is readable throughout the content written inside the element —
 expression props and conditions, text and code-block interpolation, the regions
 and components written there, an `eval` block, and the caller's content
-projected through a component invoked there. It is not readable in that
+projected through a component invoked there. An `eval` block that runs reads the
+outcome the trusted provider reported, whatever public middleware did to the
+block on its way: a `Component.applyModifiers` or `Component.codeBlock` handler
+may observe the block, transform or structurally copy what it delegates, refuse
+it by throwing, or answer without delegating at all, and none of that changes
+which outcome a running built-in terminal reads. A block that is refused or
+overridden does not run, and reads nothing. It is not readable in that
 component's own body, in the child document, or from another authorized
 `<Execution>` written inside this one. Every other name resolves exactly as it
 would elsewhere in the document, and a binding written under the same name
@@ -332,6 +338,13 @@ that middleware decided. The engine lays the published outcome over the composed
 environment at each read the body performs instead. Public middleware therefore
 cannot fabricate a completion for the assertions to read, and the read the body
 performs is of the outcome the trusted provider reported.
+
+A code block reaches the built-in `eval` terminal through an engine-owned
+modifier invocation the execution supplies, which retains the outcome by
+closure. The block context carries public block data only; which terminal is
+privileged follows the modifier factory the execution registered, never the word
+the document wrote. A modifier registered under the name `eval` therefore runs
+with ordinary modifier semantics and no access to the outcome.
 
 ## Test API
 

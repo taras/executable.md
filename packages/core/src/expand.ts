@@ -27,6 +27,8 @@ import type {
   FunctionComponentDefinition,
   Json,
   CodeBlockContext,
+  CodeBlockResult,
+  Modifier,
   ReturnsSchema,
   SourcePosition,
 } from "./types.ts";
@@ -87,7 +89,8 @@ import { remark } from "remark";
 import { select as cssSelect } from "unist-util-select";
 import { toString as mdastToString } from "mdast-util-to-string";
 import { liveEnvironment, validateBindingName } from "./live-env.ts";
-import { ProjectionBinding, blockContext, readThrough } from "./projection-binding.ts";
+import { ProjectionBinding, readThrough } from "./projection-binding.ts";
+import type { ModifierInvocation } from "./projection-binding.ts";
 import { TestHarnessComponentDefinition } from "./test-harness.ts";
 import type { TestHarnessBinding } from "./test-harness.ts";
 
@@ -189,6 +192,15 @@ function expandChildrenScoped(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -212,6 +224,7 @@ function expandChildrenScoped(
       0,
       checkedFailures,
       bundle,
+      runner,
     );
   });
 }
@@ -238,6 +251,8 @@ interface ProjectionState {
    * carries its own source position.
    */
   ownPath: string;
+  /** How a code block in projected content runs (projection-binding.ts). */
+  runner: ModifierInvocation | undefined;
   /**
    * Where a string projection records the errors it renders away. A handle that
    * only projects structured segments needs none — its caller sees the errors.
@@ -393,6 +408,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.bundle,
+            state.runner,
           );
           outcome.resolve({ segments: rendered });
         } catch (error) {
@@ -492,6 +508,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             0,
             state.checkedFailures,
             state.bundle,
+            state.runner,
           );
           outcome.resolve({ segments: [...errors, ...rendered] });
         } catch (error) {
@@ -651,6 +668,15 @@ export function* expandSegments(
    */
   checkedFailures?: CheckedFailures,
   bundle?: WorkflowImportAuthority,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -671,6 +697,7 @@ export function* expandSegments(
         indexBase,
         checkedFailures,
         bundle,
+        runner,
       );
     });
   }
@@ -770,6 +797,7 @@ export function* expandSegments(
               elementPath,
               checkedFailures,
               bundle,
+              runner,
             )),
           );
           break;
@@ -790,6 +818,7 @@ export function* expandSegments(
               elementPath,
               checkedFailures,
               bundle,
+              runner,
             )),
           );
           break;
@@ -811,6 +840,7 @@ export function* expandSegments(
             elementPath,
             checkedFailures,
             bundle,
+            runner,
           );
           break;
         }
@@ -838,6 +868,7 @@ export function* expandSegments(
             elementPath,
             checkedFailures,
             bundle,
+            runner,
           );
           break;
         }
@@ -856,6 +887,7 @@ export function* expandSegments(
             elementPath,
             checkedFailures,
             bundle,
+            runner,
           );
           break;
         }
@@ -882,6 +914,7 @@ export function* expandSegments(
                   0,
                   checkedFailures,
                   bundle,
+                  runner,
                 ),
               result,
               binding,
@@ -929,6 +962,7 @@ export function* expandSegments(
           elementPath,
           checkedFailures,
           bundle,
+          runner,
         );
         // A printed error the callee produced is data, and stays data here: it
         // was decided once, where it was raised, under the error mode governing
@@ -971,21 +1005,16 @@ export function* expandSegments(
         // Compose modifier chain from info string and run it.
         // blockId uses counter.next() for deterministic IDs that
         // survive per-segment expansion (see spec §6.1 Block ID counter).
-        // The built-in `eval` terminal reads the projection through the
-        // context canonical core issued it with — an ordinary block context to
-        // everything that handles one, carrying the binding where only core can
-        // read it back (projection-binding.ts).
-        const context: CodeBlockContext = blockContext(
-          {
-            language: segment.language,
-            content: interpolatedContent,
-            blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
-            componentName: parentMeta["componentName"] as string | undefined,
-            routing: yield* declaredRouting(),
-            ...(segment.position === undefined ? {} : { position: segment.position }),
-          },
-          binding,
-        );
+        // Public block data, and only that. What a handler may see, copy or
+        // replace; the projection travels beside it, in the runner's closure.
+        const context: CodeBlockContext = {
+          language: segment.language,
+          content: interpolatedContent,
+          blockId: `eval:${parentMeta["componentName"] ?? "root"}:${counter.next()}`,
+          componentName: parentMeta["componentName"] as string | undefined,
+          routing: yield* declaredRouting(),
+          ...(segment.position === undefined ? {} : { position: segment.position }),
+        };
 
         if (bindingName !== undefined) {
           if (!evalEnv) {
@@ -1049,7 +1078,7 @@ export function* expandSegments(
         }
 
         try {
-          const codeResult = yield* applyModifiers(segment.modifiers, context);
+          const codeResult = yield* runCodeBlock(segment.modifiers, context, binding, runner);
 
           // What the command printed and whether it failed are two separate
           // questions, and the exit code alone answers the second one (#307).
@@ -1122,6 +1151,35 @@ export function* expandSegments(
   }
 
   return result;
+}
+
+/**
+ * Run one code block: through the execution's runner when there is one, and
+ * through the public operation when expansion is driven without one.
+ *
+ * The fallback is the ordinary path an ordinary block has always taken, and it
+ * is reachable only with no projection active. A projection with no runner
+ * would be a binding canonical core carried to a read it cannot answer — an
+ * engine mistake rather than anything a document or a handler can cause — so it
+ * stops here instead of running the block against an environment public
+ * middleware composed.
+ */
+function runCodeBlock(
+  modifiers: Modifier[],
+  context: CodeBlockContext,
+  binding: ProjectionBinding | undefined,
+  runner: ModifierInvocation | undefined,
+): Operation<CodeBlockResult> {
+  if (runner !== undefined) {
+    return runner(modifiers, context, binding);
+  }
+  if (binding !== undefined) {
+    throw new Error(
+      `code block "${context.blockId}" is expanded inside an assertion projection, but this ` +
+        "expansion was driven without the execution's modifier runner.",
+    );
+  }
+  return applyModifiers(modifiers, context);
 }
 
 /**
@@ -1245,6 +1303,15 @@ function* expandCapture(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<ErrorSegment[]> {
   if (segment.selfClosing || segment.children.length === 0) {
     return [
@@ -1297,6 +1364,7 @@ function* expandCapture(
       0,
       checkedFailures,
       bundle,
+      runner,
     ),
   );
 
@@ -1366,6 +1434,15 @@ function* expandEach(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1452,6 +1529,7 @@ function* expandEach(
       extendPath(path, { f: "item", i: iteration }),
       checkedFailures,
       bundle,
+      runner,
     );
     // A `<Break>` in the body exits the enclosing `<Loop>`, so the remaining
     // items are part of the work that iteration no longer does.
@@ -1716,6 +1794,15 @@ function* expandIf(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1792,6 +1879,7 @@ function* expandIf(
     0,
     checkedFailures,
     bundle,
+    runner,
   );
 }
 
@@ -1900,6 +1988,15 @@ function* expandLoop(
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -1963,6 +2060,7 @@ function* expandLoop(
           0,
           checkedFailures,
           bundle,
+          runner,
         );
         if (frame.broken) {
           break;
@@ -2089,6 +2187,15 @@ function* expandPrintErrors(
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2118,6 +2225,8 @@ function* expandPrintErrors(
       // The region grants authority for the work it causes, and a failure it
       // recovers is not one the run suffered.
       recoveringLedger(),
+      undefined,
+      runner,
     );
   });
 }
@@ -2162,6 +2271,15 @@ function* expandComponent(
    */
   checkedFailures?: CheckedFailures,
   bundle?: WorkflowImportAuthority,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2232,6 +2350,7 @@ function* expandComponent(
       path,
       checkedFailures,
       bundle,
+      runner,
     );
   }
 
@@ -2383,6 +2502,7 @@ function* expandComponent(
       counter,
       callerLoop: siteLoop,
       ownPath: path,
+      runner,
       printedErrors: bodyContentErrors,
       checkedFailures,
       bundle,
@@ -2456,6 +2576,7 @@ function* expandComponent(
           path,
           checkedFailures,
           bundle,
+          runner,
         );
       });
     } catch (error) {
@@ -2500,6 +2621,7 @@ function* expandComponent(
       path,
       checkedFailures,
       bundle,
+      runner,
     );
   });
 
@@ -2656,6 +2778,15 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
   bundle?: WorkflowImportAuthority,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2838,6 +2969,7 @@ function* expandFunctionComponent(
           counter,
           callerLoop: siteLoop,
           ownPath: path,
+          runner,
           checkedFailures,
           bundle,
         });
@@ -3826,6 +3958,15 @@ export function* expandBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
   bundle?: WorkflowImportAuthority,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -3845,6 +3986,7 @@ export function* expandBody(
       0,
       checkedFailures,
       bundle,
+      runner,
     );
   }
 
@@ -3867,6 +4009,7 @@ export function* expandBody(
         0,
         checkedFailures,
         bundle,
+        runner,
       );
     } else if (chunk.output) {
       yield* scoped(function* () {
@@ -3883,6 +4026,7 @@ export function* expandBody(
           0,
           checkedFailures,
           bundle,
+          runner,
         );
       });
     } else {
@@ -3901,6 +4045,7 @@ export function* expandBody(
           chunkBase,
           checkedFailures,
           bundle,
+          runner,
         );
       });
     }
@@ -3928,6 +4073,15 @@ function runDocumentation(
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
   bundle: WorkflowImportAuthority | undefined,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -3944,6 +4098,7 @@ function runDocumentation(
       indexBase,
       checkedFailures,
       bundle,
+      runner,
     );
   });
 }
@@ -3998,6 +4153,15 @@ function* expandValueBody(
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
   bundle?: WorkflowImportAuthority,
+  /**
+   * How a code block in this work runs (projection-binding.ts).
+   *
+   * Supplied by the execution that owns the modifier registry and handed on
+   * unchanged. Expansion driven without one — a test, a tool describing a
+   * document — falls back to the public operation, which is what an ordinary
+   * block has always composed through.
+   */
+  runner?: ModifierInvocation,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };
@@ -4020,6 +4184,7 @@ function* expandValueBody(
       index,
       checkedFailures,
       bundle,
+      runner,
     );
   }
 

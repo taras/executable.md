@@ -8,8 +8,11 @@
  * classes are different classes, so what the copy builds is not what this copy
  * recognizes, in either direction.
  *
- * These load the same source under a distinct specifier, which is exactly what
- * a second copy is at runtime.
+ * This loads the same source under a distinct specifier, which is exactly what
+ * a second copy is at runtime. What a second copy of the built-in `eval`
+ * terminal can and cannot do is held where it is observable — as a registered
+ * modifier, in `packages/testing/tests/execution-harness.test.ts` — because the
+ * answer there is about the invocation and not about a field on a value.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -18,11 +21,8 @@ import { call, scoped } from "effection";
 import type { Operation } from "effection";
 import { installTestHarness, provideTestHarnessInstallers } from "../src/test-harness.ts";
 import type { TestHarness } from "../src/test-harness.ts";
-import { ProjectionBinding, blockBinding, blockContext } from "../src/projection-binding.ts";
-import type { CodeBlockContext } from "../src/types.ts";
 
 type HarnessModule = typeof import("../src/test-harness.ts");
-type BindingModule = typeof import("../src/projection-binding.ts");
 
 /** The same file again, under a specifier the module map has not seen. */
 function load<T>(specifier: string): Operation<T> {
@@ -53,21 +53,5 @@ describe("a separately loaded copy of core", () => {
       yield* installTestHarness();
     });
     expect(delivered).toBe(1);
-  });
-
-  it("cannot read a projection binding off the block context core issued", function* () {
-    const copy = yield* load<BindingModule>("../src/projection-binding.ts?loaded-copy");
-    const plain: CodeBlockContext = { language: "js", content: "", blockId: "block-1" };
-
-    const binding = new ProjectionBinding("run");
-    const ours = blockContext(plain, binding);
-    // The built-in terminal this copy composed reads its own.
-    expect(blockBinding(ours)).toBe(binding);
-    // A terminal from another copy reads nothing at all, so a block it runs
-    // sees whatever ordinary composition produced and no published outcome.
-    expect(copy.blockBinding(ours)).toBe(undefined);
-    expect(blockBinding(copy.blockContext(plain, new copy.ProjectionBinding("run")))).toBe(
-      undefined,
-    );
   });
 });

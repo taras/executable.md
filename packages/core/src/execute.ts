@@ -106,7 +106,8 @@ import {
   useCodeBlock,
 } from "./modifiers.ts";
 import type { BoundExecChain, CodeBlockWorkflow, ModifierFactory } from "./modifiers.ts";
-import { evalFactory } from "./eval-handler.ts";
+import { evalFactory, projectedEvalFactory } from "./eval-handler.ts";
+import type { ModifierInvocation } from "./projection-binding.ts";
 import { persistFactory } from "./modifiers/persist.ts";
 import { timeoutFactory } from "./modifiers/timeout.ts";
 import { daemonFactory } from "./modifiers/daemon.ts";
@@ -1574,6 +1575,8 @@ function* runValueRoot(
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
   bundle: WorkflowImportAuthority | undefined,
+  /** How this execution runs a code block (projection-binding.ts). */
+  runModifiers: ModifierInvocation,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -1606,6 +1609,7 @@ function* runValueRoot(
         0,
         checkedFailures,
         bundle,
+        runModifiers,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1645,6 +1649,8 @@ function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void
 function* documentWorkflow(
   props: Record<string, Json>,
   bundle: WorkflowImportAuthority | undefined,
+  /** How this execution runs a code block (projection-binding.ts). */
+  runModifiers: ModifierInvocation,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -1734,6 +1740,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         bundle,
+        runModifiers,
       );
     }
 
@@ -1757,6 +1764,7 @@ function* documentWorkflow(
         rootPath,
         checkedFailures,
         bundle,
+        runModifiers,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -1784,6 +1792,7 @@ function* documentWorkflow(
         0,
         checkedFailures,
         bundle,
+        runModifiers,
       );
 
       while (emittedThrough < produced.length) {
@@ -1931,6 +1940,48 @@ function* executeDocument(
     registry.set(name, handler);
   }
 
+  /**
+   * Run one code block, keeping the projection out of everything public.
+   *
+   * The chain is the public one: `Component.applyModifiers` middleware composes
+   * around this call exactly as it always did, sees the ordinary modifier array
+   * and the ordinary block context, and may observe them, transform what it
+   * delegates, refuse by throwing, or answer without delegating at all.
+   *
+   * What it cannot reach is `projection`, which stays in this closure. The
+   * terminal installed here is this invocation's — nested inside the
+   * execution's own provider at the same position, so it answers first — and it
+   * composes whatever the chain delegated against the projection this block was
+   * expanded with. A structural copy of the modifiers or the context therefore
+   * changes what runs, which is the point of the public surface, and changes
+   * nothing about which outcome the built-in terminal reads.
+   *
+   * The privilege is by factory identity, never by the word `eval`: a modifier
+   * registered over that name is a different factory, runs as an ordinary
+   * terminal, and reads no projection.
+   */
+  const runModifiers: ModifierInvocation = (modifiers, context, projection) =>
+    scoped(function* () {
+      yield* Component.around(
+        {
+          *applyModifiers([delegated, delegatedContext], _next) {
+            const chain = composeModifierChain(
+              delegated,
+              delegatedContext,
+              registry,
+              projection === undefined
+                ? undefined
+                : (factory) =>
+                    factory === evalFactory ? projectedEvalFactory(projection) : factory,
+            );
+            return yield* chain();
+          },
+        },
+        { at: "min" },
+      );
+      return yield* Component.operations.applyModifiers(modifiers, context);
+    });
+
   // Replay-safe transport: late subscribers receive every chunk and the
   // close value, so subscription readiness before first emission is never
   // required (spec §9; see replay-stream.ts).
@@ -2040,7 +2091,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, bundle),
+            documentWorkflow(claimed, bundle, runModifiers),
           );
           try {
             return yield* beforeAnyImport(issued);

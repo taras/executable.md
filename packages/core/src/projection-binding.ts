@@ -27,15 +27,25 @@
  * Every channel is somebody else's to replace. A Context is keyed by name, so a
  * value planted under the same name is indistinguishable from the engine's; an
  * Api is a public surface by construction; a name is reachable by anything that
- * knows it. What was handed to a call chain is reachable by that call chain
- * alone — so the binding travels as a required argument, and the type checker
+ * knows it; and a value carried on something that crosses public middleware is
+ * only as private as that middleware chooses to leave it — a handler may
+ * structurally copy what it delegates, and a copy of an object is not the
+ * object. What was handed to a call chain is reachable by that call chain
+ * alone, so the binding travels as a required argument, and the type checker
  * asks every expansion site to say which side of the caller/authored boundary
  * it is on rather than letting one default quietly.
+ *
+ * A code block is the one read that leaves canonical expansion: the block runs
+ * through the public `Component.applyModifiers` chain. It reaches the built-in
+ * terminal by closure instead of by transport — the execution that owns the
+ * modifier registry supplies a `ModifierInvocation`, which keeps this binding
+ * where no handler can see it and hands it to the built-in terminal directly,
+ * whatever the chain did to the modifiers and the block context on the way.
  */
 
 import { derivedEnvironment } from "./live-env.ts";
-import type { CodeBlockContext, EvalEnv, SourcePosition } from "./types.ts";
-import type { ForegroundRouting } from "./foreground.ts";
+import type { Operation } from "effection";
+import type { CodeBlockContext, CodeBlockResult, EvalEnv, Modifier } from "./types.ts";
 
 /**
  * One authorized invocation's published outcome.
@@ -102,80 +112,21 @@ export function readThrough(
 }
 
 /**
- * The block context canonical core expands a code block with while a projection
- * binding is active.
+ * How canonical expansion runs one code block.
  *
- * An ordinary `CodeBlockContext` to everything that handles one — the same
- * members, in the same shape, so instrumentation and `Component.applyModifiers`
- * middleware compose around it exactly as they always did. The binding rides in
- * a private field, so the only thing that can read it back is the module that
- * put it there: the built-in `eval` terminal, which is canonical core's.
+ * Supplied by the execution that owns the modifier registry, because composing
+ * a chain is that execution's to do and the registry is not expansion's to
+ * hold. What expansion adds is the third argument: the projection active where
+ * the block is written, which the runner retains by closure for the built-in
+ * terminal and hands to nothing else.
  *
- * The alternative was a public member on the context or a parameter on a public
- * modifier operation, and either one would hand the value to every handler in
- * the chain — which is the thing this whole mechanism exists to avoid.
- *
- * What this does not defend: a handler that answers `codeBlock()` with a
- * context of its own has replaced the block canonical core issued, and the
- * built-in terminal then runs against a context carrying no binding. That is
- * the pre-existing `applyModifiers` boundary — a handler there may already
- * refuse a block outright or answer with a result of its own — and not
- * something an overlay can restore.
+ * Public `Component.applyModifiers` middleware composes around the invocation
+ * exactly as it always has — it may observe, transform what it delegates,
+ * refuse by throwing, or answer without delegating at all — and none of that
+ * decides which terminal is privileged or what it reads.
  */
-class ProjectedBlockContext implements CodeBlockContext {
-  readonly #binding: ProjectionBinding;
-  readonly language: string;
-  readonly content: string;
-  readonly blockId: string;
-  readonly componentName?: string;
-  readonly routing?: ForegroundRouting;
-  readonly position?: Readonly<SourcePosition>;
-
-  constructor(context: CodeBlockContext, binding: ProjectionBinding) {
-    this.#binding = binding;
-    this.language = context.language;
-    this.content = context.content;
-    this.blockId = context.blockId;
-    if (context.componentName !== undefined) {
-      this.componentName = context.componentName;
-    }
-    if (context.routing !== undefined) {
-      this.routing = context.routing;
-    }
-    if (context.position !== undefined) {
-      this.position = context.position;
-    }
-  }
-
-  /** The binding `value` carries, if this class is what built it. */
-  static of(value: unknown): ProjectionBinding | undefined {
-    if (typeof value !== "object" || value === null) {
-      return undefined;
-    }
-    try {
-      return #binding in value ? value.#binding : undefined;
-    } catch {
-      // A revoked proxy, or one whose `has` trap refuses. Not one of ours.
-      return undefined;
-    }
-  }
-}
-
-/**
- * The context to expand this block with: the plain one when no projection is
- * active, and the carrier when one is.
- *
- * A block expanded outside an assertion body allocates exactly what it always
- * did, so the ordinary path is unchanged down to the object identity.
- */
-export function blockContext(
+export type ModifierInvocation = (
+  modifiers: Modifier[],
   context: CodeBlockContext,
-  binding: ProjectionBinding | undefined,
-): CodeBlockContext {
-  return binding === undefined ? context : new ProjectedBlockContext(context, binding);
-}
-
-/** The projection binding this block was issued with, for the built-in terminal. */
-export function blockBinding(context: CodeBlockContext): ProjectionBinding | undefined {
-  return ProjectedBlockContext.of(context);
-}
+  projection: ProjectionBinding | undefined,
+) => Operation<CodeBlockResult>;
