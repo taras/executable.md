@@ -994,11 +994,14 @@ The exercise must resolve enough of these to implement one vertical slice:
    require (#369)? The evaluator itself is settled and built for observation
    (#497): complete preflight inside the admission, pinned identities, exact
    request ceilings, one retained decision, and replay held to it.
-3. How does a revision iteration reach the *same* pull request? The effect is
-   settled (#295, #500, #504): an unnumbered invocation asks for one to exist
-   and a numbered one asks for that exact open pull request to say this. What is
-   unsettled is the composition — a loop whose first iteration has no number to
-   carry and whose later iterations do (#301).
+3. What state makes external effects safe to repeat or resume after
+   interruption (#297)? A revision iteration reaching the *same* pull request is
+   settled: the effect is an upsert over one explicit identity (#295, #500,
+   #504), and #301's architecture amendment settles the composition — an
+   expression prop evaluating to `undefined` is omitted before validation and
+   before the durable JSON boundary, so a loop seeded with an empty object
+   creates on its first iteration and updates on every later one through a
+   single invocation. Omission is not built yet.
 4. Which fetches does a review actually write? `<PullRequest>`'s result is
    deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer is
    handed the rest — but no stage composes those reads yet, and the public

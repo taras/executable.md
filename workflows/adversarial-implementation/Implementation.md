@@ -129,6 +129,10 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 ```
 </Capture>
 
+```ts eval
+let pullRequest = {};
+```
+
 <Agent name={props.implementor}>
   <Session name="implementor">
     <Loop name="implementation" max={5}>
@@ -205,7 +209,12 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
       <Git.Add paths="." />
       <Git.Commit message={proposal.commitMessage} as="commit" />
       <Git.Push />
-      <PullRequest title={proposal.title} draft={true} as="pullRequest">
+      <PullRequest
+        number={pullRequest.number}
+        title={proposal.title}
+        draft={true}
+        as="pullRequest"
+      >
         {proposal.report}
       </PullRequest>
 
@@ -474,27 +483,33 @@ commit and replaying a completed push performs no remote mutation; resuming
 after uncertain completion reconciles against retained state rather than
 repeating the effect (#294, #297).
 
-**The upsert is settled, and this markup does not yet reach it.** #500 and #504
-settle what `<PullRequest>` does: without `number` it asks for *a* pull request
-from this head to this base, creating one or adopting the compatible one an
-interrupted earlier attempt created; with `number` it asks for *that* pull
-request, and brings its title, body, draft state and base to what the invocation
-says. Which of the two it is, is the document's own word rather than a search.
+**One invocation creates and updates.** #500 and #504 settle what
+`<PullRequest>` does: without `number` it asks for *a* pull request from this
+head to this base, creating one or adopting the compatible one an interrupted
+earlier attempt created; with `number` it asks for *that* pull request, and
+brings its title, body, draft state and base to what the invocation says. Which
+of the two it is, is the document's own word rather than a search.
 
-The markup above passes no `number`, and a revision iteration commits again — so
-the head SHA it asks about is not the head SHA the existing pull request holds.
-An unnumbered request that finds an open pull request for the branch pair saying
-anything else is a **conflict**, deliberately: it asked for one to exist, not for
-whatever is there to become this, and rewriting it would act on a pull request
-the document never named.
+A revision iteration commits again, so the head it asks about is not the head
+the existing pull request holds — which is why an unnumbered second request
+would be a **conflict** rather than an update: it asked for one to exist, not
+for whatever is there to become this. The loop therefore says which one it
+means. `let pullRequest = {}` seeds the binding once, before the loop; on the
+first iteration `pullRequest.number` is `undefined`, so `number` is omitted and
+the unnumbered create-or-adopt contract applies; the successful result replaces
+the seed through ordinary `as` binding, and every later iteration passes the
+retained positive number and selects the numbered update contract for that exact
+pull request. `<Loop>` opens no binding scope, which is what lets one iteration
+read what the previous one bound.
 
-Reaching update mode means carrying the bound `pullRequest.number` from the
-first iteration into `number=` on the next. `<Loop>` opens no binding scope, so
-a later iteration can read what an earlier one bound — but the first iteration
-has nothing to read, and no settled composition writes "numbered after the first
-time" without inventing a guard over an unbound name. That integration is
-**#301's supervised composition**, and this document leaves the markup unchanged
-rather than choose a spelling for it.
+The engine contract underneath it is **#301's, and not built yet**: an
+expression prop evaluating to `undefined` is omitted before prop validation and
+before the durable JSON boundary, so the component never receives `undefined`
+and no journal or replay stores it. A required prop that evaluates to
+`undefined` still fails validation as missing, `null` stays an explicit value
+passed only where a schema accepts it, and an unbound name still fails. Today
+the engine refuses such a prop instead of omitting it, so this is the one part
+of the loop that does not run yet.
 
 ## The reviewer sees what it judges
 
@@ -615,7 +630,8 @@ revision turn, or acceptance.
 | `<Expand>` | #369 | unbuilt; public name open. The evaluator under it is shipped (#497), for observation only |
 | `<Issue>` | #296 | unbuilt |
 | `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
-| `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host; carrying its number into a revision is #301's |
+| `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
+| omitting an expression prop that evaluates to `undefined` | #301 | unbuilt — the loop's `number={pullRequest.number}` depends on it |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
 | shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and now the push and pull-request components over it |
 | the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |

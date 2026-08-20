@@ -450,6 +450,7 @@ trusted-host API, and no document calls it.
 | prove the shipped planning-document logic | #290 | this change — the proof lands here; #290 closes on delivery |
 | a root's declared component bundle, resolved from its pinned commit | #301 slice, delivered by #493 | shipped |
 | compose the supervised workflow — scheduling the loop, continuing it unattended | #301 | open |
+| omit an expression prop that evaluates to `undefined`, before validation and before the durable JSON boundary | #301 | open — architecture settled; `Implementation`'s one-invocation pull-request loop depends on it |
 | typed durable answer delivery to a suspended run | #300 | shipped — delivery is non-executing; automatic scheduling is not shipped |
 | default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
 | certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
