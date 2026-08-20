@@ -3,14 +3,14 @@
  * names (specs/workflow-workspace-spec.md §10.3).
  *
  * ```md
- * <IssueTarget url={props.tracker}>
+ * <IssueTracker url={props.tracker}>
  *   <Issue
  *     title="Retry the publish step on a 5xx"
  *     description={finding.evidence}
  *     tags={["reliability", "publish"]}
  *     as="issue"
  *   />
- * </IssueTarget>
+ * </IssueTracker>
  *
  * Recorded at {issue.url}.
  * ```
@@ -25,7 +25,7 @@
  *
  * Which tracker an issue belongs in is a deployment fact, and a deployment fact
  * written into every element is one that cannot be changed without editing
- * every element. `<IssueTarget>` says it once for a region; the nearest one
+ * every element. `<IssueTracker>` says it once for a region; the nearest one
  * wins, and a nested one replaces the whole target rather than merging with it.
  *
  * The context is composition data. It requests a destination and grants
@@ -52,17 +52,18 @@
  *
  * ## Failure
  *
- * A missing context, a URL that is not a credential-free container, and a URL
- * no built-in mapping names a provider for are decided here, before routing
- * exists in the story. What a provider answers — a conflict, an ambiguity, an
+ * Content written around it, a missing context, a URL that is not a
+ * credential-free container, and a URL the host maps no provider to are decided
+ * here, before routing exists in the story. What a provider answers — a conflict, an ambiguity, an
  * unavailability, a target outside the host's ceiling — travels under §10.3's
  * vocabulary.
  */
 
+import { hasContent } from "@executablemd/core";
 import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { currentIssueTarget, issueProviderFor } from "../../issue/context.ts";
+import { currentIssueTracker, issueProviderFor } from "../../issue/context.ts";
 import { resolveIssueDestination } from "../../issue/target.ts";
 import { reconcileIssueEffect } from "../../issue/effect.ts";
 import {
@@ -72,7 +73,7 @@ import {
   parseIssueRecordResult,
   type IssueInputs,
 } from "../../issue/records.ts";
-import { IssueProtocolError } from "../../issue/errors.ts";
+import { IssueContentError, IssueProtocolError } from "../../issue/errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
 export const ISSUE_ELEMENT = "<Issue>";
@@ -120,10 +121,21 @@ export const returns: ReturnsSchema = {
 };
 
 export default function* Issue(props: Record<string, Json>): Operation<Json> {
-  // The destination first, and locally. A document that named no container, or
+  // Before the destination is resolved, before routing and before any provider
+  // is asked anything. This element renders nothing, so content written around
+  // it would be discarded in silence — and an issue created beside text nobody
+  // ever saw is worse than one not created at all.
+  if (yield* hasContent()) {
+    throw new IssueContentError(
+      `${ISSUE_ELEMENT} renders nothing, so it takes no content. The issue's text is its ` +
+        `description prop. Write it as <Issue title=… description=… as=… />.`,
+    );
+  }
+
+  // The destination next, and locally. A document that named no container, or
   // one nothing can resolve a provider for, is refused before an effect
   // identity exists and before any surface has been asked anything.
-  const target = yield* currentIssueTarget();
+  const target = yield* currentIssueTracker();
   // The mapping is the host's, read here and applied by the shared resolution
   // so that one place decides what a destination is.
   const resolved = target === undefined ? undefined : yield* issueProviderFor(target.url);

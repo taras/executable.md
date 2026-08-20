@@ -16,7 +16,7 @@
 
 import type { Operation } from "effection";
 import { useIssueProvider } from "../../issue/effect.ts";
-import { IssueTargetContext } from "../../issue/context.ts";
+import { IssueTrackerContext } from "../../issue/context.ts";
 import { builtInIssueProvider } from "./resolution.ts";
 import type { IssueProvider } from "../../issue/api.ts";
 import type { GitHubAccess } from "../composition/github.ts";
@@ -55,7 +55,7 @@ export function* useIssueProviders(options: IssueProviderOptions = {}): Operatio
   // Beside the adapters, because the table of well-known hosts is host policy.
   // It answers the resolution alone and leaves the target a context supplies to
   // whatever installed one further in.
-  yield* IssueTargetContext.around(
+  yield* IssueTrackerContext.around(
     {
       // deno-lint-ignore require-yield
       *resolve([target]): Operation<string | undefined> {

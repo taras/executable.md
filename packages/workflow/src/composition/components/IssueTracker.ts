@@ -1,11 +1,11 @@
 /**
- * `<IssueTarget>` — which tracker or project the issues inside it belong in
+ * `<IssueTracker>` — which tracker or project the issues inside it belong in
  * (specs/workflow-workspace-spec.md §10.3).
  *
  * ```md
- * <IssueTarget url={props.tracker}>
+ * <IssueTracker url={props.tracker}>
  *   <Issue title="Retry the publish step" description={finding.evidence} as="issue" />
- * </IssueTarget>
+ * </IssueTracker>
  * ```
  *
  * `url` is a credential-free URL naming the container new issues are created
@@ -36,11 +36,11 @@ import { content, hasContent } from "@executablemd/core";
 import type { PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { IssueTargetContext } from "../../issue/context.ts";
-import type { IssueTarget as Target } from "../../issue/target.ts";
+import { IssueTrackerContext } from "../../issue/context.ts";
+import type { IssueTracker as Tracker } from "../../issue/target.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
-export const ISSUE_TARGET_ELEMENT = "<IssueTarget>";
+export const ISSUE_TRACKER_ELEMENT = "<IssueTracker>";
 
 export const props: PropsSchema = {
   type: "object",
@@ -59,11 +59,11 @@ export const props: PropsSchema = {
   additionalProperties: false,
 };
 
-export default function* IssueTarget(props: Record<string, Json>): Operation<string> {
+export default function* IssueTracker(props: Record<string, Json>): Operation<string> {
   if (!(yield* hasContent())) {
     return "";
   }
-  const target: Target = Object.freeze({
+  const tracker: Tracker = Object.freeze({
     url: typeof props.url === "string" ? props.url : "",
     // Absent rather than empty: the whole point of the discriminator is that
     // stating one and stating nothing are different requests, and an empty
@@ -72,6 +72,6 @@ export default function* IssueTarget(props: Record<string, Json>): Operation<str
       ? { provider: props.provider }
       : {}),
   });
-  yield* IssueTargetContext.around({ current: () => target }, { at: "min" });
+  yield* IssueTrackerContext.around({ current: () => tracker }, { at: "min" });
   return yield* content();
 }

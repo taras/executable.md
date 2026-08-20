@@ -17,7 +17,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { IssueTargetError, IssueProviderError } from "../src/issue/errors.ts";
+import { IssueContentError, IssueProviderError, IssueTrackerError } from "../src/issue/errors.ts";
 import { parseIssueInputs } from "../src/issue/records.ts";
 import {
   atlassianProvider,
@@ -36,12 +36,16 @@ import {
   TOKEN,
 } from "./support/issues.ts";
 
-function isTargetFailure(value: unknown): value is IssueTargetError {
-  return value instanceof IssueTargetError;
+function isTargetFailure(value: unknown): value is IssueTrackerError {
+  return value instanceof IssueTrackerError;
 }
 
 function isProviderFailure(value: unknown): value is IssueProviderError {
   return value instanceof IssueProviderError;
+}
+
+function isContentFailure(value: unknown): value is IssueContentError {
+  return value instanceof IssueContentError;
 }
 
 describe("workflow Issue", () => {
@@ -122,11 +126,11 @@ describe("workflow Issue", () => {
     const state = store();
     const run = yield* runIssueDocument({
       source: [
-        `<IssueTarget url="${TARGET}">`,
+        `<IssueTracker url="${TARGET}">`,
         "before",
         `<Issue title="${TITLE}" description="${DESCRIPTION}" as="issue" />`,
         "after",
-        "</IssueTarget>",
+        "</IssueTracker>",
       ].join("\n"),
       providers: [{ discriminator: "github", provider: gitHub(state) }],
     });
@@ -135,6 +139,50 @@ describe("workflow Issue", () => {
     expect(rendered).toContain("after");
     expect(rendered).not.toContain(TITLE);
     expect(rendered).not.toContain(DESCRIPTION);
+  });
+
+  it("refuses a paired invocation before it resolves, routes or creates anything", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: [
+        `<IssueTracker url="${TARGET}">`,
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="issue">`,
+        "text nobody would ever see",
+        "</Issue>",
+        "</IssueTracker>",
+        "",
+        "later sibling ran",
+      ].join("\n"),
+      // Reaching this provider at all fails the test, which is the claim: the
+      // refusal happens before the destination is resolved and before routing.
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
+    });
+
+    expect(causedBy(run.thrown, isContentFailure)).toBeDefined();
+    expect(String(run.thrown)).toContain("takes no content");
+    // Nothing was created, nothing was journaled, and the work after it stopped.
+    expect(state.issues).toHaveLength(0);
+    expect(state.requests).toHaveLength(0);
+    expect(issueYields(run.events)).toHaveLength(0);
+    expect(String(run.rendered ?? "")).not.toContain("later sibling ran");
+  });
+
+  it("refuses a paired invocation even where the content renders nothing", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: [
+        `<IssueTracker url="${TARGET}">`,
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="issue"></Issue>`,
+        "</IssueTracker>",
+      ].join("\n"),
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
+    });
+
+    // The shape of the invocation, not a prediction about what it renders:
+    // `<Issue></Issue>` is paired and `<Issue />` is not.
+    expect(causedBy(run.thrown, isContentFailure)).toBeDefined();
+    expect(state.issues).toHaveLength(0);
+    expect(issueYields(run.events)).toHaveLength(0);
   });
 
   it("refuses props this primitive does not declare", function* () {
@@ -169,8 +217,8 @@ describe("workflow Issue target context", () => {
       providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
     });
 
-    expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("no-issue-target");
-    expect(String(run.thrown)).toContain("<IssueTarget");
+    expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("no-issue-tracker");
+    expect(String(run.thrown)).toContain("<IssueTracker");
     expect(String(run.rendered ?? "")).not.toContain("later sibling ran");
     // No effect exists, so nothing was journaled for it either.
     expect(issueYields(run.events)).toHaveLength(0);
@@ -188,7 +236,7 @@ describe("workflow Issue target context", () => {
         source: document(url),
         providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
       });
-      expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("invalid-target-url");
+      expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("invalid-tracker-url");
       expect(issueYields(run.events)).toHaveLength(0);
     }
   });
@@ -198,13 +246,13 @@ describe("workflow Issue target context", () => {
     const tracker = atlassianTracker();
     const run = yield* runIssueDocument({
       source: [
-        `<IssueTarget url="${TARGET}" provider="github">`,
-        `<IssueTarget url="${ATLASSIAN_TARGET}">`,
+        `<IssueTracker url="${TARGET}" provider="github">`,
+        `<IssueTracker url="${ATLASSIAN_TARGET}">`,
         `<Issue title="${TITLE}" description="${DESCRIPTION}" as="inner" />`,
-        "</IssueTarget>",
+        "</IssueTracker>",
         "",
         "inner: {inner.url}",
-        "</IssueTarget>",
+        "</IssueTracker>",
       ].join("\n"),
       providers: [
         { discriminator: "github", provider: gitHub(state) },
@@ -226,12 +274,12 @@ describe("workflow Issue target context", () => {
     const tracker = atlassianTracker();
     const run = yield* runIssueDocument({
       source: [
-        `<IssueTarget url="${TARGET}">`,
-        `<IssueTarget url="${ATLASSIAN_TARGET}">`,
+        `<IssueTracker url="${TARGET}">`,
+        `<IssueTracker url="${ATLASSIAN_TARGET}">`,
         `<Issue title="${TITLE}" description="${DESCRIPTION}" as="inner" />`,
-        "</IssueTarget>",
+        "</IssueTracker>",
         `<Issue title="${TITLE}" description="${DESCRIPTION}" as="outer" />`,
-        "</IssueTarget>",
+        "</IssueTracker>",
         "",
         "outer: {outer.url}",
       ].join("\n"),

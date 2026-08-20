@@ -1757,14 +1757,14 @@ interface IssueProps {
 ```
 
 ```md
-<IssueTarget url={props.tracker}>
+<IssueTracker url={props.tracker}>
   <Issue
     title="Retry the publish step on a 5xx"
     description={finding.evidence}
     tags={["reliability", "publish"]}
     as="issue"
   />
-</IssueTarget>
+</IssueTracker>
 
 Recorded at {issue.url}.
 ```
@@ -1780,6 +1780,13 @@ It takes no rendered children and has no `repository`, `url`, `provider`,
 `dependencyImpact`, `intendedTiming`, `label`, `milestone`, `project`,
 `comment`, `close` or approval prop. It renders nothing and binds through `as`.
 
+A paired invocation is refused, and refused before the tracker is read, before
+routing and before any provider is asked anything. The refusal is about the
+shape of the invocation rather than about what the content would render, so
+`<Issue></Issue>` is refused exactly as `<Issue>…</Issue>` is. Content this
+element never renders would be discarded in silence, and an issue created beside
+text nobody ever saw is worse than one not created at all.
+
 Deferral classification, typed approval, PullRequest provenance, rationale,
 dependency impact and intended timing are workflow policy. A workflow expresses
 them through ordinary document structure or Issue routing middleware before it
@@ -1790,14 +1797,14 @@ publishes an approval suspension.
 context:
 
 ```ts
-interface IssueTarget {
+interface IssueTracker {
   readonly url: string;
   readonly provider?: string;
 }
 ```
 
 It is shared across loaded copies under the stable namespaced name
-`executablemd.workflow.issue-target`. It is replaceable composition data, not
+`executablemd.workflow.issue-tracker`. It is replaceable composition data, not
 authority: installing or replacing it requests a target for lexical descendants
 and grants no network access, credential, provider or permission to mutate that
 target.

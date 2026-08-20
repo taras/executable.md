@@ -1,5 +1,5 @@
 /**
- * The contextual Issue target a lexical `<IssueTarget>` installs for its
+ * The contextual Issue tracker a lexical `<IssueTracker>` installs for its
  * content.
  *
  * A stable, namespaced contextual value holding a requested destination and no
@@ -19,10 +19,10 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { IssueTarget } from "./target.ts";
+import type { IssueTracker } from "./target.ts";
 
-export interface IssueTargetContextApi {
-  readonly current: IssueTarget | undefined;
+export interface IssueTrackerContextApi {
+  readonly current: IssueTracker | undefined;
   /**
    * The provider this canonical target selects when the context named none.
    *
@@ -37,10 +37,10 @@ export interface IssueTargetContextApi {
   resolve(target: string): Operation<string | undefined>;
 }
 
-export const ISSUE_TARGET_CONTEXT = "executablemd.workflow.issue-target";
+export const ISSUE_TRACKER_CONTEXT = "executablemd.workflow.issue-tracker";
 
-export const IssueTargetContext: Api<IssueTargetContextApi> = createApi<IssueTargetContextApi>(
-  ISSUE_TARGET_CONTEXT,
+export const IssueTrackerContext: Api<IssueTrackerContextApi> = createApi<IssueTrackerContextApi>(
+  ISSUE_TRACKER_CONTEXT,
   {
     current: undefined,
     // deno-lint-ignore require-yield
@@ -50,12 +50,12 @@ export const IssueTargetContext: Api<IssueTargetContextApi> = createApi<IssueTar
   },
 );
 
-/** The nearest enclosing Issue target, or `undefined` when there is none. */
-export function currentIssueTarget(): Operation<IssueTarget | undefined> {
-  return IssueTargetContext.operations.current;
+/** The nearest enclosing Issue tracker, or `undefined` when there is none. */
+export function currentIssueTracker(): Operation<IssueTracker | undefined> {
+  return IssueTrackerContext.operations.current;
 }
 
 /** What this host maps this canonical target to, when a context named nothing. */
 export function issueProviderFor(target: string): Operation<string | undefined> {
-  return IssueTargetContext.operations.resolve(target);
+  return IssueTrackerContext.operations.resolve(target);
 }

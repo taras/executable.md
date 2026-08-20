@@ -214,33 +214,34 @@ export type {
   IssueRoutingRequest,
 } from "./src/issue/api.ts";
 export {
-  ISSUE_TARGET_CONTEXT,
-  IssueTargetContext,
-  currentIssueTarget,
+  ISSUE_TRACKER_CONTEXT,
+  IssueTrackerContext,
+  currentIssueTracker,
 } from "./src/issue/context.ts";
-export type { IssueTargetContextApi } from "./src/issue/context.ts";
+export type { IssueTrackerContextApi } from "./src/issue/context.ts";
 export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
 export { reconcileIssueEffect, useIssueProvider, withIssueProvider } from "./src/issue/effect.ts";
 export type { IssueEffectRequest } from "./src/issue/effect.ts";
 export {
   IssueAmbiguousError,
   IssueConflictError,
+  IssueContentError,
   IssueProtocolError,
   IssueProviderError,
-  IssueTargetError,
+  IssueTrackerError,
   IssueUnavailableError,
   issueFailure,
   isIssueRefused,
   isIssueUnavailable,
 } from "./src/issue/errors.ts";
-export type { IssueTargetReason } from "./src/issue/errors.ts";
+export type { IssueTrackerReason } from "./src/issue/errors.ts";
 export {
   canonicalIssueTarget,
   issueProviderName,
   resolveIssueDestination,
   withinIssueCeiling,
 } from "./src/issue/target.ts";
-export type { IssueDestination, IssueTarget } from "./src/issue/target.ts";
+export type { IssueDestination, IssueTracker } from "./src/issue/target.ts";
 export {
   byCodePoint,
   completeIssueRequestJson,

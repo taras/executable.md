@@ -38,7 +38,7 @@ import {
   type IssueSnapshot,
 } from "../../src/issue/records.ts";
 import { withinIssueCeiling } from "../../src/issue/target.ts";
-import { IssueTargetContext } from "../../src/issue/context.ts";
+import { IssueTrackerContext } from "../../src/issue/context.ts";
 import { builtInIssueProvider } from "../../src/deno/issue/resolution.ts";
 import { gitHubIssueProvider } from "../../src/deno/issue/github.ts";
 import { fakeGitHubAccess, gitHubStore, type GitHubStore } from "./github.ts";
@@ -69,9 +69,9 @@ export const TOKEN = "github-credential-for-this-test";
 export function document(target: string = TARGET, attributes = "", provider?: string): string {
   const discriminator = provider === undefined ? "" : ` provider="${provider}"`;
   return [
-    `<IssueTarget url="${target}"${discriminator}>`,
+    `<IssueTracker url="${target}"${discriminator}>`,
     `<Issue title="${TITLE}" description="${DESCRIPTION}"${attributes} as="issue" />`,
-    "</IssueTarget>",
+    "</IssueTracker>",
     "",
     "recorded {issue.url}",
   ].join("\n");
@@ -253,7 +253,7 @@ export function runIssueDocument(options: RunOptions = {}): Operation<IssueAttem
       yield* useCompositionComponents();
       // The host's own mapping, installed the way `useIssueProviders()`
       // installs it: this harness stands in for the trusted host.
-      yield* IssueTargetContext.around(
+      yield* IssueTrackerContext.around(
         {
           // deno-lint-ignore require-yield
           *resolve([target]): Operation<string | undefined> {

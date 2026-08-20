@@ -35,10 +35,10 @@
  * container are one string.
  */
 
-import { IssueTargetError } from "./errors.ts";
+import { IssueTrackerError } from "./errors.ts";
 
 /** What a lexical Issue context supplies, before anything is decided about it. */
-export interface IssueTarget {
+export interface IssueTracker {
   readonly url: string;
   readonly provider?: string;
 }
@@ -95,21 +95,21 @@ export function issueProviderName(value: unknown): string | undefined {
  * decides whether the target is one of its own.
  */
 export function resolveIssueDestination(
-  target: IssueTarget | undefined,
+  target: IssueTracker | undefined,
   /** What the host maps a canonical URL to, when the context named nothing. */
   resolve: (canonical: string) => string | undefined,
 ): IssueDestination {
   if (target === undefined) {
-    throw new IssueTargetError(
-      "no-issue-target",
+    throw new IssueTrackerError(
+      "no-issue-tracker",
       "it is written outside any lexical Issue context, so nothing says which tracker or " +
-        'project a new issue belongs in. Write <IssueTarget url="…"> around it.',
+        'project a new issue belongs in. Write <IssueTracker url="…"> around it.',
     );
   }
   const canonical = canonicalIssueTarget(target.url);
   if (canonical === undefined) {
-    throw new IssueTargetError(
-      "invalid-target-url",
+    throw new IssueTrackerError(
+      "invalid-tracker-url",
       "the Issue context does not carry an http or https URL naming one container, free of " +
         "credentials, query and fragment.",
     );
@@ -117,18 +117,18 @@ export function resolveIssueDestination(
   if (target.provider === undefined) {
     const resolved = resolve(canonical);
     if (resolved === undefined) {
-      throw new IssueTargetError(
+      throw new IssueTrackerError(
         "unresolved-provider",
         "this host maps no provider to that URL, and guessing one would ask an unrelated " +
           "service to create the issue. Install a context that names one, as " +
-          '<IssueTarget url="…" provider="…">.',
+          '<IssueTracker url="…" provider="…">.',
       );
     }
     return Object.freeze({ target: canonical, provider: resolved });
   }
   const named = issueProviderName(target.provider);
   if (named === undefined) {
-    throw new IssueTargetError(
+    throw new IssueTrackerError(
       "invalid-provider",
       "a provider discriminator is a stable lower-case name, and that is not one.",
     );

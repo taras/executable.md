@@ -91,18 +91,34 @@ export class IssueProtocolError extends Error {
  * Every one of them is decided locally, before routing exists in the story, and
  * each names the remedy: what a document can fix, it is told how to fix.
  */
-export type IssueTargetReason =
-  | "no-issue-target"
-  | "invalid-target-url"
+export type IssueTrackerReason =
+  | "no-issue-tracker"
+  | "invalid-tracker-url"
   | "unresolved-provider"
   | "invalid-provider";
 
-export class IssueTargetError extends Error {
-  override name = "IssueTargetError";
+/**
+ * The document wrote something around the element that it does not take.
+ *
+ * Refused before the destination is resolved, before routing exists and before
+ * any provider is asked anything — because content a component never renders is
+ * content nobody would see was discarded, and an issue created beside silently
+ * dropped text is worse than one not created at all.
+ */
+export class IssueContentError extends Error {
+  override name = "IssueContentError";
 
-  readonly reason: IssueTargetReason;
+  constructor(sentence: string) {
+    super(sentence);
+  }
+}
 
-  constructor(reason: IssueTargetReason, sentence: string) {
+export class IssueTrackerError extends Error {
+  override name = "IssueTrackerError";
+
+  readonly reason: IssueTrackerReason;
+
+  constructor(reason: IssueTrackerReason, sentence: string) {
     super(`<Issue> has no destination it can use: ${sentence}`);
     this.reason = reason;
   }

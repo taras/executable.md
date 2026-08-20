@@ -1,5 +1,5 @@
 /**
- * Which provider a canonical Issue target selects when a context named none.
+ * Which provider a canonical target URL selects when a tracker named no provider.
  *
  * The table lives with the trusted host rather than in the shared boundary, and
  * that placement is enforced: the shared coordination surface may not name a
