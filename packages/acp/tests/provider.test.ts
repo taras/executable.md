@@ -9,8 +9,18 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent, Config } from "@executablemd/core";
-import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
-import { createAcpxProvider, useAcpxProvider } from "../src/provider.ts";
+import type {
+  AgentLaunchRequest,
+  AgentPromptEvent,
+  AgentProviderAuthority,
+  PromptOptions,
+  Session,
+} from "@executablemd/core";
+import {
+  createAcpxProvider,
+  createPartitionedAcpxProvider,
+  useAcpxProvider,
+} from "../src/provider.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
 import type { AcpxProvider } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
@@ -34,7 +44,7 @@ function* installProvider(harness: FakeRuntimeHarness): Operation<void> {
     sessionStore: makeStore(),
     agentRegistry: makeRegistry({ codex: "codex-cmd", other: "other-cmd" }),
   });
-  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 }
 
 function* collectPrompt(
@@ -161,7 +171,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 
       // Simulate a prior turn's reconnect: the persisted record now
       // carries a replaced ACP session id that the handle predates.
@@ -221,7 +231,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 
       // The persisted record carries the authoritative ids after a
       // prior reconnect replaced both.
@@ -295,7 +305,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 
       const sessionKey = deriveSessionKey("codex-cmd", CWD);
       const record = makeRecord("codex-cmd", CWD);
@@ -374,7 +384,7 @@ describe("Tier AP — ACPX provider", () => {
         sessionStore: store,
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 
       // Pre-seed the repo-root session so the walk from a subdir reuses it.
       const rootKey = deriveSessionKey("codex-cmd", "/repo");
@@ -425,7 +435,7 @@ describe("Tier AP — ACPX provider", () => {
         agentRegistry: makeRegistry({ codex: "codex-cmd" }),
         withSessionRoute: (_context, op) => routeQueue.withSlot("route", op),
       });
-      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
 
       const a1 = yield* spawn(() => collectPrompt("a1"));
       yield* sleep(10);
@@ -673,6 +683,300 @@ describe("Tier AP — ACPX provider", () => {
       if (mismatchError instanceof Error) {
         expect(mismatchError.message).toContain("does not match session");
       }
+    });
+  });
+});
+
+/** What a partition owner holds: the public handle, and nothing more. */
+interface Partition {
+  handle: AcpxProvider;
+  /** Deliberately answers with no partition, for the absence case. */
+  absent(): AcpxProvider | undefined;
+}
+
+function* usePartition(harness: FakeRuntimeHarness): Operation<Partition> {
+  const handle = yield* useAcpxProvider(
+    { defaultAgent: "codex", permissionMode: "deny-all" },
+    {
+      createRuntime: harness.create,
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ codex: "codex-cmd", other: "other-cmd" }),
+    },
+  );
+  return { handle, absent: () => undefined };
+}
+
+/** A stand-in for what core delivers to an installed factory. */
+interface AuthorityLog extends AgentProviderAuthority {
+  performed: number;
+  refused: number;
+}
+
+function stubAuthority(): AuthorityLog {
+  const log: AuthorityLog = {
+    performed: 0,
+    refused: 0,
+    // deno-lint-ignore require-yield
+    *perform() {
+      log.performed += 1;
+    },
+    // deno-lint-ignore require-yield
+    *refuse() {
+      log.refused += 1;
+    },
+  };
+  return log;
+}
+
+/** A routed request's shape, for a dispatch that never reaches core. */
+function fakeRequest(): AgentLaunchRequest {
+  const request = {
+    instructions: "You are the implementor.",
+    agent: "codex",
+    cwd: CWD,
+    additionalDirectories: [],
+    permissionMode: "deny-all",
+    with: () => request,
+  };
+  return request as AgentLaunchRequest;
+}
+
+/**
+ * Install one partition-selecting factory, counting what it selected.
+ *
+ * The default selector answers with a partition this scope owns, which is the
+ * ordinary case; a test that is about the selector supplies its own.
+ */
+function* installPartitioned(
+  harness: FakeRuntimeHarness,
+  options: { select?: () => AcpxProvider | undefined } = {},
+): Operation<{ authority: AuthorityLog; selections: () => number }> {
+  yield* useFlatWorld(CWD);
+  const owned = options.select ? undefined : yield* usePartition(harness);
+  let selections = 0;
+  const factory = createPartitionedAcpxProvider(function* () {
+    selections += 1;
+    return options.select ? options.select() : owned!.handle;
+  });
+  const authority = stubAuthority();
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, authority);
+  return { authority, selections: () => selections };
+}
+
+/**
+ * Tier PT — one installed factory over isolated provider partitions
+ * (issue-518-test-agent-provider-partition-architect-amendment.md).
+ *
+ * Authority has to be installed where the content it serves is projected, and
+ * isolation has to be per `<Test>`. Both hold because installation and state
+ * are different things: one factory is installed, and it selects which complete
+ * provider state to act on for each dispatch.
+ *
+ * What that buys has to be paid for structurally, not by convention. A handle
+ * is a way to reach work, never permission — so these ask what happens when the
+ * selector answers with something this module never created, with a partition
+ * its owner has already dismantled, or with nothing at all.
+ */
+describe("Tier PT — partitioned provider installation", () => {
+  it("PT1: the selector runs afresh for every dispatch", function* () {
+    // Never cached across calls: a partition selected once and reused would
+    // make the second `<Test>` act on the first one's sessions.
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const { selections } = yield* installPartitioned(harness);
+
+      // Counted as growth rather than as totals: `session()` resolves an agent
+      // on its way, and that is a dispatch too. What matters is that no call
+      // reuses a partition chosen by an earlier one.
+      const grew: number[] = [];
+      let seen = 0;
+      const since = () => {
+        const grown = selections() - seen;
+        seen = selections();
+        return grown;
+      };
+
+      yield* Agent.operations.agent("codex");
+      grew.push(since());
+      yield* Agent.operations.session("one");
+      grew.push(since());
+      yield* collectPrompt("hello");
+      grew.push(since());
+
+      expect(grew.every((count) => count > 0)).toBe(true);
+    });
+  });
+
+  it("PT2: constructing a prompt stream selects nothing", function* () {
+    // Selection belongs inside subscription, with the rest of a turn's work. A
+    // stream nobody subscribed to has chosen no state and started nothing.
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const { selections } = yield* installPartitioned(harness);
+
+      const stream = yield* Agent.operations.prompt("held", {});
+      expect(stream).toBeDefined();
+
+      expect(selections()).toBe(0);
+      expect(harness.ensureCalls).toEqual([]);
+    });
+  });
+
+  it("PT3: no current partition refuses, and never falls back to another", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      // A second, perfectly usable partition exists. Absence must not quietly
+      // become "some other test's state".
+      const spare = yield* usePartition(harness);
+      yield* installPartitioned(harness, { select: () => spare.absent() });
+
+      let refused: Error | undefined;
+      try {
+        yield* Agent.operations.session("one");
+      } catch (error) {
+        refused = error instanceof Error ? error : new Error(String(error));
+      }
+
+      expect(refused?.message).toContain("no agent provider partition");
+      expect(harness.ensureCalls).toEqual([]);
+    });
+  });
+
+  it("PT4: no handle reflection can build authorizes anything", function* () {
+    // Shape is not identity, and neither is reflection. Each of these is
+    // everything a holder of a live handle can produce from it, and none of
+    // them reaches the state behind it.
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const real = yield* usePartition(harness);
+      const live = real.handle;
+
+      const forgeries: Record<string, () => AcpxProvider> = {
+        // Rebuilt from the operations it offers.
+        structural: () => ({
+          agent: (name) => live.agent(name),
+          session: (option) => live.session(option),
+          promptStream: (content, options) => live.promptStream(content, options),
+        }),
+        // Every own property descriptor, on the same prototype: the closest
+        // copy reflection can make of the object itself.
+        descriptors: () =>
+          Object.create(
+            Object.getPrototypeOf(live),
+            Object.getOwnPropertyDescriptors(live),
+          ) as AcpxProvider,
+        // Built on the prototype alone, so every method is the real one.
+        prototype: () => Object.create(Object.getPrototypeOf(live)) as AcpxProvider,
+        // Delegating to a live handle for everything a reader can see.
+        delegating: () => Object.create(live) as AcpxProvider,
+      };
+
+      for (const [shape, build] of Object.entries(forgeries)) {
+        yield* scoped(function* () {
+          yield* installPartitioned(harness, { select: () => build() });
+
+          let refused: Error | undefined;
+          try {
+            yield* Agent.operations.session("one");
+          } catch (error) {
+            refused = error instanceof Error ? error : new Error(String(error));
+          }
+
+          expect([
+            shape,
+            refused?.message?.includes("not a live agent provider partition"),
+          ]).toEqual([shape, true]);
+        });
+      }
+      // Refused before provider work, every time.
+      expect(harness.ensureCalls).toEqual([]);
+    });
+  });
+
+  it("PT5: a partition its owner dismantled can no longer be selected", function* () {
+    const harness = createFakeRuntime();
+    const closed = yield* scoped(function* () {
+      const partition = yield* usePartition(harness);
+      return partition.handle;
+    });
+
+    yield* scoped(function* () {
+      yield* installPartitioned(harness, { select: () => closed });
+
+      let refused: Error | undefined;
+      try {
+        yield* Agent.operations.session("one");
+      } catch (error) {
+        refused = error instanceof Error ? error : new Error(String(error));
+      }
+
+      expect(refused?.message).toContain("not a live agent provider partition");
+      expect(harness.ensureCalls).toEqual([]);
+    });
+  });
+
+  it("PT6: reflection over a handle finds no state and no launch", function* () {
+    // The embedder surface is the non-authoritative half. There is no launch on
+    // it to call and no way to read one out of it, so holding a partition and
+    // holding a request still adds up to nothing.
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const partition = yield* usePartition(harness);
+      const handle = partition.handle;
+
+      // Nothing of its own at all: the state lives in a private field, which
+      // appears in no key list and no descriptor.
+      expect(Reflect.ownKeys(handle)).toEqual([]);
+      expect(Object.getOwnPropertySymbols(handle)).toEqual([]);
+      expect(Object.values(Object.getOwnPropertyDescriptors(handle))).toEqual([]);
+
+      // The callable surface, wherever it lives, is the three public operations.
+      const surface: string[] = [];
+      for (
+        let target: object | null = Object.getPrototypeOf(handle);
+        target && target !== Object.prototype;
+        target = Object.getPrototypeOf(target)
+      ) {
+        for (const key of Reflect.ownKeys(target)) {
+          if (key !== "constructor") {
+            surface.push(String(key));
+          }
+        }
+      }
+      expect(surface.sort()).toEqual(["agent", "promptStream", "session"]);
+      expect("launch" in handle).toBe(false);
+
+      // The class is reachable through the instance, as every class is. What it
+      // does not carry is a way in: no resolver, and a constructor that refuses
+      // anyone holding a state of their own.
+      const constructor = Object.getPrototypeOf(handle).constructor as new (
+        ...args: unknown[]
+      ) => unknown;
+      expect(Reflect.ownKeys(constructor).sort()).toEqual(["length", "name", "prototype"]);
+      let built: unknown;
+      let refused: Error | undefined;
+      try {
+        built = new constructor(Symbol("admit"), { launch: () => {} });
+      } catch (error) {
+        refused = error instanceof Error ? error : new Error(String(error));
+      }
+      expect(built).toBe(undefined);
+      expect(refused?.message).toContain("created by the provider that owns its state");
+    });
+  });
+
+  it("PT7: a launch reaches the selected partition through the installed factory", function* () {
+    // The other direction, and the one the whole shape exists for: the factory
+    // core installed is what pairs a routed request with its authority, and the
+    // work lands on whichever partition was selected for that dispatch.
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const { authority, selections } = yield* installPartitioned(harness);
+
+      yield* Agent.operations.launch(fakeRequest());
+
+      expect(selections()).toBe(1);
+      expect(authority.performed).toBe(1);
     });
   });
 });

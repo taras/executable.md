@@ -16,6 +16,8 @@
  *   this xmd, and eval-block compilation
  *   (`cwd`, `env`, `platform`, `command`, `compile`)
  * - `API.Service` — scoped attached service startup (`startService`)
+ * - `NativeLauncher` — handing one native agent UI the foreground terminal
+ *   (`reserveTerminal`, `flushOutput`, `nativeLaunch`)
  * - `Config` — shared execution config (`timeout`, `timeoutExec`, `timeoutFetch`)
  *
  * See `apis.ts` for architecture rationale.
@@ -121,5 +123,41 @@ export type {
   FileWriteTarget,
   GlobInput,
 } from "./files.ts";
+export {
+  flushOutput,
+  installControlledLauncher,
+  installForegroundLauncher,
+  NATIVE_LAUNCHER_UNAVAILABLE,
+  NativeLauncher,
+  NativeLauncherUnavailableError,
+  nativeLaunch,
+  NO_TERMINAL,
+  reserveTerminal,
+} from "./launcher.ts";
+export type {
+  ControlledLauncherOptions,
+  NativeLauncherHandler,
+  NativeLaunchOutcome,
+  NativeLaunchRequest,
+} from "./launcher.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";
+export {
+  AgentSessionBusy,
+  agentSessionKeyDigest,
+  AgentSessionRecoveryRequired,
+  parseAgentSessionOwnership,
+  serializeAgentSessionOwnership,
+} from "./agent-session-coordinator.ts";
+export type {
+  AgentSessionCoordinator,
+  AgentSessionKey,
+  AgentSessionOwner,
+  AgentSessionOwnerKind,
+  AgentSessionOwnership,
+  AgentSessionOwnershipRecordV1,
+} from "./agent-session-coordinator.ts";
+export {
+  createDenoAgentSessionCoordinator,
+  hasDenoAgentSessionCoordinator,
+} from "./deno-agent-session-coordinator.ts";

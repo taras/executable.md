@@ -16,16 +16,24 @@
 
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { content, hasContent } from "../component-api.ts";
+import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
-import { parseDuration } from "@executablemd/runtime";
+import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
-import type { PromptOptions, Session } from "./agent-api.ts";
-import { AgentProviders } from "./provider-api.ts";
+import type { LaunchOptions, PromptOptions, Session, SessionLaunchResult } from "./agent-api.ts";
+import { launchAgentSession, useProviderInstallation } from "./launch-install.ts";
+import { AgentLaunchError } from "./launch.ts";
+import type {
+  DetachedLaunchRecord,
+  ExitedLaunchRecord,
+  LaunchPhase,
+  PreparedLaunchRecord,
+} from "./launch.ts";
+import type { LaunchIdentity } from "./launch-journal.ts";
 import { installApproveAll, installAskPermission } from "./permission.ts";
-import { AgentInternal } from "./internal.ts";
+import { AgentInternal, formatLocation } from "./internal.ts";
 import { serializePromptFailure } from "./errors.ts";
 import type { SerializedPromptFailure } from "./errors.ts";
 import { persistPrompt, promptFailureFromRecord } from "./journal.ts";
@@ -60,6 +68,15 @@ export const SESSION_PROPS: PropsSchema = {
   additionalProperties: false,
 };
 
+export const SESSION_LAUNCH_PROPS: PropsSchema = {
+  type: "object",
+  properties: {
+    agent: { type: "string" },
+    session: { type: "string" },
+  },
+  additionalProperties: false,
+};
+
 export const PROMPT_PROPS: PropsSchema = {
   type: "object",
   properties: {
@@ -76,16 +93,6 @@ function asString(value: Json | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** `path:line:column`, `line:column`, or `unknown` — the durable prompt key. */
-function formatLocation(metadata: Expansion): string {
-  const position = metadata.position;
-  if (!position) {
-    return "unknown";
-  }
-  const at = `${position.line}:${position.column}`;
-  return position.path ? `${position.path}:${at}` : at;
-}
-
 /**
  * Everything this component installs belongs to its own getExpansion, so the
  * engine dismantles content before the provider's resources. A failure from the
@@ -94,7 +101,6 @@ function formatLocation(metadata: Expansion): string {
  */
 export function* AgentProvider(props: Record<string, Json>): Operation<Json> {
   const name = String(props.name);
-  const factory = yield* AgentProviders.operations.resolve(name);
   const inheritedDefault = yield* AgentInternal.operations.defaultAgentName;
   const permissionMode = yield* AgentInternal.operations.permissionMode;
   const defaultAgent = asString(props.defaultAgent) ?? inheritedDefault;
@@ -115,7 +121,10 @@ export function* AgentProvider(props: Record<string, Json>): Operation<Json> {
     },
     { at: "min" },
   );
-  yield* factory({ defaultAgent, permissionMode });
+  // Installed in this invocation, not inside a frame nested in it: the body
+  // below is projected into the invocation, so a provider installed anywhere
+  // else would be invisible to the very content it was selected for.
+  yield* useProviderInstallation(name, { defaultAgent, permissionMode });
 
   if (!(yield* hasContent())) {
     return "";
@@ -175,6 +184,12 @@ export function* SessionComponent(props: Record<string, Json>): Operation<Json> 
       },
       *prompt([text, options], next) {
         return yield* next(text, { session, ...options });
+      },
+      *launch([request], next) {
+        // Pinned by deriving, which is the only way a handler may change what a
+        // launch asks for. An explicit `session` on the launch itself already
+        // named one, and lexical pinning does not override it.
+        return yield* next(request.session === undefined ? request.with({ session }) : request);
       },
     },
     { at: "min" },
@@ -328,4 +343,63 @@ function* runPrompt(
     record.raised = true;
   }
   return record;
+}
+
+/**
+ * One native session launch: prepare a durable agent session from this body,
+ * then hand the person the provider's own interactive UI for that exact
+ * session (specs/native-agent-session-launch-spec.md).
+ *
+ * The body renders first and completely. Only what it rendered becomes
+ * prepared instructions — the prose around this element is documentation, and
+ * a file the provider happens to be able to read is not selected by being
+ * readable. A body that failed to render prepares nothing, resolves nothing,
+ * and launches nothing.
+ *
+ * The launch itself is the provider's, and every phase it completes is
+ * retained through the journal installed here. That is also the authority
+ * boundary: middleware around the Agent Api may observe a launch or refuse
+ * one, but a result that arrives without those retained phases describes a
+ * launch that did not happen, and is refused.
+ */
+/**
+ * Render the body, then launch. Nothing else.
+ *
+ * The phases, their order, their retention and the result all belong to
+ * `Agent.launch()`, which a repository function component may call directly.
+ * A second implementation here is what let the component and the programmatic
+ * caller disagree about what a launch is — and it is why an exit the provider
+ * never retained used to be able to settle one.
+ */
+export function* SessionLaunch(props: Record<string, Json>): Operation<Json> {
+  const instructions = (yield* hasContent()) ? String(yield* content()) : "";
+  const options: LaunchOptions = {};
+  const agentProp = asString(props.agent);
+  if (agentProp !== undefined) {
+    options.agent = agentProp;
+  }
+  const sessionProp = asString(props.session);
+  if (sessionProp !== undefined) {
+    options.session = sessionProp;
+  }
+  try {
+    yield* launchAgentSession(instructions, options);
+  } catch (error) {
+    if (!(error instanceof AgentLaunchError)) {
+      throw error;
+    }
+    // Raised rather than thrown: how a launch ended is something the document
+    // observed, and the observation chain is where a document's own failures
+    // are seen — which is also what lets an author assert on one. The cause
+    // carries the class so that assertion is about which refusal it was, not
+    // about the wording of a message.
+    const reported = yield* raise({
+      type: "error",
+      message: error.message,
+      source: "Session.Launch",
+      cause: { phase: error.phase, failureClass: error.failureClass },
+    });
+    return reported.message;
+  }
+  return "";
 }

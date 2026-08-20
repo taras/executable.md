@@ -14,11 +14,15 @@
  * the isolation boundary.
  *
  * Scenario scenarios are resources held by suspended tasks spawned into
- * their boundary scope, so a boundary halt releases them. Because
- * acquiring one is an operation but the provider's route resolver is a
- * synchronous callback, every instance is provisioned by the `session`
- * and `prompt` seams before the provider routes, and `routeFor` is a
- * pure lookup.
+ * their boundary scope, so a boundary halt releases them. Because acquiring one
+ * is an operation but the ACPX registry resolves routes synchronously, every
+ * instance is provisioned inside the provider's own `withSessionRoute` hook —
+ * which may suspend — before the route it produces is pinned.
+ *
+ * One ACP provider is installed here, in the `<TestAgent>` invocation, over as
+ * many partitions as there are tests. Installation says where the provider can
+ * be reached from and is the only thing holding launch authority; the partition
+ * a dispatch selects says which state it acts on.
  */
 
 import { createContext, scoped, spawn, suspend, useScope, withResolvers } from "effection";
@@ -26,21 +30,25 @@ import type { Operation, Scope } from "effection";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { EvalScope } from "@effectionx/scope-eval";
 import {
-  Agent,
   Component,
   installPromptFailurePolicy,
   getExpansion,
   raise,
+  registerAgentProvider,
   registerComponents,
   tryContent,
+  useProviderInstallation,
 } from "@executablemd/core";
-import type { ErrorSegment, Json, PropsSchema, Segment, Session } from "@executablemd/core";
+import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
+import { createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
-import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
+import { command, installControlledLauncher, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
-import { useTestAgentController } from "./controller.ts";
+import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
-import { useTestAgentProvider } from "./provider.ts";
+import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
+import { TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
+import type { SessionRouting } from "./provider.ts";
 
 /** One `<TestAgent.Scenario>` mapping, before any worker exists. */
 interface ScenarioDeclaration {
@@ -97,6 +105,21 @@ function describeMapping(agentName: string, sessionName: string | undefined): st
 }
 
 /**
+ * The session a pinned operation resolved, if it resolved one.
+ *
+ * Read off the value rather than declared, because the route hook bounds
+ * several different registry-dependent operations and only some of them settle
+ * a session. What those have in common is the key, which is all this needs.
+ */
+function sessionKeyOf(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const key = Reflect.get(value, "sessionKey");
+  return typeof key === "string" ? key : undefined;
+}
+
+/**
  * Resolve a pinned session for the agent using it. The registry routes
  * every agent through the same worker command, so the provider's own
  * ownership check cannot tell two agents apart — a session stays owned
@@ -143,80 +166,106 @@ export function* installTestAgentComponents(): Operation<void> {
       const declarations = new Map<string, ScenarioDeclaration>();
       const boundaries = new Map<EvalScope | "test-agent-scope", BoundaryState>();
 
-      function* resolveScenario(
-        state: BoundaryState,
-        agentName: string,
-        sessionName: string | undefined,
-        dir: string,
-      ): Operation<ScenarioHandle> {
-        const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
-        if (!declared) {
-          throw new Error(
-            `no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`,
-          );
-        }
-        if (declared.duplicate) {
-          throw new Error(
-            `duplicate <TestAgent.Scenario> mappings for ${describeMapping(agentName, sessionName)}`,
-          );
-        }
-        const key = scenarioKey(agentName, sessionName, dir);
-        const existing = state.scenarios.get(key);
-        if (existing) {
-          return existing;
-        }
-        const inFlight = state.pending.get(key);
-        if (inFlight) {
-          return yield* inFlight;
-        }
-        // Publish the shared future before acquiring so concurrent
-        // callers await this acquisition instead of starting their own.
-        const ready = withResolvers<ScenarioHandle>();
-        state.pending.set(key, ready.operation);
-        yield* state.boundaryScope.spawn(function* () {
-          let scenario: ScenarioHandle;
-          try {
-            scenario = yield* controller.useScenario({
-              document: declared.document,
-              rootDir: declared.rootDir,
-            });
-          } catch (error) {
-            // Nothing consumes this task's failure yet, so it is
-            // reported through the future the callers are waiting on.
-            state.pending.delete(key);
-            ready.reject(error instanceof Error ? error : new Error(String(error)));
-            return;
-          }
-          state.scenarios.set(key, scenario);
-          state.pending.delete(key);
-          ready.resolve(scenario);
-          // Held, not caught: the future has settled, so a later
-          // failure must reach the boundary scope to fail the test.
-          yield* suspend();
-        });
-        return yield* ready.operation;
-      }
-
+      /**
+       * One complete partition: the state a `<Test>` is a world of its own in.
+       *
+       * Scenario provisioning belongs here, not above the provider, because the
+       * route it pins is this partition's and so is the coordinator that says
+       * who owns a session. A sibling test naming the same agent, session and
+       * directory reaches its own of each.
+       */
       function* provisionState(): Operation<BoundaryState> {
-        // The maps exist before useTestAgentProvider so the route resolver
-        // can close over them.
         const scenarios = new Map<string, ScenarioHandle>();
+        const pending = new Map<string, Operation<ScenarioHandle>>();
         const bySessionKey = new Map<string, PinnedSession>();
-        const resolveRoute = (context: SessionRouteContext): string => {
-          if (typeof context.session === "object") {
-            return resolvePinned(bySessionKey, context.session.sessionKey, context.agentName)
-              .scenario.route;
-          }
-          const scenario = scenarios.get(
-            scenarioKey(context.agentName, context.session, context.cwd),
-          );
-          if (!scenario) {
+        const boundaryScope = yield* useScope();
+
+        function* provision(
+          agentName: string,
+          sessionName: string | undefined,
+          dir: string,
+        ): Operation<ScenarioHandle> {
+          const declared = declarations.get(declarationKey(agentName, sessionName ?? ""));
+          if (!declared) {
             throw new Error(
-              `no <TestAgent.Scenario> maps ${describeMapping(context.agentName, context.session)}`,
+              `no <TestAgent.Scenario> maps ${describeMapping(agentName, sessionName)}`,
             );
           }
-          return scenario.route;
-        };
+          if (declared.duplicate) {
+            throw new Error(
+              `duplicate <TestAgent.Scenario> mappings for ${describeMapping(
+                agentName,
+                sessionName,
+              )}`,
+            );
+          }
+          const key = scenarioKey(agentName, sessionName, dir);
+          const existing = scenarios.get(key);
+          if (existing) {
+            return existing;
+          }
+          const inFlight = pending.get(key);
+          if (inFlight) {
+            return yield* inFlight;
+          }
+          // Publish the shared future before acquiring so concurrent
+          // callers await this acquisition instead of starting their own.
+          const ready = withResolvers<ScenarioHandle>();
+          pending.set(key, ready.operation);
+          yield* boundaryScope.spawn(function* () {
+            let scenario: ScenarioHandle;
+            try {
+              scenario = yield* controller.useScenario({
+                document: declared.document,
+                rootDir: declared.rootDir,
+              });
+            } catch (error) {
+              // Nothing consumes this task's failure yet, so it is
+              // reported through the future the callers are waiting on.
+              pending.delete(key);
+              ready.reject(error instanceof Error ? error : new Error(String(error)));
+              return;
+            }
+            scenarios.set(key, scenario);
+            pending.delete(key);
+            ready.resolve(scenario);
+            // Held, not caught: the future has settled, so a later
+            // failure must reach the boundary scope to fail the test.
+            yield* suspend();
+          });
+          return yield* ready.operation;
+        }
+
+        /**
+         * Place one registry-dependent operation in this partition.
+         *
+         * Suspending is allowed here and forbidden in `registry.resolve()`, so
+         * this is where a scenario is acquired — before the route it produces
+         * is pinned and the provider's own work begins.
+         */
+        function* routeFor(context: SessionRouteContext): Operation<SessionRouting> {
+          if (typeof context.session === "object") {
+            // Established by an earlier operation in this partition. Provisioning
+            // it again would key it as the unnamed session and route elsewhere.
+            const pinned = resolvePinned(
+              bySessionKey,
+              context.session.sessionKey,
+              context.agentName,
+            );
+            return { route: pinned.scenario.route, resolved: () => {} };
+          }
+          const scenario = yield* provision(context.agentName, context.session, context.cwd);
+          return {
+            route: scenario.route,
+            resolved(value) {
+              const sessionKey = sessionKeyOf(value);
+              if (sessionKey !== undefined) {
+                bySessionKey.set(sessionKey, { agent: context.agentName, scenario });
+              }
+            },
+          };
+        }
+
         // Asked for here, not at install time: a document with no
         // <TestAgent> never needs a worker, and must run even where no
         // entrypoint installed a command adapter.
@@ -226,15 +275,12 @@ export function* installTestAgentComponents(): Operation<void> {
           agents: [defaultAgent],
           workerCommand,
           probeRoute: controller.probeRoute,
-          resolveRoute,
+          routeFor,
+          // This partition's own, so two tests owning "the same" session are
+          // owning two sessions and never exclude each other.
+          coordinator: createDeterministicSessionCoordinator(),
         });
-        return {
-          provider,
-          boundaryScope: yield* useScope(),
-          scenarios,
-          pending: new Map(),
-          bySessionKey,
-        };
+        return { provider, boundaryScope, scenarios, pending, bySessionKey };
       }
 
       // The <TestAgent> scope itself is the fallback isolation boundary.
@@ -284,48 +330,33 @@ export function* installTestAgentComponents(): Operation<void> {
       // `<Prompt>` reads it at all.
       yield* installPromptFailurePolicy(() => Test.operations.inTest);
 
-      yield* Agent.around(
-        {
-          *agent([name], _next) {
-            const state = yield* boundary();
-            return yield* state.provider.agent(name);
-          },
-          *session([name], _next) {
-            const state = yield* boundary();
-            const agentName = yield* Agent.operations.agent();
-            const dir = resolve(yield* contextualCwd());
-            const scenario = yield* resolveScenario(state, agentName, name, dir);
-            // The provider's session() drives withSessionRoute itself;
-            // it maps this same context back to the scenario route.
-            const resolved = yield* state.provider.session(name);
-            state.bySessionKey.set(resolved.sessionKey, { agent: agentName, scenario });
-            return resolved;
-          },
-          *prompt([content, promptOptions], _next) {
-            // Routing flows through the provider's withSessionRoute hook,
-            // whose resolver is synchronous — so the scenario it will
-            // look up is provisioned here, once the stream is subscribed.
-            return {
-              *[Symbol.iterator]() {
-                const state = yield* boundary();
-                const pinned: string | Session | undefined = promptOptions?.session;
-                const agentName = yield* Agent.operations.agent(promptOptions?.agent);
-                if (typeof pinned === "object") {
-                  // Already provisioned by session(); resolving it again
-                  // would mis-key it as the unnamed session.
-                  resolvePinned(state.bySessionKey, pinned.sessionKey, agentName);
-                } else {
-                  const dir = resolve(yield* contextualCwd());
-                  yield* resolveScenario(state, agentName, pinned, dir);
-                }
-                const stream = state.provider.promptStream(content, promptOptions);
-                return yield* stream;
-              },
-            };
-          },
-        },
-        { at: "min" },
+      // The test agent's native UI is fictional in the way its agent is: the
+      // worker asserts a native identity, and nothing here has a UI to resume
+      // it in. So a launch under this component is recorded and answered
+      // rather than started, and never reaches the host's terminal — which is
+      // also what lets an authored `<Session.Launch>` run under `xmd test`,
+      // where no host launcher exists at all.
+      yield* installControlledLauncher({ ...(yield* NativeLaunchObserver.get()) });
+
+      // One installation, many partitions.
+      //
+      // Installing here — in the invocation the content is projected into — is
+      // what makes the provider reachable from that content at all, and it is
+      // also what makes it the only thing holding this document's launch
+      // authority. Selecting per test is what keeps one test's sessions, queues
+      // and records out of the next. Neither is a substitute for the other, and
+      // the selector carries no authority: it answers with a partition, which
+      // is work, never permission.
+      yield* registerAgentProvider(
+        TEST_AGENT_PROVIDER,
+        createPartitionedAcpxProvider(function* () {
+          return (yield* boundary()).provider;
+        }),
       );
+      yield* useProviderInstallation(TEST_AGENT_PROVIDER, {
+        defaultAgent,
+        permissionMode: "deny-all",
+      });
 
       // The <Testing> completion shape, not content(): a body may legally hold
       // a settled diagnostic beside healthy scenarios, and content() would

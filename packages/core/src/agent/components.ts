@@ -30,6 +30,8 @@ import { createReplayStream } from "../replay-stream.ts";
 import type { Json } from "../types.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
+import type { AgentProviderAuthority } from "./launch-authority.ts";
+import { useLaunchInstallation } from "./launch-install.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
 import {
@@ -42,8 +44,10 @@ import {
   NO_PROPS_SCHEMA,
   Prompt,
   PROMPT_PROPS,
+  SESSION_LAUNCH_PROPS,
   SESSION_PROPS,
   SessionComponent,
+  SessionLaunch,
 } from "./function-components.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
 
@@ -82,6 +86,12 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
     { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
     { name: "Session", origin: CORE_ORIGIN, fn: SessionComponent, props: SESSION_PROPS },
+    {
+      name: "Session.Launch",
+      origin: CORE_ORIGIN,
+      fn: SessionLaunch,
+      props: SESSION_LAUNCH_PROPS,
+    },
     { name: "Prompt", origin: CORE_ORIGIN, fn: Prompt, props: PROMPT_PROPS },
     { name: "ApproveAll", origin: CORE_ORIGIN, fn: ApproveAll, props: NO_PROPS_SCHEMA },
     { name: "AskPermission", origin: CORE_ORIGIN, fn: AskPermission, props: NO_PROPS_SCHEMA },
@@ -97,6 +107,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       const failures: SequencedFailure[] = [];
       let sequence = 0;
       const ordinals = new Map<string, number>();
+      const launchOrdinals = new Map<string, number>();
       yield* AgentInternal.around({
         // deno-lint-ignore require-yield
         *recordPromptFailure([error, failedSequence]) {
@@ -110,6 +121,12 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
         *promptOrdinal([location]) {
           const ordinal = ordinals.get(location) ?? 0;
           ordinals.set(location, ordinal + 1);
+          return ordinal;
+        },
+        // deno-lint-ignore require-yield
+        *launchOrdinal([location]) {
+          const ordinal = launchOrdinals.get(location) ?? 0;
+          launchOrdinals.set(location, ordinal + 1);
           return ordinal;
         },
       });
@@ -132,10 +149,23 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       // from here so it inherits this execution's replay decision — a confirmed
       // full replay never enters the provider at all.
       const teardown: TeardownSlot = {};
-      if (rootProvider && !replayed) {
+      // One launch installation per live document, whether or not a root
+      // provider is configured: `<AgentProvider>` needs the same authority, and
+      // a confirmed full replay installs neither — it performs no phase, so
+      // there is nothing for an authority to authorize.
+      if (!replayed) {
         yield* Execution.around({
           *document([request], nextDocument) {
-            yield* withRootProvider(rootProvider, teardown, () => nextDocument(request));
+            yield* scoped(function* () {
+              const authority = yield* useLaunchInstallation();
+              if (!rootProvider) {
+                yield* nextDocument(request);
+                return;
+              }
+              yield* withRootProvider(rootProvider, authority, teardown, () =>
+                nextDocument(request),
+              );
+            });
           },
         });
       }
@@ -164,13 +194,18 @@ interface TeardownSlot {
  */
 function* withRootProvider(
   rootProvider: { factory: AgentProviderFactory; options: AgentProviderOptions },
+  authority: AgentProviderAuthority,
   teardown: TeardownSlot,
   body: () => Operation<void>,
 ): Operation<void> {
   let completed = false;
   try {
     yield* scoped(function* () {
-      yield* rootProvider.factory(rootProvider.options);
+      // The root provider bypasses provider selection entirely: it was
+      // configured by the host, so there is no name to route and no middleware
+      // chain to travel. It receives the authority directly, on the same terms
+      // a registered provider reaches it through its own terminal.
+      yield* rootProvider.factory(rootProvider.options, authority);
       yield* body();
       completed = true;
     });

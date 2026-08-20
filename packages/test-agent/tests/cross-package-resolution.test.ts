@@ -43,7 +43,17 @@ import { installTestAgentComponents } from "../src/components.ts";
  * in the file — and checked against the live registry by XP0, which is what
  * keeps the two from drifting apart as packages gain components.
  */
-const AGENT = ["AgentProvider", "Agent", "Session", "Prompt", "ApproveAll", "AskPermission"];
+const AGENT = [
+  "AgentProvider",
+  "Agent",
+  "Session",
+  // The dotted name addresses a subdirectory, so a repository override for it
+  // is components/Session/Launch.md.
+  "Session.Launch",
+  "Prompt",
+  "ApproveAll",
+  "AskPermission",
+];
 const TESTING = [
   "Testing",
   "AssertThrows",

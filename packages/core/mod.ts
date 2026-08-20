@@ -223,15 +223,41 @@ export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,
   AgentPromptEvent,
+  LaunchOptions,
   PermissionMode,
   PermissionOption,
   PermissionOutcome,
   PermissionRequest,
   PromptOptions,
   Session,
+  SessionLaunchResult,
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";
+// Native session launch — the records one launch retains, and the request its
+// public route carries. The authority that runs and retains a phase is not here
+// and is not anywhere: it is delivered to the selected provider.
+export { AgentLaunchError } from "./src/agent/launch.ts";
+export type {
+  DetachedLaunchRecord,
+  ExitedLaunchRecord,
+  InstructionReconciliation,
+  LaunchFailure,
+  LaunchFailureClass,
+  LaunchPhase,
+  LaunchRecord,
+  PreparedLaunchRecord,
+} from "./src/agent/launch.ts";
+export { AgentLaunchProtocolError } from "./src/agent/launch-request.ts";
+export type { AgentLaunchRequest } from "./src/agent/launch-request.ts";
+export type { AgentLaunchPhases, AgentProviderAuthority } from "./src/agent/launch-authority.ts";
+export { launchAgentSession } from "./src/agent/launch-install.ts";
 export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
+// `installAgentProvider` is deliberately absent: it takes a launch authority,
+// and an authority reachable by import is an authority every package and every
+// loaded copy can reach. An embedder installs a registered provider through
+// `useProviderInstallation()`, which mints one and delivers it privately to the
+// factory through this invocation's terminal.
+export { useProviderInstallation } from "./src/agent/launch-install.ts";
 export type {
   AgentProviderApi,
   AgentProviderFactory,

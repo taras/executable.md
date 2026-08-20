@@ -9,9 +9,21 @@
  * boundary with `run`; there is no Promise-based test orchestration.
  */
 
-import { run, withResolvers } from "effection";
-import type { Operation, Task } from "effection";
-import { API } from "@executablemd/runtime";
+import { ensure, Err, Ok, run, scoped, withResolvers } from "effection";
+import type { Operation, Result, Task } from "effection";
+import {
+  AgentSessionBusy,
+  agentSessionKeyDigest,
+  AgentSessionRecoveryRequired,
+  API,
+} from "@executablemd/runtime";
+import type {
+  AgentSessionCoordinator,
+  AgentSessionKey,
+  AgentSessionOwner,
+  AgentSessionOwnerKind,
+  AgentSessionOwnership,
+} from "@executablemd/runtime";
 import type {
   AcpAgentRegistry,
   AcpRuntimeDoctorReport,
@@ -94,7 +106,21 @@ export interface FakeRuntimeHarness {
   ensureCalls: AcpRuntimeEnsureInput[];
   turns: FakeTurn[];
   closeCalls: AcpRuntimeHandle[];
+  /**
+   * Every close, whole.
+   *
+   * A discard and a release are the same call with different options, so the
+   * option is the only thing that tells them apart — and "no launch path ever
+   * discards persistent state" is a claim about exactly that.
+   */
+  closeInputs: Record<string, unknown>[];
   closeFailure?: Error;
+  /**
+   * Create sessions the way an adapter that asserts no provider-native
+   * identity does. The handle still carries ACP and record ids, which is the
+   * shape a client could mistake one of for a native id.
+   */
+  omitAgentSessionId?: boolean;
   script(turn: ScriptedTurn): void;
 }
 
@@ -113,6 +139,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     ensureCalls: [],
     turns: [],
     closeCalls: [],
+    closeInputs: [],
     script(turn) {
       scripted.push(turn);
     },
@@ -129,6 +156,18 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         ensureSession(input) {
           harness.ensureCalls.push(input);
+          // ACPX persists a record as it establishes a session, including the
+          // instruction layer the caller asked for; a fake that skipped that
+          // would hide every decision a later launch makes by reading it back.
+          const record: AcpSessionRecord = {
+            ...makeRecord(options.agentRegistry.resolve(input.agent), input.cwd ?? options.cwd),
+            acpxRecordId: input.sessionKey,
+            messages: [],
+          };
+          if (input.sessionOptions?.systemPrompt !== undefined) {
+            record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
+          }
+          void options.sessionStore.save(record);
           const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
@@ -136,8 +175,10 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             cwd: input.cwd,
             acpxRecordId: `record:${input.sessionKey}`,
             backendSessionId: `backend:${input.sessionKey}`,
-            agentSessionId: `agent-session:${input.sessionKey}`,
           };
+          if (!harness.omitAgentSessionId) {
+            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+          }
           return Promise.resolve(handle);
         },
         startTurn(input) {
@@ -223,6 +264,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         close(input) {
           harness.closeCalls.push(input.handle);
+          harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
           if (harness.closeFailure) {
             return Promise.reject(harness.closeFailure);
           }
@@ -265,4 +307,79 @@ export function* useGitWorld(cwdRef: { value: string }, gitRoot: string): Operat
       return { exists: isGit, isFile: false, isDirectory: isGit };
     },
   });
+}
+
+/**
+ * A session coordinator with the Deno adapter's semantics and none of its
+ * machinery: one live owner at a time, and an owner that never proved it
+ * stopped leaves the session owned.
+ *
+ * It records every acquisition, because "which operations coordinate, under
+ * which owner kind, against which key" is the observation most of the ownership
+ * evidence is made of — and one an ordinary coordinator has no reason to offer.
+ */
+export interface CoordinatorHarness {
+  coordinator: AgentSessionCoordinator;
+  /** Every acquisition attempt, in order, with what it was answered. */
+  acquisitions: {
+    kind: AgentSessionOwnerKind;
+    key: AgentSessionKey;
+    outcome: "granted" | "busy" | "recovery-required";
+  }[];
+  /** Leave `key` looking like the work of an owner that never finished. */
+  tombstone(key: AgentSessionKey): void;
+}
+
+export function makeCoordinator(): CoordinatorHarness {
+  const occupied = new Set<string>();
+  const retained = new Map<string, "active" | "idle">();
+  const acquisitions: CoordinatorHarness["acquisitions"] = [];
+
+  const harness: CoordinatorHarness = {
+    acquisitions,
+    tombstone(key) {
+      retained.set(agentSessionKeyDigest(key), "active");
+    },
+    coordinator: {
+      coordinate<T>(
+        key: AgentSessionKey,
+        owner: AgentSessionOwner,
+        body: (ownership: AgentSessionOwnership) => Operation<T>,
+      ): Operation<Result<T>> {
+        return scoped(function* (): Operation<Result<T>> {
+          const digest = agentSessionKeyDigest(key);
+          if (occupied.has(digest)) {
+            acquisitions.push({ kind: owner.kind, key, outcome: "busy" });
+            return Err(new AgentSessionBusy(`session "${key.sessionKey}" is held`));
+          }
+          occupied.add(digest);
+          yield* ensure(() => {
+            occupied.delete(digest);
+          });
+          if (retained.get(digest) === "active") {
+            acquisitions.push({ kind: owner.kind, key, outcome: "recovery-required" });
+            return Err(
+              new AgentSessionRecoveryRequired(`session "${key.sessionKey}" needs recovery`),
+            );
+          }
+          acquisitions.push({ kind: owner.kind, key, outcome: "granted" });
+          retained.set(digest, "active");
+          let quiesced = false;
+          yield* ensure(() => {
+            if (quiesced) {
+              retained.set(digest, "idle");
+            }
+          });
+          return Ok(
+            yield* body({
+              quiesced() {
+                quiesced = true;
+              },
+            }),
+          );
+        });
+      },
+    },
+  };
+  return harness;
 }
