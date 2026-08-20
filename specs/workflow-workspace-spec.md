@@ -443,15 +443,16 @@ same run lifecycle remotely.
 
 The lifecycle above is the whole design, including §3.7's rule that a status
 line is published only once its atomic lifecycle transition has persisted. What a
-caller can run today is `start` and `resume`, the three inspections, and the two
-control actions:
+caller can run today is `start`, `resume` and `fork`, the three inspections, and
+the two control actions:
 
 ```sh
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
 xmd workflow resume <run-id>
+xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
 xmd workflow status <run-id> [--json]
 xmd workflow list [--status=<status>] [--json]
-xmd workflow history <run-id> [--json]
+xmd workflow history <run-id> [--forkable] [--json]
 xmd workflow cancel <run-id>
 xmd workflow delete <run-id>
 ```
@@ -462,8 +463,8 @@ lock, and both refuse it rather than reaching past it (§3.6). Each
 reports one line on standard output — `workflow cancel: <run-id> (<status>)` and
 `workflow delete: <run-id> (<removed>)`.
 
-`start` and `resume` stream the document's own output to standard output and
-report two stable lines on standard error — `workflow run: <run-id>` once the run
+`start`, `resume` and `fork` stream the document's own output to standard output
+and report two stable lines on standard error — `workflow run: <run-id>` once the run
 has been created or found, and `workflow status: <status>` once the execution
 settles.
 
@@ -496,6 +497,10 @@ retained failure, and that does not make the run eligible for `resume`.
 - `resume` takes exactly one run id and nothing else. A document path, a
   generated property argument and the aggregate property forms are each refused
   rather than ignored.
+- `fork` takes the run it continues, the committed event it continues from and
+  the definition it continues with, and every one of the three is required. Its
+  generated `--props-*` arguments are the candidate definition's and merge over
+  the props the source retained, and `--at` belongs to it alone (§11).
 - The document filesystem (§10.1) and Repository/Worktree/Dir composition (§6)
   are the capabilities a run has. Git operations, Agent, Worker Shell and native
   services are not: an inherited `API.Service` provider is refused rather than
@@ -527,7 +532,9 @@ same stack: a run that reaches `suspendFor()` retains one request, settles
 `suspended`, releases its lock and exits 2, and every later resume reaches that
 same wait. Typed answer delivery is what ends such a wait, and `xmd workflow
 answer` is built by #300; scheduling is not, so a wait ends when somebody
-resumes the run rather than on its own. Fork is designed above and unbuilt.
+resumes the run rather than on its own. Fork is built (§11): a run's history can
+be continued under a changed definition from any committed checkpoint the
+retained events allow.
 
 The component bundle is built: a root declares one, `start` establishes it from
 the pinned commit, the definition retains it, and `resume` and completed replay
@@ -548,11 +555,11 @@ xmd workflow list --status=completed --json
 ```
 
 `status` reports identity, status, immutable definition, normalized props,
-timestamps, document executions, current journal frontier and current Workspace
-version. `list` reports visible runs newest-update first and optionally filters
-by status. `status` and `history` require exactly one run ID; `list` accepts
-none. A filter names exactly one of the six statuses. Fork ancestry belongs to
-#368.
+timestamps, document executions, current journal frontier, current Workspace
+version, and — for a forked run — the source run, checkpoint and Workspace root
+it was admitted from. `list` reports visible runs newest-update first and
+optionally filters by status. `status` and `history` require exactly one run ID;
+`list` accepts none. A filter names exactly one of the six statuses.
 
 Both commands use immutable lifecycle snapshots. They do not obtain an executor
 lock, replay, attach a Workspace, materialize a root, import a document,
@@ -576,7 +583,7 @@ xmd workflow history release-1.4 --json
 ```
 
 `history --json` exposes every retained protocol event in append order and its
-stable public event ID. `fork --at` later accepts eligible IDs under §11. Human
+stable public event ID. `fork --at` accepts eligible IDs under §11. Human
 history presents durable operations without repeating protocol event kinds:
 
 ```text
@@ -593,8 +600,9 @@ here for the page. A row with no authored source shows that it has none rather
 than a location the command derived.
 
 Each entry contains the exact retained event ID and protocol event, the
-Workspace root associated with that row, and an optional normalized authored
-source. Yield descriptions carry it under the stable namespaced
+Workspace root associated with that row, its forkability, an optional normalized
+authored source, and — for a row a fork inherited — the source run and source
+event it came from. Yield descriptions carry it under the stable namespaced
 `"executablemd.source-position"` field before the event crosses the security
 filter. Close events, root import and trusted-host preparation may have no
 authored source; absence is explicit. History never parses an expansion ID or
@@ -613,7 +621,30 @@ cancelled run with no root Close says that no canonical document outcome was
 recorded. History never reconstructs a filtered value from the Workspace or
 provider, materializes the associated root, mixes rendered stdout into the
 trace, removes a retained event from JSON, or synthesizes a journal event.
-`--forkable` and forkability reasons belong to #368 rather than #367.
+
+`--json` always includes `forkability`, and `--forkable --json` returns the same
+JSON. `--forkable` adds `FORKABLE` and `BLOCKERS` to human output and keeps
+every row:
+
+```json
+{
+  "forkability": {
+    "forkable": false,
+    "blockers": [{ "code": "agent-state-unavailable", "eventId": "<event-id>" }]
+  }
+}
+```
+
+Forkability is cumulative through the checkpoint, and `blockers` is empty
+exactly when `forkable` is true. Each blocker names the earliest event that
+introduced it, under one of four stable codes: `workspace-root-unavailable`,
+`agent-state-unavailable`, `external-state-unavailable` and
+`unsupported-effect`. An effect type is inheritable because it is recognized,
+never because it failed to match something, so history a later build wrote
+reports `unsupported-effect` rather than a checkpoint this build is guessing
+about. Blocker output carries stable codes and retained event IDs and nothing
+else: no filtered values, props, provider diagnostics or secrets. Candidate
+definition and prop divergence are reported by `fork`, not here.
 
 History is read-only. Event IDs are host-public run-history identifiers, not
 SQLite row numbers.
@@ -1725,30 +1756,160 @@ new run:
 xmd workflow fork release-42 \
   --at=E17 \
   --id=release-42-corrected \
-  --props-release-channel=stable \
-  corrected-release.md
+  flows/release.md \
+  --props-release-channel=stable
 ```
 
 The source run and `--at` select an inherited journal prefix and Workspace root.
-The document supplies the new immutable definition. The new run inherits source
-props by default; generated `--props-*` arguments may add or override values.
-Any definition or prop change that alters expansion before the checkpoint
-causes divergence.
+The document supplies the new immutable definition. Generated `--props-*`
+arguments follow the positionals, as they do for `start`: they are declared by
+the document rather than by the command, so option parsing stops at the first
+one and a positional written after it would not be read.
+
+The new run inherits the source's retained normalized props by default. Explicit
+generated `--props-*` arguments add or override values, property by property,
+and the merged result is validated against the candidate definition before
+anything is created — a property the source retained and the candidate does not
+declare is refused here rather than reported later as divergence. Those merged
+props are what the preflight replays under, what the fork is admitted with, what
+the run retains, and one of the terms a reused fork ID is compared on.
 
 Fork generates a new run ID unless `--id` is supplied, executes the new run in
-the foreground and follows ordinary exit semantics. Reusing a caller-selected
-fork ID is compatible only when source run, checkpoint, modified definition and
-normalized props all agree.
+the foreground and follows ordinary exit semantics. Every option that applies to
+`start` and `resume` applies to `fork`; read-only commands accept neither props
+nor `--at`.
+
+### 11.1 What a fork retains
+
+A fork is a new immutable WorkflowRun identity. It holds a new run ID, the
+supplied definition with its base, pinned commit and complete component bundle,
+the merged normalized props, its lineage, and a journal made of two records it
+writes for itself followed by everything it inherited.
+
+The two records are its own `workflow_run` and its own root import. The first is
+what its journal is held to: a history carrying two run records describes two
+runs, so the source's stays behind as lineage. The second holds the document's
+own text, and replay restores the document from it — a fork that inherited the
+source's root import would run the source's definition whatever document the
+caller named.
+
+Everything after them travels unchanged. An inherited event keeps its public
+event ID, its filtered result, its authored source position and its Workspace
+root reference, and carries the source run and source event it came from. Events
+appended after the checkpoint are the fork's own and receive fork event IDs.
+During compatibility replay and live execution `getWorkflowRun()` observes the
+fork identity, never the source's.
+
+The fork owns retention of what it inherited. The Workspace roots the prefix
+names and the selected checkpoint root are copied into the fork's own storage,
+so deleting the source after admission leaves the fork's history readable and
+its roots loadable.
+
+### 11.2 What compatibility means
+
+Any definition or prop change that alters expansion before the checkpoint causes
+divergence. A durable effect's identity is its type and its name, and an
+authored effect's name carries where it was written — so a candidate is
+compatible through the checkpoint only when the elements before it are written
+at the same path and the same offsets. In practice that is the same document,
+edited after the checkpoint.
+
+Compatibility is decided before any storage the host would recognize as the new
+run exists. The candidate replays the inherited prefix against a staged copy of
+the fork — the whole run, assembled where nothing discovers it, so a document
+resolves its paths through the Workspace the fork will actually have. The replay
+ends at the checkpoint: a guard stops it on the last inherited event, before the
+stored result is handed back, so the first effect after the checkpoint is never
+entered, no host service is reached and nothing is appended. A candidate that
+diverges, that finishes before consuming the prefix, or that goes live inside it
+is refused, and the refusal names the inherited event where the disagreement
+began.
+
+### 11.3 Reading the source, and admitting the fork
+
+Fork admission reads an immutable committed source snapshot ending at the
+selected event. It does not acquire the source executor lock and never writes
+the source run. Concurrent source appends after the selected checkpoint do not
+alter the admitted prefix or root.
+
+Before recognizable new-run storage exists, the source, the checkpoint, the
+selected root, the candidate definition, the component bundle, the normalized
+props, forkability and compatibility replay are all validated. Missing, corrupt,
+unsupported or divergent input fails with no new run and no live effects.
+
+After preflight succeeds, only the new run's executor authority is acquired. One
+atomic durable commit records the fork run, its lineage, the inherited prefix
+with its provenance, the copied Workspace roots, the selected current root and
+the first document execution. Failure before that commit leaves no fork. Failure
+or death after it leaves a valid fork under ordinary lifecycle and recovery
+rules. Live document execution begins only after that commit.
+
+Reusing a caller-selected fork ID is compatible only when the source run, the
+checkpoint, the definition including its component bundle and pinned commit, the
+base and the normalized props all agree. A request differing in any one of them
+is refused before anything is written, and the refusal names the term that
+differs rather than collapsing them into one cause.
+
+### 11.4 What a fork never rewinds
 
 Each completed journal event references the current copy-on-write logical
 Workspace root. Nonmutating events reuse the previous root. Only committed
-events are selectable checkpoints. Fork retains or cheaply clones the selected
-root without copying the whole database.
+events are selectable checkpoints, and the run's own canonical outcome is not
+one: a prefix that contains it leaves nothing to continue.
 
-Fork never rewinds external systems. Agent conversation state is present only
-when the provider can fork or checkpoint that exact session at the selected
-event. Otherwise that checkpoint is not forkable; XMD never substitutes a new
-session or transcript.
+Fork never rewinds external systems, and it never repeats one either. What
+decides an external effect is what the history holds about it.
+
+A completed Git-host reconciliation record carries the pre-state, the
+observations, the decision and the result, and replays without installing or
+contacting a provider. A fork inherits it: the remote was mutated once, by the
+source, exactly as the record says, and consuming the record asks nobody
+anything. The record keeps the identity it was written under — a fork does not
+rewrite an inherited event as its own — so the effect at that position is named
+by the identity the record holds, while every live attempt is named by the run
+performing it. That is what keeps the fork the authority for what it does next
+without making it the author of what it inherited.
+
+That identity is established once, when the engine admits the run's retained
+snapshot, and published beside the run itself — where every physical copy of the
+workflow package reads it. A second copy loaded from disk reconciles through the
+same operation name, and a fork whose Git-host history replayed for one copy and
+diverged for another would accept different history depending on which module
+object asked.
+
+What makes an answer safe is not where it came from but what happens to a wrong
+one, and what authorizes live execution is not that answer at all. A run that walked away
+from retained history it never consumed performs no Git-host effect at all: it
+asks the Git host nothing and appends nothing. The engine's own account of the
+coroutine decides that, and it holds for every operation after the one that
+diverged rather than only at that one — so removing, replacing or forging the
+transported identities cannot buy a live effect. It can only make the effect
+replay correctly or refuse. On replay the record consumed is
+additionally held to the request being made, so an identity that is not that
+record's own is a refusal too.
+
+It belongs to the exact retained event it came from, at the position that event
+occupies. One element may ask for more than one Git-host effect, so the records
+are offered in order: a call may take only the next one not yet taken, and only
+when that record asks exactly what the call asks. Anything else leaves the
+inherited prefix behind for good.
+
+Falling through to live is final in the same way. A request named by a retained
+record that reaches live execution — a mismatch earlier in the history, and a
+divergence policy that chose to run live, are enough — performs nothing. It asks
+the Git host nothing, appends nothing, and fails, because the run that may
+perform it is the one this journal belongs to. An inherited identity therefore
+never reaches an observation, a performance or an appended event.
+
+A Git-host event that settled into no such record is the other case. The run
+stopped without establishing what happened at the remote, so continuing across
+it would mean asking a provider the question the source could not answer, and
+the checkpoint is not forkable.
+
+Agent conversation state is present only when the provider can fork or
+checkpoint that exact session at the selected event. No supported provider can,
+so a checkpoint at or after an Agent turn is not forkable; XMD never substitutes
+a new session or transcript.
 
 ## 12. Retention, deletion and training
 
@@ -1906,7 +2067,7 @@ delegated without changing the document language.
 | durable suspension request and executor-lock release | built by #367 |
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
 | workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
-| history fork | defined here; unbuilt (#368) |
+| history fork | built (§11); Deno provider only |
 | read-only Agent materialization | defined here; proof required |
 | generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
 | generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |

@@ -26,6 +26,23 @@ export function workflowRunPath(root: string, runId: string): string {
 }
 
 /**
+ * Where a fork is built while it is being proved.
+ *
+ * A suffix in the same namespace as the lock, and a candidate pattern of
+ * `<hash>.sqlite` exactly excludes it: nothing discovers it, nothing lists it,
+ * and no run id resolves to it. That is what lets a fork be assembled in full —
+ * schema, run, inherited prefix, retained roots and a restored Workspace — and
+ * replayed against its own filesystem before any storage the host would
+ * recognize as the new run exists.
+ *
+ * It is scratch. Whoever creates it removes it, and one left behind by an
+ * interrupted attempt is replaced rather than resumed.
+ */
+export function workflowForkStaging(root: string, runId: string): string {
+  return join(root, `${hashRunId(runId)}.staging`);
+}
+
+/**
  * The advisory lock one run's executor holds.
  *
  * A suffix rather than a subdirectory, so every path a run occupies is derived

@@ -47,7 +47,12 @@ import type {
   GitHostRoutingRequest,
 } from "../src/git-host/api.ts";
 import { GitHostProviderError } from "../src/git-host/errors.ts";
+import {
+  gitHostRequestFingerprint,
+  parseGitHostReconciliationRecord,
+} from "../src/git-host/records.ts";
 import type {
+  CompleteGitHostEffectRequest,
   GitHostCompletion,
   GitHostEffectRequest,
   GitHostObservation,
@@ -115,6 +120,61 @@ const AUTHORIZED_OBSERVATION: GitHostObservation = Object.freeze({
   observations: { by: "authorized-provider" },
   result: { by: "authorized-provider" },
 });
+
+/** A second effect from the same element, so a fork's live suffix has one. */
+const LATER_GIT_HOST_REQUEST: GitHostEffectRequest = Object.freeze({
+  kind: "pull-request",
+  inputs: { head: "release-1.5", base: "main" },
+  naturalKey: { head: "release-1.5", base: "main" },
+});
+
+const ABSENT_OBSERVATION: GitHostObservation = Object.freeze({
+  state: "absent",
+  preState: { pullRequest: null },
+});
+
+const PERFORMED_COMPLETION: GitHostCompletion = Object.freeze({
+  observations: { pullRequest: 42 },
+  result: { pullRequest: 42 },
+});
+
+/**
+ * One run's history as another run's, so a fork can inherit it.
+ *
+ * Only the Git-host record moves: its retained identity becomes the source's,
+ * and the durable operation is renamed to the digest that identity produces —
+ * which is what the source itself wrote and what a fork copies verbatim.
+ */
+function* inheritedGitHostHistory(
+  events: readonly DurableEvent[],
+  runId: string,
+): Operation<DurableEvent[]> {
+  const rewritten: DurableEvent[] = [];
+  for (const event of events) {
+    const record =
+      event.type === "yield" &&
+      event.description.type === GIT_HOST_EFFECT &&
+      event.result.status === "ok"
+        ? parseGitHostReconciliationRecord(event.result.value)
+        : undefined;
+    // The root Close goes: a completed terminal replays without entering the
+    // durable body, and this history has to continue into the component.
+    if (event.type === "close" && event.coroutineId === "root") {
+      continue;
+    }
+    if (event.type !== "yield" || record === undefined) {
+      rewritten.push(event);
+      continue;
+    }
+    const request = { ...record.request, identity: { ...record.request.identity, runId } };
+    rewritten.push({
+      ...event,
+      description: { ...event.description, name: yield* gitHostRequestFingerprint(request) },
+      result: { status: "ok", value: { ...record, request } as unknown as Json },
+    });
+  }
+  return rewritten;
+}
 
 const FORGED_OBSERVATION: GitHostObservation = Object.freeze({
   state: "compatible",
@@ -432,5 +492,100 @@ describe("Tier DLG — physical Git-host package composition", () => {
     expect(observed).toHaveLength(1);
     expect(seen.records).toHaveLength(1);
     expect(gitHostYields(stream)).toHaveLength(1);
+  });
+
+  it("DLG3: the other copy consumes an inherited record under its retained identity", function* () {
+    // A fork's journal holds records its source wrote, and a Git-host effect is
+    // named by a digest that includes the run id — so a copy that could not see
+    // the retained identity would fingerprint an inherited record with the fork
+    // id and diverge. Which physical module object asks must not decide which
+    // retained history is accepted.
+    const copy = yield* physicalGitHostCopy();
+    const sourceRunId = "run-297-git-host-source";
+
+    // A source run that made the effect, then the same history as that run's.
+    const seedStream = new InMemoryStream();
+    const seeded = gitHostAttempt();
+    yield* scoped(function* () {
+      yield* useGitHostEffectComponent(seeded, reconcileGitHostEffect);
+      yield* withGitHostProvider(
+        {
+          *observe(): Operation<EffectionResult<GitHostObservation>> {
+            return Ok(AUTHORIZED_OBSERVATION);
+          },
+          // deno-lint-ignore require-yield
+          *perform(): Operation<EffectionResult<GitHostCompletion>> {
+            throw new Error("nothing may be performed here");
+          },
+        },
+        gitHostDocument(seedStream),
+      );
+    });
+    expect(seeded.failures).toEqual([]);
+    const inherited = yield* inheritedGitHostHistory(seedStream.snapshot(), sourceRunId);
+
+    // Replayed through the *second* copy, with no provider installed at all.
+    const stream = new InMemoryStream(inherited);
+    const seen = gitHostAttempt();
+    yield* scoped(function* () {
+      yield* useGitHostEffectComponent(seen, copy.reconcileGitHostEffect);
+      yield* gitHostDocument(stream);
+    });
+
+    // It consumed the exact inherited record, provider-free, under the identity
+    // that record was written with.
+    expect(seen.failures).toEqual([]);
+    expect(seen.records).toHaveLength(1);
+    expect(seen.records[0]?.request.identity.runId).toBe(sourceRunId);
+
+    // The record and its provenance are exactly what was inherited: nothing was
+    // re-authored, and no second Git-host event was appended.
+    expect(gitHostYields(stream)).toHaveLength(1);
+    expect(stream.snapshot().slice(0, inherited.length)).toEqual(inherited);
+
+    // And work after it is the executing run's. A second call has no unclaimed
+    // record left, so it runs live — under this run, never the source's.
+    const liveStream = new InMemoryStream(inherited);
+    const liveSeen = gitHostAttempt();
+    const observedLive: CompleteGitHostEffectRequest[] = [];
+    yield* scoped(function* () {
+      yield* registerComponents([
+        {
+          name: "Effect",
+          origin: "tier-dlg",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn() {
+            for (const request of [GIT_HOST_REQUEST, LATER_GIT_HOST_REQUEST]) {
+              try {
+                liveSeen.records.push(yield* copy.reconcileGitHostEffect(request));
+              } catch (error) {
+                liveSeen.failures.push(error);
+              }
+            }
+            return "";
+          },
+        },
+      ]);
+      yield* withGitHostProvider(
+        {
+          *observe(request): Operation<EffectionResult<GitHostObservation>> {
+            observedLive.push(request);
+            return Ok(ABSENT_OBSERVATION);
+          },
+          *perform(request): Operation<EffectionResult<GitHostCompletion>> {
+            observedLive.push(request);
+            return Ok(PERFORMED_COMPLETION);
+          },
+        },
+        gitHostDocument(liveStream),
+      );
+    });
+
+    expect(liveSeen.failures).toEqual([]);
+    expect(liveSeen.records[0]?.request.identity.runId).toBe(sourceRunId);
+    expect(liveSeen.records[1]?.request.identity.runId).toBe(GIT_HOST_RUN.runId);
+    for (const request of observedLive) {
+      expect(request.identity.runId).toBe(GIT_HOST_RUN.runId);
+    }
   });
 });

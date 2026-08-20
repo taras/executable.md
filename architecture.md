@@ -857,8 +857,7 @@ the journal and the document receive only the fingerprint.
 
 The command selects the environment; the document describes the procedure.
 `xmd run` uses the caller's current environment and makes no restoration
-promise. The specified future `xmd workflow` command creates a workflow run with
-one implicit root Workspace. The same declarative components use contextual
+promise. `xmd workflow` creates a workflow run with one implicit root Workspace. The same declarative components use contextual
 capabilities in both modes; the workflow host supplies the stronger durability
 and authority boundary.
 
@@ -1082,10 +1081,54 @@ because a live operation that appended nothing would leave the next one to
 append at its position.
 
 Every committed journal event references the current logical Workspace root.
-Only committed event boundaries are checkpoints. A history fork cheaply retains
-or clones the selected root, replays the inherited prefix under a compatible
-modified definition and appends new history under a new run ID. It never rewinds
-external branches, pushes, pull requests or provider state.
+Only committed event boundaries are checkpoints. A history fork copies the
+selected root and the roots the inherited prefix names into the new run, replays
+the inherited prefix under a compatible modified definition and appends new
+history under a new run ID. It never rewinds external branches, pushes, pull
+requests or provider state.
+
+An external effect is judged by its retained record rather than by its type. A
+completed Git-host reconciliation record replays without contacting a provider,
+so a fork inherits it and the remote is mutated once; the record keeps the
+identity it was written under, and the effect at a position the history already
+holds a record at is named by that identity, while every live attempt is named
+by the run performing it. The identity is established when the engine
+admits the run's retained snapshot and is published beside the run, so every
+physical copy of the workflow package reads one answer. What authorizes live
+execution is not that answer: a coroutine that walked away from retained history
+it never consumed performs no Git-host effect for the rest of its run — the
+engine's own account decides it, at every position after the divergence — so
+removing or replacing the transported identities can only make the effect replay
+correctly or refuse. It belongs to the exact retained event it
+came from, at the position that event occupies: records are offered in order,
+a call may take only the next untaken one and only when it asks exactly what
+that record answers, and a request named by a retained record that reaches live
+execution performs nothing rather than performing under another run. A Git-host event that settled into no such record
+leaves the remote's state unestablished, and that checkpoint is not forkable.
+
+A fork inherits the source's normalized props as its baseline; explicit
+generated arguments add to or override them, and the merged set is validated
+against the candidate definition before anything is created. Those props are
+what the compatibility replay runs under, what the run retains, and one of the
+terms a reused fork ID is compared on.
+
+A fork writes two records for itself and inherits the rest. Its own
+`workflow_run` record is what its journal is held to, and its own root import is
+what makes the run a run of the definition the caller named — that record holds
+the document's text, so inheriting the source's would run the source's document
+whatever was asked for. Everything after them travels unchanged, keeping its
+public event ID, its filtered result, its authored position and its Workspace
+root, and carrying the source run and source event it came from. Retention moves
+with the fork: once the fork commits, deleting the source leaves its prefix and
+its selected root exactly as readable as they were.
+
+Compatibility is decided before any storage the host would recognize as the new
+run exists. The candidate replays the inherited prefix against a staged copy of
+the fork — the whole run, assembled where nothing discovers it — and the replay
+ends at the checkpoint, before the first live effect, rather than after it. A
+divergent candidate leaves no fork. After it succeeds, one transaction commits
+the run, its lineage, the inherited prefix, the copied roots, the selected
+current root and the first document execution together.
 
 ## Agent authority and generated XMD
 
@@ -1196,7 +1239,8 @@ after SQLite has restored the prior frontier.
 
 Retained roots, manifests and blobs remain indefinitely. Cloudflare garbage
 collection is not in the production closure and is never invoked. The provider
-exposes no public history selection or fork operation at this layer. Its
+exposes no public history selection at this layer; a fork's root copying is a
+lifecycle transaction above it. Its
 coordinator combines one mutation, immutable-root publication and one filtered
 journal result atomically, and the transaction-bound Files provider is what
 routes a document's `<File>` and `<Glob>` to it. `xmd workflow start` and
@@ -2410,7 +2454,7 @@ Status is measured against main.
 | `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan that requires the record's natural key, inputs and result to describe one publication — and a missing, conflicting or unreadable one fails locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN` then `GITHUB_TOKEN`, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
-| history fork | creates a new run from one compatible checkpoint and retained Workspace root | defined in `specs/workflow-workspace-spec.md`, unbuilt (#368) |
+| history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
 | read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |

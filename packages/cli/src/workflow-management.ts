@@ -97,7 +97,7 @@ export function runWorkflowManagement(
         if (!entries.ok) {
           return refuse(entries.error);
         }
-        write(request.json ? json(entries.value) : renderHistory(entries.value));
+        write(request.json ? json(entries.value) : renderHistory(entries.value, request.forkable));
         return { exitCode: 0 };
       }
       case "cancel": {
@@ -158,6 +158,12 @@ function renderStatus(snapshot: WorkflowLifecycleSnapshot): string {
       `retrieval: revision ${snapshot.retrieval.revision} at ${snapshot.retrieval.updatedAt}`,
     );
   }
+  if (snapshot.lineage !== undefined) {
+    lines.push(
+      `forked from: ${snapshot.lineage.sourceRunId} at ${snapshot.lineage.checkpointEventId} ` +
+        `(Workspace ${snapshot.lineage.checkpointWorkspaceRootId})`,
+    );
+  }
   lines.push(`workspace: ${snapshot.currentWorkspaceRootId}`);
   lines.push(
     snapshot.journalFrontier === undefined
@@ -194,8 +200,19 @@ function renderList(snapshots: readonly WorkflowLifecycleSnapshot[]): string {
   return table(rows);
 }
 
-function renderHistory(entries: readonly WorkflowHistoryEntry[]): string {
-  const rows: string[][] = [["EVENT", "OPERATION", "SOURCE", "RESULT", "WORKSPACE"]];
+/**
+ * The retained events, and — when the caller asked — whether each is a
+ * checkpoint a fork may select.
+ *
+ * `--forkable` adds two columns and removes nothing: a caller reading history
+ * to choose a checkpoint needs to see the events it cannot select as much as
+ * the ones it can. The columns carry stable codes and retained event ids and
+ * nothing else, so an unforkable Agent turn says `agent-state-unavailable`
+ * rather than repeating what the provider said about the session.
+ */
+function renderHistory(entries: readonly WorkflowHistoryEntry[], forkable: boolean): string {
+  const header = ["EVENT", "OPERATION", "SOURCE", "RESULT", "WORKSPACE"];
+  const rows: string[][] = [forkable ? [...header, "FORKABLE", "BLOCKERS"] : header];
   let outcome: WorkflowHistoryEntry | undefined;
 
   for (const entry of entries) {
@@ -205,13 +222,14 @@ function renderHistory(entries: readonly WorkflowHistoryEntry[]): string {
       outcome = entry;
       continue;
     }
-    rows.push([
+    const row = [
       entry.eventId,
       describeOperation(entry.event),
       describeSource(entry),
       describeResult(entry.event),
       entry.workspaceRootId,
-    ]);
+    ];
+    rows.push(forkable ? [...row, ...describeForkability(entry)] : row);
   }
 
   const footer =
@@ -238,6 +256,23 @@ function describeOperation(event: DurableEvent): string {
     return event.description.type;
   }
   return `end of ${event.coroutineId}`;
+}
+
+/**
+ * The two forkability cells: whether this checkpoint may be selected, and the
+ * stable codes that say why not.
+ *
+ * Cumulative through this event, so a blocker introduced earlier is still named
+ * here — a caller choosing a later checkpoint is choosing the whole prefix.
+ */
+function describeForkability(entry: WorkflowHistoryEntry): [string, string] {
+  const { forkability } = entry;
+  return [
+    forkability.forkable ? "yes" : "no",
+    forkability.blockers.length === 0
+      ? "-"
+      : forkability.blockers.map((blocker) => `${blocker.code}@${blocker.eventId}`).join(", "),
+  ];
 }
 
 function describeSource(entry: WorkflowHistoryEntry): string {

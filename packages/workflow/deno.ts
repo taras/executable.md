@@ -32,10 +32,17 @@ export type {
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
+  WorkflowForkRequest,
+  WorkflowForkSelection,
   WorkflowRunCreation,
 } from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
-export { hashRunId, workflowRunLock, workflowRunPath } from "./src/deno/path.ts";
+export {
+  hashRunId,
+  workflowForkStaging,
+  workflowRunLock,
+  workflowRunPath,
+} from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/host.ts";

@@ -68,7 +68,12 @@ import {
 } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import type { DocumentTargetInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
+import type {
+  DocumentTargetInfo,
+  FileRootDocument,
+  PropsSchema,
+  RootDocumentSource,
+} from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
 import {
@@ -517,6 +522,14 @@ interface DocumentConfig {
    * quietly empty the process results a resumed workflow reads back.
    */
   retainProcessOutput: boolean;
+  /**
+   * Whether what this execution renders is kept from the reader.
+   *
+   * A fork's compatibility replay re-renders history that already happened in
+   * another run, and the fork's own execution renders it again a moment later.
+   * The default is that a reader sees what a document produced.
+   */
+  discardOutput?: boolean;
 }
 
 export interface DocumentMode {
@@ -708,9 +721,10 @@ function* runDocument(
   // observability, shown on stderr under --verbose and dropped otherwise.
   // Interactive TTY: write each chunk as it arrives.
   // Piped: collect and write the full output at the end.
+  const discarded = config.discardOutput === true;
   const fullOutput = yield* forEach(function* (chunk: string) {
-    if (valueRoot) {
-      if (verbose) {
+    if (valueRoot || discarded) {
+      if (verbose && !discarded) {
         process.stderr.write(chunk);
       }
       return;
@@ -721,7 +735,7 @@ function* runDocument(
   }, execution.output);
 
   // When piped (not TTY), write the full output at the end.
-  if (!valueRoot && !process.stdout.isTTY) {
+  if (!valueRoot && !discarded && !process.stdout.isTTY) {
     process.stdout.write(fullOutput);
   }
 
@@ -1038,11 +1052,11 @@ interface PropsPhase {
    * positional written after `--` is not in it, and asking the parser again
    * would lose exactly the token the separator was there to protect.
    */
-  workflow?: { action?: string; target?: string; suspension?: string; answer?: string };
+  workflow?: { action?: string; target?: string; argument?: string; value?: string };
   root?: RootDocumentSource;
   bindings: Binding[];
   extraction?: Extraction;
-  propsSchema?: unknown;
+  propsSchema?: PropsSchema;
   declared?: string[];
   /**
    * What the inspected document addresses, described.
@@ -1193,21 +1207,25 @@ function exactRoot(root: RootDocumentSource, target: string | undefined): RootDo
  * The props phase of a `workflow` invocation.
  *
  * `start` reads what the pinned definition declares, so its generated
- * `--props-*` arguments are exactly `xmd run`'s for that document. `resume`
- * declares nothing at all: its props are the ones the run retained, and any
- * spelling that would supply new ones is refused rather than ignored.
+ * `--props-*` arguments are exactly `xmd run`'s for that document. A `fork`
+ * reads the same way, from the definition it names as its third argument: the
+ * fork is a run of that document, so its props are that document's — merged
+ * over what the source retained, which happens later, once the run store can be
+ * read. `resume` declares nothing at all: its props are the ones the run
+ * retained, and any spelling that would supply new ones is refused rather than
+ * ignored.
  */
 function* prepareWorkflowProps(
   rawArgs: string[],
   args: string[],
-  config: { action?: string; target?: string; suspension?: string; answer?: string },
+  config: { action?: string; target?: string; argument?: string; value?: string },
   inlineDocument: string | undefined,
 ): Operation<PropsPhase> {
   const workflow = {
     action: config.action,
     target: config.target,
-    suspension: config.suspension,
-    answer: config.answer,
+    argument: config.argument,
+    value: config.value,
   };
   if (inlineDocument !== undefined) {
     return {
@@ -1234,7 +1252,11 @@ function* prepareWorkflowProps(
   }
 
   const stray = findPropsFlag(args);
-  if (config.action !== "start") {
+  // Only the two actions that name a definition declare properties. A fork
+  // names its own, as its third argument: it is a run of that document, so the
+  // generated arguments are that document's rather than the source run's.
+  const definitionPath = workflowDefinitionPath(config);
+  if (definitionPath === undefined) {
     if (stray) {
       const action = config.action ?? "resume";
       return {
@@ -1249,11 +1271,11 @@ function* prepareWorkflowProps(
     return { args, bindings: [], workflow };
   }
 
-  if (config.target === undefined || config.target === "") {
+  if (definitionPath === "") {
     return { args, bindings: [], workflow };
   }
 
-  const established = yield* establishDefinition(config.target);
+  const established = yield* establishDefinition(definitionPath);
   if (!established.ok) {
     return { args, bindings: [], workflow, error: established.error.message };
   }
@@ -1282,6 +1304,28 @@ function* prepareWorkflowProps(
 }
 
 /**
+ * The document one `workflow` invocation runs, when it names one.
+ *
+ * `start` names it as its only argument and `fork` as its second; every other
+ * action names a run and no definition at all. The empty string is a definition
+ * the caller has not written yet, which the props phase reports later as a
+ * missing argument rather than as an establishment failure.
+ */
+function workflowDefinitionPath(config: {
+  action?: string;
+  target?: string;
+  argument?: string;
+}): string | undefined {
+  if (config.action === "start") {
+    return config.target ?? "";
+  }
+  if (config.action === "fork") {
+    return config.argument ?? "";
+  }
+  return undefined;
+}
+
+/**
  * Whether these arguments select the `workflow` command.
  *
  * Read from argv rather than from a parse, because the answer is needed before
@@ -1301,8 +1345,8 @@ function namesWorkflow(args: string[]): boolean {
  * exists to prevent, since a document never selects a run.
  *
  * Read from the argv the props phase already stripped, so a generated property
- * value is not mistaken for an argument. `--id` is the one option that takes a
- * separated value, and `--` ends option parsing: every token after it is
+ * value is not mistaken for an argument. `--id` and `--at` are the options that
+ * take a separated value, and `--` ends option parsing: every token after it is
  * positional, including one that begins with `-`.
  */
 function extraWorkflowArgument(args: string[], action?: string): string | undefined {
@@ -1310,10 +1354,11 @@ function extraWorkflowArgument(args: string[], action?: string): string | undefi
   if (start === -1) {
     return undefined;
   }
-  // The action is itself the first positional. Every action but `answer` takes
-  // one more; `answer` takes three, because a delivery names the run, the wait
-  // inside it and the value in that order.
-  const allowed = action === "answer" ? 4 : 2;
+  // The action is itself the first positional. Most actions take one more;
+  // `fork` takes two, because it names the run it continues and the document it
+  // continues with; `answer` takes three, because a delivery names the run, the
+  // wait inside it and the value in that order.
+  const allowed = action === "answer" ? 4 : action === "fork" ? 3 : 2;
   let positionals = 0;
   let skip = false;
   let parsingOptions = true;
@@ -1331,7 +1376,7 @@ function extraWorkflowArgument(args: string[], action?: string): string | undefi
       continue;
     }
     if (parsingOptions && arg.startsWith("-")) {
-      skip = arg === "--id";
+      skip = arg === "--id" || arg === "--at";
       continue;
     }
     positionals += 1;
@@ -1372,14 +1417,14 @@ function separateArgs(args: string[]): SeparatedArgs {
  * separator it is positional because of where it is.
  */
 function workflowPositionals(
-  config: { action?: string; target?: string; suspension?: string; answer?: string },
+  config: { action?: string; target?: string; argument?: string; value?: string },
   tail: string[],
-): { action?: string; target?: string; suspension?: string; answer?: string } {
-  const named = [config.action, config.target, config.suspension, config.answer].filter(
-    (value) => value !== undefined,
+): { action?: string; target?: string; argument?: string; value?: string } {
+  const named = [config.action, config.target, config.argument, config.value].filter(
+    (written) => written !== undefined,
   );
-  const [action, target, suspension, answer] = [...named, ...tail];
-  return { action, target, suspension, answer };
+  const [action, target, argument, value] = [...named, ...tail];
+  return { action, target, argument, value };
 }
 
 const COMMAND_NAMES = ["run", "test", "test-agent", "workflow"];
@@ -1690,7 +1735,14 @@ function* dispatch(
       const start: WorkflowStart | undefined =
         propsPhase.established === undefined
           ? undefined
-          : { established: propsPhase.established, props: props.value ?? {} };
+          : {
+              established: propsPhase.established,
+              props: props.value ?? {},
+              // What the *candidate* declares. A fork merges the properties its
+              // source retained under its own, and the result is held to the
+              // document that is about to run.
+              propsSchema: propsPhase.propsSchema ?? {},
+            };
       announceSecretDetection(config.secretDetection);
       const outcome = yield* runWorkflow(request, start, workflowHost, (execution) =>
         execution.around(
@@ -1713,6 +1765,9 @@ function* dispatch(
               // It names no `--journal`, which is exactly why this is stated
               // here and never derived from that pathname.
               retainProcessOutput: true,
+              // A fork's compatibility replay renders history another run
+              // already produced; the fork's own execution renders it again.
+              ...(execution.discardOutput === true ? { discardOutput: true } : {}),
             },
             { testing: false, props: execution.props, installations: execution.installations },
             // The workflow authority boundary sits exactly where a host

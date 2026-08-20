@@ -144,6 +144,8 @@ function refusingHost(root: string, refuse: "settle" | "none", attempted: string
       const transitions = yield* host.useRunHost();
       return {
         begin: transitions.begin,
+        fork: transitions.fork,
+        stageFork: transitions.stageFork,
         *settle(executorLock, completion) {
           attempted.push(`settle:${completion.status}`);
           if (refuse === "settle") {
@@ -275,14 +277,22 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     expect(executions).toEqual(1);
     const execution = seen[0];
     expect(execution).toBeDefined();
-    // Exactly one installation, and it carries both halves of the contract:
-    // the mandatory retained-history admission core applies inside its own
-    // journal read, and the durable preparation core invokes inside the
-    // durable root.
-    expect(execution?.installations.length).toEqual(1);
-    const installation = execution?.installations[0];
-    expect(installation?.admissions?.length).toEqual(1);
-    expect(typeof installation?.prepare).toEqual("function");
+    // The run's own installation carries both halves of the contract: the
+    // mandatory retained-history admission core applies inside its own journal
+    // read, and the durable preparation core invokes inside the durable root.
+    // It is the only one that prepares — the others contribute admissions and
+    // nothing that runs inside the durable root.
+    const preparing = (execution?.installations ?? []).filter(
+      (candidate) => typeof candidate.prepare === "function",
+    );
+    expect(preparing.length).toEqual(1);
+    expect(preparing[0]?.admissions?.length).toEqual(1);
+    // Every installation this run was given contributes an admission, and none
+    // of them is a second execution: one `executeInstalled()`, not one per
+    // phase.
+    for (const candidate of execution?.installations ?? []) {
+      expect(candidate.admissions?.length).toEqual(1);
+    }
   });
 
   it("WFI2: a completed run is given no Workspace to attach", function* () {

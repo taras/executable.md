@@ -52,8 +52,17 @@ import type {
   WorkflowBeginRequest,
   WorkflowExecutionTransitions,
   WorkflowExecutionBegun,
+  WorkflowForkRequest,
 } from "../lifecycle/execution.ts";
-import { readEventSource, type WorkflowHistoryEntry } from "../lifecycle/history.ts";
+import { forkRunRecordEvent } from "../fork.ts";
+import { readForkSource, type ForkSourceSnapshot } from "./fork-source.ts";
+import { readForkLineage, type ForkHeadEvents } from "./fork-write.ts";
+import { classifyForkability, type Forkability } from "../lifecycle/forkability.ts";
+import {
+  readEventSource,
+  type InheritedEventProvenance,
+  type WorkflowHistoryEntry,
+} from "../lifecycle/history.ts";
 import {
   WorkflowRequestError,
   WorkflowRunIdMismatchError,
@@ -61,6 +70,7 @@ import {
   WorkflowRunNotFoundError,
   WorkflowStorageError,
 } from "../storage/errors.ts";
+import type { WorkflowRunDatabase } from "../storage/api.ts";
 import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
 import {
   createExecutorLockRegistry,
@@ -68,8 +78,14 @@ import {
   type ExecutorLockRegistry,
 } from "./executor.ts";
 import { readJournalEntries } from "./journal.ts";
-import { beginExecution, cancelRun, settleExecution } from "./transitions.ts";
-import { workflowRunPath } from "./path.ts";
+import {
+  beginExecution,
+  cancelRun,
+  forkExecution,
+  settleExecution,
+  stageFork,
+} from "./transitions.ts";
+import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
@@ -151,6 +167,12 @@ export function* installWorkflowLifecycle(
     begin(executorLock, request) {
       return beginRun(root, connections, executors, executorLock, request);
     },
+    fork(executorLock, request) {
+      return forkRun(root, connections, executors, executorLock, request);
+    },
+    stageFork(request) {
+      return stageForkRun(root, connections, request);
+    },
     *settle(executorLock, completion) {
       // Authorized before a connection exists: the path comes from the hold the
       // provider issued, never from what the lock says about itself.
@@ -203,6 +225,146 @@ function* beginRun(
     return Err(begun.value.reason);
   }
   return Ok(begun.value);
+}
+
+/**
+ * Admit one fork, and begin the execution that continues it.
+ *
+ * The source is read first, read-only, on a connection of its own and outside
+ * the execution pool — the same physical path inspection uses, for the same
+ * reason: reading a run in order to fork it is still reading it, and a fork
+ * never takes the source's executor lock or writes a row of it.
+ *
+ * A destination the caller's request never brought into being is left absent.
+ * A rolled-back transaction leaves an empty SQLite file behind, and an empty
+ * file at a run's calculated path is a candidate `list` would refuse — so a
+ * fork that failed before its commit removes the file it created.
+ */
+function* forkRun(
+  root: string,
+  connections: WorkflowRunConnections,
+  executors: ExecutorLockRegistry,
+  executorLock: ExecutorLock,
+  request: WorkflowForkRequest,
+): Operation<Result<WorkflowExecutionBegun>> {
+  const checked = checkRunId(request.runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  const source = checkRunId(request.selection.sourceRunId);
+  if (!source.ok) {
+    return source;
+  }
+  const authorized = authorizeHold(executors, executorLock, checked.value);
+  if (!authorized.ok) {
+    return authorized;
+  }
+  const hold = authorized.value;
+
+  const snapshot = yield* readSource(root, source.value, request.selection.checkpointEventId);
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+
+  const path = workflowRunPath(root, hold.runId);
+  const existed = yield* exists(path);
+  const forked = yield* forkExecution(
+    connections,
+    path,
+    hold,
+    () => executors.authorize(executorLock, checked.value),
+    request,
+    snapshot.value,
+    forkHead(hold.runId, request),
+  );
+
+  if (forked.ok) {
+    const outcome = forked.value;
+    if (outcome.kind === "begun") {
+      return Ok(outcome);
+    }
+    yield* discardEmptyDestination(connections, path, existed);
+    return Err(outcome.reason);
+  }
+  yield* discardEmptyDestination(connections, path, existed);
+  return forked;
+}
+
+/**
+ * Leave nothing behind at a destination this request brought into being.
+ *
+ * A rolled-back transaction leaves an empty SQLite file, and an empty file at a
+ * run's calculated path is a candidate `list` would refuse — so a fork that
+ * failed before its commit removes what opening the destination created.
+ */
+function* discardEmptyDestination(
+  connections: WorkflowRunConnections,
+  path: string,
+  existed: boolean,
+): Operation<void> {
+  if (existed) {
+    return;
+  }
+  connections.close(path);
+  if (yield* exists(path)) {
+    yield* rm(path);
+  }
+}
+
+/**
+ * The same fork, assembled where nothing recognizes it as a run.
+ *
+ * The source is read on the same read-only terms, and the staging file is this
+ * scope's: it is created here and removed when the caller's scope ends,
+ * whatever the replay it exists for decides.
+ */
+function* stageForkRun(
+  root: string,
+  connections: WorkflowRunConnections,
+  request: WorkflowForkRequest,
+): Operation<Result<WorkflowRunDatabase>> {
+  const checked = checkRunId(request.runId);
+  if (!checked.ok) {
+    return checked;
+  }
+  const source = checkRunId(request.selection.sourceRunId);
+  if (!source.ok) {
+    return source;
+  }
+  const snapshot = yield* readSource(root, source.value, request.selection.checkpointEventId);
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+  return yield* stageFork(
+    connections,
+    workflowForkStaging(root, checked.value),
+    request,
+    snapshot.value,
+    forkHead(checked.value, request),
+  );
+}
+
+/** The two records a fork writes for itself, wherever it is being assembled. */
+function forkHead(runId: string, request: WorkflowForkRequest): ForkHeadEvents {
+  return {
+    runRecord: forkRunRecordEvent({
+      runId,
+      base: request.creation.base,
+      pinnedCommit: request.creation.definition.objectId,
+    }),
+    rootImport: request.rootImport,
+  };
+}
+
+/** The committed source prefix, read exactly the way inspection reads a run. */
+function* readSource(
+  root: string,
+  sourceRunId: string,
+  checkpointEventId: string,
+): Operation<Result<ForkSourceSnapshot>> {
+  return yield* atRun(root, sourceRunId, (database, _record, path) =>
+    readForkSource(database, path, sourceRunId, checkpointEventId),
+  );
 }
 
 /**
@@ -340,18 +502,88 @@ function* runHistory(
   root: string,
   runId: string,
 ): Operation<Result<readonly WorkflowHistoryEntry[]>> {
-  return yield* atRun(root, runId, (database) =>
-    Object.freeze(
-      readJournalEntries(database).map((entry) =>
+  return yield* atRun(root, runId, (database) => {
+    const entries = readJournalEntries(database);
+    // Classified against the roots this database still holds, read in the same
+    // snapshot as the events. A root that was never retained and a root deleted
+    // since are the same fact to a fork: it cannot be given that Workspace.
+    const forkability = classifyForkability(entries, { retainedRoots: retainedRoots(database) });
+    const inherited = readEventProvenance(database);
+    return Object.freeze(
+      entries.map((entry, index) =>
         Object.freeze({
           eventId: entry.eventId,
           event: entry.event,
           workspaceRootId: entry.workspaceRootId,
           ...sourceOf(entry.event),
+          forkability: forkability[index] ?? UNCLASSIFIED,
+          ...provenanceOf(inherited, entry.eventId),
         }),
       ),
-    ),
-  );
+    );
+  });
+}
+
+/**
+ * The answer for an event the classification did not reach.
+ *
+ * It never happens — one forkability is produced per event — and reporting a
+ * forkable checkpoint if it ever did would offer a fork a prefix nothing
+ * examined.
+ */
+const UNCLASSIFIED: Forkability = Object.freeze({
+  forkable: false,
+  blockers: Object.freeze([Object.freeze({ code: "unsupported-effect" as const, eventId: "" })]),
+});
+
+function provenanceOf(
+  inherited: ReadonlyMap<string, InheritedEventProvenance>,
+  eventId: string,
+): Partial<WorkflowHistoryEntry> {
+  const provenance = inherited.get(eventId);
+  return provenance === undefined ? {} : { inherited: provenance };
+}
+
+/**
+ * Which rows this run inherited, and from where.
+ *
+ * Only a fork has any. The rows a run wrote itself are absent from this table,
+ * and absence is what marks them as its own.
+ */
+function readEventProvenance(
+  database: DatabaseSync,
+): ReadonlyMap<string, InheritedEventProvenance> {
+  const provenance = new Map<string, InheritedEventProvenance>();
+  for (const row of reading(
+    database,
+    "SELECT event_id, source_run_id, source_event_id FROM journal_event_provenance",
+  ).all()) {
+    const eventId = row["event_id"];
+    const sourceRunId = row["source_run_id"];
+    const sourceEventId = row["source_event_id"];
+    if (
+      typeof eventId !== "string" ||
+      typeof sourceRunId !== "string" ||
+      typeof sourceEventId !== "string"
+    ) {
+      throw new WorkflowRequestError(
+        "a retained inherited-event provenance row does not describe an inherited event.",
+      );
+    }
+    provenance.set(eventId, Object.freeze({ sourceRunId, sourceEventId }));
+  }
+  return provenance;
+}
+
+export function retainedRoots(database: DatabaseSync): ReadonlySet<string> {
+  const roots = new Set<string>();
+  for (const row of reading(database, "SELECT root_id FROM workspace_roots").all()) {
+    const rootId = row["root_id"];
+    if (typeof rootId === "string") {
+      roots.add(rootId);
+    }
+  }
+  return roots;
 }
 
 function sourceOf(event: WorkflowHistoryEntry["event"]): Partial<WorkflowHistoryEntry> {
@@ -523,7 +755,13 @@ function snapshot(
     executions: Object.freeze(executions),
     ...frontier(database, path),
     currentWorkspaceRootId: currentRoot(database, path),
+    ...lineageOf(database),
   });
+}
+
+function lineageOf(database: DatabaseSync): Pick<WorkflowLifecycleSnapshot, "lineage"> {
+  const lineage = readForkLineage(database);
+  return lineage === undefined ? {} : { lineage };
 }
 
 function frontier(

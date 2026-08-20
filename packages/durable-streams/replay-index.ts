@@ -116,6 +116,26 @@ export class ReplayIndex {
     this.cursors.set(coroutineId, cursor + 1);
   }
 
+  /**
+   * Whether this coroutine walked away from retained history it never consumed.
+   *
+   * True once replay has been disabled for it while entries it had not reached
+   * are still there — which is what a run-live decision leaves behind. It stays
+   * true for every later operation in that coroutine, because the history is
+   * still unconsumed however far past it execution has gone.
+   *
+   * An effect whose live work reaches a service this journal does not enclose
+   * reads it to decide whether running live here is something it may do at all.
+   * It is the index's own account, so nothing a document supplies takes part.
+   */
+  abandonedHistory(coroutineId: CoroutineId): boolean {
+    if (!this.disabled.has(coroutineId)) {
+      return false;
+    }
+    const list = this.yields.get(coroutineId);
+    return list !== undefined && (this.cursors.get(coroutineId) ?? 0) < list.length;
+  }
+
   /** Returns the current cursor position for this coroutine. */
   getCursor(coroutineId: CoroutineId): number {
     return this.cursors.get(coroutineId) ?? 0;

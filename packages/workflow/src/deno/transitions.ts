@@ -25,9 +25,16 @@
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { Err, Ok, type Operation, type Result, scoped } from "effection";
-import { exists } from "@effectionx/fs";
-import type { WorkflowBeginRequest, WorkflowExecutionBegun } from "../lifecycle/execution.ts";
+import { ensure, Err, Ok, type Operation, resource, type Result, scoped } from "effection";
+import { exists, rm } from "@effectionx/fs";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import type {
+  WorkflowBeginRequest,
+  WorkflowExecutionBegun,
+  WorkflowForkRequest,
+  WorkflowRunCreation,
+} from "../lifecycle/execution.ts";
+import type { WorkflowRunDatabase } from "../storage/api.ts";
 import { conflictingFields } from "../storage/compatibility.ts";
 import { definitionToJson } from "../storage/definition.ts";
 import {
@@ -51,6 +58,8 @@ import { openWorkflowRunDatabase, readRunRow } from "./database.ts";
 import type { ExecutorLockHold } from "./executor.ts";
 import { reading } from "./reading.ts";
 import { readJournalEntries } from "./journal.ts";
+import type { ForkSourceSnapshot } from "./fork-source.ts";
+import { readForkLineage, writeForkInheritance, type ForkHeadEvents } from "./fork-write.ts";
 import { readDocumentExecution, readRetrieval, stopReasonColumns } from "./rows.ts";
 import {
   initializeSchema,
@@ -261,6 +270,200 @@ function beginOnce(
 }
 
 /**
+ * Admit one fork and begin its first execution, in one transaction.
+ *
+ * The source was read before this opened, into an immutable snapshot: the
+ * source's executor lock is never taken and no statement here touches it. What
+ * commits is the fork's schema, its immutable run, the copied Workspace content
+ * and roots, the restored checkpoint Workspace, the inherited journal prefix
+ * with its provenance, the lineage and the first execution — all of it, or a
+ * destination that holds nothing.
+ *
+ * A fork id already in use is compatible only when every term of the fork's
+ * identity agrees: the source run, the checkpoint, the definition including its
+ * component bundle and pinned commit, the base and the normalized props. When
+ * they do, this is the same fork again and it continues like any other run.
+ */
+export function* forkExecution(
+  connections: WorkflowRunConnections,
+  path: string,
+  hold: ExecutorLockHold,
+  authorize: () => ExecutorLockHold,
+  request: WorkflowForkRequest,
+  snapshot: ForkSourceSnapshot,
+  head: ForkHeadEvents,
+): Operation<Result<BeginOutcome>> {
+  const connection = connections.at(path);
+
+  const outcome = yield* scoped(function* (): Operation<Result<BegunRows | Refused>> {
+    yield* connection.lock.hold();
+    return inLifecycleTransaction(connection, path, (transaction) =>
+      forkOnce(connection, path, sameHold(authorize, hold), request, snapshot, head, transaction),
+    );
+  });
+  if (!outcome.ok) {
+    // The transaction rolled back, so nothing was forked after all.
+    hold.execution = undefined;
+    return outcome;
+  }
+  if (outcome.value.kind === "refused") {
+    return Ok(outcome.value);
+  }
+
+  const { record, execution, replay, closed } = outcome.value;
+  const database = yield* openWorkflowRunDatabase({ connection, connections, record });
+  return Ok({
+    kind: "begun",
+    database,
+    record,
+    execution,
+    replay,
+    ...(closed === undefined ? {} : { closed }),
+  });
+}
+
+/**
+ * Build the whole fork somewhere nothing recognizes it as a run, and hand back
+ * its open database.
+ *
+ * A compatibility replay needs the fork's own Workspace: a `<File>` resolves
+ * through the run's filesystem, and a replay run without one produces effects
+ * of a different kind entirely and diverges for a reason that has nothing to do
+ * with the candidate. So the fork is assembled in full at a staging path first,
+ * replayed there, and thrown away — and only then, if it proved compatible, is
+ * the same assembly committed at the run's own path.
+ *
+ * The staging file belongs to this operation's scope. Whatever happens, it goes
+ * when that scope ends, and one left by an interrupted attempt is replaced
+ * rather than continued.
+ */
+export function stageFork(
+  connections: WorkflowRunConnections,
+  path: string,
+  request: WorkflowForkRequest,
+  snapshot: ForkSourceSnapshot,
+  head: ForkHeadEvents,
+): Operation<Result<WorkflowRunDatabase>> {
+  return resource(function* (provide) {
+    yield* ensure(function* () {
+      connections.close(path);
+      yield* rm(path, { force: true });
+    });
+    // Scratch, so a leftover is replaced rather than opened: what is there was
+    // left by an attempt that did not finish, and it describes nothing.
+    yield* rm(path, { force: true });
+
+    const connection = connections.at(path);
+    const built = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
+      yield* connection.lock.hold();
+      return inLifecycleTransaction(connection, path, (transaction) => {
+        const record = createRun(connection, path, request.runId, request.creation);
+        writeForkInheritance(connection, transaction, snapshot, head);
+        void record;
+        return readRunRow(connection.database, path);
+      });
+    });
+    if (!built.ok) {
+      yield* provide(built);
+      return;
+    }
+    const database = yield* openWorkflowRunDatabase({
+      connection,
+      connections,
+      record: built.value,
+    });
+    yield* provide(Ok(database));
+  });
+}
+
+function forkOnce(
+  connection: RunConnection,
+  path: string,
+  hold: ExecutorLockHold,
+  request: WorkflowForkRequest,
+  snapshot: ForkSourceSnapshot,
+  head: ForkHeadEvents,
+  transaction: RunTransaction,
+): BegunRows | Refused {
+  if (hold.execution !== undefined) {
+    throw new WorkflowRequestError(
+      "this executor lock has already begun a document execution. One acquisition begins one.",
+    );
+  }
+
+  const { database } = connection;
+  const resumed: WorkflowBeginRequest = {
+    runId: hold.runId,
+    action: "resume",
+    creation: request.creation,
+  };
+
+  if (!isUninitialized(database, path)) {
+    // The id is taken. Whether it is taken by *this* fork is the only question,
+    // and every term of the answer is named separately: a caller who changed
+    // the checkpoint learns that, not that "the run differs".
+    verifySchema(database, path, connection.dofs);
+    const stored = readRunRow(database, path);
+    if (stored.runId !== hold.runId) {
+      throw new WorkflowRunIdMismatchError(hold.runId, path);
+    }
+    const differing = forkConflicts(database, stored, hold.runId, request);
+    if (differing.length > 0) {
+      throw new WorkflowRunConflictError(hold.runId, differing);
+    }
+    return beginOnce(connection, path, hold, resumed);
+  }
+
+  const record = create(connection, path, hold, {
+    runId: hold.runId,
+    action: "start",
+    creation: request.creation,
+  });
+  void record;
+  writeForkInheritance(connection, transaction, snapshot, head);
+  const execution = insertExecution(database, path);
+  hold.execution = execution.executionId;
+  return { kind: "begun", record: readRunRow(database, path), execution, replay: false };
+}
+
+/**
+ * Which terms of a stored fork's identity this request disagrees with.
+ *
+ * The lineage terms come first because they are the ones a fork adds: a run
+ * stored under this id that is not a fork at all disagrees about its source,
+ * and saying so is more use than reporting the definition it also happens to
+ * differ in.
+ */
+function forkConflicts(
+  database: DatabaseSync,
+  stored: WorkflowRunRecord,
+  runId: string,
+  request: WorkflowForkRequest,
+): string[] {
+  const fields: string[] = [];
+  const lineage = readForkLineage(database);
+  if (lineage === undefined) {
+    fields.push("source run");
+  } else {
+    if (lineage.sourceRunId !== request.selection.sourceRunId) {
+      fields.push("source run");
+    }
+    if (lineage.checkpointEventId !== request.selection.checkpointEventId) {
+      fields.push("checkpoint");
+    }
+  }
+  fields.push(
+    ...conflictingFields(stored, {
+      runId,
+      definition: request.creation.definition,
+      base: request.creation.base,
+      props: request.creation.props,
+    }),
+  );
+  return fields;
+}
+
+/**
  * Finish this execution and publish what the run became, together.
  *
  * A status line says what was retained, so the record that says the execution
@@ -364,13 +567,23 @@ function create(
   if (creation === undefined) {
     throw new WorkflowRunNotFoundError(hold.runId);
   }
+  return createRun(connection, path, hold.runId, creation);
+}
+
+/** The schema, the immutable run and its retrieval metadata, in one write. */
+function createRun(
+  connection: RunConnection,
+  path: string,
+  runId: string,
+  creation: WorkflowRunCreation,
+): WorkflowRunRecord {
   const { database } = connection;
   const stamp = new Date().toISOString();
   initializeSchema(database, connection.dofs, () => {
     database
       .prepare(INSERT_RUN)
       .run(
-        hold.runId,
+        runId,
         canonicalJson(definitionToJson(creation.definition)),
         creation.base,
         canonicalJson(creation.props),
@@ -607,7 +820,7 @@ export function readRetrievalRow(database: DatabaseSync) {
 function inLifecycleTransaction<T>(
   connection: RunConnection,
   path: string,
-  body: () => T,
+  body: (transaction: RunTransaction) => T,
 ): Result<T> {
   const { database } = connection;
   try {
@@ -628,7 +841,7 @@ function inLifecycleTransaction<T>(
   }
 
   try {
-    const value = body();
+    const value = body(transaction);
     connection.validateTransaction(transaction);
     connection.finishTransaction(transaction);
     database.exec("COMMIT");

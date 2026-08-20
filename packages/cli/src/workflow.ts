@@ -13,10 +13,11 @@
  * ```sh
  * xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
  * xmd workflow resume <run-id>
+ * xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
  * xmd workflow answer [--no-secret-detection] <run-id> <suspension-id> <json>
  * xmd workflow status <run-id> [--json]
  * xmd workflow list [--status=<status>] [--json]
- * xmd workflow history <run-id> [--json]
+ * xmd workflow history <run-id> [--forkable] [--json]
  * xmd workflow cancel <run-id>
  * xmd workflow delete <run-id>
  * ```
@@ -25,6 +26,14 @@
  * wait a suspended run stopped at, and starts nothing. The run continues when
  * somebody resumes it, which is the operation that publishes the answer and
  * gives it to the document.
+ *
+ * `fork` names both: the run it continues and the document it continues with.
+ * It is the one action that changes a definition without abandoning history —
+ * a new immutable run identity whose journal begins as somebody else's, and
+ * whose first live effect happens at the checkpoint the caller selected. Its
+ * props begin as the source's, because a corrected definition is still a run of
+ * the same procedure and restating every property would make forking a
+ * transcription exercise.
  *
  * `start` names a document; every other action names a run. That asymmetry is
  * the whole lifecycle rule: a document path locates a definition and never
@@ -57,8 +66,9 @@ import { Err, Ok, ensure, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { field, object, cli } from "configliere";
 import { z } from "zod";
-import type { DurableStream, Json } from "@executablemd/durable-streams";
-import { retainedSource } from "@executablemd/core";
+import type { DurableEvent, DurableStream, Json } from "@executablemd/durable-streams";
+import { retainedSource, validateProps } from "@executablemd/core";
+import type { PropsSchema } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
 import {
   definitionComponents,
@@ -69,16 +79,20 @@ import {
 } from "@executablemd/workflow";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
+  ExecutorLock,
   WorkflowRunDatabase,
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
 import type {
+  WorkflowExecutionBegun,
   WorkflowExecutionTransitions,
   WorkflowRunCreation,
 } from "@executablemd/workflow/deno";
 import type { SuspensionControllerOptions, SuspensionNotice } from "@executablemd/workflow/deno";
 import { SUSPENSION_REQUEST } from "@executablemd/workflow";
+import { describeError } from "./props.ts";
+import { preflightFork } from "./workflow-fork.ts";
 import { loadRetainedDefinition, supportedRootDocument } from "./workflow-definition.ts";
 import type { EstablishedDefinition, RetainedSources } from "./workflow-definition.ts";
 
@@ -164,6 +178,7 @@ const HOST_ORPHANED_CODE = "executor-disappeared";
 export const WORKFLOW_ACTIONS = [
   "start",
   "resume",
+  "fork",
   "answer",
   "status",
   "list",
@@ -184,16 +199,17 @@ const EXECUTION_OPTIONS = [
   "--no-secret-detection",
 ];
 
-/** What each action accepts, beyond `start`'s generated `--props-*` arguments. */
+/** What each action accepts, beyond the generated `--props-*` arguments. */
 const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.freeze({
   start: [...EXECUTION_OPTIONS, "--id"],
   resume: EXECUTION_OPTIONS,
+  fork: [...EXECUTION_OPTIONS, "--id", "--at"],
   // A delivery writes retained state, so it crosses the same gate a durable
   // event crosses. It runs no document, so nothing else about executing one
   // applies to it.
   answer: ["--secret-detection", "--no-secret-detection"],
   status: ["--json"],
-  history: ["--json"],
+  history: ["--json", "--forkable"],
   list: ["--json", "--status"],
   cancel: [],
   delete: [],
@@ -201,23 +217,29 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
 
 export const workflowConfig = object({
   action: {
-    description: "start, resume, status, list, history, cancel or delete",
+    description: "start, resume, fork, answer, status, list, history, cancel or delete",
     ...field(z.string().optional(), cli.argument()),
   },
   target: {
-    description: "markdown definition to start, or the run id every other action addresses",
+    description:
+      "markdown definition to start, the run a fork continues, or the run id every other " +
+      "action addresses",
     ...field(z.string().optional(), cli.argument()),
   },
-  suspension: {
-    description: "the wait an answer is delivered to (answer only)",
+  argument: {
+    description: "the definition a fork runs, or the wait an answer is delivered to",
     ...field(z.string().optional(), cli.argument()),
   },
-  answer: {
+  value: {
     description: "the answer itself, as one JSON value (answer only)",
     ...field(z.string().optional(), cli.argument()),
   },
   id: {
-    description: "run id to create or address (start only; generated when absent)",
+    description: "run id to create or address (start and fork only; generated when absent)",
+    ...field(z.string().optional()),
+  },
+  at: {
+    description: "the retained event a fork continues from (fork only)",
     ...field(z.string().optional()),
   },
   verbose: {
@@ -239,6 +261,10 @@ export const workflowConfig = object({
     description: "write the inspection result as JSON (status, list and history only)",
     ...field(z.boolean(), field.default(false)),
   },
+  forkable: {
+    description: "add each event's forkability to the history (history only)",
+    ...field(z.boolean(), field.default(false)),
+  },
   status: {
     description: "list only runs retaining this status",
     ...field(z.string().optional()),
@@ -247,12 +273,17 @@ export const workflowConfig = object({
 
 /** What one execution invocation asks for, after the grammar has been read. */
 export interface WorkflowRequest {
-  readonly action: "start" | "resume";
+  readonly action: "start" | "resume" | "fork";
+  /** The definition a `start` runs, or the run every other action addresses. */
   readonly target: string;
   readonly id: string | undefined;
   readonly verbose: boolean;
   readonly raw: boolean;
   readonly secretDetection: boolean;
+  /** The retained event a fork continues from. Present exactly for `fork`. */
+  readonly at?: string;
+  /** The definition a fork runs. Present exactly for `fork`. */
+  readonly definition?: string;
 }
 
 /**
@@ -265,7 +296,14 @@ export interface WorkflowRequest {
  * grammar refuses.
  */
 export type WorkflowManagementRequest =
-  | { readonly action: "status" | "history"; readonly runId: string; readonly json: boolean }
+  | { readonly action: "status"; readonly runId: string; readonly json: boolean }
+  | {
+      readonly action: "history";
+      readonly runId: string;
+      readonly json: boolean;
+      /** Whether human output carries the forkability columns. JSON always does. */
+      readonly forkable: boolean;
+    }
   | {
       readonly action: "list";
       readonly status: WorkflowRunStatus | undefined;
@@ -299,6 +337,14 @@ export interface WorkflowExecution {
    * hook records the run inside the durable root before the root import.
    */
   readonly installations: readonly ExecutionInstallation[];
+  /**
+   * Whether what this execution renders is kept from the reader.
+   *
+   * A fork's compatibility replay re-renders history another run already
+   * produced, and the fork's own execution renders it again a moment later.
+   * Showing both would print the same document twice for one command.
+   */
+  readonly discardOutput?: boolean;
   /** Wraps the whole document execution, or passes it through on completed replay. */
   around<T>(operation: Operation<T>): Operation<T>;
 }
@@ -376,13 +422,15 @@ export function parseWorkflowRequest(
   config: {
     action?: string;
     target?: string;
-    suspension?: string;
-    answer?: string;
+    argument?: string;
+    value?: string;
     id?: string;
+    at?: string;
     verbose: boolean;
     raw: boolean;
     secretDetection: boolean;
     json: boolean;
+    forkable: boolean;
     status?: string;
   },
   args: readonly string[] = [],
@@ -410,18 +458,12 @@ export function parseWorkflowRequest(
     return Err(new Error(refusal));
   }
 
-  if (action !== "start" && action !== "resume") {
+  if (action !== "start" && action !== "resume" && action !== "fork") {
     return manageRequest(action, config);
   }
 
   if (target === undefined || target === "") {
-    return Err(
-      new Error(
-        action === "start"
-          ? "xmd workflow start requires a markdown definition — `xmd workflow start <document.md>`"
-          : "xmd workflow resume requires a run id — `xmd workflow resume <run-id>`",
-      ),
-    );
+    return Err(new Error(missingTarget(action)));
   }
   if (action === "resume" && config.id !== undefined) {
     return Err(
@@ -431,27 +473,68 @@ export function parseWorkflowRequest(
       ),
     );
   }
+  const execution = {
+    target,
+    id: config.id,
+    verbose: config.verbose,
+    raw: config.raw,
+    secretDetection: config.secretDetection,
+  };
+  if (action !== "fork") {
+    return Ok({ kind: "execute", request: { action, ...execution } });
+  }
+
+  // A fork names three things and every one of them is required: the run it
+  // continues, the committed event it continues from, and the document it
+  // continues with. Defaulting any of them would fork something the caller did
+  // not name.
+  if (config.at === undefined || config.at === "") {
+    return Err(
+      new Error(
+        "xmd workflow fork requires the checkpoint it continues from — " +
+          "`xmd workflow fork <source-run-id> --at=<event-id> <document.md>`. " +
+          "`xmd workflow history <source-run-id> --forkable` lists the events it may select.",
+      ),
+    );
+  }
+  const definition = config.argument;
+  if (definition === undefined || definition === "") {
+    return Err(
+      new Error(
+        "xmd workflow fork requires the markdown definition it runs — " +
+          "`xmd workflow fork <source-run-id> --at=<event-id> <document.md>`",
+      ),
+    );
+  }
   return Ok({
     kind: "execute",
-    request: {
-      action,
-      target,
-      id: config.id,
-      verbose: config.verbose,
-      raw: config.raw,
-      secretDetection: config.secretDetection,
-    },
+    request: { action, ...execution, at: config.at, definition },
   });
+}
+
+function missingTarget(action: string): string {
+  if (action === "start") {
+    return "xmd workflow start requires a markdown definition — `xmd workflow start <document.md>`";
+  }
+  if (action === "fork") {
+    return (
+      "xmd workflow fork requires the run it continues — " +
+      "`xmd workflow fork <source-run-id> --at=<event-id> <document.md>`"
+    );
+  }
+  return "xmd workflow resume requires a run id — `xmd workflow resume <run-id>`";
 }
 
 function manageRequest(
   action: string,
   config: {
     target?: string;
-    suspension?: string;
-    answer?: string;
+    argument?: string;
+    value?: string;
     id?: string;
+    at?: string;
     json: boolean;
+    forkable: boolean;
     status?: string;
     secretDetection: boolean;
   },
@@ -459,8 +542,8 @@ function manageRequest(
   if (config.id !== undefined) {
     return Err(
       new Error(
-        `unrecognized option for xmd workflow ${action}: --id — only a start names the run it ` +
-          "creates",
+        `unrecognized option for xmd workflow ${action}: --id — only a start and a fork name ` +
+          "the run they create",
       ),
     );
   }
@@ -511,8 +594,14 @@ function manageRequest(
   if (action === "cancel" || action === "delete") {
     return Ok({ kind: "manage", request: { action, runId } });
   }
-  if (action === "status" || action === "history") {
+  if (action === "status") {
     return Ok({ kind: "manage", request: { action, runId, json: config.json } });
+  }
+  if (action === "history") {
+    return Ok({
+      kind: "manage",
+      request: { action, runId, json: config.json, forkable: config.forkable },
+    });
   }
   // Reached only if `WORKFLOW_ACTIONS` names an action this function does not,
   // which is a disagreement inside the grammar rather than a caller's mistake.
@@ -528,9 +617,9 @@ function manageRequest(
  */
 function answerRequest(
   runId: string,
-  config: { suspension?: string; answer?: string; secretDetection: boolean },
+  config: { argument?: string; value?: string; secretDetection: boolean },
 ): Result<WorkflowCommand> {
-  const suspensionId = config.suspension;
+  const suspensionId = config.argument;
   if (suspensionId === undefined || suspensionId === "") {
     return Err(
       new Error(
@@ -540,7 +629,7 @@ function answerRequest(
       ),
     );
   }
-  const written = config.answer;
+  const written = config.value;
   if (written === undefined || written === "") {
     return Err(
       new Error(
@@ -616,7 +705,7 @@ function optionRefusal(action: string, args: readonly string[]): string | undefi
     if (applicable.includes(name)) {
       continue;
     }
-    if (action === "start" && name.startsWith("--props-")) {
+    if ((action === "start" || action === "fork") && name.startsWith("--props-")) {
       continue;
     }
     return (
@@ -627,19 +716,35 @@ function optionRefusal(action: string, args: readonly string[]): string | undefi
   return undefined;
 }
 
-/** What the props phase already established for a `start`. */
+/** What the props phase already established for a `start` or a `fork`. */
 export interface WorkflowStart {
   readonly established: EstablishedDefinition;
+  /**
+   * The properties this invocation supplied, and only those.
+   *
+   * A value a schema default would have filled in is not one of them: core
+   * applies defaults when it validates, and a run retains what it was asked
+   * for. That distinction is what lets a fork inherit a source's property
+   * without a default quietly overwriting it.
+   */
   readonly props: Record<string, Json>;
+  /** What the candidate document declares, for validating merged properties. */
+  readonly propsSchema: PropsSchema;
 }
 
 /**
- * Run one `start` or `resume` to completion, and answer with its exit status.
+ * Run one `start`, `resume` or `fork` to completion, and answer with its exit
+ * status.
  *
  * `execute` is the shared CLI's own document machinery, handed everything this
  * run decided: the pinned source, the retained props, the run's journal, the
  * installations that belong inside the execution scope, and the attachment that
  * wraps it.
+ *
+ * A fork runs the same way once it exists. What it does first is prove it can:
+ * the compatibility replay happens before the executor lock is taken and before
+ * any destination storage is opened, so a candidate that cannot carry the
+ * inherited history leaves nothing behind at all.
  */
 export function runWorkflow(
   request: WorkflowRequest,
@@ -654,9 +759,36 @@ export function runWorkflow(
     // executor lock — and a generated one is this invocation's own run.
     const runId = request.action === "resume" ? request.target : (request.id ?? generatedRunId());
 
-    const creation = yield* startCreation(request, start);
+    // A fork begins from the properties the source retained, so the merged set
+    // is decided before the creation that carries it — and therefore before
+    // preflight replays under it, before it is admitted, and before it becomes
+    // the identity a reused fork id is compared against.
+    const inherited = yield* inheritedProps(request);
+    if (!inherited.ok) {
+      report(inherited.error.message);
+      return { exitCode: 1 };
+    }
+
+    const creation = yield* startCreation(request, start, inherited.value);
     if (!creation.ok) {
       report(creation.error.message);
+      return { exitCode: 1 };
+    }
+
+    // Before the executor lock, and before a destination exists: a fork that
+    // cannot reproduce the prefix it asked to inherit is a request being
+    // refused, not a run that failed.
+    const inheritance = yield* forkInheritance(
+      request,
+      runId,
+      start,
+      creation.value,
+      host,
+      transitions,
+      execute,
+    );
+    if (!inheritance.ok) {
+      report(inheritance.error.message);
       return { exitCode: 1 };
     }
 
@@ -691,12 +823,17 @@ export function runWorkflow(
 
     // One transaction: whatever the previous workflow executor left is reconciled, this
     // action is admitted against what that left behind, and the execution is
-    // recorded — or none of it is.
-    const begun = yield* transitions.begin(executorLock, {
+    // recorded — or none of it is. A fork's one transaction is its whole
+    // existence: the run, its lineage, the inherited prefix, the selected
+    // Workspace root and the first execution commit together or not at all.
+    const begun = yield* admit(
+      transitions,
+      executorLock,
+      request,
       runId,
-      action: request.action,
-      ...(creation.value === undefined ? {} : { creation: creation.value }),
-    });
+      creation.value,
+      inheritance.value,
+    );
     if (!begun.ok) {
       report(begun.error.message);
       return { exitCode: 1 };
@@ -861,7 +998,97 @@ export function runWorkflow(
 }
 
 /**
- * What a `start` creates its run from, or nothing when a resume names one.
+ * Begin this action's one document execution, however the run comes to exist.
+ *
+ * A fork carries the selection its preflight proved, so the transition writes
+ * exactly the prefix that was checked rather than reading the source a second
+ * time and hoping it agrees.
+ */
+function* admit(
+  transitions: WorkflowExecutionTransitions,
+  executorLock: ExecutorLock,
+  request: WorkflowRequest,
+  runId: string,
+  creation: WorkflowRunCreation | undefined,
+  inheritance: ForkInheritance | undefined,
+): Operation<Result<WorkflowExecutionBegun>> {
+  if (request.action !== "fork") {
+    return yield* transitions.begin(executorLock, {
+      runId,
+      action: request.action,
+      ...(creation === undefined ? {} : { creation }),
+    });
+  }
+  if (creation === undefined || inheritance === undefined) {
+    return Err(new Error("xmd workflow fork has no definition to run"));
+  }
+  return yield* transitions.fork(executorLock, {
+    runId,
+    selection: {
+      sourceRunId: inheritance.sourceRunId,
+      checkpointEventId: inheritance.checkpointEventId,
+    },
+    creation,
+    rootImport: inheritance.rootImport,
+  });
+}
+
+/** What a fork proved it may inherit, or nothing when this is not a fork. */
+interface ForkInheritance {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly rootImport: DurableEvent;
+}
+
+/**
+ * Prove a fork's candidate before anything of the fork exists.
+ *
+ * Answers with nothing for every other action, which is what lets the one
+ * lifecycle path below stay the same for all three.
+ */
+function* forkInheritance(
+  request: WorkflowRequest,
+  runId: string,
+  start: WorkflowStart | undefined,
+  creation: WorkflowRunCreation | undefined,
+  host: WorkflowHost,
+  transitions: WorkflowExecutionTransitions,
+  execute: (execution: WorkflowExecution) => Operation<Result<void>>,
+): Operation<Result<ForkInheritance | undefined>> {
+  if (request.action !== "fork") {
+    return Ok(undefined);
+  }
+  if (start === undefined || creation === undefined) {
+    return Err(new Error("xmd workflow fork has no definition to run"));
+  }
+  const at = request.at;
+  if (at === undefined) {
+    return Err(new Error("xmd workflow fork has no checkpoint to continue from"));
+  }
+  const checked = yield* preflightFork(
+    {
+      runId,
+      sourceRunId: request.target,
+      checkpointEventId: at,
+      established: start.established,
+      creation,
+    },
+    { transitions, attach: (database, operation) => host.attach(database, operation) },
+    execute,
+  );
+  if (!checked.ok) {
+    return checked;
+  }
+  return Ok({
+    sourceRunId: request.target,
+    checkpointEventId: at,
+    rootImport: checked.value.rootImport,
+  });
+}
+
+/**
+ * What a `start` or a `fork` creates its run from, or nothing when a resume
+ * names one.
  *
  * Checked before the executor lock is taken, because a definition that cannot
  * be a root document is this invocation's mistake rather than something to
@@ -870,25 +1097,92 @@ export function runWorkflow(
 function* startCreation(
   request: WorkflowRequest,
   start: WorkflowStart | undefined,
+  inherited: Record<string, Json> | undefined,
 ): Operation<Result<WorkflowRunCreation | undefined>> {
   if (request.action === "resume") {
     return Ok(undefined);
   }
   if (start === undefined) {
-    return Err(new Error("xmd workflow start has no definition to run"));
+    return Err(new Error(`xmd workflow ${request.action} has no definition to run`));
   }
   const supported = supportedRootDocument(start.established.definition);
   if (!supported.ok) {
     return supported;
   }
+  const props = yield* forkProps(start, inherited);
+  if (!props.ok) {
+    return props;
+  }
   return Ok({
     definition: start.established.definition,
     base: start.established.base,
-    props: start.props,
+    props: props.value,
     ...(start.established.retrieval === undefined
       ? {}
       : { retrieval: start.established.retrieval }),
   });
+}
+
+/**
+ * The properties this run is created with.
+ *
+ * A `start` supplies its own and nothing else. A fork begins from what the
+ * source retained: a corrected definition is still a run of the same procedure,
+ * and restating every property the original was started with would make
+ * forking a transcription exercise. Whatever the fork command wrote itself
+ * takes precedence, property by property — that is what "add or override"
+ * means — and a property the source retained under a name the fork also wrote
+ * is the fork's.
+ *
+ * The result is held to the *candidate* document, because that is the document
+ * that will run: a property the source declared and this one does not is a
+ * property this run cannot carry, and saying so here is better than letting the
+ * compatibility replay report it as divergence.
+ */
+function* forkProps(
+  start: WorkflowStart,
+  inherited: Record<string, Json> | undefined,
+): Operation<Result<Record<string, Json>>> {
+  if (inherited === undefined) {
+    return Ok(start.props);
+  }
+  const merged = { ...inherited, ...start.props };
+  try {
+    // Validated, not replaced: `validateProps` answers with a copy core has
+    // filled defaults into, and a run retains what it was asked for. A `start`
+    // retains no default either.
+    yield* validateProps("__root__", merged, start.propsSchema);
+    return Ok(merged);
+  } catch (error) {
+    return Err(
+      new Error(
+        "the properties this fork inherits do not satisfy the definition it runs: " +
+          `${describeError(error)}. Supply the differing properties with --props-* arguments, ` +
+          "or fork a definition that declares them.",
+      ),
+    );
+  }
+}
+
+/**
+ * What the source run retained, for a fork to begin from.
+ *
+ * Read through the ordinary read-only inspection surface, before the fork's
+ * executor lock and before anything of the fork exists. Every other action
+ * answers with nothing: a `start` has no source, and a `resume` already has the
+ * properties its own run retained.
+ */
+function* inheritedProps(
+  request: WorkflowRequest,
+): Operation<Result<Record<string, Json> | undefined>> {
+  if (request.action !== "fork") {
+    return Ok(undefined);
+  }
+  const snapshot = yield* WorkflowLifecycle.operations.inspect(request.target);
+  if (!snapshot.ok) {
+    return snapshot;
+  }
+  return Ok(snapshot.value.record.props);
 }
 
 /**

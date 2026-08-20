@@ -2093,13 +2093,14 @@ describe("Tier TX — journal provenance across the admission gate", () => {
    */
   function witnessing(seen: Coordinated): LiveDurableOperationCoordinator {
     return {
-      *run(execute, publish, activateFailure, journalProvenance) {
+      *run(execute, publish, activateFailure, journalProvenance, abandoned) {
         seen.witnesses.push(journalProvenance);
         return yield* defaultLiveDurableOperationCoordinator.run(
           execute,
           publish,
           activateFailure,
           journalProvenance,
+          abandoned,
         );
       },
     };
