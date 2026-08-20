@@ -1,7 +1,7 @@
 /**
  * Registers the composition components as ordinary defaults.
  *
- * Repository, Worktree, Dir, the Git operations and PullRequest are ordinary
+ * Repository, Worktree, Dir, the Git operations, PullRequest and Issue are ordinary
  * registered defaults — not reserved and not structural — so a repository-local component
  * may shadow one for its own scope, and the workflow host installs them only
  * for a live or partial attachment. A completed root replay does not attach any
@@ -25,6 +25,7 @@ import PullRequest, {
   props as pullRequestProps,
   returns as pullRequestReturns,
 } from "./components/PullRequest.ts";
+import Issue, { props as issueProps, returns as issueReturns } from "./components/Issue.ts";
 
 const ORIGIN = "@executablemd/workflow/composition";
 
@@ -79,6 +80,13 @@ export function useCompositionComponents(): Operation<void> {
       props: pullRequestProps,
       returns: pullRequestReturns,
       fn: PullRequest,
+    },
+    {
+      name: "Issue",
+      origin: ORIGIN,
+      props: issueProps,
+      returns: issueReturns,
+      fn: Issue,
     },
   ]);
 }

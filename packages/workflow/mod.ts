@@ -73,6 +73,7 @@ export {
   GitCompositionProviderError,
   GitOperationError,
   GitOperationProtocolError,
+  IssueAuthorityError,
   PullRequestAuthorityError,
   RepositoryCompositionError,
   RepositoryCompositionProtocolError,
@@ -82,6 +83,7 @@ export {
 } from "./src/composition/errors.ts";
 export type {
   GitFailureReason,
+  IssueAuthorityReason,
   PullRequestAuthorityReason,
   RepositoryFailureReason,
   WorktreeFailureReason,
@@ -182,7 +184,9 @@ export {
   pullRequestResultJson,
   pullRequestResultOf,
   pullRequestSnapshotJson,
+  parsePullRequestEvidence,
   sameNaturalKey,
+  samePullRequestEvidence,
   samePullRequestIdentity,
 } from "./src/composition/pull-request-records.ts";
 export type {
@@ -199,7 +203,50 @@ export type {
   PullRequestSnapshot,
   PullRequestUpdateKey,
 } from "./src/composition/pull-request-records.ts";
+export {
+  DEFER,
+  ISSUE,
+  issueAgrees,
+  issueBindingJson,
+  issueBody,
+  issueDispositions,
+  issueInputsJson,
+  issueNaturalKey,
+  issueNaturalKeyJson,
+  issueNumber,
+  issueObservationsJson,
+  issueOriginMarker,
+  issuePreStateJson,
+  issueResultJson,
+  issueResultOf,
+  issueSnapshotJson,
+  parseIssueDisposition,
+  parseIssueInputs,
+  parseIssueNaturalKey,
+  parseIssueObservations,
+  parseIssuePreState,
+  parseIssueRecord,
+  parseIssueResult,
+  parseIssueSnapshot,
+  sameIssueIdentity,
+  sameIssueInputs,
+  sameIssueNaturalKey,
+} from "./src/composition/issue-records.ts";
+export type {
+  IssueDisposition,
+  IssueExpectation,
+  IssueInputs,
+  IssueNaturalKey,
+  IssueObservations,
+  IssueOutcome,
+  IssuePreState,
+  IssuePullRequestReference,
+  IssueRequest,
+  IssueResult,
+  IssueSnapshot,
+} from "./src/composition/issue-records.ts";
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
+export { admitPullRequestEvidence } from "./src/composition/pull-request-evidence.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";

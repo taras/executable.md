@@ -28,6 +28,7 @@ import type {
 } from "./git-records.ts";
 import type { GitPushOutcome, GitPushRequest } from "./git-push-records.ts";
 import type { PullRequestOutcome, PullRequestRequest } from "./pull-request-records.ts";
+import type { IssueOutcome, IssueRequest } from "./issue-records.ts";
 
 export interface GitCompositionApi {
   /**
@@ -92,6 +93,23 @@ export interface GitCompositionApi {
    * moves only the four fields the request names.
    */
   upsertPullRequest(request: PullRequestRequest): Operation<PullRequestOutcome>;
+
+  /**
+   * Record one approved deferred obligation as an issue in the selected
+   * checkout's Repository.
+   *
+   * Routed here with the other five because a document names a Repository the
+   * same way for all of them — by writing an element inside one — and because
+   * this one has to prove something about the run's own history before it may
+   * act: the pull request it records has to be one this run reconciled with
+   * `<PullRequest>`. Only a deferral the document already had approved reaches
+   * this operation; the component owns the closed disposition and the durable
+   * approval, and this owns everything that touches retained state and a host.
+   *
+   * It runs no Git. An issue is a statement about a decision rather than about
+   * a tree, so the checkout is only what says which Repository is meant.
+   */
+  upsertIssue(request: IssueRequest): Operation<IssueOutcome>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -116,6 +134,10 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *upsertPullRequest(_request: PullRequestRequest): Operation<PullRequestOutcome> {
       throw new GitCompositionProviderError("<PullRequest>");
+    },
+    // deno-lint-ignore require-yield
+    *upsertIssue(_request: IssueRequest): Operation<IssueOutcome> {
+      throw new GitCompositionProviderError("<Issue>");
     },
   },
 );

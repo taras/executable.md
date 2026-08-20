@@ -230,6 +230,48 @@ export class PullRequestAuthorityError extends StaleInputError {
 }
 
 /**
+ * A word from the fixed vocabulary an `<Issue>` authority refusal speaks.
+ *
+ * Every one of them is decided locally, before an approval is published or a
+ * Git host is observed. An issue is a public record of a decision, and the run
+ * has to be able to prove the decision was one it made about work it did.
+ */
+export type IssueAuthorityReason =
+  | "no-repository-context"
+  | "unknown-disposition"
+  | "missing-pull-request-evidence"
+  | "conflicting-pull-request-evidence"
+  | "unreadable-pull-request-evidence";
+
+/**
+ * `<Issue>` is not authorized by what this run retained.
+ *
+ * A `StaleInputError`, on the same terms as {@link PullRequestAuthorityError}:
+ * a document cannot avoid a Repository context that was replaced or a retained
+ * PullRequest result that stopped being readable, and later siblings must not
+ * run as though an obligation had been recorded. None of these is a Git-host
+ * answer — every one of them is decided before anything is observed — so none
+ * of them is printable and none of them is journaled as an effect outcome.
+ *
+ * The sentence names the category and, where there is one, the remedy. It
+ * quotes no journal content, no retained record and nothing a caller presented:
+ * the evidence this refuses to read is exactly the evidence it must not repeat.
+ */
+export class IssueAuthorityError extends StaleInputError {
+  override name = "IssueAuthorityError";
+
+  readonly reason: IssueAuthorityReason;
+
+  constructor(reason: IssueAuthorityReason, sentence: string) {
+    super(
+      `<Issue> is not authorized against this run's retained state: ${sentence} Nothing was ` +
+        "observed at the Git host, and no issue was created.",
+    );
+    this.reason = reason;
+  }
+}
+
+/**
  * Native Git failed in a way this provider does not recognize.
  *
  * A refusal is a condition a document can act on, and the set of them is closed.

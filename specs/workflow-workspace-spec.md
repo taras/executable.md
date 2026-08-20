@@ -1293,7 +1293,113 @@ every raw response stay inside the per-invocation provider closure: public
 routing middleware receives the frozen JSON request of §10.2 and nothing else,
 and the journal holds the normalized record alone.
 
-### 7.6 Multiple repositories are explicit composition
+### 7.6 Issue
+
+```md
+<Repository name="project" url={props.repository}>
+  <Git.Push />
+  <PullRequest title="Prepare release 1.4" as="pullRequest">
+Prepared from commit {commit}.
+  </PullRequest>
+
+  <Issue
+    finding={finding.id}
+    disposition={finding.disposition}
+    pullRequest={pullRequest}
+    title={finding.title}
+    rationale={finding.deferralRationale}
+    dependencyImpact={finding.dependencyImpact}
+    intendedTiming={finding.intendedTiming}
+    as="issue"
+  >
+{finding.evidence}
+  </Issue>
+</Repository>
+```
+
+`Issue` records one deferred obligation as a Git-host issue. `finding`,
+`disposition`, `pullRequest`, `title`, `rationale`, `dependencyImpact` and
+`intendedTiming` are required. The rendered content is the evidence body,
+verbatim: no trimming, summarizing or redaction happens inside the component.
+Which repository owns the issue is decided by the enclosing Repository context,
+and the supplied `pullRequest` must be stable evidence this same run retained
+from `<PullRequest>` for that Repository. There are no `repository`, `provider`,
+`token`, `label`, `assignee`, `milestone`, `project`, `comment`, `close` or
+implicit pull-request controls.
+
+`disposition` is a closed word. Only `defer` can reach the approval wait or the
+Git host. `rejected`, `fix-now` and `inserted-repair` render nothing, bind a
+skipped result when `as` is present, and observe no provider. Any other
+disposition is a local authority failure before retained history or the Git host
+is observed.
+
+**Issue approval is exact.** A deferred issue is not created because the
+document declared one. Before any Git-host observation, the component publishes
+one durable suspension request whose request body is the normalized Issue
+request: Repository identity, PullRequest evidence, finding ID, title,
+rationale, dependency impact, intended timing and rendered evidence. The
+response schema accepts either `{ "approved": true }` or
+`{ "approved": false }`. A false answer binds the same skipped result as a
+non-deferred disposition and observes no provider. A true answer authorizes only
+that exact normalized request; changing any member reaches a different
+suspension request before it can reach a different Git-host effect. The
+approval value is not a prop, a context value, a frontmatter flag or a component
+name, so authored Markdown cannot manufacture it without passing through typed
+answer delivery.
+
+**Issue depends on the pull request it records.** Direct Git-host observation is
+not proof that a pull request belongs to this run. The run must already hold its
+own successful `PullRequest` result for the same Repository identity and the
+same supplied PullRequest evidence. Missing, conflicting and unreadable
+PullRequest evidence are fixed local refusals, each before the Git host is
+observed and without quoting journal content. Evidence that is not a
+PullRequest result at all is refused before the approval is published; evidence
+this run holds no matching result for is refused after it, because the retained
+history a match is looked up in belongs to the provider and the approval belongs
+to the component. The issue body records the
+workflow run, expansion, PullRequest number and URL, finding ID, evidence,
+deferral rationale, dependency impact and intended timing from the admitted
+request. Reviews, later pull-request movement, labels and issue comments are
+separate reads or effects rather than freshness embedded in the creation
+result.
+
+**Reconciliation.** The natural key is the Repository identity with the
+PullRequest provider identity and the finding ID:
+
+```text
+{ repository, pullRequestIdentity, finding }
+```
+
+The complete request fingerprint covers title, body, rationale, dependency
+impact, intended timing, disposition and the PullRequest evidence. With no local
+record, a Git host observes by that natural key. No matching issue is absence
+and creates once; one open issue whose recorded origin marker and public fields
+agree with the request is adopted; one matching issue whose mutable fields
+differ is updated once and then observed; a closed issue, multiple matching
+issues, or one whose origin marker agrees while its repository, PullRequest or
+finding content disagrees is conflict or permanent ambiguity rather than a
+silent overwrite. Replay restores the retained reconciliation record without
+contacting a provider.
+
+**The `as` result is stable issue evidence.** A skipped result names the
+disposition and contains no provider data. A created, updated or adopted result
+contains the filtered Repository identity, PullRequest number and URL, the
+provider's stable issue identity, issue number, URL, state `open`, finding ID
+and the reconciliation decision. It is not a live issue snapshot and does not
+carry provider payloads, credentials, endpoint data or host-local paths.
+
+**The first adapter** works over `github.com` issues in the same repository as
+the PullRequest. It is selected from the same retained locator admission as
+PullRequest and reads credentials in the same order, `GH_TOKEN` then
+`GITHUB_TOKEN`, only after local PullRequest evidence and approval both succeed.
+It writes one provider-visible origin marker in the issue body and searches by
+that marker. Creation is one REST creation; an update changes title and body,
+then observes exactly once. A rejected mutation, an incomplete page walk, a
+transport failure and an unreadable answer are temporary unavailability rather
+than absence. The endpoint, credential, raw payloads and search responses stay
+inside the per-invocation provider closure.
+
+### 7.7 Multiple repositories are explicit composition
 
 There is no transaction spanning repositories:
 
@@ -1306,7 +1412,7 @@ SDK Commit starts
         ✕ interruption
 ```
 
-Each Commit, Push and PullRequest owns its effect identity and durability.
+Each Commit, Push, PullRequest and Issue owns its effect identity and durability.
 Document structure expresses ordering, retry and failure policy. It never makes
 two Git repositories one atomic domain.
 
