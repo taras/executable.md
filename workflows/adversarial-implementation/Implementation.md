@@ -637,10 +637,19 @@ revision turn, or acceptance.
 | the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
 
 The agent, parsing, capture, and control-flow syntax runs today, and so do the
-local Git effects: `<Git.Add>` and `<Git.Commit>` are built. The loop body above
-still does not expand, because four names in it resolve to nothing — the
-constrained evaluator and the three components that reach a remote or a forge. Until those land, the effects they stand for remain explicit
-user-run steps between manual stages.
+Git effects: `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` and `<PullRequest>` are
+all built and registered by the workflow host.
+
+The loop body above still does not expand, and it is worth separating the two
+reasons. **Two names resolve to nothing** — `<Expand>` (#369) and `<Issue>`
+(#296) — and one **engine capability is unbuilt**: omitting an expression prop
+that evaluates to `undefined` (#301), which the seeded `number={pullRequest.number}`
+needs on its first pass. Neither of those is a statement about `<Git.Push>` or
+`<PullRequest>`: those are shipped, and this stage still cannot reach them,
+because the `<Expand>` that would produce the change to stage and commit comes
+first. A shipped component behind an unbuilt prerequisite is unreachable here,
+not unbuilt. Until the prerequisites land, the effects this stage stands for
+remain explicit user-run steps between manual stages.
 
 Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,
 `verdict`, `checkpointMaterial`, and `reviewCheckpoint` are authored bindings and

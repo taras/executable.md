@@ -248,9 +248,10 @@ agent's benefit.
 ## Agents inspect; XMD mutates
 
 Under `xmd workflow` an Agent is read-only, and the host enforces that ceiling
-in its permission bridge, its provider-native sandbox, and the filesystem view
-it presents. A document cannot raise it, so there is no `<Sandbox>` component to
-write: the command selects the environment and the ceiling comes with it (#302).
+in its permission bridge and its provider-native sandbox. There is no filesystem
+view to enforce it in: an Agent is given no path to see. A document cannot raise
+the ceiling either, so there is no `<Sandbox>` component to write — the command
+selects the environment and the ceiling comes with it (#302).
 
 An implementor that cannot write files proposes changes instead. It returns an
 XMD fragment, and a constrained evaluator preflights the whole fragment and
@@ -482,13 +483,20 @@ path as cwd, and no registered directory, so there is no component here to
 build. What is still missing is the forge component that files a deferred
 finding, and the public component that expands generated XMD.
 
-So what remains non-executable is the implementation stage's remote and forge
-effects; the named checkouts the Workspace is composed from, and the local Git
-effects inside them, are here. What can be exercised today is discovery through plan convergence and
-the user gates around them, running in one document execution and one existing
-working directory, with commits, pushes, pull requests, and issues performed as
-explicit user-run steps between manual stages. Proving that shipped subset is
-#290.
+So what remains non-executable is the implementation stage — but not because its
+Git and forge effects are missing. The named checkouts the Workspace is composed
+from are here, and so are the local Git effects, the push and the pull request.
+What the stage waits on is what comes *before* them: `<Expand>` (#369) to
+produce the change at all, `<Issue>` (#296) to file a deferred finding, and
+#301's omission of an expression prop that evaluates to `undefined`, which the
+pull-request loop's seeded `number` depends on. `<Git.Push>` and `<PullRequest>`
+are shipped and simply out of reach behind those, which is a different thing
+from unbuilt.
+
+What can be exercised today is discovery through plan convergence and the user
+gates around them, running in one document execution and one existing working
+directory, with commits, pushes, pull requests, and issues performed as explicit
+user-run steps between manual stages. Proving that shipped subset is #290.
 
 The command and the foundation underneath it are built.
 `xmd workflow start [--id] [--props-*] <definition>` and
@@ -536,7 +544,7 @@ does not make the workflow run.
 
 | Captured value         | Produced by                | Consumed by                                         |
 | ---------------------- | -------------------------- | --------------------------------------------------- |
-| `worktree`             | self-closing `Worktree` (Workspace-relative path) | `Dir`, which makes it cwd for the flow; and every stage that registers a directory with an Agent |
+| `worktree`             | self-closing `Worktree` (Workspace-relative path) | `Dir`, which makes it cwd for the flow, and through it XMD's own file and Git effects. No stage takes it, and no Agent is given it |
 | `instructionPaths`     | `Glob` (`string[]`)         | `InstructionFiles`                                  |
 | `instructions`         | `InstructionFiles` (text)  | every agent prompt                                  |
 | `handoff`              | `Discovery` (text)          | handoff `UserCheckpoint`, `Planning`                |

@@ -67,12 +67,13 @@ isolation, not a security boundary.
 
 ## The Agent ceiling is the host's, not the document's
 
-Workflow Agents are mandatorily read-only, enforced in three places: the
-provider permission bridge allows only read and search operations, the provider
-runs in its native read-only sandbox, and registered Workspace paths are
-presented as read-only filesystem views. `<ApproveAll>`, repository `.codex` or
-`.claude` configuration, and prompt content cannot raise that ceiling, and a
-provider that cannot enforce it fails before Prompt execution (#302).
+Workflow Agents are mandatorily read-only, enforced in two places: the provider
+permission bridge allows only read and search operations, and the provider runs
+in its native read-only sandbox. No third place presents Workspace paths as
+read-only filesystem views, because none is registered with an Agent at all.
+`<ApproveAll>`, repository `.codex` or `.claude` configuration, and prompt
+content cannot raise that ceiling, and a provider that cannot enforce it fails
+before Prompt execution (#302).
 
 There is therefore no `<Sandbox>` component in this workflow, and no document
 prop that grants an Agent write access. Earlier drafts of this document declared
