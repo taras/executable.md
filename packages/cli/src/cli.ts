@@ -71,7 +71,12 @@ import type { ExecutionInstallation } from "@executablemd/core/host";
 import type { DocumentTargetInfo, FileRootDocument, RootDocumentSource } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import { installTestingComponents, TestFailureError, useTesting } from "@executablemd/testing";
+import {
+  installTestingComponents,
+  TestFailureError,
+  testHarnessInstallation,
+  useTesting,
+} from "@executablemd/testing";
 import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/test-agent";
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
@@ -93,6 +98,7 @@ import {
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
+import { testingExecutionHost } from "./testing-host.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
 import {
@@ -513,7 +519,7 @@ interface DocumentConfig {
   retainProcessOutput: boolean;
 }
 
-interface DocumentMode {
+export interface DocumentMode {
   testing: boolean;
   agent?: AgentFlags;
   props?: Record<string, Json>;
@@ -529,6 +535,52 @@ interface DocumentMode {
 }
 
 export type HostServiceInstaller = () => Operation<void>;
+
+/**
+ * Everything a document execution runs with, after the command line has been
+ * read.
+ *
+ * Extracted from `runDocument` rather than restated: what a nested execution
+ * (`<Execution host="run">`) needs is *this*, and a second copy of it would be
+ * a test passing against components production does not install. Process
+ * presentation — the journal file, the verbose echo, terminal formatting, the
+ * value root's stdout — stays with the command that owns those streams.
+ */
+export function* installDocumentComponents(mode: DocumentMode, verbose: boolean): Operation<void> {
+  // Compose testing around the single core execution entrypoint: both
+  // commands register the components (assertions work in regular documents,
+  // explicit <Testing> boundaries affect the outcome), while `xmd test`
+  // additionally activates root testing through a useTesting() session.
+  if (mode.testing) {
+    yield* useTesting({ verbose });
+    // TestAgent installs before the agent components so its <Prompt>
+    // interceptor runs first.
+    yield* installTestAgentComponents();
+    yield* installAgentComponents();
+  } else {
+    yield* installTestingComponents({ verbose });
+  }
+
+  // `<WebForm>` for both commands. Registered rather than reserved, so a
+  // repository's own WebForm.md or WebForm.ts still wins.
+  yield* installWebComponents();
+
+  // `<Elicit>` reaches a person through the same form — but only for `xmd run`.
+  // Under `xmd test` a document that elicits without supplying an answer would
+  // open a browser and wait for somebody who is not coming, which is a hang
+  // rather than a test result. Leaving the provider out makes that document
+  // fail immediately with "no elicitation provider configured", and an
+  // `<Answers>` region stays the way a test says what the answer is.
+  if (!mode.testing) {
+    yield* installWebElicitation();
+  }
+
+  // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
+  // through the deterministic TestAgent stack instead.
+  if (mode.agent) {
+    yield* installAgentStack(mode.agent);
+  }
+}
 
 /**
  * Run one document and report how it finished.
@@ -590,39 +642,7 @@ function* runDocument(
     yield* useTerminalOutput();
   }
 
-  // Compose testing around the single core execution entrypoint: both
-  // commands register the components (assertions work in regular documents,
-  // explicit <Testing> boundaries affect the outcome), while `xmd test`
-  // additionally activates root testing through a useTesting() session.
-  if (mode.testing) {
-    yield* useTesting({ verbose });
-    // TestAgent installs before the agent components so its <Prompt>
-    // interceptor runs first.
-    yield* installTestAgentComponents();
-    yield* installAgentComponents();
-  } else {
-    yield* installTestingComponents({ verbose });
-  }
-
-  // `<WebForm>` for both commands. Registered rather than reserved, so a
-  // repository's own WebForm.md or WebForm.ts still wins.
-  yield* installWebComponents();
-
-  // `<Elicit>` reaches a person through the same form — but only for `xmd run`.
-  // Under `xmd test` a document that elicits without supplying an answer would
-  // open a browser and wait for somebody who is not coming, which is a hang
-  // rather than a test result. Leaving the provider out makes that document
-  // fail immediately with "no elicitation provider configured", and an
-  // `<Answers>` region stays the way a test says what the answer is.
-  if (!mode.testing) {
-    yield* installWebElicitation();
-  }
-
-  // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
-  // through the deterministic TestAgent stack instead.
-  if (mode.agent) {
-    yield* installAgentStack(mode.agent);
-  }
+  yield* installDocumentComponents(mode, verbose);
 
   // `xmd test` reports on stdout, so the JSON result contract is `xmd run`'s
   // alone. Reading the mode costs no document effects.
@@ -653,6 +673,15 @@ function* runDocument(
   // the provider for a service.
   yield* installService();
 
+  // What a `<Test>` in this document runs a nested execution under. Captured
+  // before document code begins, so a child is offered exactly what this
+  // command assembled — and never a second description of it.
+  const testingHost = testingExecutionHost({
+    componentDirs: componentDir,
+    secretDetection,
+    installService,
+  });
+
   // One authoritative execution, and only one. What a host attaches travels as
   // values canonical core captures before anything else exists — never as a
   // second call, and never as middleware that could be reordered around this
@@ -668,7 +697,10 @@ function* runDocument(
       // commands' output to the reader and accumulates none of it.
       retainProcessOutput,
     },
-    mode.installations ?? [],
+    // The harness installer is this command's, not the document's: canonical
+    // `<Test>` hands each invocation's authority to whoever the host attached,
+    // and this is where `xmd` says that is the testing package.
+    [...(mode.installations ?? []), testHarnessInstallation(testingHost)],
   );
 
   // Consume the output stream with forEach.

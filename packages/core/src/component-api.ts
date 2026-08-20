@@ -14,8 +14,7 @@
  */
 
 import { type Api, createApi, type Operations } from "@effectionx/context-api";
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
+import type { Operation } from "effection";
 import type { EvalScope } from "@effectionx/scope-eval";
 import { settle } from "./errors.ts";
 import type { BoundExecRequest } from "./bound-exec.ts";
@@ -23,7 +22,6 @@ import type {
   CodeBlockContext,
   CodeBlockResult,
   ComponentDefinition,
-  ComponentElement,
   ComponentFailure,
   ComponentRegistry,
   PartialContent,
@@ -31,7 +29,6 @@ import type {
   EvalEnv,
   FunctionComponentDefinition,
   Modifier,
-  Segment,
   SourcePosition,
 } from "./types.ts";
 

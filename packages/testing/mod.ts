@@ -27,4 +27,24 @@ export { Test, testing, record, results, TestFailureError } from "./src/test-api
 export type { TestApi, TestResult, BoundaryOutcome } from "./src/test-api.ts";
 export { installTestingComponents } from "./src/components.ts";
 export { useTesting } from "./src/use-testing.ts";
+// The nested-execution harness. This package owns the authored components and
+// the request-only host-profile surface; the trusted answer is attached to the
+// test-harness installation as a captured value.
+export { ExecutionHost, ExecutionHostError } from "./src/execution-host.ts";
+// The authority path. A trusted host attaches this to `executeInstalled()`, and
+// canonical `<Test>` calls it with each invocation's harness; a document run
+// without it recognizes `<Execution>` and refuses it.
+export { testHarnessInstallation } from "./src/execution-harness.ts";
+export type {
+  ChildInvocation,
+  ChildSettlement,
+  ExecutionHostApi,
+  ExecutionHostProvider,
+  ExecutionHostRequest,
+  ExecutionOutcome,
+  HostProfileName,
+  HostProfileRequest,
+  JournalPolicy,
+  WorkflowRunScope,
+} from "./src/execution-host.ts";
 export type { Testing } from "./src/use-testing.ts";

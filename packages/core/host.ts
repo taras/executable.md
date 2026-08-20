@@ -52,6 +52,15 @@
  * second copy to disagree about and nothing for anyone else to reach.
  */
 
+/**
+ * A **test harness installer** is the third, and it is a delivery rather than a
+ * capability anybody can ask for. Running another document as a root is
+ * infrastructure — its own root import, its own journal, its own scope — so who
+ * may do it is decided by canonical `<Test>`, and what it is handed to is
+ * decided here, by the host, as a function it holds and passes. There is no
+ * reader: nothing published, nothing named, and nothing for a same-name context
+ * or a second loaded copy to reach.
+ */
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
@@ -68,3 +77,11 @@ export type {
   GeneratedRequest,
   GeneratedXmdRequest,
 } from "./src/generated-xmd.ts";
+
+export { TestHarnessError } from "./src/test-harness.ts";
+export type {
+  TestHarness,
+  TestHarnessAuthorization,
+  TestHarnessBinding,
+  TestHarnessInstaller,
+} from "./src/test-harness.ts";
