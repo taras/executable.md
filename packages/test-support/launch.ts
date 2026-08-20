@@ -1,7 +1,9 @@
 import { exec } from "@effectionx/process";
 import type { ProcessResult } from "@effectionx/process";
 import { timebox } from "@effectionx/timebox";
+import { spawn } from "effection";
 import type { Operation } from "effection";
+import { loadavg } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -83,31 +85,81 @@ export interface CliRun {
  */
 export function runCli(args: string[], options: CliRunOptions = {}): CliRun {
   return {
-    join: () => bounded(args, options, (run) => run.join()),
-    expect: () => bounded(args, options, (run) => run.expect()),
+    join: () => bounded(args, options, "join"),
+    expect: () => bounded(args, options, "expect"),
   };
+}
+
+/** Everything the child wrote on one channel before its run settled. */
+interface PartialOutput {
+  stdout: string;
+  stderr: string;
 }
 
 function* bounded(
   args: string[],
   options: CliRunOptions,
-  settle: (run: ReturnType<typeof exec>) => Operation<ProcessResult>,
+  mode: "join" | "expect",
 ): Operation<ProcessResult> {
   const limit = options.timeout ?? DEFAULT_TIMEOUT;
+  const cli = cliCommand(args);
+  // Accumulated outside the deadline, so a run the deadline abandons still has
+  // an account: a timeout that reports nothing but its duration cannot say
+  // whether the child hung before its first line or after its last.
+  const partial: PartialOutput = { stdout: "", stderr: "" };
   const result = yield* timebox<ProcessResult>(limit, function* () {
-    const cli = cliCommand(args);
-    return yield* settle(
-      exec(cli.command, {
-        arguments: cli.arguments,
-        cwd: options.cwd,
-        env: cliEnv(options),
-      }),
-    );
+    const child = yield* exec(cli.command, {
+      arguments: cli.arguments,
+      cwd: options.cwd,
+      env: cliEnv(options),
+    });
+    yield* spawn(function* () {
+      const output = yield* child.stdout;
+      for (let next = yield* output.next(); !next.done; next = yield* output.next()) {
+        partial.stdout += text(next.value);
+      }
+    });
+    yield* spawn(function* () {
+      const output = yield* child.stderr;
+      for (let next = yield* output.next(); !next.done; next = yield* output.next()) {
+        partial.stderr += text(next.value);
+      }
+    });
+    const status = yield* mode === "expect" ? child.expect() : child.join();
+    return { ...status, stdout: partial.stdout, stderr: partial.stderr };
   });
   if (result.timeout) {
-    throw new Error(`xmd ${args.join(" ")} timed out after ${limit}ms`);
+    throw new Error(abandonedReport(args, limit, partial));
   }
   return result.value;
+}
+
+// Chunks decode independently, exactly as capture concatenates them.
+function text(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * A timeout is a host observation, not a CLI outcome, so the report carries
+ * what a diagnosis needs from the host: the machine's load — these deadlines
+ * expire under contention, not by the child's own doing — and whatever each
+ * channel received before the run was abandoned.
+ */
+function abandonedReport(args: string[], limit: number, partial: PartialOutput): string {
+  const load = loadavg()
+    .map((average) => average.toFixed(1))
+    .join(", ");
+  return [
+    `xmd ${args.join(" ")} timed out after ${limit}ms (load average ${load})`,
+    channel("stdout", partial.stdout),
+    channel("stderr", partial.stderr),
+  ].join("\n");
+}
+
+function channel(name: string, content: string): string {
+  return content.length === 0
+    ? `--- ${name} before the deadline: nothing ---`
+    : `--- ${name} before the deadline ---\n${content}`;
 }
 
 function cliEnv(options: CliRunOptions): Record<string, string> {
