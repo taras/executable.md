@@ -163,7 +163,11 @@ function* useRemote(root: string, refusing = false): Operation<string> {
   yield* writeTextFile(join(seed, "which.txt"), "main\n");
   yield* git(seed, ["add", "-A"]);
   yield* git(seed, ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "first"]);
-  yield* git(root, ["init", "-q", "--bare", bare]);
+  // Named explicitly, like the seed's: without it the bare repository's HEAD
+  // follows whatever `init.defaultBranch` the machine happens to set, and a
+  // remote whose HEAD names a branch nothing pushed is cloned with an unborn
+  // one — which fails inside the run rather than here.
+  yield* git(root, ["init", "-q", "--bare", "--initial-branch=main", bare]);
   yield* git(seed, ["push", "-q", bare, "main"]);
   if (refusing) {
     // The destination ref already exists, at a commit the run's own branch does
