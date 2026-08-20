@@ -136,9 +136,13 @@ descriptive evidence about an event, never identity — nothing is located by
 reconstructing a position from an expansion ID, the current definition, or the
 Workspace.
 
-There is no forkability column and no forkability reason. Selecting an event to
-fork from is #368, along with versioned history checkpoints and
-`history --forkable`, and none of it is built.
+`history --forkable` adds a forkability column and a blockers column, and
+removes nothing — so a caller that does not ask for them reads the same history
+it always did. Selecting an event to fork from is shipped (#368, delivered by
+#498): compatible forks, forkability reasons, lineage, changed-definition replay
+admission and retained Workspace-root copying. A fork writes its own run record
+and its own root import, and inherits everything after them unchanged, so
+lineage is what it carries rather than identity.
 
 Part of what history reads is journaled by the constructs the workflow already
 writes. `<Loop>` records every iteration
@@ -316,17 +320,20 @@ fields tell a decline (`proceed` false) from a review that never passed
 either.
 
 Neither stage *returns* the pull-request handle, and the boundary is worth
-stating exactly. `<PullRequest>` (#295) resolves a minimal creation result —
-stable provider identity, number, URL, state, head SHA, and base SHA.
+stating exactly. `<PullRequest>` (#295, shipped) resolves a minimal result —
+filtered Repository identity, stable provider identity, number, URL, open state,
+head SHA, and base SHA. Reviews, comments, checks, labels and merge state are
+separate reads rather than freshness smuggled into it, so a replayed run hands
+back exactly what the run recorded.
 `Implementation` consumes it internally, together with the separately observed
 review state its prompt needs; `start.md` never receives it. What crosses the
 stage boundary is the verdict and the decision it gates on, and the filtered
 journal records the external effect independently.
 
-A return field typed `string` would be actively harmful: a conforming
-`<PullRequest>` would perform its external effect and only then fail the stage's
-return validation. If a later caller needs the handle, it is declared with #295's
-object schema.
+A return field typed `string` would be actively harmful: `<PullRequest>` would
+perform its external effect and only then fail the stage's return validation. If
+a later caller needs the handle, it is declared with #295's settled object
+schema.
 
 Prompt output used for control flow is JSON parsed against captured draft-07
 JSON Schema content. `<SafeParse>` exposes the candidate and normalized errors

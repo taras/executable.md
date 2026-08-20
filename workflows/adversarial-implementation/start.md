@@ -451,31 +451,36 @@ checkpoint in an `<Answers>` region instead of reaching a person.
 `Planning` run as written too: no stage reaches for a directory, because a
 workflow Agent is given none.
 
-**Composed by the workflow host.** `<Repository>`, `<Worktree>` and `<Dir>` are
-built and registered by `@executablemd/workflow/composition` (#293, shipped),
-which is what makes the composition above executable under a workflow run.
-Registration is scope-local and the workflow host is what installs it, so plain
-`xmd run` — which composes no workflow — reports all three unresolved. That is
-where a document ran, not whether a component exists.
+**Composed by the workflow host.** `<Repository>`, `<Worktree>`, `<Dir>`,
+`<Git.Switch>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` and `<PullRequest>`
+are built and registered by `@executablemd/workflow/composition` (#293, #294,
+#495, #504), which is what makes the composition above executable under a
+workflow run. Registration is scope-local and the workflow host is what installs
+it, so plain `xmd run` — which composes no workflow — reports all eight
+unresolved. That is where a document ran, not whether a component exists.
 
-**Not expressible.** Every component that performs a durable environmental
-effect. These four names resolve to nothing under either host:
+**Not expressible.** Two names resolve to nothing under either host:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
-| `<Git.Push>` | #370 | unbuilt |
-| `<PullRequest>` | #295 | unbuilt |
 | `<Issue>` | #296 | unbuilt |
 
-`<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` have left that list:
-they are built as Workspace-local durable effects (#294, shipped), and the
-shared Git-host reconciliation the remote effects will need is shipped too
-(#297). `<Agent.AddDir>` is not on it either, and never will be — #302 settles
-that a workflow Agent receives no checkout, no materialization, no Workspace or
-host path as cwd, and no registered directory, so there is no component here to
-build. What is still missing is the three components that reach a remote or a
-forge, and the constrained evaluator.
+`<Git.Push>` and `<PullRequest>` have left that list. `<Git.Push />` publishes
+the selected checkout's current branch and commit to the same branch at the
+Repository's own `origin`, with no props, no result, no force-push, no upstream
+change and no implicit stage or commit (#495). `<PullRequest>` creates or brings
+up to date one pull request for the branch this run published, and requires that
+Push's own matching successful evidence rather than pushing anything itself
+(#500, #504). `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left it
+earlier as Workspace-local durable effects (#294), over the shared Git-host
+reconciliation both remote effects use (#297).
+
+`<Agent.AddDir>` is not on it either, and never will be — #302 settles that a
+workflow Agent receives no checkout, no materialization, no Workspace or host
+path as cwd, and no registered directory, so there is no component here to
+build. What is still missing is the forge component that files a deferred
+finding, and the public component that expands generated XMD.
 
 So what remains non-executable is the implementation stage's remote and forge
 effects; the named checkouts the Workspace is composed from, and the local Git
@@ -552,8 +557,8 @@ Neither stage returns the pull-request handle. `Implementation` creates the pull
 request, reviews it, and keeps the handle internal, because `start.md` gates on
 the verdict and the decision rather than on forge state, and the filtered
 journal records the effect independently (#291). A return field typed `string`
-would let a conforming `<PullRequest>` perform its external effect and only then
-fail the stage's return validation.
+would let `<PullRequest>` perform its external effect and only then fail the
+stage's return validation.
 
 ## Details
 

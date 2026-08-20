@@ -248,11 +248,13 @@ no decision was found.
 
 The seventh criterion — five failing iterations returning the exhausted outcome
 — is proven in `scripts/tests/adversarial-planning-workflow.test.ts`. It costs
-twenty agent turns in one `Planning` invocation, which does not fit a test's
-fixed twenty-second timeout when each turn is an ACP round trip. That test runs
-the same component from this directory, on this search path, with a synchronous
-stub root Agent provider instead of the transport, and finishes in well under a
-second.
+twenty agent turns in one `Planning` invocation. A `<Test>` can declare its own
+timeout (#503) and twenty seconds is only the default, so the bound is not what
+puts that proof there. The evidence is: a synchronous stub root Agent provider
+makes the complete twenty-call trace and the authorization boundary directly
+observable, and finishes in well under a second, where a long ACP scenario would
+take longer to prove less. That test runs the same component from this
+directory, on this search path.
 
 Where `start.md` puts `<Implementation>` behind that gate, and reports
 exhaustion as awaiting direction inside `<Dir>` and the root `<Output>`, stays

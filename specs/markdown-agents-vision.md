@@ -197,10 +197,11 @@ supplies the run around them: `xmd workflow start` creates a workflow run with
 one retained Workspace and `xmd workflow resume` continues it from the retained
 journal (#366, shipped). The composition inside that run is there too: named
 `<Repository>`, `<Worktree>` and lexical `<Dir>` are registered by the workflow
-host (#293, shipped). What it still lacks are the durable effects — deterministic
-local Git effects (#294), explicit `<Git.Push>` (#370), `<PullRequest>` (#295),
-and `<Issue>` (#296) — none of which is built. Together they cover the work that
-should not depend on model judgment:
+host (#293, shipped). The durable effects are there too: deterministic
+local Git effects (#294), explicit `<Git.Push>` (#495), and `<PullRequest>`
+(#295) are all registered by the workflow host. `<Issue>` (#296) is the one that
+is still not built. Together they cover the work that should not depend on model
+judgment:
 
 - retain each handoff, plan, review, and decision as a filtered journal event
   bound to the Workspace root current when it was written;
@@ -214,9 +215,13 @@ should not depend on model judgment:
 - record the inputs, observed state, effects, and outputs of each operation.
 
 Agent calls analyze evidence and propose changes; they do not perform them. Under
-a workflow run an Agent is read-only, and a proposal reaches the Workspace as
-generated XMD that a constrained evaluator preflights and expands as ordinary
-durable effects (#302, #369). Deterministic components apply approved
+a workflow run an Agent reaches no checkout at all, and a proposal reaches the
+Workspace as generated XMD that a constrained evaluator preflights completely
+and expands as ordinary durable effects. That evaluator is built for observation
+(#497) — pinned identities, exact request ceilings, one retained admission — and
+what is still owed is admission for a mutating fragment, the bounded
+request/result loop an Agent observes the repository through (#302), and the
+public component a document writes to reach either (#369). Deterministic components apply approved
 environmental changes and provide exact required content to the next call.
 Generated files are optional exports rather than the handoff protocol. This
 removes manual copying between agent-owned transcripts, plan files, and working
