@@ -144,7 +144,7 @@ interface FileEffect {
  * transaction are invisible here until that transaction commits, so this
  * reports what has been *published* rather than what some handle is holding.
  */
-function committedEffects(path: string): FileEffect[] {
+function committedEffects(path: string): Operation<FileEffect[]> {
   return readRunDatabase(path, (database) => {
     const rows = database
       .prepare("SELECT event_id AS id, record FROM journal_events ORDER BY sequence")
@@ -163,7 +163,7 @@ function committedEffects(path: string): FileEffect[] {
 }
 
 /** The run's retained status, as a second connection sees it. */
-function committedStatus(path: string): string {
+function committedStatus(path: string): Operation<string> {
   return readRunDatabase(path, (database) => {
     const row = database.prepare("SELECT status FROM workflow_run WHERE id = 1").get();
     return String(row?.["status"]);
@@ -171,7 +171,7 @@ function committedStatus(path: string): string {
 }
 
 /** The current Workspace root, as a second connection sees it. */
-function committedRoot(path: string): string {
+function committedRoot(path: string): Operation<string> {
   return readRunDatabase(path, (database) => {
     const row = database.prepare("SELECT current_root_id AS root FROM workspace_state").get();
     return String(row?.["root"]);
@@ -193,7 +193,7 @@ interface ExecutionRow {
  * them by identity is what separates "an execution was closed" from "*this*
  * execution was closed".
  */
-function committedExecutions(path: string): ExecutionRow[] {
+function committedExecutions(path: string): Operation<ExecutionRow[]> {
   return readRunDatabase(path, (database) =>
     database
       .prepare(
@@ -283,12 +283,12 @@ function signalledRun(
     yield* when(
       function* () {
         expect(exists(path)).toBe(true);
-        expect(committedEffects(path).length).toBeGreaterThanOrEqual(reached);
+        expect((yield* committedEffects(path)).length).toBeGreaterThanOrEqual(reached);
       },
       { timeout: 60_000 },
     );
-    const before = committedEffects(path);
-    const rootBefore = committedRoot(path);
+    const before = yield* committedEffects(path);
+    const rootBefore = yield* committedRoot(path);
     process.kill(child.pid, signal);
     const status = yield* child.join();
 
@@ -320,11 +320,11 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
 
       // Nothing ran after the signal, so the run is still `running`: no status
       // was published and no execution record was closed.
-      expect(committedStatus(path)).toBe("running");
+      expect(yield* committedStatus(path)).toBe("running");
 
       // The killed owner's execution, by its own identity. It is open, because
       // closing one is work and the signal left no opportunity to do any.
-      const abandoned = committedExecutions(path);
+      const abandoned = yield* committedExecutions(path);
       expect(abandoned).toHaveLength(1);
       expect(abandoned[0]?.stopped).toBe(false);
       const owner = abandoned[0]?.executionId;
@@ -338,9 +338,9 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
       expect(resumed.code).toBe(0);
       expect(resumed.stderr).toContain(`workflow run: ${RUN_ID}`);
       expect(resumed.stderr).toContain("workflow status: completed");
-      expect(committedStatus(path)).toBe("completed");
+      expect(yield* committedStatus(path)).toBe("completed");
 
-      const after = committedEffects(path);
+      const after = yield* committedEffects(path);
 
       // Every effect the kill left committed is still there, by its own event
       // id and in the same order: the resume replayed them rather than
@@ -358,13 +358,13 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
 
       // The resume continued from the root the last committed effect left, so
       // the frontier moved on rather than starting again.
-      expect(committedRoot(path)).not.toBe(killed.rootBefore);
+      expect(yield* committedRoot(path)).not.toBe(killed.rootBefore);
 
       // And the killed owner's own execution — that exact one, not merely some
       // execution — was closed as interrupted, saying what became of the attempt
       // the signal ended. The resume's execution is a different one, and it
       // completed.
-      const settled = committedExecutions(path);
+      const settled = yield* committedExecutions(path);
       expect(settled).toHaveLength(2);
       expect(settled[0]?.executionId).toBe(owner);
       expect(settled[0]?.stopped).toBe(true);
@@ -397,8 +397,8 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
       // anything resumes: the process that was interrupted settled its own run.
       // A kill leaves `running` with an open execution for the next owner to
       // reconcile; a Ctrl-C leaves the outcome already published.
-      expect(committedStatus(path)).toBe("interrupted");
-      const closed = committedExecutions(path);
+      expect(yield* committedStatus(path)).toBe("interrupted");
+      const closed = yield* committedExecutions(path);
       expect(closed).toHaveLength(1);
       expect(closed[0]?.stopped).toBe(true);
       expect(closed[0]?.stopStatus).toBe("interrupted");
@@ -417,18 +417,18 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
 
       expect(resumed.code).toBe(0);
       expect(resumed.stderr).toContain("workflow status: completed");
-      expect(committedStatus(path)).toBe("completed");
+      expect(yield* committedStatus(path)).toBe("completed");
 
       // Nothing the interruption had already committed was performed again, by
       // event id and in order, and the document's effects appear exactly once.
-      const after = committedEffects(path);
+      const after = yield* committedEffects(path);
       expect(after.slice(0, interrupted.before.length)).toEqual(interrupted.before);
       expect(after).toHaveLength(HELD_EFFECTS);
       expect(new Set(after.map((effect) => effect.name)).size).toBe(HELD_EFFECTS);
 
       // The interrupted execution stays closed as it was, and the resume's is a
       // second, different one.
-      const settled = committedExecutions(path);
+      const settled = yield* committedExecutions(path);
       expect(settled).toHaveLength(2);
       expect(settled[0]?.executionId).toBe(owner);
       expect(settled[0]?.stopStatus).toBe("interrupted");
@@ -448,8 +448,8 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
         document: "flows/holding.md",
         reached: HELD_EFFECTS,
       });
-      expect(committedStatus(path)).toBe("running");
-      expect(committedExecutions(path)).toHaveLength(1);
+      expect(yield* committedStatus(path)).toBe("running");
+      expect(yield* committedExecutions(path)).toHaveLength(1);
 
       const options = {
         cwd: fixture.repository,
@@ -478,14 +478,14 @@ describe("Tier WFX — a killed workflow run resumes from its frontier", () => {
       // The loser was refused before it could begin anything: the run holds the
       // killed owner's execution and the winner's, and no third. A refusal that
       // still recorded an execution would be a second owner advancing the run.
-      const settled = committedExecutions(path);
+      const settled = yield* committedExecutions(path);
       expect(settled).toHaveLength(2);
       expect(settled[0]?.stopStatus).toBe("interrupted");
       expect(settled[1]?.stopStatus).toBe("completed");
 
       // And one winner means one set of effects.
-      expect(committedStatus(path)).toBe("completed");
-      const after = committedEffects(path);
+      expect(yield* committedStatus(path)).toBe("completed");
+      const after = yield* committedEffects(path);
       expect(after).toHaveLength(HELD_EFFECTS);
       expect(new Set(after.map((effect) => effect.name)).size).toBe(HELD_EFFECTS);
     });
