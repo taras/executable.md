@@ -24,9 +24,9 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
-import { DatabaseSync } from "node:sqlite";
 import { cliCommand, runCli } from "@executablemd/test-support/launch";
 import { workflowRunPath } from "@executablemd/workflow/deno";
+import { readRunDatabase } from "./support/run-database.ts";
 
 const RUN_ID = "fetch-run";
 
@@ -161,15 +161,12 @@ interface JournalRecord {
 
 /** Everything a second connection can read of the run's journal. */
 function rows(path: string): JournalRecord[] {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
-    return database
+  return readRunDatabase(path, (database) =>
+    database
       .prepare("SELECT record FROM journal_events ORDER BY sequence")
       .all()
-      .map((row) => JSON.parse(typeof row["record"] === "string" ? row["record"] : "{}"));
-  } finally {
-    database.close();
-  }
+      .map((row) => JSON.parse(typeof row["record"] === "string" ? row["record"] : "{}")),
+  );
 }
 
 function committedFetches(path: string): JournalRecord[] {

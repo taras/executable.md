@@ -35,6 +35,7 @@ import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { cliCommand, runCli } from "@executablemd/test-support/launch";
 import { workflowRunPath } from "@executablemd/workflow/deno";
+import { readRunDatabase } from "./support/run-database.ts";
 
 /** Enough effects that a kill lands part-way through rather than after. */
 const EFFECTS = 60;
@@ -144,8 +145,7 @@ interface FileEffect {
  * reports what has been *published* rather than what some handle is holding.
  */
 function committedEffects(path: string): FileEffect[] {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
+  return readRunDatabase(path, (database) => {
     const rows = database
       .prepare("SELECT event_id AS id, record FROM journal_events ORDER BY sequence")
       .all();
@@ -159,31 +159,23 @@ function committedEffects(path: string): FileEffect[] {
       }
     }
     return effects;
-  } finally {
-    database.close();
-  }
+  });
 }
 
 /** The run's retained status, as a second connection sees it. */
 function committedStatus(path: string): string {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
+  return readRunDatabase(path, (database) => {
     const row = database.prepare("SELECT status FROM workflow_run WHERE id = 1").get();
     return String(row?.["status"]);
-  } finally {
-    database.close();
-  }
+  });
 }
 
 /** The current Workspace root, as a second connection sees it. */
 function committedRoot(path: string): string {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
+  return readRunDatabase(path, (database) => {
     const row = database.prepare("SELECT current_root_id AS root FROM workspace_state").get();
     return String(row?.["root"]);
-  } finally {
-    database.close();
-  }
+  });
 }
 
 interface ExecutionRow {
@@ -202,9 +194,8 @@ interface ExecutionRow {
  * execution was closed".
  */
 function committedExecutions(path: string): ExecutionRow[] {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
-    return database
+  return readRunDatabase(path, (database) =>
+    database
       .prepare(
         "SELECT execution_id AS id, stopped_at AS stopped, stop_status AS status, " +
           "stop_reason_code AS reason FROM document_executions ORDER BY sequence",
@@ -215,10 +206,8 @@ function committedExecutions(path: string): ExecutionRow[] {
         stopped: row["stopped"] !== null,
         stopStatus: row["status"] === null ? undefined : String(row["status"]),
         stopReasonCode: row["reason"] === null ? undefined : String(row["reason"]),
-      }));
-  } finally {
-    database.close();
-  }
+      })),
+  );
 }
 
 function exists(path: string): boolean {
