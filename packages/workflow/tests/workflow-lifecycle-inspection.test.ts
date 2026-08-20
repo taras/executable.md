@@ -1280,6 +1280,63 @@ describe("Tier WLI — inspecting a crashed run", () => {
       yield* until(chmod(String(raised.scratchPath), 0o700));
       yield* rm(String(raised.scratchPath), { recursive: true });
     }
+
+    // Cancellation that begins after the answer exists, while the removal is
+    // suspended. "An answer was computed" is not the same question as "this
+    // call can still deliver one", and a cleanup refusal found here has no
+    // receiver either: it has to be raised.
+    {
+      const root = yield* useStorageRoot();
+      yield* retainedRun(root, "residue-3");
+      const path = runPath(root, "residue-3");
+      yield* leaveHot(root, "residue-3");
+      const before = yield* pairPrint(path);
+
+      const suspended = withResolvers<void>();
+      const held = withResolvers<void>();
+      let pauses = 0;
+      const watched = recorder({
+        *"before-cleanup"(directory) {
+          // Unwritable from the first pass on, so the removal genuinely cannot
+          // happen whichever pass reaches it.
+          yield* until(chmod(directory, 0o500));
+          pauses += 1;
+          if (pauses === 1) {
+            // Reached only after the snapshot exists: this is the operation's
+            // own removal, not the teardown net.
+            suspended.resolve();
+            yield* held.operation;
+          }
+        },
+      });
+
+      let raised: unknown;
+      yield* scoped(function* () {
+        const inspecting = yield* spawn(() =>
+          withObserved(root, watched.observe, () => inspect("residue-3")),
+        );
+        yield* suspended.operation;
+        try {
+          yield* inspecting.halt();
+        } catch (error) {
+          raised = error;
+        }
+      });
+
+      expect(raised).toBeInstanceOf(WorkflowInspectionRecoveryError);
+      if (!(raised instanceof WorkflowInspectionRecoveryError)) {
+        throw raised;
+      }
+      expect(raised.path).toBe(path);
+      expect(raised.scratchPath).toBe(watched.directories[0]);
+      expect(raised.message).toContain(String(raised.scratchPath));
+      expect(yield* exists(String(raised.scratchPath))).toBe(true);
+      expect(yield* pairPrint(path)).toEqual(before);
+      expect(directCode(path)).toBe(READONLY_ROLLBACK);
+
+      yield* until(chmod(String(raised.scratchPath), 0o700));
+      yield* rm(String(raised.scratchPath), { recursive: true });
+    }
   });
 
   it("WLI16: the clean path costs nothing, and the hot one takes no authority", function* () {

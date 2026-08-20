@@ -833,91 +833,123 @@ function* recoverSnapshot<T>(
   read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
   observe: RecoveryObserver,
 ): Operation<Result<T>> {
-  // Whether this call reached an answer of its own. A cleanup refusal found on
-  // the way out of an answered call becomes that call's `Err`; one found while
-  // the call is being cancelled has nobody to answer, so it is raised instead
-  // and reaches whoever cancelled it.
-  let answered = false;
-  try {
-    return yield* scoped(function* (): Operation<Result<T>> {
-      let directory: string | undefined;
+  return yield* scoped(function* (): Operation<Result<T>> {
+    let directory: string | undefined;
 
-      // Registered before anything is created, so every exit — answered,
-      // refused or cancelled — removes the copy. A removal that cannot happen
-      // outranks whatever else this operation was going to say, because it is
-      // the only outcome that tells the operator a copy of their run's contents
-      // is still on disk and where.
-      yield* ensure(function* () {
-        if (directory === undefined) {
-          return;
-        }
-        const created = directory;
-        yield* observe({ phase: "before-cleanup", directory: created });
-        try {
-          // Forced, so a directory something else already removed is removal
-          // that succeeded. Reporting residue at a path that holds nothing
-          // would send an operator after a copy that is not there.
-          yield* rm(created, { recursive: true, force: true });
-        } catch {
-          throw new WorkflowInspectionRecoveryError(source, created);
-        }
-      });
-
-      try {
-        const retried = yield* scoped(function* (): Operation<Result<T> | undefined> {
-          yield* holdRecoveryCoordination(source);
-
-          // Asked again under coordination: a write-capable owner may have
-          // recovered the run while this inspection waited, and reading what it
-          // recovered is a better answer than copying anything.
-          const owned = attemptDirect(source, source, read);
-          if (owned !== undefined) {
-            return owned;
-          }
-
-          const scratch = yield* until(mkdtemp(join(tmpdir(), "xmd-inspection-")));
-          directory = scratch;
-          yield* observe({ phase: "scratch-created", directory: scratch });
-
-          // Copied under the candidate's own name, so the copy answers the
-          // location question as itself rather than needing to be told what it
-          // stands for.
-          const copy = join(scratch, basename(source));
-          yield* copyFile(source, copy);
-          if (yield* exists(journalOf(source))) {
-            yield* copyFile(journalOf(source), journalOf(copy));
-          }
-          yield* observe({ phase: "source-pair-copied", directory: scratch });
-          return undefined;
-        });
-        if (retried !== undefined) {
-          answered = true;
-          return retried;
-        }
-        if (directory === undefined) {
-          throw new WorkflowRequestError("the recovered inspection copy was not created.");
-        }
-
-        const copy = join(directory, basename(source));
-        recoverCopy(copy);
-        yield* observe({ phase: "scratch-recovered", directory });
-        const recovered = readSnapshot(copy, source, read);
-        answered = true;
-        return recovered;
-      } catch {
-        // Coordination, copying and the recovery read itself. What the copy
-        // then turned out to describe — a damaged image, another run's
-        // identity, an unparseable row — keeps its own type and never arrives
-        // here.
-        answered = true;
-        return Err(new WorkflowInspectionRecoveryError(source));
+    // The net, and only the net. It has work to do when this operation never
+    // reached its own removal below — it was cancelled, or it failed its way
+    // out — and in that state there is nobody left to answer, so a removal
+    // that cannot happen is raised. Whoever cancelled this receives it, which
+    // is the only way they learn a copy of the run's contents is still on disk.
+    yield* ensure(function* () {
+      if (directory === undefined) {
+        return;
+      }
+      const abandoned = directory;
+      yield* observe({ phase: "before-cleanup", directory: abandoned });
+      if (!(yield* removeScratch(abandoned))) {
+        throw new WorkflowInspectionRecoveryError(source, abandoned);
       }
     });
-  } catch (error) {
-    if (answered && error instanceof WorkflowInspectionRecoveryError) {
-      return Err(error);
+
+    const outcome = yield* produceRecovered(source, read, observe, (scratch) => {
+      directory = scratch;
+    });
+
+    if (directory !== undefined) {
+      // Removed here rather than in teardown, because a call that has an answer
+      // to give is the one call that can report a failed removal as its answer.
+      // Whether "an answer was computed" is not the same question as whether
+      // this operation is still live, and only this line knows both.
+      const created = directory;
+      yield* observe({ phase: "before-cleanup", directory: created });
+      const removed = yield* removeScratch(created);
+      // Cleared either way: this call has dealt with the copy, and the net
+      // above must not answer for it a second time. A cancellation that
+      // interrupts the removal above leaves this unset, so the net still does.
+      directory = undefined;
+      if (!removed) {
+        return Err(new WorkflowInspectionRecoveryError(source, created));
+      }
     }
-    throw error;
+
+    return outcome;
+  });
+}
+
+/**
+ * Whether the copy is gone.
+ *
+ * Forced, so a directory something else already removed is removal that
+ * succeeded: reporting residue at a path holding nothing would send an operator
+ * after a copy that is not there.
+ */
+function* removeScratch(directory: string): Operation<boolean> {
+  try {
+    yield* rm(directory, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The answer a recovered copy gives, and the copy it needed to give it.
+ *
+ * `created` is called the moment the scratch directory exists, before anything
+ * is written into it, so its removal is arranged before there is anything to
+ * remove.
+ */
+function* produceRecovered<T>(
+  source: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+  observe: RecoveryObserver,
+  created: (directory: string) => void,
+): Operation<Result<T>> {
+  let directory: string | undefined;
+  try {
+    const retried = yield* scoped(function* (): Operation<Result<T> | undefined> {
+      yield* holdRecoveryCoordination(source);
+
+      // Asked again under coordination: a write-capable owner may have
+      // recovered the run while this inspection waited, and reading what it
+      // recovered is a better answer than copying anything.
+      const owned = attemptDirect(source, source, read);
+      if (owned !== undefined) {
+        return owned;
+      }
+
+      const scratch = yield* until(mkdtemp(join(tmpdir(), "xmd-inspection-")));
+      directory = scratch;
+      created(scratch);
+      yield* observe({ phase: "scratch-created", directory: scratch });
+
+      // Copied under the candidate's own name, so the copy answers the location
+      // question as itself rather than needing to be told what it stands for.
+      const copy = join(scratch, basename(source));
+      yield* copyFile(source, copy);
+      if (yield* exists(journalOf(source))) {
+        yield* copyFile(journalOf(source), journalOf(copy));
+      }
+      yield* observe({ phase: "source-pair-copied", directory: scratch });
+      return undefined;
+    });
+    if (retried !== undefined) {
+      return retried;
+    }
+    if (directory === undefined) {
+      throw new WorkflowRequestError("the recovered inspection copy was not created.");
+    }
+
+    const copy = join(directory, basename(source));
+    recoverCopy(copy);
+    yield* observe({ phase: "scratch-recovered", directory });
+    return readSnapshot(copy, source, read);
+  } catch {
+    // Coordination, copying and the recovery read itself. What the copy then
+    // turned out to describe — a damaged image, another run's identity, an
+    // unparseable row — keeps its own type and never arrives here.
+    return Err(new WorkflowInspectionRecoveryError(source));
   }
 }
 
