@@ -301,6 +301,21 @@ export function* installTestAgentComponents(): Operation<void> {
             state.bySessionKey.set(resolved.sessionKey, { agent: agentName, scenario });
             return resolved;
           },
+          *launch([instructions, launchOptions], _next) {
+            // Same provisioning as a prompt: the provider's route resolver is
+            // synchronous, so the scenario it will look up has to exist by the
+            // time the launch reaches it.
+            const state = yield* boundary();
+            const pinned: string | Session | undefined = launchOptions?.session;
+            const agentName = yield* Agent.operations.agent(launchOptions?.agent);
+            if (typeof pinned === "object") {
+              resolvePinned(state.bySessionKey, pinned.sessionKey, agentName);
+            } else {
+              const dir = resolve(yield* contextualCwd());
+              yield* resolveScenario(state, agentName, pinned, dir);
+            }
+            return yield* state.provider.launch(instructions, launchOptions);
+          },
           *prompt([content, promptOptions], _next) {
             // Routing flows through the provider's withSessionRoute hook,
             // whose resolver is synchronous — so the scenario it will

@@ -36,6 +36,10 @@ describe("Tier WA — ACP server lifecycle", () => {
     const worker: WorkerAgent = {
       // deno-lint-ignore require-yield
       *ready() {},
+      // deno-lint-ignore require-yield
+      *startSession(): Operation<string> {
+        return "native-acp-server-test";
+      },
       *runTurn(): Operation<TurnResult> {
         started.resolve();
         yield* ensure(() => {

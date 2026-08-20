@@ -18,11 +18,20 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { content, hasContent } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
-import { parseDuration } from "@executablemd/runtime";
+import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
-import type { PromptOptions, Session } from "./agent-api.ts";
+import type { LaunchOptions, PromptOptions, Session, SessionLaunchResult } from "./agent-api.ts";
+import { AgentLaunchError, AgentLaunchJournal } from "./launch.ts";
+import type {
+  DetachedLaunchRecord,
+  ExitedLaunchRecord,
+  LaunchPhase,
+  PreparedLaunchRecord,
+} from "./launch.ts";
+import { persistDetach, persistExit, persistPreparation } from "./launch-journal.ts";
+import type { LaunchIdentity } from "./launch-journal.ts";
 import { AgentProviders } from "./provider-api.ts";
 import { installApproveAll, installAskPermission } from "./permission.ts";
 import { AgentInternal } from "./internal.ts";
@@ -57,6 +66,15 @@ export const AGENT_PROPS: PropsSchema = {
 export const SESSION_PROPS: PropsSchema = {
   type: "object",
   properties: { name: { type: "string" } },
+  additionalProperties: false,
+};
+
+export const SESSION_LAUNCH_PROPS: PropsSchema = {
+  type: "object",
+  properties: {
+    agent: { type: "string" },
+    session: { type: "string" },
+  },
   additionalProperties: false,
 };
 
@@ -154,6 +172,9 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
       *prompt([text, options], next) {
         return yield* next(text, { agent: resolved, ...options });
       },
+      *launch([instructions, options], next) {
+        return yield* next(instructions, { agent: resolved, ...options });
+      },
     },
     { at: "min" },
   );
@@ -175,6 +196,9 @@ export function* SessionComponent(props: Record<string, Json>): Operation<Json> 
       },
       *prompt([text, options], next) {
         return yield* next(text, { session, ...options });
+      },
+      *launch([instructions, options], next) {
+        return yield* next(instructions, { session, ...options });
       },
     },
     { at: "min" },
@@ -328,4 +352,196 @@ function* runPrompt(
     record.raised = true;
   }
   return record;
+}
+
+/**
+ * One native session launch: prepare a durable agent session from this body,
+ * then hand the person the provider's own interactive UI for that exact
+ * session (specs/native-agent-session-launch-spec.md).
+ *
+ * The body renders first and completely. Only what it rendered becomes
+ * prepared instructions — the prose around this element is documentation, and
+ * a file the provider happens to be able to read is not selected by being
+ * readable. A body that failed to render prepares nothing, resolves nothing,
+ * and launches nothing.
+ *
+ * The launch itself is the provider's, and every phase it completes is
+ * retained through the journal installed here. That is also the authority
+ * boundary: middleware around the Agent Api may observe a launch or refuse
+ * one, but a result that arrives without those retained phases describes a
+ * launch that did not happen, and is refused.
+ */
+export function* SessionLaunch(props: Record<string, Json>): Operation<Json> {
+  const instructions = (yield* hasContent()) ? String(yield* content()) : "";
+
+  const sessionProp = asString(props.session);
+  const expansion = yield* getExpansion();
+  const location = formatLocation(expansion);
+  const ordinal = yield* AgentInternal.operations.launchOrdinal(location);
+  const identity: LaunchIdentity = { name: `launch:${location}#${ordinal}` };
+  if (expansion.position) {
+    identity.position = expansion.position;
+  }
+
+  const permissionMode = yield* AgentInternal.operations.permissionMode;
+  const contextualCwd = yield* cwd();
+  // `Agent.AddDir` is not built, so a launch declares no additional roots yet
+  // and the retained request says so explicitly rather than omitting the fact.
+  const additionalDirectories: string[] = [];
+
+  return yield* scoped(function* (): Operation<Json> {
+    // The one foreground-terminal lease, and the first thing asked for. A host
+    // with no terminal cannot launch anything, and learning that should not
+    // cost an agent probe — so this refuses before any agent is resolved,
+    // which is well before any session ownership could move.
+    yield* reserveTerminal();
+    // Everything the document has said so far reaches the reader before the
+    // native UI draws over the terminal.
+    yield* flushOutput();
+
+    // Resolving here is the availability boundary: an agent that is not there
+    // fails expansion rather than being retained as a refused launch.
+    const options: LaunchOptions = {
+      agent: yield* Agent.operations.agent(asString(props.agent)),
+    };
+    if (sessionProp !== undefined) {
+      options.session = sessionProp;
+    }
+
+    const retained: RetainedPhases = {};
+    yield* AgentLaunchJournal.around(
+      {
+        *recordPreparation([live]) {
+          const record = yield* persistPreparation(
+            identity,
+            {
+              instructions,
+              agent: options.agent ?? "",
+              ...(sessionProp === undefined ? {} : { session: sessionProp }),
+              cwd: contextualCwd,
+              additionalDirectories,
+              permissionMode,
+            },
+            live,
+          );
+          retained.prepared = record;
+          raiseRetained("prepared", record.failure);
+          return record;
+        },
+        *recordDetach([live]) {
+          const record = yield* persistDetach(identity, live);
+          retained.detached = record;
+          raiseRetained("detached", record.failure);
+          return record;
+        },
+        *recordExit([live]) {
+          const record = yield* persistExit(identity, live);
+          retained.exited = record;
+          raiseRetained("exited", record.failure);
+          return record;
+        },
+      },
+      { at: "min" },
+    );
+
+    const result = yield* Agent.operations.launch(instructions, options);
+    settleLaunch(retained, result);
+    return "";
+  });
+}
+
+interface RetainedPhases {
+  prepared?: PreparedLaunchRecord;
+  detached?: DetachedLaunchRecord;
+  exited?: ExitedLaunchRecord;
+}
+
+/**
+ * Raise a phase that was retained as a refusal.
+ *
+ * Retained first and raised second, so the phase a later replay resumes from
+ * is the phase that actually happened — including when what happened was the
+ * provider declining to go further.
+ */
+function raiseRetained(
+  phase: LaunchPhase,
+  failure: { class: string; message: string } | undefined,
+) {
+  if (!failure) {
+    return;
+  }
+  throw new AgentLaunchError(failure.message, {
+    phase,
+    failureClass: parseFailureClass(failure.class),
+  });
+}
+
+function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
+  switch (value) {
+    case "unsupported-capability":
+    case "identity-unavailable":
+    case "instructions-refused":
+    case "directory-authority":
+    case "detach-failed":
+    case "process-creation-failed":
+    case "native-exit":
+      return value;
+    default:
+      return "unsupported-capability";
+  }
+}
+
+/**
+ * Decide what the launch was, from the phases that were retained rather than
+ * from what the Agent Api returned.
+ *
+ * A `SessionLaunchResult` is ordinary structural data. Middleware can build
+ * one, and this is where that stops being enough: the phases below are
+ * written by the invocation's own journal, and a result that disagrees with
+ * them — or arrives with none of them — is not a launch that happened.
+ */
+function settleLaunch(retained: RetainedPhases, result: SessionLaunchResult): void {
+  const prepared = retained.prepared;
+  if (!prepared) {
+    throw new AgentLaunchError(
+      "the agent provider returned a launch result without preparing a session — " +
+        "a launch is authored by the provider that performed it",
+      { phase: "prepared", failureClass: "unsupported-capability" },
+    );
+  }
+  if (!retained.detached) {
+    throw new AgentLaunchError(
+      "the agent provider launched without releasing its ACP session — ACP and " +
+        "the native UI never own one session at the same time",
+      { phase: "prepared", failureClass: "detach-failed" },
+    );
+  }
+  const exited = retained.exited;
+  if (!exited) {
+    throw new AgentLaunchError("the native agent UI never reported how it ended", {
+      phase: "launched",
+      failureClass: "process-creation-failed",
+    });
+  }
+  if (exited.signal !== undefined) {
+    throw new AgentLaunchError(`the native agent UI was terminated by ${exited.signal}`, {
+      phase: "exited",
+      failureClass: "native-exit",
+    });
+  }
+  if (exited.exitCode !== 0) {
+    throw new AgentLaunchError(
+      `the native agent UI exited with status ${exited.exitCode ?? "unknown"}`,
+      { phase: "exited", failureClass: "native-exit" },
+    );
+  }
+  if (
+    result.nativeSessionId !== prepared.nativeSessionId ||
+    result.launcher !== prepared.launcher
+  ) {
+    throw new AgentLaunchError("the launch result names a session this launch did not prepare", {
+      phase: "exited",
+      failureClass: "identity-unavailable",
+    });
+  }
 }

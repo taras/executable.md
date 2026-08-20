@@ -86,6 +86,7 @@ import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/te
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
+import { installForegroundLauncher } from "@executablemd/runtime";
 import { resolveAgentConfig } from "./agent-config.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
@@ -483,6 +484,10 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
     rootProvider: { factory, options: { defaultAgent, permissionMode } },
   });
   yield* installPermissionMode(permissionMode);
+  // `xmd run` is the one command that has a terminal to give away. Help,
+  // document inspection and `xmd test` install no launcher, so a document that
+  // reaches <Session.Launch> under any of them refuses instead of spawning.
+  yield* installForegroundLauncher();
 }
 
 /**

@@ -42,8 +42,10 @@ import {
   NO_PROPS_SCHEMA,
   Prompt,
   PROMPT_PROPS,
+  SESSION_LAUNCH_PROPS,
   SESSION_PROPS,
   SessionComponent,
+  SessionLaunch,
 } from "./function-components.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
 
@@ -82,6 +84,12 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
     { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
     { name: "Session", origin: CORE_ORIGIN, fn: SessionComponent, props: SESSION_PROPS },
+    {
+      name: "Session.Launch",
+      origin: CORE_ORIGIN,
+      fn: SessionLaunch,
+      props: SESSION_LAUNCH_PROPS,
+    },
     { name: "Prompt", origin: CORE_ORIGIN, fn: Prompt, props: PROMPT_PROPS },
     { name: "ApproveAll", origin: CORE_ORIGIN, fn: ApproveAll, props: NO_PROPS_SCHEMA },
     { name: "AskPermission", origin: CORE_ORIGIN, fn: AskPermission, props: NO_PROPS_SCHEMA },
@@ -97,6 +105,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
       const failures: SequencedFailure[] = [];
       let sequence = 0;
       const ordinals = new Map<string, number>();
+      const launchOrdinals = new Map<string, number>();
       yield* AgentInternal.around({
         // deno-lint-ignore require-yield
         *recordPromptFailure([error, failedSequence]) {
@@ -110,6 +119,12 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
         *promptOrdinal([location]) {
           const ordinal = ordinals.get(location) ?? 0;
           ordinals.set(location, ordinal + 1);
+          return ordinal;
+        },
+        // deno-lint-ignore require-yield
+        *launchOrdinal([location]) {
+          const ordinal = launchOrdinals.get(location) ?? 0;
+          launchOrdinals.set(location, ordinal + 1);
           return ordinal;
         },
       });

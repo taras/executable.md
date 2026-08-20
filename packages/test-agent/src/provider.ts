@@ -16,6 +16,7 @@ import type {
   AcpxProviderDependencies,
   SessionRouteContext,
 } from "@executablemd/acp";
+import type { NativeAdapter } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
@@ -42,6 +43,22 @@ export interface TestAgentProviderOptions {
   dependencies?: AcpxProviderDependencies;
 }
 
+/**
+ * The launcher identity a test agent's native UI would have.
+ *
+ * A real adapter is advertised only after an integration proof against the
+ * installed CLI. This one is advertised unconditionally because there is
+ * nothing to prove: the worker asserts the native identity itself, and the
+ * host a test installs never starts a UI at all — which is exactly the
+ * separation the advertisement gate exists to keep.
+ */
+export const TEST_AGENT_LAUNCHER = "test-agent";
+
+export const TEST_AGENT_NATIVE_ADAPTER: NativeAdapter = {
+  launcher: TEST_AGENT_LAUNCHER,
+  resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
+};
+
 export function* useTestAgentProvider(options: TestAgentProviderOptions): Operation<AcpxProvider> {
   let pendingRoute: string | undefined;
   const routeSlot = yield* useRouteSlot();
@@ -64,6 +81,10 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
     {
       sessionStore: createMemorySessionStore(),
       agentRegistry: registry,
+      advertiseNativeLaunch: options.agents,
+      nativeAdapters: Object.fromEntries(
+        options.agents.map((name) => [name, TEST_AGENT_NATIVE_ADAPTER]),
+      ),
       // withSlot bounds the route mutex to the hook's op without a scope
       // of its own — op's acquisitions (turn resources) belong to the
       // provider's subscriber scope and outlive the critical section.

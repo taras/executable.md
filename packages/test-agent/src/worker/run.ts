@@ -88,6 +88,10 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
           throw new Error("probe workers only initialize; they never start a behavior document");
         },
         // deno-lint-ignore require-yield
+        *startSession(): Operation<string> {
+          throw new Error("probe workers only initialize; they never create a session");
+        },
+        // deno-lint-ignore require-yield
         *runTurn(): Operation<TurnResult> {
           throw new Error("probe workers do not serve prompts");
         },
@@ -268,6 +272,20 @@ export function* runTestAgentWorker(options: { connect: string }): Operation<voi
     {
       *ready() {
         yield* current.ready;
+      },
+      // deno-lint-ignore require-yield
+      *startSession(instructions): Operation<string> {
+        // The scenario owns this identity, not this process: a worker that
+        // reconnects to the same scenario names the state that already
+        // exists, exactly as an agent with its own durable store does. It
+        // arrived with the config, so establishing a session costs no
+        // round-trip on the queue a turn's journal commits are using.
+        const session: WorkerMessage = { t: "session" };
+        if (instructions !== undefined) {
+          session.systemPrompt = instructions;
+        }
+        client.send(session);
+        return scenario.nativeSessionId;
       },
       *runTurn(text): Operation<TurnResult> {
         if (current.isExhausted()) {

@@ -20,18 +20,25 @@
  * provider scope.
  */
 
-import { createChannel, ensure, spawn, until, useScope } from "effection";
+import { createChannel, ensure, scoped, spawn, until, useScope } from "effection";
 import type { Operation, Stream } from "effection";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { Agent } from "@executablemd/core";
+import { Agent, AgentLaunchJournal } from "@executablemd/core";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
   AgentProviderOptions,
+  DetachedLaunchRecord,
+  InstructionReconciliation,
+  ExitedLaunchRecord,
+  LaunchFailure,
+  LaunchOptions,
+  PreparedLaunchRecord,
   PromptOptions,
   Session,
+  SessionLaunchResult,
 } from "@executablemd/core";
 import { createAcpRuntime, createAgentRegistry, createRuntimeStore } from "acpx/runtime";
 import type {
@@ -41,13 +48,20 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
+  AcpSessionRecord,
   AcpSessionStore,
 } from "acpx/runtime";
 import { createPermissionBridge } from "./permission-bridge.ts";
 import { consumeTurn } from "./events.ts";
 import { resolveSessionPlacement } from "./session-key.ts";
 import { useSerialQueues } from "./serial-queue.ts";
-import { cwd } from "@executablemd/runtime";
+import { cwd, nativeLaunch } from "@executablemd/runtime";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  knownNativeAdapters,
+  nativeAdapterFor,
+} from "./native-launch.ts";
+import type { NativeAdapter } from "./native-launch.ts";
 
 /** The runtime surface the provider needs — ACPX's runtime plus its probe. */
 export interface ProbeCapableRuntime extends AcpRuntime {
@@ -72,6 +86,18 @@ export interface AcpxProviderDependencies {
   sessionStore?: AcpSessionStore;
   agentRegistry?: AcpAgentRegistry;
   /**
+   * The native adapters this host has proven and is therefore willing to hand
+   * a session to. Absent means none: knowing an adapter's command shape is not
+   * evidence that its native UI resumes the session ACP created.
+   */
+  advertiseNativeLaunch?: readonly string[];
+  /**
+   * Extra native adapters, by agent name. A harness driving an agent this
+   * package has never heard of supplies its own resume command shape here
+   * rather than being special-cased in the adapter table.
+   */
+  nativeAdapters?: Readonly<Record<string, NativeAdapter>>;
+  /**
    * Wraps registry-dependent work — session preparation AND
    * ensure/session validation + turn start — so an embedder can pin its
    * route for that critical section. `op` runs in the CALLER's scope
@@ -86,6 +112,23 @@ interface ManagedSession {
   agentCommand: string;
   cwd: string;
   session: Session;
+  /**
+   * True once a native UI took ownership of this session. The handle predates
+   * that handoff, so nothing may prompt through it again: the next use
+   * re-ensures the same session key, which reattaches ACP to the provider
+   * session the native UI was working in.
+   */
+  stale?: boolean;
+  /**
+   * True once a turn has started against this session.
+   *
+   * Tracked here because ACPX's cached `messages` cannot answer the question:
+   * native turns are deliberately never mirrored back, so an emptied or
+   * never-populated cache says nothing about what the provider session holds.
+   * Only a session this provider established and has since left completely
+   * alone is known to be an empty shell.
+   */
+  used?: boolean;
 }
 
 /** Read-only session resolution; the placement linearization point. */
@@ -102,6 +145,12 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value));
 }
 
+/** The provider identity retained in a launch record. */
+const ACPX_PROVIDER = "acpx";
+
+/** Where this provider puts prepared instructions on a session it creates. */
+const INSTRUCTION_CHANNEL = "acp.session.systemPrompt";
+
 /**
  * The provider's operations, decoupled from the Agent Api install so
  * embedders (e.g. the test agent) can hold several independent states —
@@ -112,6 +161,7 @@ export interface AcpxProvider {
   agent(name?: string): Operation<string>;
   session(option?: string | Session): Operation<Session>;
   promptStream(content: string, options?: PromptOptions): Stream<AgentPromptEvent, string>;
+  launch(instructions: string, options?: LaunchOptions): Operation<SessionLaunchResult>;
 }
 
 export function createAcpxProvider(dependencies?: AcpxProviderDependencies): AgentProviderFactory {
@@ -128,6 +178,9 @@ export function createAcpxProvider(dependencies?: AcpxProviderDependencies): Age
         },
         *prompt([content, options], _next) {
           return state.promptStream(content, options);
+        },
+        *launch([instructions, options], _next) {
+          return yield* state.launch(instructions, options);
         },
       },
       { at: "min" },
@@ -146,6 +199,14 @@ export function* useAcpxProvider(
   const withSessionRoute =
     dependencies?.withSessionRoute ??
     (<T>(_c: SessionRouteContext, op: () => Operation<T>) => op());
+  const advertised = new Set(dependencies?.advertiseNativeLaunch ?? ADVERTISED_NATIVE_LAUNCH);
+  const extraAdapters = dependencies?.nativeAdapters;
+  const adapterFor = (agentName: string): NativeAdapter | undefined => {
+    if (extraAdapters && Object.hasOwn(extraAdapters, agentName)) {
+      return extraAdapters[agentName];
+    }
+    return nativeAdapterFor(agentName);
+  };
   const bridge = createPermissionBridge();
   const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
@@ -221,6 +282,17 @@ export function* useAcpxProvider(
             `"${option.sessionKey}" (${entry.agentCommand})`,
         );
       }
+      if (entry.stale) {
+        // The handle predates a native handoff. Reaching for the same key
+        // again re-ensures it, which is a reattach to the provider session the
+        // native UI left behind rather than a connection older than it.
+        return {
+          kind: "placement",
+          sessionKey: entry.session.sessionKey,
+          agentCommand: entry.agentCommand,
+          placement: { sessionKey: entry.session.sessionKey, cwd: entry.cwd },
+        };
+      }
       return { kind: "existing", sessionKey: option.sessionKey, entry };
     }
     const agentCommand = registry.resolve(agentName);
@@ -280,6 +352,9 @@ export function* useAcpxProvider(
 
         return yield* withSessionRoute(context, function* () {
           const entry = yield* ensureFromPrepared(agentName, prepared);
+          // From here this session has been spoken to, whatever the cache
+          // later says, so nothing may discard it to install a new layer.
+          entry.used = true;
 
           const scope = yield* useScope();
           const recordKey = entry.handle.acpxRecordId ?? entry.session.sessionKey;
@@ -342,6 +417,283 @@ export function* useAcpxProvider(
     };
   }
 
+  function refusal(
+    failureClass: LaunchFailure["class"],
+    message: string,
+    known: Partial<PreparedLaunchRecord> = {},
+  ): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "",
+      sessionKey: "",
+      provider: ACPX_PROVIDER,
+      nativeSessionId: "",
+      sessionState: "created",
+      instructionChannel: INSTRUCTION_CHANNEL,
+      instructionReconciliation: "installed",
+      instructionsDigest: "",
+      instructions: "",
+      cwd: "",
+      additionalDirectories: [],
+      permissionMode: providerOptions.permissionMode,
+      launcher: "",
+      ...known,
+      failure: { class: failureClass, message },
+    };
+  }
+
+  function storedSystemPrompt(record: AcpSessionRecord | undefined): string | undefined {
+    const stored = record?.acpx?.session_options?.system_prompt;
+    if (typeof stored === "string") {
+      return stored;
+    }
+    if (stored && typeof stored === "object") {
+      return stored.append;
+    }
+    return undefined;
+  }
+
+  /**
+   * Prepare one durable session and report the identity the native UI will be
+   * handed.
+   *
+   * Everything refusable is refused here, while ACP still owns the session: an
+   * agent with no proven native launcher, an instruction layer this provider
+   * cannot put in force, and a session whose provider-native identity the
+   * adapter never asserted.
+   */
+  function* prepareLaunch(
+    agentName: string,
+    callerCwd: string,
+    instructions: string,
+    prepared: Prepared,
+  ): Operation<PreparedLaunchRecord> {
+    const adapter = adapterFor(agentName);
+    if (!adapter || !advertised.has(agentName)) {
+      const known = knownNativeAdapters().join(", ");
+      return refusal(
+        "unsupported-capability",
+        `agent "${agentName}" is not advertised as native-launch capable. An adapter ` +
+          `is advertised only once its integration proof shows the native UI resumes ` +
+          `the session ACP created and the prepared instructions are in force on its ` +
+          `first turn. Adapters with a known command shape: ${known || "none"}.`,
+        { agent: agentName, cwd: callerCwd },
+      );
+    }
+
+    const sessionKey = prepared.sessionKey;
+    const sessionCwd = prepared.kind === "existing" ? prepared.entry.cwd : prepared.placement.cwd;
+    const agentCommand =
+      prepared.kind === "existing" ? prepared.entry.agentCommand : prepared.agentCommand;
+    const acp = yield* getRuntime();
+    const existing = yield* until(store.load(sessionKey));
+    let sessionState: "created" | "resumed" = existing ? "resumed" : "created";
+    let reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
+
+    if (existing && storedSystemPrompt(existing) !== instructions) {
+      // ACPX fixes a session's instruction layer when its ACP session is
+      // created, so an existing session's layer cannot simply be replaced.
+      // What that protects is the conversation the session holds, and only a
+      // session this provider established and never used is known to hold
+      // none. The ordinary authoring shape is exactly that: `<Session name>`
+      // establishes the shell, and the `<Session.Launch>` inside it is its
+      // first real use.
+      //
+      // An empty `messages` cache proves nothing on its own. Native turns are
+      // never mirrored back into ACPX, so a session handed to a native UI and
+      // worked in for an hour still reads as empty — and discarding it on that
+      // evidence would destroy conversation XMD does not own and cannot see.
+      const entry = managed.get(sessionKey);
+      const untouched = entry !== undefined && entry.stale !== true && entry.used !== true;
+      const conversation = existing.messages?.length ?? 0;
+      if (!untouched || conversation > 0) {
+        return refusal(
+          "instructions-refused",
+          `session "${sessionKey}" already carries a different XMD instruction layer, ` +
+            `and this provider cannot replace one on a session that has been used. ` +
+            `Launch a differently named <Session>, or launch the same prepared ` +
+            `instructions again.`,
+          { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher },
+        );
+      }
+      try {
+        yield* until(
+          acp.close({
+            handle: entry.handle,
+            reason: "installing the prepared instruction layer",
+            discardPersistentState: true,
+          }),
+        );
+      } catch (error) {
+        return refusal("instructions-refused", toError(error).message, {
+          agent: agentName,
+          sessionKey,
+          cwd: sessionCwd,
+          launcher: adapter.launcher,
+        });
+      }
+      managed.delete(sessionKey);
+      sessionState = "created";
+      reconciliation = "recreated";
+    }
+
+    const handle = yield* until(
+      acp.ensureSession({
+        sessionKey,
+        agent: agentName,
+        mode: "persistent",
+        cwd: sessionCwd,
+        sessionOptions: { systemPrompt: instructions },
+      }),
+    );
+
+    const session: Session = { sessionKey, cwd: sessionCwd };
+    if (handle.agentSessionId !== undefined) {
+      session.agentSessionId = handle.agentSessionId;
+    }
+    managed.set(sessionKey, { handle, agentCommand, cwd: sessionCwd, session });
+
+    const nativeSessionId = handle.agentSessionId;
+    if (nativeSessionId === undefined) {
+      // An ACP session id and an ACPX record id are not native identities, and
+      // neither is a string that merely looks like one.
+      return refusal(
+        "identity-unavailable",
+        `agent "${agentName}" created a session but asserted no provider-native ` +
+          `session identity, so there is nothing ${adapter.launcher} can resume`,
+        { agent: agentName, sessionKey, cwd: sessionCwd, launcher: adapter.launcher },
+      );
+    }
+
+    const record: PreparedLaunchRecord = {
+      phase: "prepared",
+      agent: agentName,
+      sessionKey,
+      provider: ACPX_PROVIDER,
+      nativeSessionId,
+      sessionState,
+      instructionChannel: INSTRUCTION_CHANNEL,
+      instructionReconciliation: reconciliation,
+      instructionsDigest: createHash("sha256").update(instructions).digest("hex"),
+      instructions,
+      cwd: sessionCwd,
+      additionalDirectories: [],
+      permissionMode: providerOptions.permissionMode,
+      launcher: adapter.launcher,
+    };
+    const model = yield* effectiveModel(acp, handle);
+    if (model !== undefined) {
+      record.model = model;
+    }
+    return record;
+  }
+
+  function* effectiveModel(
+    acp: ProbeCapableRuntime,
+    handle: AcpRuntimeHandle,
+  ): Operation<string | undefined> {
+    if (!acp.getStatus) {
+      return undefined;
+    }
+    const status = yield* until(acp.getStatus({ handle }));
+    return status.models?.currentModelId;
+  }
+
+  /** Release ACP ownership. Nothing is spawned until this has completed. */
+  function* detachSession(sessionKey: string): Operation<DetachedLaunchRecord> {
+    const entry = managed.get(sessionKey);
+    if (!entry || entry.stale) {
+      // Nothing of this provider's owns the session. A resumed launch reaches
+      // here with no live ACP connection at all, which is the state detaching
+      // exists to produce.
+      return { phase: "detached" };
+    }
+    try {
+      const acp = yield* getRuntime();
+      // Not `discardPersistentState`: the record is exactly what the native UI
+      // is about to resume.
+      yield* until(acp.close({ handle: entry.handle, reason: "native session launch" }));
+    } catch (error) {
+      return {
+        phase: "detached",
+        failure: { class: "detach-failed", message: toError(error).message },
+      };
+    }
+    entry.stale = true;
+    return { phase: "detached" };
+  }
+
+  function launch(instructions: string, options?: LaunchOptions): Operation<SessionLaunchResult> {
+    return scoped(function* (): Operation<SessionLaunchResult> {
+      const agentName = yield* Agent.operations.agent(options?.agent);
+      const callerCwd = resolve(yield* cwd());
+      const context: SessionRouteContext = {
+        agentName,
+        session: options?.session,
+        cwd: callerCwd,
+      };
+
+      const placement = yield* withSessionRoute(context, () =>
+        prepare(agentName, options?.session, callerCwd),
+      );
+
+      // Held from preparation through the native child's exit: while a native
+      // UI owns this session, nothing else may run a turn against it.
+      yield* turns.slot(placement.sessionKey);
+
+      const prepared = yield* AgentLaunchJournal.operations.recordPreparation(() =>
+        withSessionRoute(context, () =>
+          prepareLaunch(agentName, callerCwd, instructions, placement),
+        ),
+      );
+
+      yield* AgentLaunchJournal.operations.recordDetach(() => detachSession(prepared.sessionKey));
+
+      const adapter = adapterFor(prepared.agent);
+      yield* AgentLaunchJournal.operations.recordExit(function* (): Operation<ExitedLaunchRecord> {
+        if (!adapter) {
+          return {
+            phase: "exited",
+            failure: {
+              class: "process-creation-failed",
+              message: `no native launcher adapter for agent "${prepared.agent}"`,
+            },
+          };
+        }
+        try {
+          const outcome = yield* nativeLaunch({
+            command: adapter.resume(prepared.nativeSessionId),
+            cwd: prepared.cwd,
+          });
+          const exited: ExitedLaunchRecord = { phase: "exited" };
+          if (outcome.exitCode !== undefined) {
+            exited.exitCode = outcome.exitCode;
+          }
+          if (outcome.signal !== undefined) {
+            exited.signal = outcome.signal;
+          }
+          return exited;
+        } catch (error) {
+          return {
+            phase: "exited",
+            failure: { class: "process-creation-failed", message: toError(error).message },
+          };
+        }
+      });
+
+      return {
+        agent: prepared.agent,
+        session: {
+          sessionKey: prepared.sessionKey,
+          cwd: prepared.cwd,
+          agentSessionId: prepared.nativeSessionId,
+        },
+        nativeSessionId: prepared.nativeSessionId,
+        launcher: prepared.launcher,
+      };
+    });
+  }
+
   yield* ensure(function* () {
     for (const turn of [...activeTurns]) {
       activeTurns.delete(turn);
@@ -354,6 +706,11 @@ export function* useAcpxProvider(
     if (runtime) {
       const closedHandles = new Set<string>();
       for (const entry of managed.values()) {
+        // A handle a native UI took over is not this provider's to close, and
+        // skipping it leaves every unrelated cleanup below still attempted.
+        if (entry.stale) {
+          continue;
+        }
         const handleKey = entry.handle.acpxRecordId ?? entry.handle.sessionKey;
         if (closedHandles.has(handleKey)) {
           continue;
@@ -393,5 +750,6 @@ export function* useAcpxProvider(
       );
     },
     promptStream,
+    launch,
   };
 }

@@ -59,20 +59,37 @@ describe("Tier TP — controller protocol", () => {
     expect(parseControllerMessage(workerLine).ok).toBe(false);
   });
 
-  it("TP5: scenario config carries the document and journal only", function* () {
+  it("TP5: scenario config carries the document, journal and native identity", function* () {
     const result = parseControllerMessage(
       JSON.stringify({
         t: "config",
         mode: "scenario",
         doc: { path: "agents/review.md", source: '<WhenPrompt template="hi" />' },
         journal: [],
+        nativeSessionId: "native-1",
       }),
     );
     expect(result.ok).toBe(true);
-    const withEnv = parseControllerMessage(
-      JSON.stringify({ t: "config", mode: "scenario", doc: { path: "a", source: "b" } }),
+    // Every member is required: a config missing one describes a scenario the
+    // worker cannot serve, and is refused rather than filled in.
+    const withoutJournal = parseControllerMessage(
+      JSON.stringify({
+        t: "config",
+        mode: "scenario",
+        doc: { path: "a", source: "b" },
+        nativeSessionId: "native-1",
+      }),
     );
-    expect(withEnv.ok).toBe(false);
+    expect(withoutJournal.ok).toBe(false);
+    const withoutIdentity = parseControllerMessage(
+      JSON.stringify({
+        t: "config",
+        mode: "scenario",
+        doc: { path: "a", source: "b" },
+        journal: [],
+      }),
+    );
+    expect(withoutIdentity.ok).toBe(false);
   });
 
   it("TP6: the line splitter reassembles partial chunks", function* () {

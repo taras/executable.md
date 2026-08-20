@@ -19,5 +19,16 @@ export type { AcpxProviderDependencies, SessionRouteContext } from "./src/provid
 /** The agent ACPX selects when nothing else is configured. */
 export { DEFAULT_AGENT_NAME } from "acpx/runtime";
 
+/**
+ * Native session launch: the adapters whose resume command shape this package
+ * knows, and the (empty by default) set it is willing to hand a session to.
+ */
+export {
+  ADVERTISED_NATIVE_LAUNCH,
+  knownNativeAdapters,
+  nativeAdapterFor,
+} from "./src/native-launch.ts";
+export type { NativeAdapter } from "./src/native-launch.ts";
+
 export { useAcpxProvider } from "./src/provider.ts";
 export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";

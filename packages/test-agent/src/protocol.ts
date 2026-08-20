@@ -29,6 +29,7 @@ export type WorkerMessage =
   | { t: "journal"; seq: number; event: WireDurableEvent }
   | { t: "read"; path: string }
   | { t: "stat"; path: string }
+  | { t: "session"; systemPrompt?: string }
   | {
       t: "turn-failure";
       kind: "mismatch" | "exhausted" | "config";
@@ -44,6 +45,12 @@ export type ControllerMessage =
       mode: "scenario";
       doc: { path: string; source: string };
       journal: WireDurableEvent[];
+      /**
+       * The provider-native session identity this scenario asserts. The
+       * scenario owns it, so a worker that reconnects names the state that
+       * already exists rather than minting a replacement for it.
+       */
+      nativeSessionId: string;
     }
   | { t: "ack"; seq: number }
   | { t: "recorded" }
@@ -87,6 +94,7 @@ const workerMessage: z.ZodType<WorkerMessage> = z.discriminatedUnion("t", [
   z.object({ t: z.literal("journal"), seq: z.number().int().nonnegative(), event: durableEvent }),
   z.object({ t: z.literal("read"), path: z.string() }),
   z.object({ t: z.literal("stat"), path: z.string() }),
+  z.object({ t: z.literal("session"), systemPrompt: z.string().optional() }),
   z.object({
     t: z.literal("turn-failure"),
     kind: z.enum(["mismatch", "exhausted", "config"]),
@@ -103,6 +111,7 @@ const configMessage: z.ZodType<ControllerMessage> = z.discriminatedUnion("mode",
     mode: z.literal("scenario"),
     doc: z.object({ path: z.string(), source: z.string() }),
     journal: z.array(durableEvent),
+    nativeSessionId: z.string(),
   }),
 ]);
 

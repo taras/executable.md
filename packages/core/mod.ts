@@ -221,14 +221,30 @@ export { Agent } from "./src/agent/agent-api.ts";
 export type {
   AgentApi,
   AgentPromptEvent,
+  LaunchOptions,
   PermissionMode,
   PermissionOption,
   PermissionOutcome,
   PermissionRequest,
   PromptOptions,
   Session,
+  SessionLaunchResult,
 } from "./src/agent/agent-api.ts";
 export { AgentPromptError } from "./src/agent/errors.ts";
+// Native session launch — the phase journal one <Session.Launch> lends its
+// provider, and the records that journal retains.
+export { AgentLaunchError, AgentLaunchJournal } from "./src/agent/launch.ts";
+export type {
+  AgentLaunchJournalApi,
+  DetachedLaunchRecord,
+  ExitedLaunchRecord,
+  InstructionReconciliation,
+  LaunchFailure,
+  LaunchFailureClass,
+  LaunchPhase,
+  LaunchRecord,
+  PreparedLaunchRecord,
+} from "./src/agent/launch.ts";
 export { AgentProviders, registerAgentProvider } from "./src/agent/provider-api.ts";
 export type {
   AgentProviderApi,

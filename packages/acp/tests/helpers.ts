@@ -95,6 +95,12 @@ export interface FakeRuntimeHarness {
   turns: FakeTurn[];
   closeCalls: AcpRuntimeHandle[];
   closeFailure?: Error;
+  /**
+   * Create sessions the way an adapter that asserts no provider-native
+   * identity does. The handle still carries ACP and record ids, which is the
+   * shape a client could mistake one of for a native id.
+   */
+  omitAgentSessionId?: boolean;
   script(turn: ScriptedTurn): void;
 }
 
@@ -129,6 +135,18 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         ensureSession(input) {
           harness.ensureCalls.push(input);
+          // ACPX persists a record as it establishes a session, including the
+          // instruction layer the caller asked for; a fake that skipped that
+          // would hide every decision a later launch makes by reading it back.
+          const record: AcpSessionRecord = {
+            ...makeRecord(options.agentRegistry.resolve(input.agent), input.cwd ?? options.cwd),
+            acpxRecordId: input.sessionKey,
+            messages: [],
+          };
+          if (input.sessionOptions?.systemPrompt !== undefined) {
+            record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
+          }
+          void options.sessionStore.save(record);
           const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
@@ -136,8 +154,10 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             cwd: input.cwd,
             acpxRecordId: `record:${input.sessionKey}`,
             backendSessionId: `backend:${input.sessionKey}`,
-            agentSessionId: `agent-session:${input.sessionKey}`,
           };
+          if (!harness.omitAgentSessionId) {
+            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+          }
           return Promise.resolve(handle);
         },
         startTurn(input) {

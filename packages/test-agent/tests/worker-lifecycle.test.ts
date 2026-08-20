@@ -201,7 +201,15 @@ function* useGatedController(doc: { path: string; source: string }): Operation<G
       const message = parsed.value;
       if (!attached) {
         attached = true;
-        conn.send(encodeMessage({ t: "config", mode: "scenario", doc, journal: [...journal] }));
+        conn.send(
+          encodeMessage({
+            t: "config",
+            mode: "scenario",
+            doc,
+            journal: [...journal],
+            nativeSessionId: "native-worker-lifecycle",
+          }),
+        );
         yield* each.next();
         continue;
       }

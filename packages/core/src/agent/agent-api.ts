@@ -2,8 +2,10 @@
  * The Agent Api — Effection Api for stateful coding-agent sessions
  * (specs/acp-client-spec.md). Distinct from the stateless Sample Api.
  *
- * Providers install middleware for `agent`, `session`, and `prompt`; the
- * base handlers fail until one is installed. `requestPermission` has a
+ * Providers install middleware for `agent`, `session`, `prompt`, and
+ * `launch`; the base handlers fail until one is installed. A provider that
+ * answers `prompt` does not thereby answer `launch` — native session launch
+ * is its own capability and is installed on its own. `requestPermission` has a
  * working base implementation that denies every request; permission
  * policies layer on top of it.
  *
@@ -44,6 +46,34 @@ export interface PromptOptions {
   timeout?: number;
 }
 
+/**
+ * Which logical agent and session a native launch prepares. Mirrors
+ * `PromptOptions` for `agent` and `session`; a launch is not bounded by a
+ * turn timeout, because the person using the native UI decides when it ends.
+ */
+export interface LaunchOptions {
+  agent?: Agent;
+  session?: string | Session;
+}
+
+/**
+ * A native UI that was prepared, handed the terminal, and exited normally.
+ *
+ * Nonzero exit, a signal, cancellation, detach failure, process creation
+ * failure, an unsupported provider, and preparation refusal all fail the
+ * operation instead of producing one of these.
+ *
+ * `launcher` is the provider's stable adapter identity — `claude`, `codex` —
+ * never an executable path. `nativeSessionId` is the identity the provider
+ * asserted, never one XMD inferred from an ACP string.
+ */
+export interface SessionLaunchResult {
+  agent: Agent;
+  session: Session;
+  nativeSessionId: string;
+  launcher: string;
+}
+
 export type PermissionMode = "approve-all" | "approve-reads" | "deny-all";
 
 export interface PermissionOption {
@@ -71,6 +101,7 @@ export interface AgentApi {
   agent(name?: string): Operation<Agent>;
   session(name?: string): Operation<Session>;
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
+  launch(instructions: string, options?: LaunchOptions): Operation<SessionLaunchResult>;
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
 }
 
@@ -112,6 +143,10 @@ export const Agent: Api<AgentApi> = createApi<AgentApi>("Agent", {
         throw noProvider("prompt()");
       },
     };
+  },
+  // deno-lint-ignore require-yield
+  *launch(_instructions: string, _options?: LaunchOptions): Operation<SessionLaunchResult> {
+    throw noProvider("launch()");
   },
   // deno-lint-ignore require-yield
   *requestPermission(request: PermissionRequest): Operation<PermissionOutcome> {
