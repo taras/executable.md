@@ -25,7 +25,12 @@
  */
 
 import type { Operation } from "effection";
-import { useWaitingAdvisoryLock } from "./advisory-lock.ts";
+import {
+  type AdvisoryLockFile,
+  releaseAdvisoryLock,
+  takeAdvisoryLock,
+  useWaitingAdvisoryLock,
+} from "./advisory-lock.ts";
 
 /** The sidecar two owners of one database-and-journal pair take turns on. */
 export function recoveryCoordinationPath(databasePath: string): string {
@@ -42,4 +47,28 @@ export function recoveryCoordinationPath(databasePath: string): string {
  */
 export function holdRecoveryCoordination(databasePath: string): Operation<void> {
   return useWaitingAdvisoryLock(recoveryCoordinationPath(databasePath));
+}
+
+/**
+ * Hold coordination for a write-capable connection, for as long as it is open.
+ *
+ * A connection is the other owner of the pair, and it owns it the whole time it
+ * exists rather than only while it is opening. SQLite recovers a hot journal on
+ * whichever read first needs a page, and for a cached connection that read can
+ * come at any moment — long after the opening, from a caller that knows nothing
+ * about any of this. A hold that ended with the opening would leave exactly that
+ * read free to roll the journal back into the database while an inspection was
+ * copying the two, and copy and read would then describe different states.
+ *
+ * So the lock lives as long as the connection: taken here, released where the
+ * connection closes. That is also why a cached lookup pays nothing — the
+ * connection it returns is already holding it.
+ */
+export function takeConnectionCoordination(databasePath: string): Operation<AdvisoryLockFile> {
+  return takeAdvisoryLock(recoveryCoordinationPath(databasePath));
+}
+
+/** Give it back, which is what closing the connection means for the pair. */
+export function releaseConnectionCoordination(held: AdvisoryLockFile): void {
+  releaseAdvisoryLock(held);
 }

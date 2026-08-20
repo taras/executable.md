@@ -1977,8 +1977,10 @@ journal or history. No owner descriptor or cancellation-request file exists.
 The same adapter owns a second, separate advisory lock: a waiting exclusive
 lock on its own deterministic sidecar, which serializes the two callers that
 act on a database and its rollback journal as a pair. Every write-capable
-opening holds it across the first read that performs or proves recovery, and
-read-only inspection holds it to copy a still-crashed pair. Waiting is
+connection holds it for as long as it is open, because any read through it can
+be the one that recovers a journal a later crash left; read-only inspection
+holds it to copy a still-crashed pair, and therefore waits while this host has
+such a connection open. Waiting is
 cooperative rather than a blocking host call, so a cancellation and the owner
 being waited for both keep making progress. It is not the executor lock, shares
 no sidecar name with it, produces no capability and authorizes no transition.

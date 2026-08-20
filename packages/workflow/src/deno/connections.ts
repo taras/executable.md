@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
-import { ensure, resource, scoped } from "effection";
+import { ensure, resource } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   establishJournalProvenance,
@@ -20,7 +20,11 @@ import type {
   SQLStorageLike,
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import { type ConnectionLock, createConnectionLock } from "./lock.ts";
-import { holdRecoveryCoordination } from "./recovery-coordination.ts";
+import {
+  releaseConnectionCoordination,
+  takeConnectionCoordination,
+} from "./recovery-coordination.ts";
+import type { AdvisoryLockFile } from "./advisory-lock.ts";
 import {
   createSavepointManager,
   type SavepointManager,
@@ -154,7 +158,11 @@ class SqliteStorage implements SQLStorageLike {
   }
 }
 
-function createConnection(path: string, observeSavepoint: SavepointObserver): RunConnection {
+function createConnection(
+  path: string,
+  observeSavepoint: SavepointObserver,
+  coordination: AdvisoryLockFile,
+): RunConnection {
   const database = new DatabaseSync(path);
   try {
     database.exec("PRAGMA foreign_keys = ON");
@@ -315,6 +323,9 @@ function createConnection(path: string, observeSavepoint: SavepointObserver): Ru
           active = undefined;
         }
         database.close();
+        // Released only now: while this connection existed it could recover the
+        // pair at any read, so it owned the pair for exactly that long.
+        releaseConnectionCoordination(coordination);
       }
     },
   };
@@ -385,10 +396,10 @@ export function createWorkflowRunConnections(
       if (existing !== undefined) {
         return existing;
       }
-      return yield* scoped(function* () {
-        // Held across the opening and its first page read, so a reader copying
-        // this database beside its journal cannot catch the pair half-recovered.
-        yield* holdRecoveryCoordination(canonical);
+      // Taken for as long as the connection lives, not merely while it opens:
+      // any later read through it can be the one that recovers a hot journal.
+      const coordination = yield* takeConnectionCoordination(canonical);
+      try {
         if (!open) {
           throw new WorkflowConnectionStateError("the workflow storage provider has closed");
         }
@@ -397,12 +408,16 @@ export function createWorkflowRunConnections(
         // connection per database is what this registry exists to keep.
         const raced = entries.get(canonical);
         if (raced !== undefined) {
+          releaseConnectionCoordination(coordination);
           return raced;
         }
-        const created = createConnection(canonical, observeSavepoint);
+        const created = createConnection(canonical, observeSavepoint, coordination);
         entries.set(canonical, created);
         return created;
-      });
+      } catch (error) {
+        releaseConnectionCoordination(coordination);
+        throw error;
+      }
     },
 
     registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease {

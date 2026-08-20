@@ -443,6 +443,15 @@ function* remove(
     }
 
     const path = workflowRunPath(root, hold.runId);
+    // Closed before anything reads it, for two reasons. The connection this
+    // host holds on the file has to go before the file does, or the next caller
+    // opens the one that was removed. And a write-capable connection owns the
+    // database-and-journal pair while it is open, so recognizing a crashed run
+    // below would otherwise wait for a connection only this line closes.
+    // Closing changes nothing about the file, so nothing is recognized any
+    // differently for having done it first.
+    connections.close(path);
+
     // Recognized before anything is removed: deleting a file because its name
     // matches would remove whatever happened to be there, and an absent run is
     // reported rather than treated as an idempotent success.
@@ -451,9 +460,6 @@ function* remove(
       return recognized;
     }
 
-    // Closed first: the connection this host holds on the file has to go before
-    // the file does, or the next caller opens the one that was removed.
-    connections.close(path);
     yield* rm(path);
     return Ok({ removed: ["run-storage"] });
   });

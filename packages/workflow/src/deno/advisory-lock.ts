@@ -124,6 +124,51 @@ export function useAdvisoryLock(path: string): Operation<AdvisoryLockFile | unde
 }
 
 /**
+ * Wait for the exclusive lock at `path` and hand it to an owner that outlives
+ * this call.
+ *
+ * A scope-bound hold cannot express a lock that belongs to a cached connection:
+ * that connection outlives the call that opened it, and so must its lock. The
+ * caller therefore releases explicitly, and the only safe place to do that is
+ * wherever it closes the thing the lock belongs to.
+ *
+ * Nothing is leaked by cancelling the wait. Until the lock is taken this holds
+ * only an open descriptor, and the `finally` closes it; once it is taken the
+ * handoff has happened and the owner is responsible for it.
+ */
+export function* takeAdvisoryLock(path: string): Operation<AdvisoryLockFile> {
+  yield* ensureDir(dirname(path));
+
+  let file: AdvisoryLockFile | undefined;
+  let locked = false;
+  let handed = false;
+  try {
+    file = locking().openSync(path, { read: true, write: true, create: true });
+    while (!locked) {
+      locked = file.tryLockSync(true);
+      if (!locked) {
+        yield* sleep(RETRY_INTERVAL);
+      }
+    }
+    handed = true;
+    return file;
+  } finally {
+    if (!handed && file !== undefined) {
+      if (locked) {
+        release(file);
+      } else {
+        file.close();
+      }
+    }
+  }
+}
+
+/** Give back a lock `takeAdvisoryLock` handed over. */
+export function releaseAdvisoryLock(file: AdvisoryLockFile): void {
+  release(file);
+}
+
+/**
  * Wait for the exclusive lock at `path`, asking again until it is free.
  *
  * Waiting is cooperative on purpose. `lockSync` would block the whole

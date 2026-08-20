@@ -558,13 +558,15 @@ authorized lease and transaction handle. The provider invalidates that record
 before commit or rollback, so a retained handle or token never becomes valid
 again in a later transaction.
 
-Creating that physical connection holds recovery coordination across the
-opening and one first read that touches a page, which is what makes SQLite put
-back a rollback journal a lost host left behind. The coordination is released
-only after that read succeeds, so no reader can copy the pair while it is
-half-recovered. It is taken once per physical opening — never per transaction,
-lease or effect — and a cached entry answers without taking it at all. Closing
-and reopening a path is a new physical opening and takes it again.
+Creating that physical connection takes recovery coordination, and holds it
+until the connection closes. The opening performs one first read that touches a
+page, which is what makes SQLite put back a rollback journal a lost host left
+behind; the hold continues past it because any later read through the same
+connection can be the one that meets a journal a process crashing afterwards
+left. It is taken once per physical opening — never per transaction, lease or
+effect — and a cached entry answers without taking anything, because the
+connection it answers with already holds it. Closing and reopening a path is a
+new physical opening and takes it again.
 
 Opening existing storage performs structural recognition, retained-root and
 content validation, the live/current comparison and the singleton run-row read

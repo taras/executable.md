@@ -681,6 +681,11 @@ function* leaveHot(root: string, runId: string): Operation<void> {
   expect(directCode(path)).toBe(READONLY_ROLLBACK);
 }
 
+/** Where a run keeps the journal that says what to put back. */
+function journalOf(database: string): string {
+  return `${database}-journal`;
+}
+
 /** The SQLite extended code an independent read-only reader meets, if any. */
 function directCode(path: string): number | undefined {
   const database = new DatabaseSync(path, { readOnly: true });
@@ -1337,6 +1342,51 @@ describe("Tier WLI — inspecting a crashed run", () => {
       yield* until(chmod(String(raised.scratchPath), 0o700));
       yield* rm(String(raised.scratchPath), { recursive: true });
     }
+  });
+
+  it("WLI17: a connection that is already open owns the pair until it closes", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "cached-1");
+    const path = runPath(root, "cached-1");
+
+    yield* scoped(function* () {
+      // A write-capable connection this host opened while the run was healthy,
+      // and has not read through since. Its opening recovered nothing, because
+      // there was nothing to recover yet.
+      const connections = yield* useWorkflowRunConnections();
+      const cached = yield* connections.at(path);
+      expect(cached.path).toBe(path);
+
+      // Now another process crashes underneath it. The rollback journal is
+      // there, and the next read through this connection — whenever some
+      // unrelated caller happens to make one — is what would put it back.
+      yield* leaveHot(root, "cached-1");
+      expect(yield* exists(journalOf(path))).toBe(true);
+
+      const watched = recorder();
+      const inspecting = yield* spawn(() =>
+        withObserved(root, watched.observe, () => inspect("cached-1")),
+      );
+      yield* sleep(1_000);
+
+      // So inspection may not copy the pair. It is waiting, it has created no
+      // scratch, and the journal it would have copied is still exactly there.
+      expect(watched.phases).toEqual([]);
+      expect(yield* exists(journalOf(path))).toBe(true);
+      expect(directCode(path)).toBe(READONLY_ROLLBACK);
+
+      // Closing the connection is what hands the pair over.
+      connections.close(path);
+      const answered = yield* inspecting;
+      expect(answered.ok).toBe(true);
+      if (!answered.ok) {
+        throw answered.error;
+      }
+      expect(answered.value.record.runId).toBe("cached-1");
+      // It recovered a copy, and the retained pair is still the crash's.
+      expect(watched.phases).toContain("source-pair-copied");
+      expect(directCode(path)).toBe(READONLY_ROLLBACK);
+    });
   });
 
   it("WLI16: the clean path costs nothing, and the hot one takes no authority", function* () {

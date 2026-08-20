@@ -652,8 +652,21 @@ uncommitted transaction, so the resulting recovered inspection snapshot is the
 committed state the retained database describes rather than a repaired or
 alternative run.
 
-Every write-capable opening of a retained workflow database holds the same
-coordination through the first read that performs or proves recovery complete.
+Every write-capable connection to a retained workflow database holds the same
+coordination for as long as it is open. SQLite recovers a hot journal on
+whichever read first needs a page, and for a connection a host already has that
+read can come at any moment, from a caller that knows nothing about any of this.
+A hold that ended once the connection was open would leave exactly that read
+free to roll the journal back while an inspection was copying the database and
+the journal, so the two would describe different states. A connection therefore
+owns the pair from the moment it opens until it closes, and a cached lookup
+takes nothing because the connection it answers with is already holding it.
+
+One consequence is deliberate: inspection of a crashed run waits while this host
+has a write-capable connection to it open. That connection is the pair's owner
+and is the very thing that may recover it. Deleting a run closes its connection
+before recognizing it, so recognition never waits for a connection only the
+deletion itself would close.
 The coordination is separate from the executor lock, produces no public
 capability, authorizes no transition and cannot make an inspector appear to be
 a workflow executor. Its deterministic empty sidecar occupies a provider-owned

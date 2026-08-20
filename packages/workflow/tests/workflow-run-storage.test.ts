@@ -168,6 +168,14 @@ function promptly<T>(body: () => Operation<T>): Operation<T | undefined> {
   return race([body(), stillWaiting()]);
 }
 
+/** Take the coordination sidecar and give it straight back. */
+function* heldCoordination(path: string): Operation<string> {
+  return yield* scoped(function* () {
+    yield* holdRecoveryCoordination(path);
+    return "held";
+  });
+}
+
 function* stillWaiting(): Operation<undefined> {
   yield* sleep(500);
   return undefined;
@@ -204,51 +212,39 @@ describe("Tier WS — authoritative connection and complete schema", () => {
     expect(refused).toBeInstanceOf(Error);
   });
 
-  it("WS0a: one physical opening takes recovery coordination once", function* () {
+  it("WS0a: a write-capable connection owns the pair for as long as it is open", function* () {
     const root = yield* useStorageRoot();
     const connections = createWorkflowRunConnections();
     const path = join(root, "coordinated.sqlite");
 
     const first = yield* connections.at(path);
 
-    // Cached lookups pay nothing for coordination: they answer with the same
-    // connection while another owner is holding the sidecar, because the
-    // opening that had to prove recovery already happened.
-    yield* scoped(function* () {
-      yield* holdRecoveryCoordination(path);
-      expect(yield* promptly(() => connections.at(path))).toBe(first);
-      expect(yield* promptly(() => connections.at(join(root, ".", "coordinated.sqlite")))).toBe(
-        first,
-      );
-    });
+    // Cached lookups wait for nothing and pay nothing: the connection they
+    // answer with is already holding the pair.
+    expect(yield* promptly(() => connections.at(path))).toBe(first);
+    expect(yield* promptly(() => connections.at(join(root, ".", "coordinated.sqlite")))).toBe(
+      first,
+    );
 
-    // And neither does the work that runs on it. A transaction and a DOFS
-    // effect complete while another owner holds the sidecar, because
-    // coordination belongs to the opening rather than to anything done through
-    // it afterwards.
-    yield* scoped(function* () {
-      yield* holdRecoveryCoordination(path);
-      const ran = yield* promptly(function* () {
-        const connection = yield* connections.at(path);
-        const transaction = connection.beginTransaction();
-        connection.database.exec("BEGIN IMMEDIATE");
-        connection.dofs.transactionSync(() => {
-          connection.dofs.run("CREATE TABLE effect_ran (value TEXT)");
-        });
-        connection.database.exec("COMMIT");
-        connection.finishTransaction(transaction);
-        return "ran";
-      });
-      expect(ran).toBe("ran");
-    });
+    // Nobody else may have the pair while that connection exists, because any
+    // read through it can be the one that recovers a hot journal.
+    expect(yield* promptly(() => heldCoordination(path))).toBeUndefined();
 
-    // Closing it makes the next call a new physical opening, which waits for
-    // the same sidecar all over again.
+    // Not even after work has been done through it. A transaction and a DOFS
+    // effect neither reacquire coordination nor give it up.
+    const transaction = first.beginTransaction();
+    first.database.exec("BEGIN IMMEDIATE");
+    first.dofs.transactionSync(() => {
+      first.dofs.run("CREATE TABLE effect_ran (value TEXT)");
+    });
+    first.database.exec("COMMIT");
+    first.finishTransaction(transaction);
+    expect(yield* promptly(() => connections.at(path))).toBe(first);
+    expect(yield* promptly(() => heldCoordination(path))).toBeUndefined();
+
+    // Closing the connection is what hands the pair back.
     connections.close(path);
-    yield* scoped(function* () {
-      yield* holdRecoveryCoordination(path);
-      expect(yield* promptly(() => connections.at(path))).toBeUndefined();
-    });
+    expect(yield* promptly(() => heldCoordination(path))).toBe("held");
 
     const reopened = yield* connections.at(path);
     expect(reopened).not.toBe(first);
