@@ -439,6 +439,13 @@ why the run id is also stored inside the database and checked against the one
 that was asked for. A file at the right path holding a different run is a
 collision or tampering, reported as its own failure and left unchanged.
 
+Two sidecars share the root without being candidates for it. `<hash>.lock` is
+the executor lock, and `<hash>.recovery.lock` is the coordination two owners of
+a database-and-journal pair take turns on. Both are derived rather than
+registered, both may be empty, and both may outlive the run they name. Neither
+matches the `<hash>.sqlite` pattern discovery enumerates, so neither is ever
+read, listed or mistaken for a run.
+
 ### 9.4 What a run retains
 
 - The immutable identity above.
@@ -550,6 +557,14 @@ active record containing its path, connection generation, open state,
 authorized lease and transaction handle. The provider invalidates that record
 before commit or rollback, so a retained handle or token never becomes valid
 again in a later transaction.
+
+Creating that physical connection holds recovery coordination across the
+opening and one first read that touches a page, which is what makes SQLite put
+back a rollback journal a lost host left behind. The coordination is released
+only after that read succeeds, so no reader can copy the pair while it is
+half-recovered. It is taken once per physical opening — never per transaction,
+lease or effect — and a cached entry answers without taking it at all. Closing
+and reopening a path is a new physical opening and takes it again.
 
 Opening existing storage performs structural recognition, retained-root and
 content validation, the live/current comparison and the singleton run-row read
@@ -764,6 +779,16 @@ differently is reported as itself:
 | record malformed | a stored row does not describe what its column claims |
 | request | a value a caller supplied describes nothing storage can keep |
 | transaction | a transaction cannot be started, continued or committed as asked |
+| inspection recovery | a crashed run could not be read from a private recovered copy |
+
+Inspection recovery is a distinct condition because it says nothing about the
+run. It reports that read-only inspection could not produce or clean up the
+private copy it reads a crashed run from — the retained database and journal
+are unchanged, and their next write-capable owner still recovers them. Damage a
+recovered copy then reveals keeps its own condition above and is never folded
+into this one. The refusal names the retained database; it names the private
+copy as well, and only, when removing that copy failed and an operator has to
+remove it by hand.
 
 Recognizing a database is not the same as reading its table names. Every
 table's stored definition is compared with the definition this build creates,

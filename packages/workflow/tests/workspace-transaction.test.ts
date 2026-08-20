@@ -305,7 +305,7 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
           activeName = event.name;
         }
       });
-      const connection = connections.at(join(root, `${phase}.sqlite`));
+      const connection = yield* connections.at(join(root, `${phase}.sqlite`));
       connection.database.exec("BEGIN IMMEDIATE");
       const transaction = connection.beginTransaction();
       const failure = yield* raised(
@@ -327,7 +327,7 @@ describe("Tier WTX — unified WorkflowRun savepoints", () => {
     }
 
     const connections = createWorkflowRunConnections();
-    const connection = connections.at(join(root, "creation.sqlite"));
+    const connection = yield* connections.at(join(root, "creation.sqlite"));
     connection.database.exec("BEGIN IMMEDIATE");
     const transaction = connection.beginTransaction();
     connection.database.close();

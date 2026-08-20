@@ -14,17 +14,20 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, until } from "effection";
+import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import process from "node:process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { workflowRunPath } from "@executablemd/workflow/deno";
+import { when } from "@effectionx/converge";
 
 interface Fixture {
   readonly repository: string;
@@ -100,6 +103,44 @@ function xmd(fixture: Fixture, args: string[]) {
   });
 }
 
+const RECOVERY_CHILD = fileURLToPath(
+  new URL("../../workflow/tests/support/workflow-recovery-child.ts", import.meta.url),
+);
+
+/**
+ * Leave this run's database beside a rollback journal nobody will put back.
+ *
+ * A real child opens the real file, spills pages inside an open transaction and
+ * is killed where it stands, because that is the only way the condition exists
+ * at all: everything a test can do to itself commits or rolls back.
+ */
+function* leaveHot(path: string): Operation<void> {
+  yield* scoped(function* () {
+    const child = yield* exec(process.execPath, {
+      arguments: ["run", "--allow-all", "--frozen", RECOVERY_CHILD, "hot", path],
+    });
+    let announced = false;
+    yield* spawn(function* () {
+      const output = yield* child.stdout;
+      let next = yield* output.next();
+      while (!next.done) {
+        if (new TextDecoder().decode(next.value).includes("READY")) {
+          announced = true;
+        }
+        next = yield* output.next();
+      }
+    });
+    yield* when(
+      function* () {
+        expect(announced).toBe(true);
+      },
+      { timeout: 30_000 },
+    );
+    process.kill(child.pid, "SIGKILL");
+    yield* child.join();
+  });
+}
+
 /** Bytes and mode together: what a read must leave exactly as it found it. */
 function* fingerprint(path: string): Operation<string> {
   const bytes = yield* until(readFile(path));
@@ -135,6 +176,43 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       expect(snapshot.executions).toHaveLength(1);
       expect(typeof snapshot.currentWorkspaceRootId).toBe("string");
       expect(typeof snapshot.journalFrontier.eventId).toBe("string");
+    });
+  });
+
+  it("WFI1b: a run a lost host left mid-transaction is reported in the same shapes", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
+      const path = workflowRunPath(fixture.runs, "release-1");
+
+      const clean = yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).join();
+      const expected = JSON.parse(clean.stdout);
+
+      yield* leaveHot(path);
+      const before = yield* fingerprint(path);
+
+      // Every read the provider recovers privately, and each is the shape its
+      // caller already documented.
+      const structured = yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).join();
+      expect(structured.code).toBe(0);
+      expect(JSON.parse(structured.stdout)).toEqual(expected);
+
+      const history = yield* xmd(fixture, ["workflow", "history", "release-1", "--json"]).join();
+      expect(history.code).toBe(0);
+      const events: HistoryRow[] = JSON.parse(history.stdout);
+      expect(events.length).toBeGreaterThan(0);
+      expect(typeof events[0]?.eventId).toBe("string");
+
+      const listed = yield* xmd(fixture, ["workflow", "list", "--json"]).join();
+      expect(listed.code).toBe(0);
+      const rows = JSON.parse(listed.stdout);
+      expect(rows.map((row: { record: { runId: string } }) => row.record.runId)).toEqual([
+        "release-1",
+      ]);
+
+      // Read three times and still exactly as the crash left it, waiting for a
+      // write-capable owner to recover it.
+      expect(yield* fingerprint(path)).toBe(before);
+      expect(yield* exists(`${path}-journal`)).toBe(true);
     });
   });
 

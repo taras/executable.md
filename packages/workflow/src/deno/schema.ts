@@ -744,6 +744,41 @@ const SQLITE_NOTADB = 26;
 const SQLITE_CONSTRAINT_FOREIGNKEY = 787;
 
 /**
+ * `SQLITE_READONLY_ROLLBACK`: a hot journal has to go back before anything can
+ * be read, and this connection is not allowed to write it.
+ *
+ * The extended code is the whole signal. Primary `SQLITE_READONLY` (8) and the
+ * other extended readonly conditions describe a database nobody may write for
+ * some other reason, and answering those with crash recovery would be this
+ * adapter guessing. The message is not consulted: several conditions share the
+ * words "attempt to write a readonly database".
+ */
+const SQLITE_READONLY_ROLLBACK = 776;
+
+/**
+ * A crashed run, read through a connection that cannot recover it.
+ *
+ * Provider-private and deliberately not a `WorkflowStorageError`: it is not an
+ * outcome any caller receives, it is the one condition read-only inspection
+ * answers by recovering a private copy instead. Whatever inspection produces
+ * after that — a snapshot, a recognition refusal, or a recovery failure — is
+ * what the caller sees, so this never leaves the Deno provider.
+ */
+export class WorkflowReadonlyRollbackError extends Error {
+  override name = "WorkflowReadonlyRollbackError";
+
+  readonly path: string;
+
+  constructor(path: string) {
+    super(
+      `The workflow run database at ${JSON.stringify(path)} holds a rollback journal a lost ` +
+        "host left behind, and a read-only connection cannot put it back.",
+    );
+    this.path = path;
+  }
+}
+
+/**
  * The typed refusal a SQLite failure describes, or the failure unchanged.
  *
  * Keyed on the code SQLite reports rather than on the words in its message, so
@@ -756,6 +791,8 @@ export function translateSqliteError(error: unknown, path: string): unknown {
       return new WorkflowDatabaseFormatError(path, "SQLite does not recognize it as a database");
     case SQLITE_CORRUPT:
       return new WorkflowDatabaseCorruptError(path, "SQLite reported a damaged image");
+    case SQLITE_READONLY_ROLLBACK:
+      return new WorkflowReadonlyRollbackError(path);
     default:
       return error;
   }

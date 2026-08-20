@@ -118,7 +118,7 @@ export function* beginExecution(
   // fabricated lock is refused before a connection exists. The same lock is
   // checked again inside the transaction, because a scope can end
   // in between.
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
 
   // One transaction. Recovery decides what the previous workflow executor's execution
   // became, admission decides whether this caller may continue, and an admitted
@@ -293,7 +293,7 @@ export function* forkExecution(
   snapshot: ForkSourceSnapshot,
   head: ForkHeadEvents,
 ): Operation<Result<BeginOutcome>> {
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
 
   const outcome = yield* scoped(function* (): Operation<Result<BegunRows | Refused>> {
     yield* connection.lock.hold();
@@ -353,7 +353,7 @@ export function stageFork(
     // left by an attempt that did not finish, and it describes nothing.
     yield* rm(path, { force: true });
 
-    const connection = connections.at(path);
+    const connection = yield* connections.at(path);
     const built = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
       yield* connection.lock.hold();
       return inLifecycleTransaction(connection, path, (transaction) => {
@@ -481,7 +481,7 @@ export function* settleExecution(
     return checked;
   }
   const completion = checked.value;
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
 
   return yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
     yield* connection.lock.hold();
@@ -892,7 +892,7 @@ export function* cancelRun(
   if (!(yield* exists(path))) {
     return Err(new WorkflowRunNotFoundError(hold.runId));
   }
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
 
   const outcome = yield* scoped(function* (): Operation<Result<WorkflowRunRecord | Refused>> {
     yield* connection.lock.hold();

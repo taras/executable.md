@@ -321,6 +321,7 @@ export {
   WorkflowDefinitionError,
   WorkflowDocumentExecutionError,
   WorkflowIncompleteVersionOneError,
+  WorkflowInspectionRecoveryError,
   WorkflowRecordMalformedError,
   WorkflowRequestError,
   WorkflowRunConflictError,

@@ -9092,6 +9092,30 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.
 | WFC18 | Resume from the tree | A resume reaches every stage after the root and every component are deleted from the checkout |
 | WFC19 | Unreachable bundle | A resume whose retained repository is gone is refused, publishes no status, and leaves the lifecycle records exactly as they were |
 
+### Tier WLI — Immutable lifecycle inspection
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §4. Runs against
+the production Deno adapter, on real run files.
+
+| # | Test | Verify |
+|---|------|--------|
+| WLI1 | One snapshot, one moment | The record, executions, journal frontier and current Workspace root are read together, so no two of them describe different commits |
+| WLI2 | An absent run | Reported as absent, and no database is created by having looked |
+| WLI3 | Reading changes nothing | `status`, `list` and `history` leave every byte, row and file mode as they found them |
+| WLI4 | List order and namespace | Newest update first, and only the `<hash>.sqlite` namespace is enumerated |
+| WLI5/WLI5b/WLI5c | One bad candidate fails the list | A foreign candidate, a healthy database at another run's name, and a retained id no reader can see each fail the whole request rather than returning the healthy subset |
+| WLI6 | History is what was retained | Every event with its exact id, Workspace root and authored source |
+| WLI7 | An unparseable source | A present source position that does not parse makes that entry unreadable rather than the run |
+| WLI8 | Inspection reaches nothing | A partial run is inspected without reaching storage, Git or the journal |
+| WLI9 | Ids are not patterns | An id holding `*` or `?` addresses exactly its own run |
+| WLI10 | A crashed run reports its committed state | A run whose host was killed mid-transaction reports the state it committed — not the record change, deletions or insertions that transaction held — and its database and journal are byte-for-byte what the crash left, still refusing a direct read-only reader with `SQLITE_READONLY_ROLLBACK` |
+| WLI11 | Discovery is still complete | A healthy run and two crashed ones are listed together in the existing order, and at most one private copy exists at a time |
+| WLI12 | The pair is copied under coordination | A real second process opening the same database through the production registry cannot finish its first read while inspection holds coordination with the pair copied; and an owner that recovers the source first is read as an ordinary run, with nothing copied |
+| WLI13 | Recognition survives recovery | Damage a recovered copy reveals keeps its own refusal, naming the retained database rather than the removed copy, and still fails the whole list |
+| WLI14 | Only the exact condition recovers | `SQLITE_READONLY_ROLLBACK` alone enters recovery; the primary readonly code and every other extended readonly code — including ones carrying the identical message — do not |
+| WLI15 | A copy that cannot be removed | A real removal refusal is the authoritative outcome: the typed inspection-recovery error carries the retained database and the private directory that remains, the retained pair is unchanged, and the reported directory is really there |
+| WLI16 | The common path costs nothing | A clean run is read directly, creating no private copy, no coordination sidecar and no recovery step |
+
 ### Tier WFI — What a run hands to canonical core
 
 | # | Test | Verify |

@@ -188,7 +188,7 @@ function* createWorkflowRun(
 
   try {
     const inspectRecognition = yield* WorkflowRunRecognition.expect();
-    const connection = connections.at(path);
+    const connection = yield* connections.at(path);
     const { lock } = connection;
     // Held across initialization, so a second caller creating the same run
     // waits here rather than inside a synchronous `BEGIN IMMEDIATE` that
@@ -238,7 +238,7 @@ function* lookupWorkflowRun(
 
   try {
     const inspectRecognition = yield* WorkflowRunRecognition.expect();
-    const connection = connections.at(path);
+    const connection = yield* connections.at(path);
     const { database, lock } = connection;
     const record = yield* scoped(function* (): Operation<Result<WorkflowRunRecord>> {
       yield* lock.hold();

@@ -13,19 +13,24 @@
  * run.
  */
 
-import { readFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, until } from "effection";
+import { ensure, resource, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { copyFile, stat, writeTextFile } from "@effectionx/fs";
+import { copyFile, exists, rm, stat, writeTextFile } from "@effectionx/fs";
+import { exec } from "@effectionx/process";
+import { when } from "@effectionx/converge";
 import type { Close, DurableEvent, Yield } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import {
   Git,
   WorkflowDatabaseFormatError,
+  WorkflowInspectionRecoveryError,
   WorkflowLifecycle,
   type WorkflowHistoryEntry,
   type WorkflowLifecycleSnapshot,
@@ -36,6 +41,14 @@ import {
   WorkflowRunStorage,
 } from "../mod.ts";
 import { useWorkflowLifecycle } from "../deno.ts";
+import { useWorkflowRunConnections } from "../src/deno/connections.ts";
+import {
+  installWorkflowLifecycle,
+  type RecoveryObserver,
+  type RecoveryPhase,
+} from "../src/deno/lifecycle.ts";
+import { holdRecoveryCoordination } from "../src/deno/recovery-coordination.ts";
+import { translateSqliteError, WorkflowReadonlyRollbackError } from "../src/deno/schema.ts";
 import { EMPTY_WORKSPACE_ROOT_ID } from "../src/deno/workspace/manifest.ts";
 import {
   creation,
@@ -584,3 +597,441 @@ function* fileFingerprint(path: string): Operation<string> {
   const bytes = yield* until(readFile(path));
   return `${bytes.toString("base64")}:${(yield* stat(path)).mode}`;
 }
+
+/**
+ * Tier WLI — inspecting a run a lost host left mid-transaction (issue #513).
+ *
+ * The condition is physical and cannot be simulated: a rollback journal exists
+ * only between the moment SQLite starts writing pages and the moment it
+ * commits, and every in-process way of ending work commits or rolls back. So a
+ * real child process opens the real database, changes committed rows inside one
+ * immediate transaction, and is killed where it stands.
+ *
+ * What inspection then has to do is read that run without becoming its owner.
+ * Recovery belongs to the next write-capable connection, and these suites hold
+ * inspection to leaving that job — and every byte of the pair it is about —
+ * exactly where it found it.
+ */
+
+const RECOVERY_CHILD = fileURLToPath(
+  new URL("./support/workflow-recovery-child.ts", import.meta.url),
+);
+const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
+
+/** `SQLITE_READONLY_ROLLBACK`, as an independent reader meets it. */
+const READONLY_ROLLBACK = 776;
+
+/** A live child process, and whatever it has announced so far. */
+interface RecoveryChild {
+  readonly pid: number;
+  announced(): boolean;
+}
+
+function useRecoveryChild(mode: "hot" | "open", path: string): Operation<RecoveryChild> {
+  return resource<RecoveryChild>(function* (provide) {
+    const child = yield* exec(process.execPath, {
+      arguments: ["run", "--allow-all", "--frozen", RECOVERY_CHILD, mode, path],
+      cwd: REPOSITORY,
+    });
+    let announced = false;
+    yield* spawn(function* () {
+      const output = yield* child.stdout;
+      let next = yield* output.next();
+      while (!next.done) {
+        if (new TextDecoder().decode(next.value).includes("READY")) {
+          announced = true;
+        }
+        next = yield* output.next();
+      }
+    });
+    // Killed rather than asked: this child exists to be lost, and a mode that
+    // is still waiting has no other way to end.
+    yield* ensure(function* () {
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // Already gone, which is the outcome this wanted.
+      }
+      yield* child.join();
+    });
+    yield* provide({ pid: child.pid, announced: () => announced });
+  });
+}
+
+/**
+ * Leave this run's database beside a rollback journal nobody will put back.
+ *
+ * The child is killed once it says it has spilled pages inside an open
+ * transaction, so what remains is a healthy database one rollback away from its
+ * last committed state — the exact condition a read-only connection cannot get
+ * past.
+ */
+function* leaveHot(root: string, runId: string): Operation<void> {
+  const path = runPath(root, runId);
+  yield* scoped(function* () {
+    const child = yield* useRecoveryChild("hot", path);
+    yield* when(
+      function* () {
+        expect(child.announced()).toBe(true);
+      },
+      { timeout: 30_000 },
+    );
+    process.kill(child.pid, "SIGKILL");
+  });
+  expect(directCode(path)).toBe(READONLY_ROLLBACK);
+}
+
+/** The SQLite extended code an independent read-only reader meets, if any. */
+function directCode(path: string): number | undefined {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    database.prepare("SELECT count(*) FROM sqlite_schema").get();
+    return undefined;
+  } catch (error) {
+    if (error instanceof Error && "errcode" in error && typeof error.errcode === "number") {
+      return error.errcode;
+    }
+    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
+/** Let a write-capable owner do what recovery is actually its job. */
+function recoverInPlace(path: string): void {
+  const database = new DatabaseSync(path);
+  try {
+    database.prepare("SELECT count(*) FROM sqlite_schema").get();
+  } finally {
+    database.close();
+  }
+}
+
+/** Everything about the retained pair that inspection may not change. */
+interface PairPrint {
+  readonly database: string;
+  readonly journal: string;
+}
+
+function* pairPrint(path: string): Operation<PairPrint> {
+  const journal = `${path}-journal`;
+  return {
+    database: yield* fileFingerprint(path),
+    journal: (yield* exists(journal)) ? yield* fileFingerprint(journal) : "absent",
+  };
+}
+
+/** What recovered inspection did, in the order it did it. */
+interface Recorder {
+  readonly phases: RecoveryPhase[];
+  readonly directories: string[];
+  /** The highest number of scratch directories alive at any one moment. */
+  concurrent(): number;
+  observe: RecoveryObserver;
+}
+
+function recorder(
+  pause: Partial<Record<RecoveryPhase, (directory: string) => Operation<void>>> = {},
+): Recorder {
+  const phases: RecoveryPhase[] = [];
+  const directories: string[] = [];
+  let live = 0;
+  let peak = 0;
+  return {
+    phases,
+    directories,
+    concurrent: () => peak,
+    *observe(observation) {
+      phases.push(observation.phase);
+      if (observation.phase === "scratch-created") {
+        directories.push(observation.directory);
+        live += 1;
+        peak = Math.max(peak, live);
+      }
+      if (observation.phase === "before-cleanup") {
+        live -= 1;
+      }
+      yield* (pause[observation.phase] ?? noPause)(observation.directory);
+    },
+  };
+}
+
+// deno-lint-ignore require-yield
+function* noPause(_directory: string): Operation<void> {
+  return undefined;
+}
+
+/** Read a run through a lifecycle installation a test can watch. */
+function withObserved<T>(
+  root: string,
+  observe: RecoveryObserver,
+  body: () => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const connections = yield* useWorkflowRunConnections();
+    yield* installWorkflowLifecycle({ root }, connections, observe);
+    return yield* body();
+  });
+}
+
+describe("Tier WLI — inspecting a crashed run", () => {
+  it("WLI10: a hot run reports its last committed state, and stays hot", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "hot-1");
+    const path = runPath(root, "hot-1");
+
+    // What the run committed, read while it is still readable.
+    const committed = yield* withLifecycle(root, function* () {
+      return { snapshot: yield* snapshotOf("hot-1"), history: yield* historyOf("hot-1") };
+    });
+    expect(committed.snapshot.record.status).toBe("completed");
+
+    yield* leaveHot(root, "hot-1");
+    const before = yield* pairPrint(path);
+    expect(before.journal).not.toBe("absent");
+
+    const watched = recorder();
+    const read = yield* withObserved(root, watched.observe, function* () {
+      return { snapshot: yield* snapshotOf("hot-1"), history: yield* historyOf("hot-1") };
+    });
+
+    // The killed transaction changed the record and deleted and inserted
+    // events. None of it is here: this is the state the run committed.
+    expect(read.snapshot).toEqual(committed.snapshot);
+    expect(read.history).toEqual(committed.history);
+    expect(watched.phases).toEqual([
+      "scratch-created",
+      "source-pair-copied",
+      "scratch-recovered",
+      "before-cleanup",
+      "scratch-created",
+      "source-pair-copied",
+      "scratch-recovered",
+      "before-cleanup",
+    ]);
+
+    // The retained pair is byte-for-byte what the crash left, and still hot:
+    // recovering it is the next write-capable owner's job, not inspection's.
+    expect(yield* pairPrint(path)).toEqual(before);
+    expect(directCode(path)).toBe(READONLY_ROLLBACK);
+    for (const directory of watched.directories) {
+      expect(yield* exists(directory)).toBe(false);
+    }
+  });
+
+  it("WLI11: list answers a healthy run and a hot one together, one copy at a time", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "healthy-1");
+    yield* retainedRun(root, "hot-2");
+    yield* retainedRun(root, "hot-3");
+    yield* leaveHot(root, "hot-2");
+    yield* leaveHot(root, "hot-3");
+
+    const watched = recorder();
+    const listed = yield* withObserved(root, watched.observe, function* () {
+      const answered = yield* list();
+      if (!answered.ok) {
+        throw answered.error;
+      }
+      return answered.value;
+    });
+
+    expect(listed.map((entry) => entry.record.runId).sort()).toEqual([
+      "healthy-1",
+      "hot-2",
+      "hot-3",
+    ]);
+    // Two candidates were recovered, and never both at once.
+    expect(watched.directories).toHaveLength(2);
+    expect(watched.concurrent()).toBe(1);
+  });
+
+  it("WLI12: a copy is taken before any owner may recover, and a recovered source is read as itself", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "race-1");
+    yield* leaveHot(root, "race-1");
+    const path = runPath(root, "race-1");
+
+    // Paused holding coordination, with the pair already copied. A real owner
+    // opening the same database through the production registry cannot finish
+    // its first read until this releases.
+    const release = withResolvers<void>();
+    const copied = withResolvers<void>();
+    const watched = recorder({
+      *"source-pair-copied"(_directory) {
+        copied.resolve();
+        yield* release.operation;
+      },
+    });
+
+    yield* scoped(function* () {
+      const inspecting = yield* spawn(() =>
+        withObserved(root, watched.observe, () => snapshotOf("race-1")),
+      );
+      yield* copied.operation;
+
+      const owner = yield* useRecoveryChild("open", path);
+      yield* sleep(1_000);
+      // Still hot, still untouched: the owner is waiting on the sidecar.
+      expect(owner.announced()).toBe(false);
+      expect(yield* exists(`${path}-journal`)).toBe(true);
+
+      release.resolve();
+      const snapshot = yield* inspecting;
+      expect(snapshot.record.runId).toBe("race-1");
+
+      // Released, the owner finishes its read and recovers the source itself.
+      yield* when(
+        function* () {
+          expect(owner.announced()).toBe(true);
+        },
+        { timeout: 30_000 },
+      );
+      expect(yield* exists(`${path}-journal`)).toBe(false);
+    });
+
+    // Recovered by its owner, the run is ordinary again: inspection reads it
+    // directly and copies nothing.
+    const after = recorder();
+    const plain = yield* withObserved(root, after.observe, () => snapshotOf("race-1"));
+    expect(plain.record.runId).toBe("race-1");
+    expect(after.phases).toEqual([]);
+
+    // The other way round: an owner holds coordination and recovers the source
+    // while inspection is already waiting for it. The coordinated retry reads
+    // the run as itself, so nothing is ever copied.
+    yield* retainedRun(root, "race-2");
+    yield* leaveHot(root, "race-2");
+    const second = recorder();
+    const holding = withResolvers<void>();
+    const owned = withResolvers<void>();
+    yield* scoped(function* () {
+      yield* spawn(function* () {
+        yield* scoped(function* () {
+          yield* holdRecoveryCoordination(runPath(root, "race-2"));
+          holding.resolve();
+          yield* owned.operation;
+          recoverInPlace(runPath(root, "race-2"));
+        });
+      });
+      yield* holding.operation;
+
+      const waiting = yield* spawn(() =>
+        withObserved(root, second.observe, () => snapshotOf("race-2")),
+      );
+      yield* sleep(500);
+      // Its direct read has already refused; it is waiting on the sidecar.
+      expect(second.phases).toEqual([]);
+
+      owned.resolve();
+      const snapshot = yield* waiting;
+      expect(snapshot.record.runId).toBe("race-2");
+    });
+    expect(second.phases).toEqual([]);
+  });
+
+  it("WLI13: damage a copy reveals keeps its own refusal, naming the source", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "damaged-1");
+    // A healthy database under another run's name: recognized by location, and
+    // recognized the same way after recovery because the copy keeps the exact
+    // candidate filename.
+    yield* copyFile(runPath(root, "damaged-1"), runPath(root, "impostor-1"));
+    yield* leaveHot(root, "impostor-1");
+
+    const watched = recorder();
+    const answered = yield* withObserved(root, watched.observe, () => list());
+
+    expect(answered.ok).toBe(false);
+    if (answered.ok) {
+      throw new Error("a candidate holding another run was listed");
+    }
+    expect(answered.error).toBeInstanceOf(WorkflowRunLocationMismatchError);
+    // The refusal is about the run's own file, not the copy it was read from.
+    expect(answered.error.message).toContain(runPath(root, "impostor-1"));
+    for (const directory of watched.directories) {
+      expect(answered.error.message).not.toContain(directory);
+      expect(yield* exists(directory)).toBe(false);
+    }
+    // A failed list is not a shorter one.
+    expect(Object.hasOwn(answered, "value")).toBe(false);
+  });
+
+  it("WLI14: only the exact rollback code enters recovery", function* () {
+    const sqlite = (errcode: number): Error => {
+      const error = new Error("attempt to write a readonly database");
+      return Object.assign(error, { code: "ERR_SQLITE_ERROR", errcode });
+    };
+
+    expect(translateSqliteError(sqlite(776), "/runs/a.sqlite")).toBeInstanceOf(
+      WorkflowReadonlyRollbackError,
+    );
+    // The primary readonly code and every other extended readonly condition —
+    // including the ones carrying the identical message — are somebody else's
+    // problem and pass through as themselves.
+    for (const errcode of [8, 264, 520, 1032, 1288]) {
+      expect(translateSqliteError(sqlite(errcode), "/runs/a.sqlite")).not.toBeInstanceOf(
+        WorkflowReadonlyRollbackError,
+      );
+    }
+  });
+
+  it("WLI15: a copy that cannot be removed is reported with where it is", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "cleanup-1");
+    yield* leaveHot(root, "cleanup-1");
+    const path = runPath(root, "cleanup-1");
+    const before = yield* pairPrint(path);
+
+    // A real refusal: the scratch directory is made unwritable underneath the
+    // removal, so teardown meets a filesystem that says no.
+    const watched = recorder({
+      *"before-cleanup"(directory) {
+        yield* until(chmod(directory, 0o500));
+      },
+    });
+    const refused = yield* withObserved(root, watched.observe, () => inspect("cleanup-1"));
+
+    expect(refused.ok).toBe(false);
+    if (refused.ok) {
+      throw new Error("an unremovable copy was reported as a successful inspection");
+    }
+    expect(refused.error).toBeInstanceOf(WorkflowInspectionRecoveryError);
+    const failure = refused.error;
+    if (!(failure instanceof WorkflowInspectionRecoveryError)) {
+      throw failure;
+    }
+    expect(failure.path).toBe(path);
+    expect(failure.scratchPath).toBe(watched.directories[0]);
+    expect(failure.message).toContain(String(failure.scratchPath));
+
+    // The residue it named is really there, and the retained pair is untouched.
+    expect(yield* exists(String(failure.scratchPath))).toBe(true);
+    expect(yield* pairPrint(path)).toEqual(before);
+    expect(directCode(path)).toBe(READONLY_ROLLBACK);
+
+    yield* until(chmod(String(failure.scratchPath), 0o700));
+    yield* rm(String(failure.scratchPath), { recursive: true });
+  });
+
+  it("WLI16: a clean run is read directly, with no copy and no sidecar", function* () {
+    const root = yield* useStorageRoot();
+    yield* retainedRun(root, "clean-1");
+    const path = runPath(root, "clean-1");
+
+    // The run host that created it has closed, so the empty sidecar its
+    // write-capable opening took is removed here: what this proves is that
+    // inspection does not create one.
+    yield* rm(`${path}.recovery.lock`, { force: true });
+    const before = yield* fileFingerprint(path);
+
+    const watched = recorder();
+    const snapshot = yield* withObserved(root, watched.observe, () => snapshotOf("clean-1"));
+
+    expect(snapshot.record.runId).toBe("clean-1");
+    expect(watched.phases).toEqual([]);
+    expect(watched.directories).toEqual([]);
+    expect(yield* exists(`${path}.recovery.lock`)).toBe(false);
+    expect(yield* fileFingerprint(path)).toBe(before);
+  });
+});

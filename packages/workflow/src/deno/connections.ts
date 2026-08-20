@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { resolve } from "node:path";
-import { ensure, resource } from "effection";
+import { ensure, resource, scoped } from "effection";
 import type { WorkflowRunDatabase, WorkflowRunTransaction } from "../storage/api.ts";
 import {
   establishJournalProvenance,
@@ -20,6 +20,7 @@ import type {
   SQLStorageLike,
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import { type ConnectionLock, createConnectionLock } from "./lock.ts";
+import { holdRecoveryCoordination } from "./recovery-coordination.ts";
 import {
   createSavepointManager,
   type SavepointManager,
@@ -106,7 +107,7 @@ export interface RunConnection {
 }
 
 export interface WorkflowRunConnections {
-  at(path: string): RunConnection;
+  at(path: string): Operation<RunConnection>;
   registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease;
   registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
@@ -158,6 +159,12 @@ function createConnection(path: string, observeSavepoint: SavepointObserver): Ru
   try {
     database.exec("PRAGMA foreign_keys = ON");
     database.exec("PRAGMA busy_timeout = 5000");
+    // Reads a page, and reading a page is what makes SQLite notice a rollback
+    // journal a lost host left behind and put it back. The pragmas above settle
+    // connection behavior without touching the file, so a connection that
+    // stopped at them would have proven nothing about the state it is about to
+    // write to. The caller holds recovery coordination across this line.
+    database.prepare("SELECT count(*) FROM sqlite_schema").get();
   } catch (error) {
     database.close();
     throw error;
@@ -369,7 +376,7 @@ export function createWorkflowRunConnections(
   }
 
   return {
-    at(path: string): RunConnection {
+    *at(path: string): Operation<RunConnection> {
       if (!open) {
         throw new WorkflowConnectionStateError("the workflow storage provider has closed");
       }
@@ -378,9 +385,24 @@ export function createWorkflowRunConnections(
       if (existing !== undefined) {
         return existing;
       }
-      const created = createConnection(canonical, observeSavepoint);
-      entries.set(canonical, created);
-      return created;
+      return yield* scoped(function* () {
+        // Held across the opening and its first page read, so a reader copying
+        // this database beside its journal cannot catch the pair half-recovered.
+        yield* holdRecoveryCoordination(canonical);
+        if (!open) {
+          throw new WorkflowConnectionStateError("the workflow storage provider has closed");
+        }
+        // Asked again after the wait: another caller on this host may have
+        // opened the same database while this one waited, and one authoritative
+        // connection per database is what this registry exists to keep.
+        const raced = entries.get(canonical);
+        if (raced !== undefined) {
+          return raced;
+        }
+        const created = createConnection(canonical, observeSavepoint);
+        entries.set(canonical, created);
+        return created;
+      });
     },
 
     registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease {

@@ -118,7 +118,7 @@ function* crash(root: string, runId: string): Operation<void> {
   });
   yield* ensure(() => connections.close());
 
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
   readTransaction(connection.database, () => {
     verifySchema(connection.database, path, connection.dofs);
   });

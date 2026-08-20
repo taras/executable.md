@@ -124,7 +124,7 @@ function* deliverAnswer(
     return Err(new WorkflowRunNotFoundError(runId));
   }
 
-  const connection = connections.at(path);
+  const connection = yield* connections.at(path);
 
   const waiting = yield* scoped(function* (): Operation<Result<RetainedWait>> {
     yield* connection.lock.hold();
