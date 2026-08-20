@@ -259,28 +259,29 @@ prose into a component.
 The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
 `UserCheckpoint` therefore uses shipped syntax throughout. None of them asks for
 a directory: a workflow Agent is given none, so each stage reasons over what its
-prompt renders. `Implementation` is the exception, and not for that reason: its loop body invokes `<Expand>`, `<Git.Push>`, `<PullRequest>`, and
-`<Issue>`, which resolve to nothing. The `<Git.Add>` and `<Git.Commit>` beside
-them do resolve — under a workflow run, where the host registers them.
+prompt renders. `Implementation` is the exception, and not for that reason: its loop body
+invokes `<Expand>` and `<Issue>`, which resolve to nothing. The `<Git.Add>`,
+`<Git.Commit>`, `<Git.Push>` and `<PullRequest>` beside them do resolve — under
+a workflow run, where the host registers them.
 
-Four names in this workflow resolve to nothing today, and each is owed by one
+Two names in this workflow resolve to nothing today, and each is owed by one
 issue:
 
 | Name | Owed by |
 | --- | --- |
 | `<Expand>` | #369 |
-| `<Git.Push>` | #370 |
 | `<Issue>` | #296 |
-| `<PullRequest>` | #295 |
 
-`<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left that list when
-#294 shipped them as Workspace-local durable effects, and #297 shipped the
-shared Git-host reconciliation the remote effects are built over.
-`<Agent.AddDir>` is absent for a different reason: #302 settles that a workflow
-Agent gets no checkout, no materialization, no cwd of its own and no registered
-directory, so it is not an implementation target this workflow is waiting on.
-What still resolves to nothing is what reaches a remote or a forge, plus the
-constrained evaluator.
+`<Git.Push>` and `<PullRequest>` left that list when #495 and #504 shipped them
+as registered workflow-host components; `<Git.Switch>`, `<Git.Add>` and
+staged-only `<Git.Commit>` left it when #294 shipped them as Workspace-local
+durable effects. All four remote and local Git effects sit over the shared
+Git-host reconciliation #297 shipped. `<Agent.AddDir>` is absent for a different
+reason: #302 settles that a workflow Agent gets no checkout, no materialization,
+no cwd of its own and no registered directory, so it is not an implementation
+target this workflow is waiting on. What still resolves to nothing is the forge
+component that files a deferred finding, plus the public component that expands
+generated XMD.
 
 `<Repository>`, `<Worktree>` and `<Dir>` have left that list:
 `@executablemd/workflow/composition` registers all three (#293, shipped), which
@@ -328,7 +329,7 @@ whose dependency order this workflow consumes in the same sequence.
 | read-only `status`, `list` and `history` over immutable lifecycle snapshots | #367 slice 1, delivered by #460 | shipped |
 | single-executor ownership, atomic begin/settle, cancellation, deletion, all owned by the executor lock | #367 slice 2, delivered by #466 | shipped |
 | durable suspension, and releasing the executor lock back | #367 slice 3, delivered by #475 | shipped |
-| versioned history checkpoints, compatible forks, `history --forkable` and forkability reasons | #368 | open |
+| versioned history checkpoints, compatible forks, `history --forkable`, forkability reasons, lineage, changed-definition replay admission and retained Workspace-root copying | #368, delivered by #498 | shipped |
 
 `xmd workflow start` is what makes this document a workflow rather than a script,
 and it exists: `xmd workflow start [--id] [--props-*] <definition>` creates the
@@ -367,8 +368,8 @@ and continuing it unattended. Reachable stage names are not a running workflow.
 | `<Repository>`, self-closing `<Worktree>`, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | shipped — registered by the workflow host |
 | `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
 | shared Git-host effect reconciliation | #297 | shipped — one request-only surface; the components over it are not |
-| explicit `<Git.Push>` | #370 | open |
-| `<PullRequest>` over an explicitly pushed head | #295 | open |
+| explicit `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
+| `<PullRequest>` over an explicitly pushed head | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
 | provenance-linked deferred `<Issue>` | #296 | open |
 
 Names are stable component identity, not magic configuration lookup: a
@@ -393,28 +394,52 @@ merge.
 `<Git.Push>` stays separate from both `<Git.Commit>` and `<PullRequest>` because
 a remote ref cannot join the local transaction. It is an external effect that
 observes remote state and adopts, performs, or fails — never force-pushes, never
-resolves divergence implicitly. `<PullRequest>` depends on that explicit pushed
-head rather than performing a hidden push.
+resolves divergence implicitly, and never changes upstream tracking. It takes no
+props and produces no result: the remote is the Repository's own `origin`, the
+branch is the one the selected checkout is on, and the commit is the one that
+branch points at, so there is nothing left to name. `<PullRequest>` depends on
+that explicit pushed head rather than performing a hidden push — it requires
+this run's own matching successful Push evidence for the exact Repository, head
+branch, destination ref and commit, before a creation and before an update
+alike.
 
 **3. Agent authority and constrained execution.**
 
 | Capability | Issue | Status |
 | --- | --- | --- |
 | provider-correct filesystem containment | #227 | open — `API.Files`, the host provider and the run's transaction-bound provider are built; the host validate-then-use race is what remains |
-| the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory | #302 | open |
-| `<Expand>`: preflight and expand constrained Agent-generated XMD | #369 | open; public component name undecided |
+| the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory | #302 | architecture settled; the bounded request/result loop is open |
+| `evaluateGeneratedXmd()` and the pinned observation policy a run admits a fragment under | #497 | shipped — trusted-host APIs, observation only |
+| `<Expand>`: the public component that expands constrained Agent-generated XMD | #369 | open; public component name undecided |
 | transactional Worker Shell | #363 | open; containment and transaction POCs complete |
 
 The read-only ceiling is the host's, not the document's, which is why no
 `<Sandbox>` appears anywhere in this workflow. An implementor that cannot write
-returns XMD instead, and a constrained evaluator parses the complete fragment,
-resolves an allowlist to pinned component identities supplied by the trusted
-parent definition, refuses everything outside that set — including eval and exec
-blocks, imports, native execution, and arbitrary JavaScript expressions — and
-only then expands what it admitted. The allowlist is authority, not prompting
-guidance: generated source cannot grant itself push, pull-request, or secret
-access by naming a component. The exact filtered generated source is retained, so
-replay expands the same fragment without asking the Agent again.
+returns XMD instead, and the evaluator that admits it is built (#497). It parses
+the complete fragment and walks all of it before the first effect, resolves an
+allowlist to pinned component identities the trusted host supplies, and refuses
+everything outside that set — eval and exec blocks, expression props,
+interpolation that reads a binding, a result binding, an unadmitted component,
+and a malformed or out-of-ceiling request — naming the construct class and never
+echoing the source. Only then does it expand what it admitted. Resolution
+consults neither `componentDirs`, nor a registration, nor the workflow component
+bundle, so a same-named file beside the checkout answers nothing. The allowlist
+is authority, not prompting guidance: generated source cannot grant itself push,
+pull-request, or secret access by naming a component. One durable event records
+the decision before the first admitted observation, the admitted source and
+normalized policy are retained in it, and a continuation is held to the exact
+ceilings it was admitted under — so replay expands the same fragment without
+asking the Agent again.
+
+What that evaluator admits today is **observation**: pinned identities and exact
+request ceilings, with `<Fetch>` on the allowlist only when the run states the
+requests it may perform, and each observation retained by its own ordinary
+durable effect. It admits no file mutation. Three things this workflow's
+implementation stage needs are still open: the bounded request/result loop that
+lets an Agent ask the repository anything at all (#302, #369), admission for the
+mutating fragment this stage writes, and the public `<Expand>` component that a
+document would write to reach any of it (#369). `evaluateGeneratedXmd()` is a
+trusted-host API, and no document calls it.
 
 **4. Compose and certify.**
 
