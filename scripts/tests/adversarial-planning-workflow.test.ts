@@ -2,11 +2,15 @@
  * #290 criterion 6 — an exhausted planning loop.
  *
  * `Planning` declares `<Loop name="planning" max={5}>`, so exercising every
- * failing iteration costs twenty agent turns in one invocation. That does not
- * fit the fixed twenty-second `<Test>` timeout when each turn is an ACP round
- * trip, so the run happens here instead: the real `Planning` component, one
- * execution, one contextual working directory, and a synchronous stub root
- * Agent provider in place of the transport.
+ * failing iteration costs twenty agent turns in one invocation. A `<Test>` can
+ * declare its own timeout (#503) and twenty seconds is only the default, so the
+ * bound is not what decides this. What decides it is the evidence: the run
+ * happens here because the stub root Agent provider makes the complete
+ * twenty-call trace and the authorization boundary directly observable, and
+ * finishes in well under a second. A long ACP scenario would take longer to
+ * prove less. So: the real `Planning` component, one execution, one contextual
+ * working directory, and a synchronous stub root Agent provider in place of the
+ * transport.
  *
  * Nothing about the document under test changes. The component resolves from
  * the workflow directory exactly as `xmd test` resolves it, including the

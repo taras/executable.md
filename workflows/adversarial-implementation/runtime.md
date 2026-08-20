@@ -157,8 +157,14 @@ The wait is here too, as substrate. `suspendFor()` suspends a run durably and
 gives its executor lock back (#367), and a typed answer can be delivered to it
 (#300). What is missing is anything that reaches or acts on it: `suspendFor()`
 is an Api operation with no v1 element spelling it, this document calls nothing
-that suspends, delivery executes nothing, no scheduler resumes a run, and forks
-and forkability remain #368.
+that suspends, delivery executes nothing, and no scheduler resumes a run.
+
+Explicit history forks are shipped (#368, delivered by #498) — compatible forks,
+`history --forkable`, forkability reasons, lineage, changed-definition replay
+admission and retained Workspace-root copying. That is a new run continuing one
+run's retained history under a definition the caller names, and it is a
+different thing from an Agent provider continuing a session: no provider-level
+Agent-session fork exists, and nothing here schedules or resumes either one.
 
 ## Cleanup follows the invocation
 

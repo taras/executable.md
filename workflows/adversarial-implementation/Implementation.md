@@ -395,24 +395,41 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 ## Agents inspect; XMD mutates
 
-The implementor's proposal is XMD source, and `<Expand>` is what runs it (#369;
-the public component name is still open, and the workflow Workspace
-specification uses this spelling as a placeholder). The evaluator parses the
-complete fragment before its first effect, resolves the allowlist to pinned
-component identities supplied by this document, refuses everything outside that
-set — eval and exec blocks, imports, native execution, arbitrary JavaScript
-expressions — and only then expands what it admitted. Rejected syntax produces
-no partial effect.
+The implementor's proposal is XMD source, and `<Expand>` is what runs it — a
+documented placeholder, not a component. #369 still owes the public name and the
+component itself, and the workflow Workspace specification uses this spelling to
+say where one would go.
 
-The allowlist is authority, not prompting guidance. It admits `<Dir>`, `<File>`,
-and `<DeleteFile>` and nothing else, so a fragment cannot stage, commit, push,
-open a pull request, or reach a secret by naming a component. `<Git.Add>` in
-particular stays out: what gets staged and committed is this document's decision,
-not the proposal's.
+The evaluator underneath it is built (#497), as trusted-host APIs no document
+calls. `evaluateGeneratedXmd()` parses the complete fragment and walks all of it
+inside the durable admission before the first effect, resolves an allowlist to
+pinned component identities the trusted host supplies, and refuses everything
+outside that set — eval and exec blocks, expression props, interpolation that
+reads a binding, a result binding, an unadmitted component, and a malformed or
+out-of-ceiling request. A refusal names the construct class and never echoes the
+generated source. Rejected syntax produces no partial effect: a fragment whose
+second element is an executable block performs nothing at all, however safe its
+first element was.
 
-The exact filtered generated source is retained, so a replay expands the same
-fragment without asking the implementor again — and so the source is available to
-the reviewer and to the user as the literal description of what happened.
+The allowlist is authority, not prompting guidance, and a name is not an
+identity: resolution consults neither `componentDirs`, nor a registration, nor
+the workflow component bundle, so a same-named file beside the checkout answers
+nothing. One durable event records the decision before the first admitted
+observation, carrying the exact admitted source and the normalized policy, and a
+continuation is held to the exact ceilings it was admitted under — so a replay
+expands the same fragment without asking the implementor again, and the source
+is available to the reviewer and to the user as the literal description of what
+happened.
+
+**What is admitted today is observation, not mutation.** #497 shipped pinned
+observation identities and exact request ceilings — `<Fetch>` is on the
+allowlist only when the run states the requests it may perform, and each
+observation is retained by its own ordinary durable effect. The allowlist this
+stage writes above asks for `<Dir>`, `<File>` and `<DeleteFile>`, and admission
+for a fragment that mutates files is not built. So `<Git.Add>` staying out of it
+is this document's decision to keep — what gets staged and committed is this
+document's word, not the proposal's — but it is not yet a decision any evaluator
+enforces here.
 
 Being lexically inside `<Agent>` selects an agent for nested prompts and grants
 that agent nothing. `<Expand>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, and
@@ -432,8 +449,10 @@ let an agent ask for more belongs to #302 and #369.
 Each step is one expansion, one effect, and one transaction:
 
 ```text
-<Expand>       → each admitted <File> publishes its mutation, the resulting
-                 logical Workspace root, and its journal result together
+<Expand>       → the target shape: each admitted <File> would publish its
+                 mutation, the resulting logical Workspace root, and its journal
+                 result together. #497 admits observation, not mutation, and
+                 #369 still owes the component
 <Git.Add>      → stages explicit paths; "." is written explicitly because
                  omission never means all paths
 <Git.Commit>   → commits only the staged index, fails when nothing is staged,
@@ -442,8 +461,11 @@ Each step is one expansion, one effect, and one transaction:
                  paths, message evidence — not Git object contents
 <Git.Push>     → an external effect; the remote ref cannot join the local
                  transaction, so it observes remote state and adopts, performs,
-                 or fails, and never force-pushes
-<PullRequest>  → requires that pushed head; it never pushes on its own
+                 or fails, never force-pushes and never changes upstream
+                 tracking. No props, no result, nothing rendered
+<PullRequest>  → requires this run's own matching successful Push evidence for
+                 the exact Repository, head branch, destination ref and commit;
+                 it never pushes on its own and never rewrites the head
 ```
 
 Push is explicit precisely so that neither `<Git.Commit>` nor `<PullRequest>`
@@ -452,13 +474,27 @@ commit and replaying a completed push performs no remote mutation; resuming
 after uncertain completion reconciles against retained state rather than
 repeating the effect (#294, #297).
 
-**Open question for #295 and #297.** A revision iteration commits again, pushes
-the same branch again, and reaches `<PullRequest>` again under a new expansion
-identity. The reconciliation that keeps that from opening a second pull request
-is the effect-specific natural key — repository, head branch, base — rather than
-expansion identity alone. A head that advanced on the same branch is the normal
-shape of a revision, not a conflict, and #295's "conflicting head is diagnosed"
-needs to distinguish the two.
+**The upsert is settled, and this markup does not yet reach it.** #500 and #504
+settle what `<PullRequest>` does: without `number` it asks for *a* pull request
+from this head to this base, creating one or adopting the compatible one an
+interrupted earlier attempt created; with `number` it asks for *that* pull
+request, and brings its title, body, draft state and base to what the invocation
+says. Which of the two it is, is the document's own word rather than a search.
+
+The markup above passes no `number`, and a revision iteration commits again — so
+the head SHA it asks about is not the head SHA the existing pull request holds.
+An unnumbered request that finds an open pull request for the branch pair saying
+anything else is a **conflict**, deliberately: it asked for one to exist, not for
+whatever is there to become this, and rewriting it would act on a pull request
+the document never named.
+
+Reaching update mode means carrying the bound `pullRequest.number` from the
+first iteration into `number=` on the next. `<Loop>` opens no binding scope, so
+a later iteration can read what an earlier one bound — but the first iteration
+has nothing to read, and no settled composition writes "numbered after the first
+time" without inventing a guard over an unbound name. That integration is
+**#301's supervised composition**, and this document leaves the markup unchanged
+rather than choose a spelling for it.
 
 ## The reviewer sees what it judges
 
@@ -488,8 +524,10 @@ exactly, because it is what makes the review adversarial rather than uninformed:
 
 This stage does not write those fetches yet, so today it reviews the change it
 just made against the plan and the material rendered into the prompt, and an
-objection raised by anyone other than the planner reaches neither surface. Admitting `<Fetch>` inside
-Agent-generated XMD is a separate question and stays #369's.
+objection raised by anyone other than the planner reaches neither surface. A
+generated fragment can carry `<Fetch>` only when the run's own policy states the
+exact requests it may perform (#497); the public component a document would
+write to expand such a fragment stays #369's.
 
 The verdict names one head. The prompt reviews the change at `headSha` against
 `baseSha`, and a moved head requires a fresh review — the same rule #295 states
@@ -507,9 +545,9 @@ answer to disagree with the first.
 The pull-request handle stays internal. `start.md` gates on the verdict and the
 decision rather than on forge state, and the filtered journal records the
 external effect independently. A return field typed `string` would be worse than
-useless — a conforming `<PullRequest>` would perform its external effect and only
-then fail this component's return validation. If a later caller genuinely needs
-the handle, it is declared with #295's object schema, never a placeholder.
+useless — `<PullRequest>` would perform its external effect and only then fail
+this component's return validation. If a later caller genuinely needs the
+handle, it is declared with #295's settled object schema, never a placeholder.
 
 There is no `changedFiles` field in the proposal either, and for the same reason
 the stage returns no `authorized` flag: the fragment already says what it writes,
@@ -574,12 +612,12 @@ revision turn, or acceptance.
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Expand>` | #369 | unbuilt; public name open |
-| `<Git.Push>` | #370 | unbuilt |
-| `<PullRequest>` | #295 | unbuilt |
+| `<Expand>` | #369 | unbuilt; public name open. The evaluator under it is shipped (#497), for observation only |
 | `<Issue>` | #296 | unbuilt |
+| `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
+| `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host; carrying its number into a revision is #301's |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
-| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, not the components over it |
+| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and now the push and pull-request components over it |
 | the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
 
 The agent, parsing, capture, and control-flow syntax runs today, and so do the

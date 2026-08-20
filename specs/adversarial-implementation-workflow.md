@@ -290,8 +290,9 @@ source that performed it, the implementor's report, and the pull request's
 identity. A verdict describes that head alone, and a moved head requires a fresh
 review.
 
-`<PullRequest>`'s creation result is deliberately minimal: stable provider
-identity, number, URL, state, head SHA and base SHA (#295). Existing reviews,
+`<PullRequest>`'s result is deliberately minimal: filtered Repository identity,
+stable provider identity, number, URL, open state, head SHA and base SHA (#295,
+shipped). Existing reviews,
 comments and check results are separate reads rather than fields on a creation
 result that would otherwise claim to stay fresh against a remote that keeps
 changing. **That read is `<Fetch>`'s** (#456, shipped): a document reads over
@@ -495,19 +496,24 @@ explicit composition rather than one implicit workspace:
   unresolved, which says which host ran the document rather than whether the
   component exists.
 - `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` operate on the
-  contextual checkout as Workspace-local durable effects (#294). `<Git.Push>` is
-  explicit and separate (#370), and `<PullRequest>` requires that pushed head
-  rather than performing a hidden push (#295).
+  contextual checkout as Workspace-local durable effects (#294). `<Git.Push />`
+  is explicit and separate (#495, shipped): it publishes the selected checkout's
+  exact current named branch and commit to the same branch at canonical
+  `origin`, with no props, no result, nothing rendered, no force-push, no
+  upstream change and no implicit stage or commit. `<PullRequest>` requires that
+  Push's own matching successful evidence rather than performing a hidden push
+  (#295, shipped).
 - `<Issue>` reconciles an approved deferred finding (#296), over the shared
   external reconciliation of #297.
 
 Each environmental operation declares its inputs and preconditions, reconciles
 existing state, returns a structured result, and records its observed effects. A
 result is a structure, never a string standing in for one: `<PullRequest>`
-resolves stable provider identity, number, URL, state, head SHA and base SHA, and
-a stage that declared any of that as text would fail its own return validation
-after the effect had already happened. Rerunning a pull-request operation
-resolves the existing pull request rather than creating a duplicate, through the
+resolves filtered Repository identity, stable provider identity, number, URL,
+open state, head SHA and base SHA, and a stage that declared any of that as text
+would fail its own return validation after the effect had already happened.
+Rerunning a pull-request operation resolves the existing pull request rather than
+creating a duplicate, through the
 effect's natural key as well as its stable identity (#297).
 
 `<Git.Commit>` journals reconciliation evidence — repository and worktree
@@ -632,9 +638,12 @@ The wait is built too: `suspendFor()` suspends a run durably and gives its
 executor lock back (#367), and a typed answer can be delivered to it (#300).
 What is not built is anything that reaches or acts on it — no v1 Markdown
 element spells the operation, this workflow calls nothing that suspends,
-delivery executes nothing, and no scheduler resumes a run. Versioned history
-checkpoints, compatible forks, `history --forkable`, and forkability reasons
-remain #368.
+delivery executes nothing, and no scheduler resumes a run. Versioned history checkpoints, compatible forks,
+`history --forkable`, forkability reasons, lineage, changed-definition replay
+admission and retained Workspace-root copying are shipped (#368, delivered by
+#498). A fork is an explicit new run continuing one run's retained history; it
+is not an Agent provider continuing a session, and nothing schedules or resumes
+either.
 
 **Still missing: who answered.** The journal records the validated decision, the
 question fingerprint, and the document execution it belongs to. It does not
@@ -874,8 +883,10 @@ The exercise succeeds when:
 7. The run composes a named Repository and Worktree from its pinned base before
    discovery; the change reaches that worktree as admitted generated XMD rather
    than as agent writes, and validation evidence is recorded.
-8. `<Git.Add>`, `<Git.Commit>`, and an explicit `<Git.Push>` precede
-   `<PullRequest>`, and none of them is implied by another.
+8. `<Git.Add>`, `<Git.Commit>`, and an explicit `<Git.Push />` precede
+   `<PullRequest>`, and none of them is implied by another: the pull request
+   requires the run's own matching successful Push evidence and never publishes
+   anything itself.
 9. The planner reviews the resulting pull request, and implementation and
    review repeat when the verdict fails.
 10. The user decides whether to accept the completed change.
@@ -978,18 +989,20 @@ The exercise must resolve enough of these to implement one vertical slice:
 1. What bounded request/result loop lets an Agent observe the repository at all,
    given that it receives no checkout, no materialization, no working directory
    and no registered directory (#302, #369)?
-2. What is the public spelling and response schema of the constrained
-   generated-XMD evaluator, and which components does the first allowlist admit
-   (#369)?
-3. What state makes external effects safe to repeat or resume after
-   interruption, and how does a revision iteration reach the *same* pull request
-   rather than a second one — expansion identity alone cannot answer it, so the
-   effect's natural key has to, and a head that deliberately advanced on the same
-   branch must be distinguishable from a conflicting one (#295, #297)?
-4. Which fetches does a review actually write? `<PullRequest>`'s creation result
-   is deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer
-   is handed the rest — but no stage composes those reads yet, and admitting
-   `<Fetch>` inside generated XMD stays #369's.
+2. What is the public spelling of the component a document writes to expand
+   constrained generated XMD, and what does a *mutating* fragment's admission
+   require (#369)? The evaluator itself is settled and built for observation
+   (#497): complete preflight inside the admission, pinned identities, exact
+   request ceilings, one retained decision, and replay held to it.
+3. How does a revision iteration reach the *same* pull request? The effect is
+   settled (#295, #500, #504): an unnumbered invocation asks for one to exist
+   and a numbered one asks for that exact open pull request to say this. What is
+   unsettled is the composition — a loop whose first iteration has no number to
+   carry and whose later iterations do (#301).
+4. Which fetches does a review actually write? `<PullRequest>`'s result is
+   deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer is
+   handed the rest — but no stage composes those reads yet, and the public
+   component that expands a fragment carrying one stays #369's.
 5. Which host mechanism closes the validate-then-use race for each supported
    runtime, now that a run-owned Workspace resolves a document path without
    producing a host path at all (#227)?
