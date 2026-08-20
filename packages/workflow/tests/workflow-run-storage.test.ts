@@ -222,6 +222,26 @@ describe("Tier WS — authoritative connection and complete schema", () => {
       );
     });
 
+    // And neither does the work that runs on it. A transaction and a DOFS
+    // effect complete while another owner holds the sidecar, because
+    // coordination belongs to the opening rather than to anything done through
+    // it afterwards.
+    yield* scoped(function* () {
+      yield* holdRecoveryCoordination(path);
+      const ran = yield* promptly(function* () {
+        const connection = yield* connections.at(path);
+        const transaction = connection.beginTransaction();
+        connection.database.exec("BEGIN IMMEDIATE");
+        connection.dofs.transactionSync(() => {
+          connection.dofs.run("CREATE TABLE effect_ran (value TEXT)");
+        });
+        connection.database.exec("COMMIT");
+        connection.finishTransaction(transaction);
+        return "ran";
+      });
+      expect(ran).toBe("ran");
+    });
+
     // Closing it makes the next call a new physical opening, which waits for
     // the same sidecar all over again.
     connections.close(path);

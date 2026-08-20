@@ -182,10 +182,20 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
   it("WFI1b: a run a lost host left mid-transaction is reported in the same shapes", function* () {
     yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
       yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
+      // A second run nothing happens to, so the list below has to answer a
+      // healthy run and a crashed one together.
+      yield* xmd(fixture, ["workflow", "start", "--id=healthy-1", "flows/release.md"]).expect();
       const path = workflowRunPath(fixture.runs, "release-1");
 
       const clean = yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).join();
       const expected = JSON.parse(clean.stdout);
+      const cleanHistory = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        "release-1",
+        "--json",
+      ]).join();
+      const expectedHistory = JSON.parse(cleanHistory.stdout);
 
       yield* leaveHot(path);
       const before = yield* fingerprint(path);
@@ -199,13 +209,18 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       const history = yield* xmd(fixture, ["workflow", "history", "release-1", "--json"]).join();
       expect(history.code).toBe(0);
       const events: HistoryRow[] = JSON.parse(history.stdout);
+      // The same events, in the same order, as before the crash.
+      expect(events).toEqual(expectedHistory);
       expect(events.length).toBeGreaterThan(0);
       expect(typeof events[0]?.eventId).toBe("string");
 
       const listed = yield* xmd(fixture, ["workflow", "list", "--json"]).join();
       expect(listed.code).toBe(0);
       const rows = JSON.parse(listed.stdout);
+      // The healthy run and the crashed one, together, in the order the
+      // command already answers in.
       expect(rows.map((row: { record: { runId: string } }) => row.record.runId)).toEqual([
+        "healthy-1",
         "release-1",
       ]);
 

@@ -833,6 +833,11 @@ function* recoverSnapshot<T>(
   read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
   observe: RecoveryObserver,
 ): Operation<Result<T>> {
+  // Whether this call reached an answer of its own. A cleanup refusal found on
+  // the way out of an answered call becomes that call's `Err`; one found while
+  // the call is being cancelled has nobody to answer, so it is raised instead
+  // and reaches whoever cancelled it.
+  let answered = false;
   try {
     return yield* scoped(function* (): Operation<Result<T>> {
       let directory: string | undefined;
@@ -849,7 +854,10 @@ function* recoverSnapshot<T>(
         const created = directory;
         yield* observe({ phase: "before-cleanup", directory: created });
         try {
-          yield* rm(created, { recursive: true });
+          // Forced, so a directory something else already removed is removal
+          // that succeeded. Reporting residue at a path that holds nothing
+          // would send an operator after a copy that is not there.
+          yield* rm(created, { recursive: true, force: true });
         } catch {
           throw new WorkflowInspectionRecoveryError(source, created);
         }
@@ -883,6 +891,7 @@ function* recoverSnapshot<T>(
           return undefined;
         });
         if (retried !== undefined) {
+          answered = true;
           return retried;
         }
         if (directory === undefined) {
@@ -892,20 +901,20 @@ function* recoverSnapshot<T>(
         const copy = join(directory, basename(source));
         recoverCopy(copy);
         yield* observe({ phase: "scratch-recovered", directory });
-        return readSnapshot(copy, source, read);
+        const recovered = readSnapshot(copy, source, read);
+        answered = true;
+        return recovered;
       } catch {
         // Coordination, copying and the recovery read itself. What the copy
         // then turned out to describe — a damaged image, another run's
         // identity, an unparseable row — keeps its own type and never arrives
         // here.
+        answered = true;
         return Err(new WorkflowInspectionRecoveryError(source));
       }
     });
   } catch (error) {
-    // A cleanup refusal reaches here only when this call was not cancelled. A
-    // cancelled one cannot answer with a `Result` at all, so its `halt()`
-    // raises this same error instead.
-    if (error instanceof WorkflowInspectionRecoveryError) {
+    if (answered && error instanceof WorkflowInspectionRecoveryError) {
       return Err(error);
     }
     throw error;
