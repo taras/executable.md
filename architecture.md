@@ -1058,31 +1058,6 @@ performs a proven absence exactly once, and refuses conflict and permanent
 ambiguity. A Git host need not implement every kind; one that does not refuses
 from observation, before any remote work.
 
-Issue creation is a boundary of its own, and that separation is the point rather
-than an accident of layering. An Issue provider does not necessarily own a Git
-repository — Atlassian issue tracking owns none — so an Atlassian issue could
-not truthfully execute or persist as a Git-host effect. `<Issue>` therefore has
-its own contextual routing operation and its own durable effect type,
-`issue_effect`, and reuses the reconciliation mechanics above internally rather
-than by sharing the Git-host boundary. What is Issue-owned, and therefore an
-Issue compatibility boundary, is the stable API name, the normalized request,
-the provider identity, the natural key, the result and the durable effect type.
-
-Which external system an issue is requested in is lexical context, and whether
-that target is authorized is the provider's. The nearest tracker supplies a
-canonical target URL and an optional provider discriminator; the adapter-private
-ceiling installed beside the credential decides whether that target may be
-reached at all. A tracker narrows within the ceiling and can never widen it,
-which is what keeps a replaceable context from being a grant.
-
-A provider is ordinary middleware around one operation rather than an entry in a
-registry, and that is the whole mechanism: there is no resolver to consult, no
-phase protocol to speak and no terminal to reach. What the boundary keeps for
-itself is small — it derives the idempotency key, wraps one call durably, and
-retains the URL. Everything about what a particular service can prove, including
-not creating an issue twice, is the middleware's, because that knowledge cannot
-be written once for services that do not agree on what an issue is.
-
 Reconciliation is reached through exactly one stable contextual operation, and
 that is a deliberate correction rather than a simplification. An earlier design
 selected a provider on one surface and coordinated the invocation on a second;
@@ -1162,6 +1137,54 @@ replaceable code: otherwise a handler could retire an effect as conflicted
 without a Git host ever being asked. Fail-stop rather than a bare refusal,
 because a live operation that appended nothing would leave the next one to
 append at its position.
+
+Issue creation is a separate boundary, and not that one. Everything above is the
+Git-host contract: a shared state machine, one request-only surface, phases, and
+a private terminal that is the only thing able to author an outcome. `<Issue>`
+has none of it, and none of it is missing.
+
+An Issue provider does not necessarily own a Git repository — Atlassian issue
+tracking owns none — so an Atlassian issue could not truthfully execute or
+persist as a Git-host effect. `<Issue>` therefore reaches its own stable
+contextual operation, `executablemd.workflow.issue`, whose only member is
+`upsert(issue, options)`, and journals its own durable effect type,
+`issue_effect`. What is Issue-owned, and therefore an Issue compatibility
+boundary, is that API name, the normalized request, the idempotency key, the
+result and the effect type.
+
+The difference is not only which name is called. A Git-host provider is selected
+by the reconciliation and answers through a terminal it cannot address directly,
+because the state machine is shared and the journal may hold only what that
+terminal accepted. An Issue provider is ordinary middleware: it composes
+`IssueApi.around(...)`, reads the destination it was handed, and either handles
+the request or delegates it untouched. There is no registry, no resolver, no
+phase protocol and no terminal. What would have been the state machine's job is
+the middleware's instead, because knowing whether an issue already exists is
+knowledge about one service rather than about external effects in general, and a
+shared machine would have to be told it by every adapter that disagreed.
+
+So the Issue boundary keeps little for itself: it derives an idempotency key
+from the canonical target and the run's own effect identity, wraps one call
+durably, validates that what came back is a URL and nothing else, and retains
+it. Replay answers from the journal without calling the operation at all. What
+it does not promise is that the service was touched once — observing before
+mutating, adopting a compatible issue, creating once, recovering an interrupted
+creation and refusing conflict and ambiguity all belong to the middleware, and
+the key is what this side hands over so the middleware can make it true.
+
+Which external system an issue is requested in is lexical context, and whether
+that target is authorized is the provider's. The nearest tracker supplies a
+canonical target URL and an optional provider discriminator; the adapter-private
+ceiling installed beside the credential decides whether that target may be
+reached at all. A tracker narrows within the ceiling and can never widen it,
+which is what keeps a replaceable context from being a grant.
+
+Without a discriminator each provider matches its own URLs; with one, only the
+provider of that name may act, which is how a self-hosted deployment is
+addressed. Once middleware matches it owns the answer: it never delegates
+afterwards, and nothing catches its refusal to try somebody else, because a
+search is how a document that named one service quietly reaches another. A
+destination every provider delegated reaches the operation's own base error.
 
 Every committed journal event references the current logical Workspace root.
 Only committed event boundaries are checkpoints. A history fork copies the

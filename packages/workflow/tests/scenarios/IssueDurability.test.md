@@ -30,12 +30,12 @@ discriminator, the title, the description, the tags and the assignee — so a
 changed request diverges at its position rather than answering with the result
 retained for a different question.
 
-That claim is about the fingerprint, and it is asserted directly in
-`issue-github.test.ts` rather than here. It cannot be staged by running a
-*different document* against a retained journal: an edited root is a fork
-(§11), and a fork replays the retained expansion positionally rather than
-re-reading what the new document says. A scenario written that way would report
-the first attempt's URL and look like a passing test of the opposite claim.
+That claim is compositional, and it is asserted in `issue-records.test.ts`
+rather than here. It stacks three facts: the request fingerprint covers every
+member of the request; the durable operation is named by that fingerprint; and a
+durable stream diverges when the name at a position is not the one the history
+holds there. The first is what those tests vary, one member at a time. The
+second is a line at the call site. The third is the stream's own contract.
 
 ## What the run retains
 

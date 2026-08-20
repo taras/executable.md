@@ -1,17 +1,28 @@
 /**
  * Tier WI — what a retained issue record is, and what names it.
  *
- * D1 lives here rather than in a scenario document, and the reason is worth
- * stating: the claim is that a *changed request* cannot consume the result
- * retained for a different one, and that cannot be staged by running an edited
- * document against a retained journal. An edited root is a fork (§11), and a
- * fork replays the retained expansion positionally rather than re-reading what
- * the new document says — so a scenario written that way reports the first
- * attempt's URL and passes while proving the opposite.
+ * D1 lives here rather than in a scenario document, and the reason is that the
+ * claim is compositional. "A changed request cannot consume the result retained
+ * for a different one" is three facts stacked:
  *
- * What actually decides it is the durable name, which is a function of the
- * request. So the request is varied one member at a time, here, where every
- * member can be named.
+ * 1. the request fingerprint covers every member of the request — the canonical
+ *    target, the discriminator, the run, the expansion, and each of the four
+ *    authored fields;
+ * 2. the durable operation is *named* by that fingerprint
+ *    (`upsertIssue()` in `src/issue/effect.ts`); and
+ * 3. a durable stream diverges when the name at a position is not the name the
+ *    history holds there, which is `@executablemd/durable-streams`' own
+ *    contract rather than this package's.
+ *
+ * Only the first is this module's to prove, and it is what these tests vary one
+ * member at a time. The second is one line at the call site and is read there.
+ * The third belongs to the stream and is proven where the stream is.
+ *
+ * Staging the composition end to end would mean offering one journal to a
+ * second execution whose request differs. That is worth having and is not what
+ * the scenario documents do today: a scenario that swapped root documents
+ * between attempts did not exercise the mismatch path in this suite's fixture,
+ * so the claim is recorded as proven compositionally rather than end to end.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";

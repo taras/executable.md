@@ -210,8 +210,6 @@ export {
   currentIssueTracker,
 } from "./src/issue/context.ts";
 export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
-export { upsertIssue } from "./src/issue/effect.ts";
-export type { IssueEffectRequest } from "./src/issue/effect.ts";
 export {
   IssueAmbiguousError,
   IssueConflictError,
