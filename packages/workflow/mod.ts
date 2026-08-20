@@ -73,7 +73,6 @@ export {
   GitCompositionProviderError,
   GitOperationError,
   GitOperationProtocolError,
-  IssueAuthorityError,
   PullRequestAuthorityError,
   RepositoryCompositionError,
   RepositoryCompositionProtocolError,
@@ -83,7 +82,6 @@ export {
 } from "./src/composition/errors.ts";
 export type {
   GitFailureReason,
-  IssueAuthorityReason,
   PullRequestAuthorityReason,
   RepositoryFailureReason,
   WorktreeFailureReason,
@@ -203,51 +201,89 @@ export type {
   PullRequestSnapshot,
   PullRequestUpdateKey,
 } from "./src/composition/pull-request-records.ts";
+export { admitPushEvidence } from "./src/composition/push-evidence.ts";
+export { useCompositionComponents } from "./src/composition/installation.ts";
+
+export { ISSUE_API, IssueRouting } from "./src/issue/api.ts";
+export type {
+  IssueApi,
+  IssueCall,
+  IssuePhase,
+  IssuePhaseDetails,
+  IssueProvider,
+  IssueRoutingRequest,
+} from "./src/issue/api.ts";
 export {
-  DEFER,
-  ISSUE,
+  ISSUE_TARGET_CONTEXT,
+  IssueTargetContext,
+  currentIssueTarget,
+} from "./src/issue/context.ts";
+export type { IssueTargetContextApi } from "./src/issue/context.ts";
+export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
+export { reconcileIssueEffect, useIssueProvider, withIssueProvider } from "./src/issue/effect.ts";
+export type { IssueEffectRequest } from "./src/issue/effect.ts";
+export {
+  IssueAmbiguousError,
+  IssueConflictError,
+  IssueProtocolError,
+  IssueProviderError,
+  IssueTargetError,
+  IssueUnavailableError,
+  issueFailure,
+  isIssueRefused,
+  isIssueUnavailable,
+} from "./src/issue/errors.ts";
+export type { IssueTargetReason } from "./src/issue/errors.ts";
+export {
+  canonicalIssueTarget,
+  issueProviderName,
+  resolveIssueDestination,
+  withinIssueCeiling,
+} from "./src/issue/target.ts";
+export type { IssueDestination, IssueTarget } from "./src/issue/target.ts";
+export {
+  byCodePoint,
+  completeIssueRequestJson,
   issueAgrees,
-  issueBindingJson,
-  issueBody,
-  issueDispositions,
   issueInputsJson,
   issueNaturalKey,
   issueNaturalKeyJson,
-  issueNumber,
   issueObservationsJson,
-  issueOriginMarker,
   issuePreStateJson,
+  issueReconciliationRecordJson,
+  issueRecordResultJson,
+  issueRequestFingerprint,
   issueResultJson,
-  issueResultOf,
   issueSnapshotJson,
-  parseIssueDisposition,
+  normalizedTags,
+  parseCompleteIssueRequest,
+  parseIssueCompletion,
   parseIssueInputs,
   parseIssueNaturalKey,
+  parseIssueObservation,
   parseIssueObservations,
   parseIssuePreState,
-  parseIssueRecord,
-  parseIssueResult,
+  parseIssueReconciliationRecord,
+  parseIssueRecordResult,
   parseIssueSnapshot,
   sameIssueIdentity,
-  sameIssueInputs,
   sameIssueNaturalKey,
-} from "./src/composition/issue-records.ts";
+  sameIssueRequest,
+} from "./src/issue/records.ts";
 export type {
-  IssueDisposition,
-  IssueExpectation,
+  CompleteIssueRequest,
+  IssueCompletion,
+  IssueDecision,
+  IssueEffectIdentity,
   IssueInputs,
   IssueNaturalKey,
+  IssueObservation,
   IssueObservations,
-  IssueOutcome,
   IssuePreState,
-  IssuePullRequestReference,
-  IssueRequest,
-  IssueResult,
+  IssueReconciliationRecord,
+  IssueRecordResult,
   IssueSnapshot,
-} from "./src/composition/issue-records.ts";
-export { admitPushEvidence } from "./src/composition/push-evidence.ts";
-export { admitPullRequestEvidence } from "./src/composition/pull-request-evidence.ts";
-export { useCompositionComponents } from "./src/composition/installation.ts";
+} from "./src/issue/records.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
 export type {

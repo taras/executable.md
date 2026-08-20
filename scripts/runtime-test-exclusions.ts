@@ -253,18 +253,6 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/295",
   },
   {
-    path: "packages/workflow/tests/issue.test.ts",
-    reason:
-      "drives <Issue> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter, a real executor lock and a real `git` subprocess; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
-    issue: "https://github.com/taras/executable.md/issues/296",
-  },
-  {
-    path: "packages/workflow/tests/issue-durability.test.ts",
-    reason:
-      "replays, damages and cancels an issue against a real node:sqlite WorkflowRun database and the Deno DOFS Workspace adapter; both the store and the Git subprocess are the Deno adapter's",
-    issue: "https://github.com/taras/executable.md/issues/296",
-  },
-  {
     path: "packages/workflow/tests/git-switch.test.ts",
     reason:
       "drives <Git.Switch> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and imports a physical copy of the Api module through the Deno module loader; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

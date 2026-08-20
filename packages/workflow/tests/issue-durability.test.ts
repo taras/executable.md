@@ -1,497 +1,518 @@
 /**
- * Tier WF — what an `<Issue>` retains, replays and refuses to guess.
+ * Tier WI — what an `<Issue>` retains, replays and refuses to guess.
  *
- * The claims here are about the run's database and the Git host together. A
- * replayed issue must reach no host, read no credential and append no second
+ * The claims here are about the journal and the provider together. A replayed
+ * issue must resolve no provider, read no credential and append no second
  * record; an issue an interrupted attempt already created must be adopted
- * rather than created twice; a retained record that no longer describes the
- * invocation it was recorded for must stop the run rather than be read around;
- * a cancelled creation must leave the journal exactly as it found it; and what
- * public routing middleware sees must be the frozen request and nothing that
- * can answer for it.
+ * rather than created twice; nothing a provider could not answer may become
+ * absence; and what public routing middleware sees must be the frozen request
+ * and nothing that can answer for it.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok, scoped, suspend, withResolvers } from "effection";
-import type { Operation } from "effection";
-import { GitOperationProtocolError } from "../src/composition/errors.ts";
-import { GitHost } from "../src/git-host/api.ts";
-import type { GitHostCall } from "../src/git-host/api.ts";
-import { GitHostProtocolError } from "../src/git-host/errors.ts";
-import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
-import { ISSUE } from "../src/composition/issue-records.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
-import type {
-  GitHubAccess,
-  GitHubHttpRequest,
-  GitHubHttpResponse,
-} from "../src/deno/composition/github.ts";
-import { runPath, tamper, useStorageRoot } from "./support/storage.ts";
-import { useBareRemote } from "./support/git-remotes.ts";
-import { causedBy, gitHostOutcomes, raised, runWorkflowDocument } from "./support/composition.ts";
-import { issueCalls, issueCreations, issuePatches, respond } from "./support/github.ts";
-import { dropRootClose } from "./support/replay.ts";
-import { fixture, LOCATOR, REMOTE, TOKEN } from "./support/pull-requests.ts";
+import { Err, Ok, scoped, type Operation, type Result } from "effection";
+import { createApi } from "@effectionx/context-api";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import { ISSUE_API, IssueRouting } from "../src/issue/api.ts";
+import type { IssueApi, IssueCall, IssueProvider, IssueRoutingRequest } from "../src/issue/api.ts";
 import {
-  deferring,
-  ISSUE_TITLE,
+  IssueAmbiguousError,
+  IssueConflictError,
+  IssueProviderError,
+  IssueUnavailableError,
+} from "../src/issue/errors.ts";
+import {
+  issueInputsJson,
+  issueNaturalKey,
+  issueNaturalKeyJson,
+  issuePreStateJson,
+  issueRequestFingerprint,
+  type IssueCompletion,
+  type IssueObservation,
+} from "../src/issue/records.ts";
+import {
+  atlassianProvider,
+  atlassianTracker,
+  causedBy,
+  DESCRIPTION,
+  document,
+  ENDPOINT,
+  forbiddenProvider,
+  gitHub,
+  issueOutcomes,
+  issueYields,
+  partial,
+  raised,
   RUN,
-  recorded,
-  attemptWorkflow,
-  answer,
-  waitOf,
+  runIssueDocument,
+  store,
+  TARGET,
+  TITLE,
+  TOKEN,
 } from "./support/issues.ts";
 
-function isProtocolFailure(value: unknown): value is GitOperationProtocolError {
-  return value instanceof GitOperationProtocolError;
-}
-
-function isHostProtocolFailure(value: unknown): value is GitHostProtocolError {
-  return value instanceof GitHostProtocolError;
-}
+/** What a compatible answer looks like when middleware writes it. */
+const FORGED: IssueObservation = Object.freeze({
+  state: "compatible",
+  preState: { by: "middleware-forgery" },
+  observations: { by: "middleware-forgery" },
+  result: { by: "middleware-forgery" },
+});
 
 /**
- * A Git host that refuses to be reached at all.
+ * The one Issue surface, addressed by its stable name from outside.
  *
- * What a completed replay is claimed to need: no adapter, no credential and no
- * request. Reaching for any of the three fails the run here rather than quietly
- * succeeding against a host that happens to still hold the answer.
+ * Independently constructed, exactly as a repository component or a second
+ * loaded copy would construct it: sharing the name is how composition works,
+ * and is deliberately not how authority works.
  */
-function unreachable(): GitHubAccess {
+const IssueWitness = createApi<IssueApi>(ISSUE_API, {
+  // deno-lint-ignore require-yield
+  *route(): Operation<unknown> {
+    throw new Error("the witness handler did not delegate");
+  },
+});
+
+function routingOf(call: IssueCall): IssueRoutingRequest {
+  return call.intent === "route" ? call : call.routing;
+}
+
+/** A provider that answers one closed observation and never performs. */
+function answering(observation: IssueObservation | Error): IssueProvider {
   return {
-    endpoint: "https://api.github.test",
     // deno-lint-ignore require-yield
-    *token(): Operation<string | undefined> {
-      throw new Error("a replay read a credential");
+    *observe(): Operation<Result<IssueObservation>> {
+      return observation instanceof Error ? Err(observation) : Ok(observation);
     },
     // deno-lint-ignore require-yield
-    *send(): Operation<GitHubHttpResponse> {
-      throw new Error("a replay reached the Git host");
+    *perform(): Operation<Result<IssueCompletion>> {
+      throw new Error("the engine performed where nothing may be performed");
     },
   };
 }
 
-/** Every journal row holding one issue reconciliation, and what it holds. */
-function eachIssueRecord(
-  path: string,
-  visit: (record: Record<string, unknown>) => "keep" | "drop",
-): number {
-  let matched = 0;
-  tamper(path, (database) => {
-    for (const row of database.prepare("SELECT sequence, record FROM journal_events").all()) {
-      const parsed: unknown = JSON.parse(String(row["record"]));
-      const description = Object(Reflect.get(Object(parsed), "description"));
-      if (Reflect.get(description, "type") !== GIT_HOST_EFFECT) {
-        continue;
-      }
-      const value = Object(Object(Reflect.get(Object(parsed), "result")).value);
-      if (Reflect.get(Object(Reflect.get(value, "request")), "kind") !== ISSUE) {
-        continue;
-      }
-      matched += 1;
-      if (visit(value) === "drop") {
-        database.prepare("DELETE FROM journal_events WHERE sequence = ?").run(row["sequence"]);
-      } else {
-        database
-          .prepare("UPDATE journal_events SET record = ? WHERE sequence = ?")
-          .run(JSON.stringify(parsed), row["sequence"]);
-      }
-    }
-  });
-  return matched;
-}
-
-/**
- * Damage the one retained issue record, and refuse if it damaged none.
- *
- * A tamper that matched nothing leaves the run healthy, and a regression built
- * on one passes by replaying an undamaged record.
- */
-function damageRecord(path: string, damage: (record: Record<string, unknown>) => void): void {
-  const matched = eachIssueRecord(path, (record) => {
-    damage(record);
-    return "keep";
-  });
-  if (matched !== 1) {
-    throw new Error(`the journal holds ${matched} issue reconciliation records`);
-  }
-}
-
-/**
- * Take the issue's retained result away, leaving what the Git host holds.
- *
- * The state an interrupted attempt leaves: the issue exists at the host, and
- * this run's own history has no result for it. It is the gap the whole
- * reconciliation exists for, and the only way to reach it without killing a
- * process is to remove the record a completed one appended.
- */
-function dropIssueRecord(path: string): void {
-  const matched = eachIssueRecord(path, () => "drop");
-  if (matched !== 1) {
-    throw new Error(`the journal holds ${matched} issue reconciliation records`);
-  }
-}
-
 describe("workflow Issue durability", () => {
-  it("replays without reaching a Git host or appending a second record", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const path = runPath(root, RUN);
-    const run = fixture(remote);
+  it("replays without resolving a provider, reading a credential or appending a record", function* () {
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+    expect(first.records).toHaveLength(1);
+    const sent = state.requests.length;
 
-    const { second } = yield* recorded(root, deferring(), run.options, {
-      *after(database) {
-        const retained = yield* gitHostOutcomes(database);
-        expect(retained).toHaveLength(3);
+    // The issue this run created is closed and retitled after the record
+    // commits. What the run retained is what it recorded.
+    const created = state.issues[0];
+    if (created !== undefined) {
+      created.state = "closed";
+      created.title = "Something else entirely";
+    }
 
-        dropRootClose(path);
-
-        // The issue this run created is closed and retitled after the record
-        // commits. What the run retained is what it recorded; none of this can
-        // change it.
-        const created = run.store.issues[0];
-        if (created !== undefined) {
-          created.state = "closed";
-          created.title = "Something else entirely";
-        }
-
-        const replayed = String(
-          yield* runWorkflowDocument(database, deferring(), {
-            composition: { host: run.counting.host, gitHub: unreachable() },
-          }),
-        );
-
-        // The same evidence, from the journal, with no adapter selected, no
-        // credential read and no request sent.
-        expect(replayed).toContain(`recorded ${created?.number}`);
-        expect(yield* gitHostOutcomes(database)).toEqual(retained);
-        expect(issueCreations(run.store)).toBe(1);
-      },
+    const replayed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(first.events)),
+      // Nothing may be resolved or reached, so nothing is installed to reach.
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
     });
 
-    expect(second.thrown).toBeUndefined();
+    expect(replayed.thrown).toBeUndefined();
+    expect(replayed.rendered).toBe(first.rendered);
+    expect(issueYields(replayed.events)).toHaveLength(1);
+    expect(state.requests).toHaveLength(sent);
   });
 
   it("adopts the issue an interrupted attempt already created", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const path = runPath(root, RUN);
-    const run = fixture(remote);
-
-    yield* recorded(root, deferring(), run.options, {
-      *after(database) {
-        dropRootClose(path);
-        dropIssueRecord(path);
-        run.store.requests.length = 0;
-
-        yield* runWorkflowDocument(database, deferring(), run.options);
-
-        // Observed, recognized, and left exactly as it was: one listing and no
-        // mutation at all.
-        expect(issueCreations(run.store)).toBe(0);
-        expect(issuePatches(run.store)).toBe(0);
-        expect(issueCalls(run.store)).toEqual(["GET /repos/octo/project/issues"]);
-        expect(run.store.issues).toHaveLength(1);
-
-        const outcomes = yield* gitHostOutcomes(database);
-        const record = parseGitHostReconciliationRecord(outcomes[2]?.record);
-        expect(record?.decision).toBe("adopted");
-        expect(record?.preState).toEqual(record?.observations);
-      },
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
     });
-  });
+    expect(state.issues).toHaveLength(1);
 
-  it("brings an issue whose text somebody moved back to what this run decided", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const path = runPath(root, RUN);
-    const run = fixture(remote);
-
-    yield* recorded(root, deferring(), run.options, {
-      *after(database) {
-        dropRootClose(path);
-        dropIssueRecord(path);
-        run.store.requests.length = 0;
-        const created = run.store.issues[0];
-        if (created !== undefined) {
-          created.title = "Something else entirely";
-        }
-
-        yield* runWorkflowDocument(database, deferring(), run.options);
-
-        // One patch, one confirming observation, and no second issue.
-        expect(issuePatches(run.store)).toBe(1);
-        expect(issueCreations(run.store)).toBe(0);
-        expect(run.store.issues).toHaveLength(1);
-        expect(run.store.issues[0]?.title).toBe(ISSUE_TITLE);
-
-        const outcomes = yield* gitHostOutcomes(database);
-        const record = parseGitHostReconciliationRecord(outcomes[2]?.record);
-        expect(record?.decision).toBe("performed");
-        expect(Object(Object(record?.preState).issue).title).toBe("Something else entirely");
-      },
-    });
-  });
-
-  const DAMAGE: Array<{ name: string; damage: (record: Record<string, unknown>) => void }> = [
-    {
-      name: "names another Repository",
-      damage: (record) => {
-        Object(Object(record.result).repository).name = "ghost";
-      },
-    },
-    {
-      name: "names another finding",
-      damage: (record) => {
-        Object(record.result).finding = "F-99";
-      },
-    },
-    {
-      name: "names a pull request the request does not describe",
-      damage: (record) => {
-        Object(Object(record.result).pullRequest).number = 99;
-      },
-    },
-    {
-      name: "disagrees with its own observations",
-      damage: (record) => {
-        Object(record.result).number = 99;
-      },
-    },
-    {
-      name: "observed an issue the request does not describe",
-      damage: (record) => {
-        Object(Object(record.observations).issue).title = "Something else";
-      },
-    },
-    {
-      name: "claims a decision its pre-state cannot support",
-      damage: (record) => {
-        record.decision = "adopted";
-      },
-    },
-    {
-      name: "holds a state this effect never produces",
-      damage: (record) => {
-        Object(record.result).state = "closed";
-        Object(Object(record.observations).issue).state = "closed";
-      },
-    },
-    {
-      name: "holds a number that is not one",
-      damage: (record) => {
-        Object(record.result).number = 0;
-      },
-    },
-  ];
-
-  for (const { name, damage } of DAMAGE) {
-    it(`fails a replay whose retained record ${name}`, function* () {
-      const root = yield* useStorageRoot();
-      const remote = yield* useBareRemote(REMOTE);
-      const path = runPath(root, RUN);
-      const run = fixture(remote);
-
-      yield* recorded(root, deferring(), run.options, {
-        *after(database) {
-          dropRootClose(path);
-          damageRecord(path, damage);
-          run.store.requests.length = 0;
-
-          const failure = yield* raised(runWorkflowDocument(database, deferring(), run.options));
-
-          expect(causedBy(failure, isProtocolFailure)).toBeInstanceOf(GitOperationProtocolError);
-          // Nothing was re-observed or re-created to make up for the damage.
-          expect(run.store.requests).toHaveLength(0);
-        },
-      });
-    });
-  }
-
-  const REKEYED: Array<{ name: string; damage: (record: Record<string, unknown>) => void }> = [
-    {
-      name: "is keyed under another pull request",
-      damage: (record) => {
-        Object(Object(record.request).naturalKey).pullRequestIdentity = "PR_node_other";
-      },
-    },
-    {
-      name: "asks for text this invocation never wrote",
-      damage: (record) => {
-        Object(Object(record.request).inputs).rationale = "for no reason at all";
-      },
-    },
-  ];
-
-  for (const { name, damage } of REKEYED) {
-    it(`fails a replay whose retained record ${name}`, function* () {
-      const root = yield* useStorageRoot();
-      const remote = yield* useBareRemote(REMOTE);
-      const path = runPath(root, RUN);
-      const run = fixture(remote);
-
-      yield* recorded(root, deferring(), run.options, {
-        *after(database) {
-          dropRootClose(path);
-          damageRecord(path, damage);
-          run.store.requests.length = 0;
-
-          const failure = yield* raised(runWorkflowDocument(database, deferring(), run.options));
-
-          // The key and the inputs are part of the request, so the shared engine
-          // refuses them before this effect's own reader is reached at all.
-          expect(causedBy(failure, isHostProtocolFailure)).toBeInstanceOf(GitHostProtocolError);
-          expect(run.store.requests).toHaveLength(0);
-        },
-      });
-    });
-  }
-
-  it("publishes nothing when a blocked creation is halted", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-    const creating = withResolvers<void>();
-
-    // The creation that never answers: the request reaches the host and the
-    // cancellation arrives before anything came back.
-    const blocking: GitHubAccess = {
-      endpoint: "https://api.github.test",
-      // deno-lint-ignore require-yield
-      *token(): Operation<string | undefined> {
-        return TOKEN;
-      },
-      *send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
-        if (request.method === "POST" && new URL(request.url).pathname.endsWith("/issues")) {
-          creating.resolve();
-          yield* suspend();
-        }
-        return respond(run.store, request);
-      },
-    };
-
-    const first = yield* attemptWorkflow(root, "start", deferring(), run.options);
-    const delivered = yield* answer(root, waitOf(first).suspensionId, { approved: true });
-    expect(delivered.ok).toBe(true);
-
-    const second = yield* attemptWorkflow(
-      root,
-      "resume",
-      deferring(),
-      { composition: { host: run.counting.host, gitHub: blocking } },
-      { interrupt: creating.operation },
+    // The state an interruption leaves: the issue exists at the provider, and
+    // this run's history holds no result for it.
+    const withoutRecord = first.events.filter(
+      (event) => !(event.type === "yield" && event.description.type === "issue_effect"),
     );
+    state.requests.length = 0;
 
-    // A cancelled attempt is not an outcome: no completion was invented, and no
-    // failure was published for it either.
-    expect(second.outcomes).toHaveLength(2);
-    expect(run.store.issues).toHaveLength(0);
+    const resumed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(withoutRecord)),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    expect(resumed.thrown).toBeUndefined();
+    // One issue, observed and recognized rather than created a second time.
+    expect(state.issues).toHaveLength(1);
+    expect(resumed.records[0]?.decision).toBe("adopted");
+    expect(resumed.records[0]?.preState).toEqual(resumed.records[0]?.observations);
+    expect(state.requests.filter((request) => request.method === "POST")).toHaveLength(0);
   });
 
-  it("shows routing middleware the frozen request and nothing that can answer it", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-    const seen: GitHostCall[] = [];
-
-    const first = yield* attemptWorkflow(root, "start", deferring(), run.options);
-    const delivered = yield* answer(root, waitOf(first).suspensionId, { approved: true });
-    expect(delivered.ok).toBe(true);
-
-    yield* attemptWorkflow(root, "resume", deferring(), run.options, {
-      *after(database) {
-        dropRootClose(runPath(root, RUN));
-        dropIssueRecord(runPath(root, RUN));
-        run.store.requests.length = 0;
-        run.store.issues.length = 0;
-
-        yield* runWorkflowDocument(database, deferring(), run.options, (execute) =>
-          scoped(function* () {
-            yield* GitHost.around({
-              *route([call], next): Operation<unknown> {
-                seen.push(call);
-                yield* next(call);
-                // A return value is not evidence, and this one is discarded.
-                return Ok({ observations: { forged: true }, result: { forged: true } });
-              },
-            });
-            return yield* execute();
-          }),
-        );
-
-        // Two for the issue: one observation, one performance. The push and the
-        // pull request replayed, so they route nothing.
-        const requests = seen.filter(
-          (call) => call.intent === "route" && call.request.kind === ISSUE,
-        );
-        expect(requests).toHaveLength(2);
-
-        for (const call of requests) {
-          expect(Object.keys(call).sort()).toEqual(["intent", "phase", "request"]);
-          const request = Reflect.get(call, "request");
-          expect(Object.keys(Object(request)).sort()).toEqual([
-            "identity",
-            "inputs",
-            "kind",
-            "naturalKey",
-          ]);
-          expect(Object.isFrozen(call)).toBe(true);
-          const described = JSON.stringify(call);
-          expect(described).not.toContain(TOKEN);
-          expect(described).not.toContain(LOCATOR);
-          expect(described).not.toContain(remote.locator);
-          expect(described).not.toContain("api.github");
-          expect(described).not.toContain("/private/var");
-          expect(described).not.toContain("/var/folders");
-          // Nothing on it is a function, so there is nothing to invoke.
-          for (const value of Object.values(Object(request))) {
-            expect(typeof value).not.toBe("function");
-          }
-        }
-
-        // What the middleware returned was ignored: the record is the provider's.
-        const outcomes = yield* gitHostOutcomes(database);
-        expect(parseGitHostReconciliationRecord(outcomes[2]?.record)?.decision).toBe("performed");
-        expect(run.store.issues).toHaveLength(1);
-      },
+  it("brings an issue whose text somebody moved back to what this run asked for", function* () {
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
     });
+
+    const withoutRecord = first.events.filter(
+      (event) => !(event.type === "yield" && event.description.type === "issue_effect"),
+    );
+    const created = state.issues[0];
+    if (created !== undefined) {
+      created.title = "Something else entirely";
+      created.labels = ["stale"];
+    }
+    state.requests.length = 0;
+
+    const resumed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(withoutRecord)),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    expect(resumed.thrown).toBeUndefined();
+    expect(state.issues).toHaveLength(1);
+    expect(state.issues[0]?.title).toBe(TITLE);
+    expect(state.issues[0]?.labels).toEqual([]);
+    expect(resumed.records[0]?.decision).toBe("performed");
+    // One update, then exactly one observation that decided it.
+    expect(state.requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
+    expect(state.requests.filter((request) => request.method === "POST")).toHaveLength(0);
   });
 
-  it("publishes nothing when routing middleware refuses to delegate", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-
-    const first = yield* attemptWorkflow(root, "start", deferring(), run.options);
-    const delivered = yield* answer(root, waitOf(first).suspensionId, { approved: true });
-    expect(delivered.ok).toBe(true);
-
-    yield* attemptWorkflow(root, "resume", deferring(), run.options, {
-      *after(database) {
-        dropRootClose(runPath(root, RUN));
-        dropIssueRecord(runPath(root, RUN));
-        run.store.requests.length = 0;
-        run.store.issues.length = 0;
-
-        const failure = yield* raised(
-          runWorkflowDocument(database, deferring(), run.options, (execute) =>
-            scoped(function* () {
-              yield* GitHost.around({
-                // deno-lint-ignore require-yield
-                *route(): Operation<unknown> {
-                  return Ok({ observations: {}, result: {} });
-                },
-              });
-              return yield* execute();
-            }),
-          ),
-        );
-
-        expect(String(failure)).toContain("executed and published nothing");
-        expect(run.store.requests).toHaveLength(0);
-        expect(run.store.issues).toHaveLength(0);
+  it("names a different durable operation for every member of the request", function* () {
+    // The claim replay rests on: a changed request cannot arrive at a retained
+    // result, because the durable name moves with the request. Asserted on the
+    // fingerprint directly rather than by editing a document between runs — an
+    // edited definition is a fork (§11), not a changed request at one position.
+    const identity = { runId: RUN.runId, expansionId: "expansion-1" };
+    const base = {
+      identity,
+      provider: "github",
+      target: TARGET,
+      inputs: issueInputsJson({
+        title: TITLE,
+        description: DESCRIPTION,
+        tags: [],
+        assignee: null,
+      }),
+      naturalKey: issueNaturalKeyJson(issueNaturalKey(identity, TARGET)),
+    };
+    const variants = [
+      base,
+      { ...base, provider: "atlassian" },
+      { ...base, target: "https://github.com/octo/other" },
+      {
+        ...base,
+        inputs: issueInputsJson({
+          title: "Other",
+          description: DESCRIPTION,
+          tags: [],
+          assignee: null,
+        }),
       },
+      {
+        ...base,
+        inputs: issueInputsJson({ title: TITLE, description: "Other", tags: [], assignee: null }),
+      },
+      {
+        ...base,
+        inputs: issueInputsJson({
+          title: TITLE,
+          description: DESCRIPTION,
+          tags: ["urgent"],
+          assignee: null,
+        }),
+      },
+      {
+        ...base,
+        inputs: issueInputsJson({
+          title: TITLE,
+          description: DESCRIPTION,
+          tags: [],
+          assignee: "octocat",
+        }),
+      },
+    ];
+
+    const names: string[] = [];
+    for (const variant of variants) {
+      names.push(yield* issueRequestFingerprint(variant));
+    }
+    expect(new Set(names).size).toBe(variants.length);
+
+    // And tag order is not one of them: a reordered set is the same question.
+    const reordered = yield* issueRequestFingerprint({
+      ...base,
+      inputs: issueInputsJson({
+        title: TITLE,
+        description: DESCRIPTION,
+        tags: ["a", "b"],
+        assignee: null,
+      }),
     });
+    const sorted = yield* issueRequestFingerprint({
+      ...base,
+      inputs: issueInputsJson({
+        title: TITLE,
+        description: DESCRIPTION,
+        tags: ["b", "a"].slice().sort(),
+        assignee: null,
+      }),
+    });
+    expect(reordered).toBe(sorted);
+  });
+});
+
+describe("workflow Issue reconciliation refusals", () => {
+  it("never turns what a provider could not answer into absence", function* () {
+    const cases: { observation: IssueObservation | Error; name: string }[] = [
+      { observation: new IssueUnavailableError(), name: "IssueUnavailableError" },
+      {
+        observation: { state: "conflict", preState: issuePreStateJson({ issue: null }) },
+        name: "IssueConflictError",
+      },
+      {
+        observation: { state: "ambiguous", preState: issuePreStateJson({ issue: null }) },
+        name: "IssueAmbiguousError",
+      },
+    ];
+
+    for (const { observation, name } of cases) {
+      const run = yield* runIssueDocument({
+        providers: [{ discriminator: "github", provider: answering(observation) }],
+      });
+      // The provider's `perform` throws if it is ever reached, so reaching this
+      // line at all is the claim: none of the three performed anything.
+      expect(run.thrown).toBeDefined();
+      expect(issueOutcomes(run.events)).toEqual([{ status: "err", name }]);
+    }
+  });
+
+  it("replays a refusal as itself rather than observing again", function* () {
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: answering(new IssueUnavailableError()) }],
+    });
+    expect(first.thrown).toBeInstanceOf(IssueUnavailableError);
+
+    const replayed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(first.events)),
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
+    });
+    expect(replayed.thrown).toBeInstanceOf(IssueUnavailableError);
+    expect(state.requests).toHaveLength(0);
+  });
+
+  it("refuses a closed issue carrying this position's marker", function* () {
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+    const withoutRecord = first.events.filter(
+      (event) => !(event.type === "yield" && event.description.type === "issue_effect"),
+    );
+    const created = state.issues[0];
+    if (created !== undefined) {
+      created.state = "closed";
+    }
+
+    const resumed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(withoutRecord)),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    expect(resumed.thrown).toBeInstanceOf(IssueConflictError);
+    // Nothing was reopened, and no second issue was filed beside it.
+    expect(state.issues).toHaveLength(1);
+    expect(state.issues[0]?.state).toBe("closed");
+  });
+
+  it("refuses two issues carrying one position's marker", function* () {
+    const state = store();
+    const first = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+    const withoutRecord = first.events.filter(
+      (event) => !(event.type === "yield" && event.description.type === "issue_effect"),
+    );
+    const created = state.issues[0];
+    if (created !== undefined) {
+      state.issues.push({ ...created, nodeId: "I_node_2", number: 2 });
+    }
+
+    const resumed = yield* runIssueDocument({
+      stream: new InMemoryStream(partial(withoutRecord)),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    expect(resumed.thrown).toBeInstanceOf(IssueAmbiguousError);
+    expect(state.issues).toHaveLength(2);
+  });
+});
+
+describe("workflow Issue routing boundary", () => {
+  it("shows middleware the frozen request and nothing that can answer it", function* () {
+    const state = store();
+    const seen: IssueCall[] = [];
+
+    const run = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+      around: (operation) =>
+        scoped(function* () {
+          yield* IssueRouting.around({
+            *route([call], next): Operation<unknown> {
+              seen.push(call);
+              yield* next(call);
+              // A return value is not evidence, and this one is discarded.
+              return Ok(FORGED);
+            },
+          });
+          return yield* operation;
+        }),
+    });
+
+    // One observation and one performance, and both were routing requests.
+    expect(seen).toHaveLength(2);
+    for (const call of seen) {
+      expect(call.intent).toBe("route");
+      expect(Object.keys(call).sort()).toEqual(["intent", "phase", "request"]);
+      const request = Reflect.get(call, "request");
+      expect(Object.keys(Object(request)).sort()).toEqual([
+        "identity",
+        "inputs",
+        "naturalKey",
+        "provider",
+        "target",
+      ]);
+      expect(Object.isFrozen(call)).toBe(true);
+      const described = JSON.stringify(call);
+      expect(described).not.toContain(TOKEN);
+      expect(described).not.toContain(ENDPOINT);
+      expect(described).not.toContain("api.github");
+      // Nothing on it is a function, so there is nothing to invoke.
+      for (const value of Object.values(Object(request))) {
+        expect(typeof value).not.toBe("function");
+      }
+    }
+
+    // What the middleware returned was ignored: the record is the provider's.
+    expect(run.records[0]?.decision).toBe("performed");
+    expect(String(JSON.stringify(run.records))).not.toContain("middleware-forgery");
+  });
+
+  it("publishes nothing when middleware refuses to delegate", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+      around: (operation) =>
+        scoped(function* () {
+          yield* IssueRouting.around({
+            // deno-lint-ignore require-yield
+            *route(): Operation<unknown> {
+              return Ok(FORGED);
+            },
+          });
+          return yield* operation;
+        }),
+    });
+
+    expect(
+      causedBy(run.thrown, (v): v is IssueProviderError => v instanceof IssueProviderError),
+    ).toBeDefined();
+    expect(String(run.thrown)).toContain("executed and published nothing");
+    expect(state.requests).toHaveLength(0);
+    expect(run.records).toHaveLength(0);
+  });
+
+  it("cannot be answered through the shared name once the invocation is over", function* () {
+    const state = store();
+    const captured: IssueRoutingRequest[] = [];
+    const run = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+      around: (operation) =>
+        scoped(function* () {
+          yield* IssueRouting.around({
+            *route([call], next): Operation<unknown> {
+              captured.push(routingOf(call));
+              return yield* next(call);
+            },
+          });
+          return yield* operation;
+        }),
+    });
+
+    expect(run.records).toHaveLength(1);
+    expect(captured).not.toHaveLength(0);
+
+    // Everything a handler can keep and everything it can rebuild from what it
+    // kept. The stable name is how composition works and deliberately not how
+    // authority works: the surface's own default completes nothing.
+    for (const routing of captured) {
+      const copied: IssueRoutingRequest = Object.freeze({
+        intent: "route",
+        phase: routing.phase,
+        request: routing.request,
+      });
+      for (const forged of [
+        routing,
+        copied,
+        { intent: "inspect" as const, routing },
+        { intent: "answer" as const, routing, answer: Ok(FORGED) },
+        { intent: "inspect" as const, routing: copied },
+        { intent: "answer" as const, routing: copied, answer: Ok(FORGED) },
+      ]) {
+        // The real surface, reached with what a handler kept: its own default
+        // is what answers, and its own default completes nothing.
+        expect(yield* raised(IssueRouting.operations.route(forged))).toBeInstanceOf(
+          IssueProviderError,
+        );
+        // And a descriptor somebody else constructed under the same stable
+        // name reaches that descriptor's default rather than this run's
+        // terminal, which is the difference between composition and authority.
+        expect(yield* raised(IssueWitness.operations.route(forged))).toBeInstanceOf(Error);
+      }
+    }
+
+    // Nothing above appended anything: the run's history is what it was.
+    expect(issueYields(run.events)).toHaveLength(1);
+    expect(String(JSON.stringify(run.records))).not.toContain("middleware-forgery");
+  });
+
+  it("keeps every provider's credential and payload out of the retained record", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: document(TARGET, ` tags={["reliability"]} assignee="octocat"`),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    const described = JSON.stringify(run.events);
+    expect(described).not.toContain(TOKEN);
+    expect(described).not.toContain("api.github.test");
+    expect(described).not.toContain("Bearer");
+    expect(described).not.toContain("node_id");
+    // What it does retain: the destination, the provider and its identity.
+    const [record] = run.records;
+    expect(record?.request.target).toBe(TARGET);
+    expect(record?.request.provider).toBe("github");
+    expect(Object(record?.result).url).toBe(
+      state.issues[0] === undefined ? "" : "https://github.com/owner/repository/issues/1",
+    );
+  });
+
+  it("gives two providers installed together only their own requests", function* () {
+    const state = store();
+    const tracker = atlassianTracker();
+    const run = yield* runIssueDocument({
+      providers: [
+        { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+        { discriminator: "github", provider: gitHub(state) },
+      ],
+    });
+
+    expect(run.thrown).toBeUndefined();
+    expect(state.issues).toHaveLength(1);
+    // Installed beneath the request's own provider, and it saw nothing.
+    expect(tracker.observed).toHaveLength(0);
+    expect(tracker.performed).toHaveLength(0);
   });
 });

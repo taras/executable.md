@@ -66,6 +66,8 @@ import type {
 import type { ExecutionInstallation, JournalAdmission } from "@executablemd/core/host";
 import { revParse } from "./git.ts";
 import { retainedGitHostIdentities } from "./git-host/identities.ts";
+import { retainedIssueIdentities } from "./issue/identities.ts";
+import type { RetainedIssueIdentity } from "./issue/identities.ts";
 import type { RetainedIdentity } from "./git-host/identities.ts";
 import {
   admitWorkflowRunHistory,
@@ -122,11 +124,24 @@ interface RunSlot {
    * it consumed, and one that reaches live execution performs nothing.
    */
   gitHostIdentities?: RetainedIdentity[];
+  /**
+   * The identity every Issue record in this run's admitted history holds.
+   *
+   * A second table rather than a shared one, because an Issue effect is a
+   * different request shape reconciled through a different boundary; what it
+   * needs from the run is the same association, for the same reason.
+   */
+  issueIdentities?: RetainedIssueIdentity[];
 }
 
 /** The Git-host identities this execution's admitted history holds. */
 export function* retainedGitHostIdentitiesHere(): Operation<RetainedIdentity[] | undefined> {
   return (yield* CurrentWorkflowRun.get())?.gitHostIdentities;
+}
+
+/** The Issue identities this execution's admitted history holds. */
+export function* retainedIssueIdentitiesHere(): Operation<RetainedIssueIdentity[] | undefined> {
+  return (yield* CurrentWorkflowRun.get())?.issueIdentities;
 }
 
 /** The frozen run of the current document execution; throws outside one. */
@@ -329,6 +344,7 @@ function* publishGitHostIdentities(retained: readonly DurableEvent[]): Operation
     return;
   }
   slot.gitHostIdentities = retainedGitHostIdentities(retained);
+  slot.issueIdentities = retainedIssueIdentities(retained);
 }
 
 /**

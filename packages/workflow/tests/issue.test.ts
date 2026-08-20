@@ -1,484 +1,369 @@
 /**
- * Tier WF — `<Issue>` as a document writes it.
+ * Tier WI — `<Issue>` as a document writes it.
  *
- * These drive the real component through a real run database, a real local bare
- * remote, a real `git`, a real executor lock and a GitHub that answers out of a
- * small model of the part of the API this adapter uses. Nothing here reaches a
- * network: the document names a `github.com` repository, and the host adapter
- * under test runs Git against a bare repository in a temporary directory
- * instead.
+ * The claim this suite exists for is that the primitive is portable: the same
+ * four props reach GitHub or an Atlassian-shaped tracker, and which one is
+ * decided by the nearest lexical context rather than by anything in the
+ * element. Everything else here is what stands between a document naming a
+ * destination and one being reached — the context that must exist, the URL that
+ * must resolve, the discriminator that never falls back, and the host ceiling a
+ * context cannot widen.
  *
- * The claim this suite exists for is that an issue is created only when
- * somebody approved this exact obligation. Everything else — the closed
- * disposition, the evidence that renders verbatim, the pull request the run has
- * to have opened itself — is what stands between a document declaring a
- * deferral and one being recorded.
+ * Nothing here reaches a network, and nothing here needs a Repository, a
+ * Workspace or SQLite. That is the contract rather than an economy: an issue
+ * provider need not own a Git repository, so the primitive that reaches one
+ * must not need one either.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, type Operation } from "effection";
-import { registerComponents } from "@executablemd/core";
-import type { ComponentRegistration } from "@executablemd/core";
-import { IssueAuthorityError } from "../src/composition/errors.ts";
+import { IssueTargetError, IssueProviderError } from "../src/issue/errors.ts";
+import { parseIssueInputs } from "../src/issue/records.ts";
 import {
-  issueInputsJson,
-  issueOriginMarker,
-  issueNaturalKey,
-  type IssueInputs,
-} from "../src/composition/issue-records.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
-import type { GitHubAccess, GitHubHttpResponse } from "../src/deno/composition/github.ts";
-import type { GitPushRepositoryIdentity } from "../src/composition/git-push-records.ts";
-import type { PullRequestResult } from "../src/composition/pull-request-records.ts";
-import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
-import { useBareRemote } from "./support/git-remotes.ts";
-import {
+  atlassianProvider,
+  atlassianTracker,
+  ATLASSIAN_TARGET,
   causedBy,
-  raised,
-  retainedRepositories,
-  runWorkflowDocument,
-} from "./support/composition.ts";
-import { issueCreations, issuePatches } from "./support/github.ts";
-import { fixture, LATER, published, pullRequest, REMOTE, TOKEN } from "./support/pull-requests.ts";
-import {
-  answer,
-  attemptWorkflow,
-  decidable,
-  deferring,
-  EVIDENCE,
-  FINDING,
-  IMPACT,
-  ISSUE_TITLE,
-  issue,
-  issueWith,
-  RATIONALE,
-  recorded,
-  suspensionRequests,
-  TIMING,
-  waitOf,
-  type WorkflowAttempt,
+  DESCRIPTION,
+  document,
+  forbiddenProvider,
+  gitHub,
+  issueYields,
+  runIssueDocument,
+  store,
+  TARGET,
+  TITLE,
+  TOKEN,
 } from "./support/issues.ts";
 
-function isAuthorityFailure(value: unknown): value is IssueAuthorityError {
-  return value instanceof IssueAuthorityError;
+function isTargetFailure(value: unknown): value is IssueTargetError {
+  return value instanceof IssueTargetError;
 }
 
-/**
- * A Git host whose credential cannot even be read.
- *
- * What a local refusal is claimed to need: no adapter, no credential and no
- * request. Reaching for any of the three fails the run here rather than letting
- * a refusal that happened after a token was read pass for one that happened
- * before.
- */
-function credentialless(): GitHubAccess {
-  return {
-    endpoint: "https://api.github.test",
-    // deno-lint-ignore require-yield
-    *token(): Operation<string | undefined> {
-      throw new Error("a refused issue read a credential");
-    },
-    // deno-lint-ignore require-yield
-    *send(): Operation<GitHubHttpResponse> {
-      throw new Error("a refused issue reached the Git host");
-    },
-  };
-}
-
-/** The one Git-host record this run retains for its issue. */
-function issueRecord(attempt: WorkflowAttempt): Record<string, unknown> {
-  const parsed = parseGitHostReconciliationRecord(attempt.outcomes[2]?.record);
-  if (parsed === undefined) {
-    throw new Error("the run retains no issue reconciliation record");
-  }
-  return Object(parsed);
+function isProviderFailure(value: unknown): value is IssueProviderError {
+  return value instanceof IssueProviderError;
 }
 
 describe("workflow Issue", () => {
-  it("records one approved deferred obligation as an issue", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-
-    const { first, second } = yield* recorded(root, deferring(), run.options, {
-      // The first execution stopped at the wait, having created nothing: what
-      // the store saw by then belongs to the pull request before it.
-      between: () => expect(issueCreations(run.store)).toBe(0),
+  it("creates one issue in the container the nearest context names", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
     });
-    expect(first.rendered).toBeUndefined();
 
-    const [created] = run.store.issues;
-    expect(created?.title).toBe(ISSUE_TITLE);
+    expect(run.thrown).toBeUndefined();
+    const [created] = state.issues;
+    expect(created?.title).toBe(TITLE);
     expect(created?.state).toBe("open");
-    expect(issueCreations(run.store)).toBe(1);
-    expect(issuePatches(run.store)).toBe(0);
+    expect(state.issues).toHaveLength(1);
 
-    // The evidence is in the body verbatim, with what a reader needs around it.
-    expect(created?.body).toContain(EVIDENCE);
-    expect(created?.body).toContain(RATIONALE);
-    expect(created?.body).toContain(IMPACT);
-    expect(created?.body).toContain(TIMING);
-    expect(created?.body).toContain(FINDING);
+    // The description is the document's, verbatim, with the marker the adapter
+    // needs after it rather than woven through it.
+    expect(created?.body).toContain(DESCRIPTION);
 
-    // The binding is evidence of what the effect settled on.
-    expect(String(second.rendered)).toContain(`recorded ${created?.number}`);
-    expect(String(second.rendered)).toContain("as open by performed");
+    // The binding is the URL, and only the URL.
+    expect(String(run.rendered)).toContain("recorded https://github.com/owner/repository/issues/1");
+    const [record] = run.records;
+    expect(record?.decision).toBe("performed");
+    expect(record?.request.provider).toBe("github");
+    expect(record?.request.target).toBe(TARGET);
+  });
 
-    const record = issueRecord(second);
-    expect(record.decision).toBe("performed");
-    expect(record.preState).toEqual({ issue: null });
-    const [repository] = second.repositories;
-    expect(record.result).toEqual({
-      repository: {
-        name: "project",
-        locatorFingerprint: repository?.record.locatorFingerprint,
-        requestedBase: null,
-        creationCommit: repository?.record.creationCommit,
-        primaryBranch: "main",
-        objectFormat: "sha1",
-      },
-      pullRequest: {
-        number: run.store.pullRequests[0]?.number,
-        url: `https://github.com/owner/repository/pull/${run.store.pullRequests[0]?.number}`,
-      },
-      providerId: created?.nodeId,
-      number: created?.number,
-      url: `https://github.com/owner/repository/issues/${created?.number}`,
-      state: "open",
-      finding: FINDING,
+  it("binds exactly a url while the record keeps what a provider owns", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
     });
+
+    // What the document can read.
+    expect(String(run.rendered)).toContain(
+      `recorded ${state.issues[0]?.nodeId === undefined ? "" : "https://github.com/owner/repository/issues/1"}`,
+    );
+
+    // What the run retains instead: the destination and the provider's own
+    // identity, which are evidence rather than something a document builds on.
+    const [record] = run.records;
+    expect(Object.keys(Object(record?.result)).sort()).toEqual([
+      "provider",
+      "providerId",
+      "target",
+      "url",
+    ]);
+    expect(Object(record?.result).providerId).toBe(state.issues[0]?.nodeId);
+    expect(Object(record?.result).target).toBe(TARGET);
+  });
+
+  it("normalizes tags to a set and absence of an assignee to one spelling", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: document(TARGET, ` tags={["publish", "reliability", "publish"]}`),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+
+    expect(run.thrown).toBeUndefined();
+    // Deduplicated and code-point sorted, in the request and at the provider.
+    const [record] = run.records;
+    expect(parseIssueInputs(record?.request.inputs)?.tags).toEqual(["publish", "reliability"]);
+    expect(parseIssueInputs(record?.request.inputs)?.assignee).toBeNull();
+    expect(state.issues[0]?.labels).toEqual(["publish", "reliability"]);
+    expect(state.issues[0]?.assignee).toBeNull();
+  });
+
+  it("carries an assignee opaquely to the provider that was selected", function* () {
+    const state = store();
+    yield* runIssueDocument({
+      source: document(TARGET, ` assignee="octocat"`),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+    expect(state.issues[0]?.assignee).toBe("octocat");
+  });
+
+  it("renders nothing of its own", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: [
+        `<IssueTarget url="${TARGET}">`,
+        "before",
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="issue" />`,
+        "after",
+        "</IssueTarget>",
+      ].join("\n"),
+      providers: [{ discriminator: "github", provider: gitHub(state) }],
+    });
+    const rendered = String(run.rendered);
+    expect(rendered).toContain("before");
+    expect(rendered).toContain("after");
+    expect(rendered).not.toContain(TITLE);
+    expect(rendered).not.toContain(DESCRIPTION);
+  });
+
+  it("refuses props this primitive does not declare", function* () {
+    const state = store();
+    for (const attribute of [
+      ` repository="octo/project"`,
+      ` url="${TARGET}"`,
+      ` provider="github"`,
+      ` finding="F-17"`,
+      ` disposition="defer"`,
+      ` milestone="1.4"`,
+      ` close={true}`,
+    ]) {
+      const run = yield* runIssueDocument({
+        source: document(TARGET, attribute),
+        providers: [{ discriminator: "github", provider: gitHub(state) }],
+      });
+      expect(String(run.thrown)).toContain("Prop validation failed");
+    }
+    expect(state.issues).toHaveLength(0);
   });
 });
 
-describe("workflow Issue disposition", () => {
-  it("binds a skipped result for every decision that records nothing", function* () {
-    const root = yield* useStorageRoot();
-
-    // Written into the evidence, so a run that expanded it would fail here. A
-    // decision that records nothing does not render what it would have said.
-    const failing: ComponentRegistration = {
-      name: "Failing",
-      origin: "test",
-      props: { type: "object", additionalProperties: true },
-      // deno-lint-ignore require-yield
-      *fn(): Operation<string> {
-        throw new Error("the evidence was expanded");
-      },
-    };
-
-    yield* withStorage(root, function* () {
-      for (const disposition of ["rejected", "fix-now", "inserted-repair"]) {
-        // A remote of its own for each: a second run against the first's remote
-        // would find the branch already published and the commit already made.
-        const run = fixture(yield* useBareRemote(REMOTE));
-        const database = yield* createRun({ runId: `decide-${disposition}` });
-        const rendered = String(
-          yield* runWorkflowDocument(
-            database,
-            published(
-              ...pullRequest(),
-              `<Issue finding="${FINDING}" disposition="${disposition}" pullRequest={pullRequest}` +
-                ` title="${ISSUE_TITLE}" rationale="${RATIONALE}"` +
-                ` dependencyImpact="${IMPACT}" intendedTiming="${TIMING}" as="issue">`,
-              "<Failing />",
-              "</Issue>",
-              "",
-              "decided {issue.disposition}",
-            ),
-            run.options,
-            (execute) =>
-              scoped(function* () {
-                yield* registerComponents([failing]);
-                return yield* execute();
-              }),
-          ),
-        );
-        expect(rendered).toContain(`decided ${disposition}`);
-        // No wait was published, no provider was asked, and nothing reached the
-        // Git host that the pull request before it did not.
-        expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-        expect(run.counting.counters.effects).not.toContain("git:issue");
-        expect(issueCreations(run.store)).toBe(0);
-      }
+describe("workflow Issue target context", () => {
+  it("fails before routing when it is written outside any context", function* () {
+    const run = yield* runIssueDocument({
+      source: [
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="issue" />`,
+        "",
+        "later sibling ran",
+      ].join("\n"),
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
     });
+
+    expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("no-issue-target");
+    expect(String(run.thrown)).toContain("<IssueTarget");
+    expect(String(run.rendered ?? "")).not.toContain("later sibling ran");
+    // No effect exists, so nothing was journaled for it either.
+    expect(issueYields(run.events)).toHaveLength(0);
   });
 
-  it("refuses a disposition this element has no meaning for", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const run = fixture(remote);
-      const failure = yield* raised(
-        runWorkflowDocument(
-          database,
-          published(...pullRequest(), ...issueWith({ disposition: `"deferred"` }), "", LATER),
-          run.options,
-        ),
-      );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("unknown-disposition");
-      // The four words it does mean, so the refusal is actionable.
-      expect(String(failure)).toContain("defer, rejected, fix-now, inserted-repair");
-      expect(String(failure)).not.toContain(LATER);
-      expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-      expect(issueCreations(run.store)).toBe(0);
-    });
-  });
-});
-
-describe("workflow Issue authority", () => {
-  it("is refused before any authored work when it is written without as", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const run = fixture(remote);
-      const failure = yield* raised(
-        runWorkflowDocument(
-          database,
-          published(
-            ...pullRequest(),
-            `<Issue finding="${FINDING}" disposition="defer" pullRequest={pullRequest}` +
-              ` title="${ISSUE_TITLE}" rationale="${RATIONALE}"` +
-              ` dependencyImpact="${IMPACT}" intendedTiming="${TIMING}" />`,
-          ),
-          run.options,
-        ),
-      );
-      // Core decides this, before the component's own work exists at all.
-      expect(String(failure)).toContain("must be invoked with `as`");
-      expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-      expect(issueCreations(run.store)).toBe(0);
-    });
+  it("fails before routing on a URL that names no container", function* () {
+    for (const url of [
+      "not a url",
+      "ftp://github.com/octo/project",
+      `https://${"token"}@github.com/octo/project`,
+      "https://github.com/octo/project?tab=readme",
+      "https://github.com/octo/project#issues",
+    ]) {
+      const run = yield* runIssueDocument({
+        source: document(url),
+        providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
+      });
+      expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("invalid-target-url");
+      expect(issueYields(run.events)).toHaveLength(0);
+    }
   });
 
-  it("fails outside a Repository without publishing a wait", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const run = fixture(remote);
-      const failure = yield* raised(
-        runWorkflowDocument(
-          database,
-          [
-            ...published(...pullRequest()).split("\n"),
-            `<Issue finding="${FINDING}" disposition="defer" pullRequest={pullRequest}` +
-              ` title="${ISSUE_TITLE}" rationale="${RATIONALE}"` +
-              ` dependencyImpact="${IMPACT}" intendedTiming="${TIMING}" as="issue">`,
-            EVIDENCE,
-            "</Issue>",
-            "",
-            LATER,
-          ].join("\n"),
-          run.options,
-        ),
-      );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe("no-repository-context");
-      expect(String(failure)).not.toContain(LATER);
-      expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-      expect(issueCreations(run.store)).toBe(0);
+  it("replaces the whole target for its descendants and never merges it", function* () {
+    const state = store();
+    const tracker = atlassianTracker();
+    const run = yield* runIssueDocument({
+      source: [
+        `<IssueTarget url="${TARGET}" provider="github">`,
+        `<IssueTarget url="${ATLASSIAN_TARGET}">`,
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="inner" />`,
+        "</IssueTarget>",
+        "",
+        "inner: {inner.url}",
+        "</IssueTarget>",
+      ].join("\n"),
+      providers: [
+        { discriminator: "github", provider: gitHub(state) },
+        { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+      ],
     });
+
+    // The nested target carried no provider, so the URL resolved one. Had the
+    // members merged, the parent's `github` would have selected GitHub for an
+    // Atlassian URL — which is the mistake nesting must not be able to make.
+    expect(run.thrown).toBeUndefined();
+    expect(String(run.rendered)).toContain("inner: https://acme.atlassian.net/browse/PROJ-1");
+    expect(tracker.issues.size).toBe(1);
+    expect(state.issues).toHaveLength(0);
   });
 
-  it("refuses evidence that is not a pull-request result, before the wait", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const run = fixture(remote);
-      const failure = yield* raised(
-        runWorkflowDocument(
-          database,
-          published(
-            ...pullRequest(),
-            ...issueWith({ pullRequest: `{{ number: pullRequest.number }}` }),
-          ),
-          run.options,
-        ),
-      );
-      expect(causedBy(failure, isAuthorityFailure)?.reason).toBe(
-        "unreadable-pull-request-evidence",
-      );
-      expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-      expect(issueCreations(run.store)).toBe(0);
+  it("restores the outer target after a nested one ends", function* () {
+    const state = store();
+    const tracker = atlassianTracker();
+    const run = yield* runIssueDocument({
+      source: [
+        `<IssueTarget url="${TARGET}">`,
+        `<IssueTarget url="${ATLASSIAN_TARGET}">`,
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="inner" />`,
+        "</IssueTarget>",
+        `<Issue title="${TITLE}" description="${DESCRIPTION}" as="outer" />`,
+        "</IssueTarget>",
+        "",
+        "outer: {outer.url}",
+      ].join("\n"),
+      providers: [
+        { discriminator: "github", provider: gitHub(state) },
+        { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+      ],
     });
-  });
 
-  it("finishes its evidence before it publishes a wait", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    const failing: ComponentRegistration = {
-      name: "Failing",
-      origin: "test",
-      props: { type: "object", additionalProperties: true },
-      // deno-lint-ignore require-yield
-      *fn(): Operation<string> {
-        throw new Error("the body never finished");
-      },
-    };
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const run = fixture(remote);
-      const failure = yield* raised(
-        runWorkflowDocument(
-          database,
-          published(
-            ...pullRequest(),
-            `<Issue finding="${FINDING}" disposition="defer" pullRequest={pullRequest}` +
-              ` title="${ISSUE_TITLE}" rationale="${RATIONALE}"` +
-              ` dependencyImpact="${IMPACT}" intendedTiming="${TIMING}" as="issue">`,
-            "<Failing />",
-            "</Issue>",
-          ),
-          run.options,
-          (execute) =>
-            scoped(function* () {
-              yield* registerComponents([failing]);
-              return yield* execute();
-            }),
-        ),
-      );
-      expect(String(failure)).toContain("the body never finished");
-      // Evidence that never finished is not an obligation anybody was asked
-      // to approve.
-      expect(suspensionRequests(yield* database.journal.readAll())).toHaveLength(0);
-      expect(issueCreations(run.store)).toBe(0);
-    });
+    expect(run.thrown).toBeUndefined();
+    expect(tracker.issues.size).toBe(1);
+    expect(state.issues).toHaveLength(1);
+    expect(String(run.rendered)).toContain("outer: https://github.com/owner/repository/issues/1");
   });
 });
 
-describe("workflow Issue approval", () => {
-  it("publishes the exact normalized request, and reaches no Git host for it", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
+describe("workflow Issue provider resolution", () => {
+  it("resolves GitHub and Atlassian Cloud from the canonical URL", function* () {
+    const state = store();
+    const tracker = atlassianTracker();
+    const providers = [
+      { discriminator: "github", provider: gitHub(state) },
+      { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+    ];
 
-    const first = yield* attemptWorkflow(root, "start", deferring(), run.options);
-    const wait = waitOf(first);
+    const github = yield* runIssueDocument({ source: document(TARGET), providers });
+    expect(github.records[0]?.request.provider).toBe("github");
 
-    const [repository] = first.repositories;
-    const created = run.store.pullRequests[0];
-    const identity: GitPushRepositoryIdentity = Object.freeze({
-      name: "project",
-      locatorFingerprint: String(repository?.record.locatorFingerprint),
-      requestedBase: null,
-      creationCommit: String(repository?.record.creationCommit),
-      primaryBranch: "main",
-      objectFormat: "sha1",
+    const atlassian = yield* runIssueDocument({
+      source: document(ATLASSIAN_TARGET),
+      providers,
     });
-    const evidence: PullRequestResult = Object.freeze({
-      repository: identity,
-      providerId: String(created?.nodeId),
-      number: Number(created?.number),
-      url: `https://github.com/owner/repository/pull/${created?.number}`,
-      state: "open",
-      headSha: String(created?.headSha),
-      baseSha: String(created?.baseSha),
-    });
-    const inputs: IssueInputs = Object.freeze({
-      repository: identity,
-      pullRequest: evidence,
-      finding: FINDING,
-      disposition: "defer",
-      title: ISSUE_TITLE,
-      body: `\n${EVIDENCE}\n`,
-      rationale: RATIONALE,
-      dependencyImpact: IMPACT,
-      intendedTiming: TIMING,
-    });
+    expect(atlassian.records[0]?.request.provider).toBe("atlassian");
 
-    // What is approved is the request itself, member for member — including the
-    // evidence verbatim and the whole PullRequest result it was decided against.
-    expect(wait.request.request).toEqual(issueInputsJson(inputs));
-    expect(wait.request.responseSchema).toEqual({
-      type: "object",
-      properties: { approved: { type: "boolean" } },
-      required: ["approved"],
-      additionalProperties: false,
-    });
-    expect(suspensionRequests(first.events)).toHaveLength(1);
-    expect(issueCreations(run.store)).toBe(0);
-
-    // Nothing about the credential or the marker leaves the provider: the wait
-    // a human reads carries the request and nothing a host said.
-    expect(JSON.stringify(wait.request)).not.toContain(TOKEN);
-    expect(JSON.stringify(wait.request)).not.toContain(issueOriginMarker(issueNaturalKey(inputs)));
+    // Installed together, each received only its own requests.
+    expect(state.issues).toHaveLength(1);
+    expect(tracker.issues.size).toBe(1);
+    expect(tracker.observed.every((request) => request.provider === "atlassian")).toBe(true);
   });
 
-  it("records nothing when the approval is declined", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-
-    const { second } = yield* recorded(root, decidable(), run.options, {
-      value: { approved: false },
+  it("refuses a URL no built-in mapping names a provider for", function* () {
+    const run = yield* runIssueDocument({
+      source: document("https://tracker.example.invalid/projects/one"),
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
     });
-
-    expect(String(second.rendered)).toContain("recorded defer");
-    expect(issueCreations(run.store)).toBe(0);
-    expect(run.store.issues).toHaveLength(0);
-    // The provider was never asked, so no Git-host effect exists for the issue.
-    expect(second.outcomes).toHaveLength(2);
+    expect(causedBy(run.thrown, isTargetFailure)?.reason).toBe("unresolved-provider");
+    // The refusal names the remedy rather than a guess.
+    expect(String(run.thrown)).toContain("provider");
+    expect(issueYields(run.events)).toHaveLength(0);
   });
 
-  it("refuses to record an obligation against a pull request this run has no result for", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-
-    // A whole, well-formed PullRequest result naming a pull request nothing in
-    // this run reconciled. It is not conflicting — this run says nothing about
-    // that pull request at all — so what the document is missing is the
-    // <PullRequest> that would have produced it.
-    const source = published(
-      ...pullRequest(),
-      ...issueWith({ pullRequest: `{{ ...pullRequest, providerId: "PR_node_absent" }}` }),
-    );
-    const first = yield* attemptWorkflow(root, "start", source, run.options);
-    const delivered = yield* answer(root, waitOf(first).suspensionId, { approved: true });
-    expect(delivered.ok).toBe(true);
-    // The resume replays the push and the pull request out of the journal, so a
-    // host it cannot reach is what proves the refusal happened before one was.
-    const second = yield* attemptWorkflow(root, "resume", source, {
-      composition: { host: run.counting.host, gitHub: credentialless() },
+  it("lets an explicit discriminator carry a non-standard URL", function* () {
+    const tracker = atlassianTracker(["https://tracker.example.invalid/projects/one"]);
+    const run = yield* runIssueDocument({
+      source: document("https://tracker.example.invalid/projects/one", "", "atlassian"),
+      providers: [
+        { discriminator: "github", provider: forbiddenProvider("github") },
+        { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+      ],
     });
 
-    expect(causedBy(second.thrown, isAuthorityFailure)?.reason).toBe(
-      "missing-pull-request-evidence",
-    );
-    expect(issueCreations(run.store)).toBe(0);
+    expect(run.thrown).toBeUndefined();
+    expect(tracker.issues.size).toBe(1);
+    expect(run.records[0]?.request.provider).toBe("atlassian");
   });
 
-  it("refuses to record an obligation against a pull request this run did not open", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-    const run = fixture(remote);
-
-    // The evidence is a whole, well-formed PullRequest result naming a pull
-    // request with another number — the one thing a document could plausibly
-    // put here that this run never reconciled.
-    const source = published(
-      ...pullRequest(),
-      ...issueWith({ pullRequest: `{{ ...pullRequest, number: 99 }}` }),
-    );
-    const first = yield* attemptWorkflow(root, "start", source, run.options);
-    const delivered = yield* answer(root, waitOf(first).suspensionId, { approved: true });
-    expect(delivered.ok).toBe(true);
-    const second = yield* attemptWorkflow(root, "resume", source, {
-      composition: { host: run.counting.host, gitHub: credentialless() },
+  it("never falls back to another provider when the selected one refuses", function* () {
+    const state = store();
+    // The discriminator says atlassian; the tracker's ceiling does not hold a
+    // GitHub URL, so it refuses. GitHub is installed and would have accepted.
+    const tracker = atlassianTracker();
+    const run = yield* runIssueDocument({
+      source: document(TARGET, "", "atlassian"),
+      providers: [
+        { discriminator: "github", provider: gitHub(state) },
+        { discriminator: "atlassian", provider: atlassianProvider(tracker) },
+      ],
     });
 
-    expect(causedBy(second.thrown, isAuthorityFailure)?.reason).toBe(
-      "conflicting-pull-request-evidence",
-    );
-    expect(issueCreations(run.store)).toBe(0);
+    expect(causedBy(run.thrown, isProviderFailure)).toBeDefined();
+    expect(state.issues).toHaveLength(0);
+    expect(tracker.issues.size).toBe(0);
+  });
+
+  it("completes nothing when no provider is registered for the discriminator", function* () {
+    const run = yield* runIssueDocument({
+      source: document(TARGET, "", "gitlab"),
+      providers: [{ discriminator: "github", provider: forbiddenProvider("github") }],
+    });
+
+    expect(String(run.thrown)).toContain("executed and published nothing");
+    expect(run.records).toHaveLength(0);
+  });
+});
+
+describe("workflow Issue host ceiling", () => {
+  it("fails before external observation for a target outside the ceiling", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      // The context asks for a repository the host never authorized.
+      source: document("https://github.com/other/secrets"),
+      providers: [{ discriminator: "github", provider: gitHub(state, [TARGET]) }],
+    });
+
+    expect(causedBy(run.thrown, isProviderFailure)).toBeDefined();
+    // Nothing was sent, and no Issue outcome was recorded for it.
+    expect(state.requests).toHaveLength(0);
+    expect(run.records).toHaveLength(0);
+    // The refusal repeats neither the target nor the credential.
+    expect(String(run.thrown)).not.toContain("other/secrets");
+    expect(String(run.thrown)).not.toContain(TOKEN);
+  });
+
+  it("admits a container beneath one the host authorized", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: document(`${TARGET}/issues`),
+      providers: [{ discriminator: "github", provider: gitHub(state, [TARGET]) }],
+    });
+
+    expect(run.thrown).toBeUndefined();
+    expect(state.issues).toHaveLength(1);
+  });
+
+  it("does not admit a sibling whose name merely starts the same way", function* () {
+    const state = store();
+    const run = yield* runIssueDocument({
+      source: document("https://github.com/octo/project-two"),
+      providers: [{ discriminator: "github", provider: gitHub(state, [TARGET]) }],
+    });
+
+    expect(causedBy(run.thrown, isProviderFailure)).toBeDefined();
+    expect(state.requests).toHaveLength(0);
   });
 });

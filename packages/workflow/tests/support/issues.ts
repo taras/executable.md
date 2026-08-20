@@ -1,287 +1,363 @@
 /**
- * What the `<Issue>` suites agree on: one repository, one pull request, and one
- * approval somebody has to give.
+ * What the `<Issue>` suites agree on: one run, one target, two providers.
  *
- * The document half is written the way a real workflow writes it — publish the
- * branch, open the pull request, bind it, and record one deferred obligation
- * against that binding — because the binding is what the element is authorized
- * by. The run half is the executor's: a durable wait ends an execution, so a
- * suite that wants to see what happens after the approval has to be the thing
- * that settles the run, delivers the answer and resumes it.
+ * These need no SQLite, no Git and no Workspace, and that is not an economy —
+ * it is the contract. An issue provider need not own a Git repository, so the
+ * primitive that reaches one must not need a Repository to work, and a harness
+ * that gave it one would hide the day that stopped being true.
+ *
+ * What is real here is the component, the context, the routing surface, the
+ * reconciliation and the GitHub adapter. What is substituted is the transport,
+ * which is the whole of what the adapter asks its host for.
  */
 
-import { call, race, scoped, suspend, type Operation } from "effection";
-import type { Json } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
-import type { Result } from "effection";
-import { WorkflowInputDelivery, type WorkflowAnswerRetention } from "../../mod.ts";
-import { createSuspensionController } from "../../src/deno/suspension.ts";
-import type { SuspensionNotice } from "../../src/deno/suspension.ts";
-import { useWorkflowInputDelivery } from "../../src/deno/delivery.ts";
-import { SUSPENSION_REQUEST } from "../../src/suspension/suspend.ts";
-import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
-import { creation, withExecutorRun, withRunHost } from "./storage.ts";
-import type { WorkflowRunDatabase } from "../../src/storage/api.ts";
-import { gitHostOutcomes, retainedRepositories, runWorkflowDocument } from "./composition.ts";
-import type { GitHostOutcomeRecord } from "./composition.ts";
-import type { StoredRepository } from "../../src/deno/workspace/repositories.ts";
-import { published, pullRequest } from "./pull-requests.ts";
+import { call, Err, Ok, scoped, type Operation, type Result } from "effection";
+import { collect, inlineSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
+import { InMemoryStream } from "@executablemd/durable-streams";
+import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
+import { retainedWorkflowInstallation } from "../../src/run.ts";
+import type { WorkflowRun } from "../../src/run.ts";
+import { useCompositionComponents } from "../../src/composition/installation.ts";
+import { ISSUE_EFFECT } from "../../src/issue/effect-type.ts";
+import { useIssueProvider } from "../../src/issue/effect.ts";
+import type { IssueProvider } from "../../src/issue/api.ts";
+import { IssueProviderError, IssueUnavailableError } from "../../src/issue/errors.ts";
+import {
+  issueObservationsJson,
+  issuePreStateJson,
+  issueRecordResultJson,
+  issueAgrees,
+  parseIssueInputs,
+  parseIssuePreState,
+  parseIssueReconciliationRecord,
+  type CompleteIssueRequest,
+  type IssueCompletion,
+  type IssueObservation,
+  type IssueReconciliationRecord,
+  type IssueSnapshot,
+} from "../../src/issue/records.ts";
+import { withinIssueCeiling } from "../../src/issue/target.ts";
+import { IssueTargetContext } from "../../src/issue/context.ts";
+import { builtInIssueProvider } from "../../src/deno/issue/resolution.ts";
+import { gitHubIssueProvider } from "../../src/deno/issue/github.ts";
+import { fakeGitHubAccess, gitHubStore, type GitHubStore } from "./github.ts";
 
-export const RUN = "release-1.4";
+export const RUN: WorkflowRun = Object.freeze({
+  runId: "run-296-issue",
+  base: "main",
+  pinnedCommit: "9fceb02d0ae598e95dc970b74767f19372d61af8",
+});
 
-export const FINDING = "F-17";
+/** The GitHub repository issue collection every suite writes into. */
+export const TARGET = "https://github.com/octo/project";
 
-export const ISSUE_TITLE = "Retry the publish step on a 5xx";
+/** An Atlassian Cloud project, for the routing the amendment requires. */
+export const ATLASSIAN_TARGET = "https://acme.atlassian.net/browse/PROJ";
 
-export const RATIONALE = "The retry needs a backoff policy nobody has settled yet.";
+/** The endpoint the fake transport answers on. */
+export const ENDPOINT = "https://api.github.test";
 
-export const IMPACT = "Blocks nothing; the publish step is manual until it lands.";
+export const TITLE = "Retry the publish step on a 5xx";
 
-export const TIMING = "Next release train.";
+export const DESCRIPTION = "The publish step failed twice in a row on 503.";
 
-export const EVIDENCE = "The publish step failed twice in a row on 503.";
+/** A credential no journal, result or routing observation may ever hold. */
+export const TOKEN = "github-credential-for-this-test";
 
-/** One `<Issue>`, and a line that reads what it bound. */
-export function issue(...attributes: string[]): string[] {
+/** One `<Issue>`, written inside a target, and a line that reads what it bound. */
+export function document(target: string = TARGET, attributes = "", provider?: string): string {
+  const discriminator = provider === undefined ? "" : ` provider="${provider}"`;
   return [
-    `<Issue finding="${FINDING}" disposition="defer" pullRequest={pullRequest}` +
-      ` title="${ISSUE_TITLE}" rationale="${RATIONALE}" dependencyImpact="${IMPACT}"` +
-      ` intendedTiming="${TIMING}"${attributes.join("")} as="issue">`,
-    EVIDENCE,
-    "</Issue>",
+    `<IssueTarget url="${target}"${discriminator}>`,
+    `<Issue title="${TITLE}" description="${DESCRIPTION}"${attributes} as="issue" />`,
+    "</IssueTarget>",
     "",
-    "recorded {issue.number} at {issue.url} as {issue.state} by {issue.decision}",
-  ];
+    "recorded {issue.url}",
+  ].join("\n");
 }
 
-/** The same element, with one attribute replaced by what a suite is testing. */
-export function issueWith(replacements: Readonly<Record<string, string>>): string[] {
-  const attributes: Record<string, string> = {
-    finding: `"${FINDING}"`,
-    disposition: `"defer"`,
-    pullRequest: "{pullRequest}",
-    title: `"${ISSUE_TITLE}"`,
-    rationale: `"${RATIONALE}"`,
-    dependencyImpact: `"${IMPACT}"`,
-    intendedTiming: `"${TIMING}"`,
-    ...replacements,
-  };
-  const written = Object.entries(attributes)
-    .map(([name, value]) => `${name}=${value}`)
-    .join(" ");
-  return [
-    `<Issue ${written} as="issue">`,
-    EVIDENCE,
-    "</Issue>",
-    "",
-    "recorded {issue.disposition}",
-  ];
+/** A GitHub store whose issues this run creates, with a token it must send. */
+export function store(): GitHubStore {
+  const created = gitHubStore({ token: TOKEN });
+  return created;
 }
 
-/** Publish a branch, open a pull request, and record one deferred obligation. */
-export function deferring(...lines: string[]): string {
-  return published(...pullRequest(), ...(lines.length === 0 ? issue() : lines));
+/** The production GitHub provider, over a transport that answers from `state`. */
+export function gitHub(state: GitHubStore, ceiling: readonly string[] = [TARGET]): IssueProvider {
+  return gitHubIssueProvider({ ceiling, access: fakeGitHubAccess(state, ENDPOINT) });
 }
 
-/** The same, written so the run can read what a skipped decision bound. */
-export function decidable(replacements: Readonly<Record<string, string>> = {}): string {
-  return published(...pullRequest(), ...issueWith(replacements));
+/** One issue an Atlassian-shaped provider holds. */
+export interface AtlassianIssue {
+  key: string;
+  title: string;
+  description: string;
+  tags: readonly string[];
+  assignee: string | null;
 }
 
-/** What one execution of a document under a real executor lock did. */
-export interface WorkflowAttempt {
-  readonly notice: SuspensionNotice | undefined;
-  readonly thrown: unknown;
-  readonly rendered: string | undefined;
-  readonly events: readonly DurableEvent[];
-  readonly outcomes: readonly GitHostOutcomeRecord[];
-  /** What the run retains, read while its executor lock is still held. */
-  readonly repositories: readonly StoredRepository[];
+export interface AtlassianTracker {
+  readonly issues: Map<string, AtlassianIssue>;
+  /** Every request this provider was given, so a suite can prove selection. */
+  readonly observed: CompleteIssueRequest[];
+  readonly performed: CompleteIssueRequest[];
+  readonly ceiling: string[];
+}
+
+export function atlassianTracker(ceiling: string[] = [ATLASSIAN_TARGET]): AtlassianTracker {
+  return { issues: new Map(), observed: [], performed: [], ceiling };
 }
 
 /**
- * Run one document as this run's next execution, and settle what it did.
+ * An Atlassian-shaped provider: the same normalized fields, another service.
  *
- * The controller stands in for the executor exactly as the CLI arranges it: it
- * observes a reported wait, `race` halts the execution around it, and the run is
- * settled `suspended` with a stop reason naming the retained request — which is
- * the state delivery reads. A run that finished is settled `completed`, and one
- * that failed settles nothing, which is what a dead process leaves behind.
+ * It exists to prove the contract is portable rather than GitHub's shape with
+ * another name on it. It keys its issues the way a tracker does — by an opaque
+ * project key it mints — and it reads the natural key out of the request rather
+ * than out of anything GitHub-specific.
  */
-export interface AttemptOptions {
-  /**
-   * What else this execution's scope does once the document has finished.
-   *
-   * A run's database is reachable only while its executor lock is held, so a
-   * claim about what the run retained — or a replay of the same document
-   * against it — belongs here rather than after the lock is released.
-   */
-  readonly after?: (database: WorkflowRunDatabase) => Operation<void>;
-  /**
-   * Halt the document when this settles.
-   *
-   * An execution somebody interrupted is not one that finished, so nothing is
-   * settled for it: what is left behind is the state a dead process leaves.
-   */
-  readonly interrupt?: Operation<unknown>;
-}
-
-export function attemptWorkflow(
-  root: string,
-  action: "start" | "resume",
-  source: string,
-  options: WorkflowWorkspaceOptions,
-  extra: AttemptOptions = {},
-): Operation<WorkflowAttempt> {
-  return withRunHost(root, function* (transitions) {
-    return yield* withExecutorRun(
-      transitions,
-      action === "start" ? { runId: RUN, action, creation: creation() } : { runId: RUN, action },
-      function* (begun, executorLock) {
-        const { database } = begun;
-        const suspension = createSuspensionController({ database });
-        let thrown: unknown;
-        let rendered: string | undefined;
-        let notice: SuspensionNotice | undefined;
-        let interrupted = false;
-
-        yield* race([
-          call(function* (): Operation<void> {
-            try {
-              rendered = String(
-                yield* suspension.own(runWorkflowDocument(database, source, options)),
-              );
-            } catch (error) {
-              thrown = error;
-            }
-          }),
-          call(function* (): Operation<void> {
-            notice = yield* suspension.notice;
-          }),
-          ...(extra.interrupt === undefined
-            ? []
-            : [
-                call(function* (): Operation<void> {
-                  yield* extra.interrupt ?? suspend();
-                  interrupted = true;
-                }),
-              ]),
-        ]);
-
-        if (extra.after !== undefined) {
-          yield* extra.after(database);
-        }
-
-        const events = yield* database.journal.readAll();
-        const outcomes = yield* gitHostOutcomes(database);
-        const repositories = yield* retainedRepositories(database);
-
-        if (notice === undefined && thrown === undefined && !interrupted) {
-          const finished = yield* transitions.settle(executorLock, {
-            executionId: begun.execution.executionId,
-            status: "completed",
-          });
-          if (!finished.ok) {
-            throw finished.error;
-          }
-        }
-
-        if (notice !== undefined) {
-          const entries = yield* database.readJournalEntries();
-          const request = entries.ok
-            ? entries.value.find(
-                (entry) =>
-                  entry.event.type === "yield" &&
-                  entry.event.description.type === SUSPENSION_REQUEST &&
-                  entry.event.description.name === notice?.suspensionId,
-              )
-            : undefined;
-          const settled = yield* transitions.settle(executorLock, {
-            executionId: begun.execution.executionId,
-            status: "suspended",
-            ...(request === undefined
-              ? {}
-              : { reason: { kind: "journal" as const, eventId: request.eventId } }),
-          });
-          if (!settled.ok) {
-            throw settled.error;
-          }
-        }
-
-        return { notice, thrown, rendered, events, outcomes, repositories };
-      },
-    );
-  });
-}
-
-/**
- * One deferring document approved and resumed: two executions, one delivery.
- *
- * That is what a durable approval is. The first execution ends at the wait, the
- * answer is retained while nothing is running, and the second spends it.
- */
-export interface RecordedOptions extends AttemptOptions {
-  /** What is delivered to the wait. Absent approves it. */
-  readonly value?: Json;
-  /** What to assert about the first execution, before the answer exists. */
-  readonly between?: (first: WorkflowAttempt) => void;
-}
-
-export function* recorded(
-  root: string,
-  source: string,
-  options: WorkflowWorkspaceOptions,
-  extra: RecordedOptions = {},
-): Operation<{ first: WorkflowAttempt; second: WorkflowAttempt }> {
-  const first = yield* attemptWorkflow(root, "start", source, options);
-  extra.between?.(first);
-  const delivered = yield* answer(
-    root,
-    waitOf(first).suspensionId,
-    extra.value ?? {
-      approved: true,
-    },
-  );
-  if (!delivered.ok) {
-    throw delivered.error;
+export function atlassianProvider(tracker: AtlassianTracker): IssueProvider {
+  function keyOf(request: CompleteIssueRequest): string {
+    return JSON.stringify(request.naturalKey);
   }
-  const second = yield* attemptWorkflow(root, "resume", source, options, extra);
-  return { first, second };
-}
 
-/** Deliver one typed answer to the wait this run reported. */
-export function answer(
-  root: string,
-  suspensionId: string,
-  value: Json,
-): Operation<Result<WorkflowAnswerRetention>> {
-  return scoped(function* () {
-    yield* useWorkflowInputDelivery({ root });
-    return yield* WorkflowInputDelivery.operations.deliver({
-      runId: RUN,
-      suspensionId,
-      value,
-      secretDetection: true,
+  function snapshotOf(issue: AtlassianIssue): IssueSnapshot {
+    return Object.freeze({
+      providerId: issue.key,
+      url: `https://acme.atlassian.net/browse/${issue.key}`,
+      state: "open" as const,
+      title: issue.title,
+      description: issue.description,
+      tags: issue.tags,
+      assignee: issue.assignee,
     });
-  });
+  }
+
+  function completion(request: CompleteIssueRequest, issue: AtlassianIssue): IssueCompletion {
+    const snapshot = snapshotOf(issue);
+    return {
+      observations: issueObservationsJson({ issue: snapshot }),
+      result: issueRecordResultJson({
+        provider: "atlassian",
+        target: request.target,
+        providerId: snapshot.providerId,
+        url: snapshot.url,
+      }),
+    };
+  }
+
+  return {
+    *observe(request): Operation<Result<IssueObservation>> {
+      tracker.observed.push(request);
+      if (
+        request.provider !== "atlassian" ||
+        !withinIssueCeiling(tracker.ceiling, request.target)
+      ) {
+        return Err(
+          new IssueProviderError("this tracker creates issues only in projects it was given"),
+        );
+      }
+      const inputs = parseIssueInputs(request.inputs);
+      if (inputs === undefined) {
+        return Err(new IssueUnavailableError());
+      }
+      const held = tracker.issues.get(keyOf(request));
+      if (held === undefined) {
+        return Ok({ state: "absent", preState: issuePreStateJson({ issue: null }) });
+      }
+      const snapshot = snapshotOf(held);
+      if (issueAgrees(snapshot, inputs)) {
+        const adopted = completion(request, held);
+        return Ok({
+          state: "compatible",
+          preState: issuePreStateJson({ issue: snapshot }),
+          observations: adopted.observations,
+          result: adopted.result,
+        });
+      }
+      return Ok({ state: "absent", preState: issuePreStateJson({ issue: snapshot }) });
+    },
+
+    *perform(request, observation): Operation<Result<IssueCompletion>> {
+      tracker.performed.push(request);
+      const inputs = parseIssueInputs(request.inputs);
+      const before = parseIssuePreState(observation.preState);
+      if (inputs === undefined || before === undefined) {
+        return Err(new IssueUnavailableError());
+      }
+      const existing = tracker.issues.get(keyOf(request));
+      const issue: AtlassianIssue = {
+        key: existing?.key ?? `PROJ-${tracker.issues.size + 1}`,
+        title: inputs.title,
+        description: inputs.description,
+        tags: inputs.tags,
+        assignee: inputs.assignee,
+      };
+      tracker.issues.set(keyOf(request), issue);
+      return Ok(completion(request, issue));
+    },
+  };
+}
+
+/** A provider that fails the suite if any phase reaches it. */
+export function forbiddenProvider(name: string): IssueProvider {
+  return {
+    // deno-lint-ignore require-yield
+    *observe(): Operation<Result<IssueObservation>> {
+      throw new Error(`the ${name} provider was observed where nothing may reach it`);
+    },
+    // deno-lint-ignore require-yield
+    *perform(): Operation<Result<IssueCompletion>> {
+      throw new Error(`the ${name} provider performed where nothing may reach it`);
+    },
+  };
+}
+
+export interface InstalledProvider {
+  readonly discriminator: string;
+  readonly provider: IssueProvider;
+}
+
+export interface RunOptions {
+  readonly stream?: DurableStream;
+  readonly source?: string;
+  readonly providers?: readonly InstalledProvider[];
+  readonly around?: (operation: Operation<unknown>) => Operation<unknown>;
+}
+
+export interface IssueAttempt {
+  readonly rendered: string | undefined;
+  readonly thrown: unknown;
+  readonly events: DurableEvent[];
+  readonly records: IssueReconciliationRecord[];
+  readonly stream: DurableStream;
 }
 
 /**
- * The wait this attempt reported, refusing an attempt that reported none.
+ * One document execution under one retained run.
  *
- * A suite whose next step is a delivery cannot continue without one, and
- * continuing with `undefined` would deliver to nothing and assert nothing.
+ * The run is retained rather than allocated so every execution in a test
+ * carries the same external identity, which is what the reconciliation keys on.
+ * The document's failure is captured rather than raised: what each test
+ * measures is the provider traffic and the journal, and both outlive it.
  */
-export function waitOf(attempt: WorkflowAttempt): SuspensionNotice {
-  if (attempt.notice === undefined) {
-    throw new Error("the document did not reach a durable wait");
-  }
-  return attempt.notice;
+export function runIssueDocument(options: RunOptions = {}): Operation<IssueAttempt> {
+  return scoped(function* () {
+    const stream = options.stream ?? new InMemoryStream();
+    const source = options.source ?? document();
+    let rendered: string | undefined;
+    let thrown: unknown;
+
+    yield* scoped(function* () {
+      yield* useCompositionComponents();
+      // The host's own mapping, installed the way `useIssueProviders()`
+      // installs it: this harness stands in for the trusted host.
+      yield* IssueTargetContext.around(
+        {
+          // deno-lint-ignore require-yield
+          *resolve([target]): Operation<string | undefined> {
+            return builtInIssueProvider(target);
+          },
+        },
+        { at: "min" },
+      );
+      for (const installed of options.providers ?? []) {
+        yield* useIssueProvider(installed.discriminator, installed.provider);
+      }
+      // Lazy on purpose. `around` installs the middleware a suite is testing,
+      // so the execution has to start inside it — an operation built by
+      // yielding here would already have run outside every handler.
+      const execution: Operation<unknown> = call(function* (): Operation<unknown> {
+        return yield* collect(
+          yield* executeInstalled({ ...inlineSource(source), stream }, [
+            retainedWorkflowInstallation(RUN),
+          ]),
+        );
+      });
+      const around = options.around ?? ((operation: Operation<unknown>) => operation);
+      try {
+        rendered = String(yield* around(execution));
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    const events = yield* stream.readAll();
+    return { rendered, thrown, events, records: recordsIn(events), stream };
+  });
 }
 
-/** The suspension requests this run retained, as the journal holds them. */
-export function suspensionRequests(events: readonly DurableEvent[]): DurableEvent[] {
+/** Every Issue effect this run journaled, in order. */
+export function issueYields(events: readonly DurableEvent[]): DurableEvent[] {
   return events.filter(
-    (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
+    (event) => event.type === "yield" && event.description.type === ISSUE_EFFECT,
   );
+}
+
+function recordsIn(events: readonly DurableEvent[]): IssueReconciliationRecord[] {
+  const records: IssueReconciliationRecord[] = [];
+  for (const event of issueYields(events)) {
+    if (event.type !== "yield" || event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseIssueReconciliationRecord(event.result.value);
+    if (record !== undefined) {
+      records.push(record);
+    }
+  }
+  return records;
+}
+
+/** The history a run leaves behind when it was interrupted before it closed. */
+export function partial(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.filter((event) => !(event.type === "close" && event.coroutineId === "root"));
+}
+
+/** What one Issue effect settled as, whichever way it settled. */
+export function issueOutcomes(events: readonly DurableEvent[]): { status: string; name: string }[] {
+  return issueYields(events).map((event) => {
+    const result = Object(Reflect.get(event, "result"));
+    const error = Object(Reflect.get(result, "error"));
+    return {
+      status: String(Reflect.get(result, "status")),
+      name: String(Reflect.get(error, "name") ?? ""),
+    };
+  });
+}
+
+/** What an operation threw, so a suite can assert on it rather than fail. */
+export function* raised(operation: Operation<unknown>): Operation<unknown> {
+  try {
+    yield* operation;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** The failure of this kind somewhere in this one's causes. */
+export function causedBy<T>(
+  error: unknown,
+  is: (candidate: unknown) => candidate is T,
+): T | undefined {
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined || current === null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    if (is(current)) {
+      return current;
+    }
+    if (current instanceof Error) {
+      queue.push(current.cause);
+      if (current instanceof AggregateError) {
+        queue.push(...current.errors);
+      }
+    }
+  }
+  return undefined;
 }

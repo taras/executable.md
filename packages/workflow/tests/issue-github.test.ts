@@ -1,34 +1,44 @@
 /**
- * Tier U — the GitHub issue adapter, on its own.
+ * Tier U — the GitHub Issue adapter, on its own.
  *
- * What it sends, what it makes of an answer, and — the claim the whole
- * reconciliation rests on — that nothing it cannot read ever becomes "there is
- * no issue here". Every test drives the real adapter; what is substituted is
- * the transport and the environment, which is the whole of what it asks its
- * host for.
+ * Which targets it will act for, what it makes of an answer, and — the claim
+ * the whole reconciliation rests on — that nothing it cannot read ever becomes
+ * "there is no issue here". Every test drives the real adapter; what is
+ * substituted is the transport, which is the whole of what it asks its host
+ * for.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { Operation } from "effection";
+import { Ok, type Operation } from "effection";
 import {
-  gitHubIssues,
-  openIssue,
-  readIssue,
-  type GitHubAccess,
-  type GitHubHttpRequest,
-  type GitHubHttpResponse,
-} from "../src/deno/composition/github.ts";
-import {
-  issueBody,
-  issueNaturalKey,
+  gitHubIssueProvider,
+  issueBodyFor,
   issueOriginMarker,
+  parseGitHubIssueTarget,
+  readGitHubIssue,
+} from "../src/deno/issue/github.ts";
+import {
+  canonicalIssueTarget,
+  issueProviderName,
+  withinIssueCeiling,
+} from "../src/issue/target.ts";
+import { builtInIssueProvider } from "../src/deno/issue/resolution.ts";
+import {
+  issueInputsJson,
+  issueNaturalKey,
+  issueNaturalKeyJson,
+  issuePreStateJson,
+  issueSnapshotJson,
+  normalizedTags,
+  type CompleteIssueRequest,
   type IssueInputs,
-  type IssueSnapshot,
-} from "../src/composition/issue-records.ts";
-import type { GitPushRepositoryIdentity } from "../src/composition/git-push-records.ts";
-import type { PullRequestResult } from "../src/composition/pull-request-records.ts";
-import type { GitHostEffectIdentity } from "../src/git-host/records.ts";
+} from "../src/issue/records.ts";
+import type {
+  GitHubAccess,
+  GitHubHttpRequest,
+  GitHubHttpResponse,
+} from "../src/deno/composition/github.ts";
 import {
   fakeGitHubAccess,
   gitHubStore,
@@ -40,231 +50,221 @@ import {
 } from "./support/github.ts";
 
 const ENDPOINT = "https://api.github.test";
-
-const IDENTITY: GitPushRepositoryIdentity = Object.freeze({
-  name: "project",
-  locatorFingerprint: "0".repeat(64),
-  requestedBase: null,
-  creationCommit: "d".repeat(40),
-  primaryBranch: "main",
-  objectFormat: "sha1",
-});
-
-const PULL_REQUEST: PullRequestResult = Object.freeze({
-  repository: IDENTITY,
-  providerId: "PR_node_1",
-  number: 7,
-  url: "https://github.com/octo/project/pull/7",
-  state: "open",
-  headSha: "a".repeat(40),
-  baseSha: "b".repeat(40),
-});
+const TARGET = "https://github.com/octo/project";
+const IDENTITY = Object.freeze({ runId: "run-296", expansionId: "expansion-1" });
 
 const INPUTS: IssueInputs = Object.freeze({
-  repository: IDENTITY,
-  pullRequest: PULL_REQUEST,
-  finding: "F-17",
-  disposition: "defer",
   title: "Retry the publish step on a 5xx",
-  body: "The publish step failed twice in a row on 503.\n",
-  rationale: "The retry needs a backoff policy nobody has settled yet.",
-  dependencyImpact: "Blocks nothing.",
-  intendedTiming: "Next release train.",
+  description: "The publish step failed twice in a row on 503.",
+  tags: Object.freeze(["publish", "reliability"]),
+  assignee: null,
 });
 
-const WHERE: GitHostEffectIdentity = Object.freeze({
-  runId: "release-1.4",
-  expansionId: "expansion-1",
+const REQUEST: CompleteIssueRequest = Object.freeze({
+  identity: IDENTITY,
+  provider: "github",
+  target: TARGET,
+  inputs: issueInputsJson(INPUTS),
+  naturalKey: issueNaturalKeyJson(issueNaturalKey(IDENTITY, TARGET)),
 });
 
-const MARKER = issueOriginMarker(issueNaturalKey(INPUTS));
-
-const BODY = issueBody(INPUTS, WHERE);
+const MARKER = issueOriginMarker(REQUEST.naturalKey);
+const BODY = issueBodyFor(INPUTS, MARKER);
 
 function store(issues: StoredIssue[] = []): GitHubStore {
   return gitHubStore({ issues });
 }
 
-function issues(state: GitHubStore) {
-  return gitHubIssues(fakeGitHubAccess(state, ENDPOINT), {
-    owner: state.owner,
-    repository: state.repository,
-  });
+function provider(state: GitHubStore, ceiling: readonly string[] = [TARGET]) {
+  return gitHubIssueProvider({ ceiling, access: fakeGitHubAccess(state, ENDPOINT) });
 }
 
-/** One issue this GitHub already holds, carrying this obligation's marker. */
+/** One issue this GitHub holds, carrying this position's marker. */
 function held(overrides: Partial<StoredIssue> = {}): StoredIssue {
   return {
     nodeId: "I_node_1",
-    number: 3,
+    number: 1,
     state: "open",
     title: INPUTS.title,
     body: BODY,
+    labels: [...INPUTS.tags],
+    assignee: null,
     ...overrides,
   };
 }
 
-/** An access that answers exactly what a test hands it, and counts the asking. */
 function scripted(
   answers: (request: GitHubHttpRequest) => GitHubHttpResponse,
   token: string | null = "test-token",
-): { access: GitHubAccess; requests: GitHubHttpRequest[] } {
-  const requests: GitHubHttpRequest[] = [];
+): GitHubAccess {
   return {
-    requests,
-    access: {
-      endpoint: ENDPOINT,
-      // deno-lint-ignore require-yield
-      *token(): Operation<string | undefined> {
-        return token === null ? undefined : token;
-      },
-      // deno-lint-ignore require-yield
-      *send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
-        requests.push(request);
-        return answers(request);
-      },
+    endpoint: ENDPOINT,
+    // deno-lint-ignore require-yield
+    *token(): Operation<string | undefined> {
+      return token === null ? undefined : token;
+    },
+    // deno-lint-ignore require-yield
+    *send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
+      return answers(request);
     },
   };
 }
 
-const REPOSITORY_URL = `${ENDPOINT}/repos/octo/project`;
-
-/** The URL the fixture reports, which is a payload's own word and not composed. */
-const HELD_URL = "https://github.com/owner/repository/issues/3";
-
-const PAYLOAD = {
-  node_id: "I_node_1",
-  number: 3,
-  html_url: "https://github.com/octo/project/issues/3",
-  state: "open",
-  title: INPUTS.title,
-  body: BODY,
-  repository_url: REPOSITORY_URL,
-};
-
-function listed(...entries: unknown[]): GitHubHttpResponse {
-  return { status: 200, body: JSON.stringify(entries) };
-}
-
-describe("workflow GitHub issue payloads", () => {
-  it("reads the eight facts an issue answer has to carry", function* () {
-    expect(readIssue(PAYLOAD)).toEqual({
-      state: "open",
-      providerId: "I_node_1",
-      number: 3,
-      url: "https://github.com/octo/project/issues/3",
-      title: INPUTS.title,
-      body: BODY,
-      repository: REPOSITORY_URL,
-      pullRequest: false,
-    });
-    // An absent body is an empty one, which is what GitHub means by `null`.
-    expect(readIssue({ ...PAYLOAD, body: null })?.body).toBe("");
-    // A pull request is an issue at GitHub, and says so.
-    expect(readIssue({ ...PAYLOAD, pull_request: { url: "…" } })?.pullRequest).toBe(true);
+describe("workflow Issue target canonicalization", () => {
+  it("gives one container one spelling", function* () {
+    expect(canonicalIssueTarget("https://github.com/octo/project/")).toBe(TARGET);
+    expect(canonicalIssueTarget("HTTPS://GitHub.com/octo/project")).toBe(TARGET);
+    expect(canonicalIssueTarget("https://acme.atlassian.net/browse/PROJ/")).toBe(
+      "https://acme.atlassian.net/browse/PROJ",
+    );
   });
 
-  it("reads no issue out of an answer missing any of them", function* () {
-    for (const damage of [
-      { node_id: "" },
-      { node_id: 1 },
-      { number: 0 },
-      { number: "3" },
-      { number: 3.5 },
-      { html_url: "" },
-      { state: "merged" },
-      { title: "" },
-      { body: 1 },
-      { repository_url: "" },
+  it("refuses every URL that is not the plain name of a container", function* () {
+    for (const value of [
+      "",
+      "not a url",
+      "github.com/octo/project",
+      "ftp://github.com/octo/project",
+      "file:///srv/issues",
+      `https://${"token"}@github.com/octo/project`,
+      `https://${["user", "password"].join(":")}@github.com/octo/project`,
+      "https://github.com/octo/project?tab=issues",
+      "https://github.com/octo/project#new",
     ]) {
-      expect(readIssue({ ...PAYLOAD, ...damage })).toBeUndefined();
+      expect(canonicalIssueTarget(value)).toBeUndefined();
     }
-    expect(readIssue(undefined)).toBeUndefined();
-    expect(readIssue([PAYLOAD])).toBeUndefined();
   });
 
-  it("makes a snapshot of an open issue and none of a closed one", function* () {
-    const open = readIssue(PAYLOAD);
-    expect(open === undefined ? undefined : openIssue(open)).toEqual({
-      providerId: "I_node_1",
-      number: 3,
-      url: "https://github.com/octo/project/issues/3",
-      state: "open",
-      title: INPUTS.title,
-      body: BODY,
+  it("maps only the hosts the compatibility contract names", function* () {
+    expect(builtInIssueProvider(TARGET)).toBe("github");
+    expect(builtInIssueProvider("https://acme.atlassian.net/browse/PROJ")).toBe("atlassian");
+    expect(builtInIssueProvider("https://github.example.invalid/octo/project")).toBeUndefined();
+    // A host that merely contains the name is not that host.
+    expect(builtInIssueProvider("https://github.com.example.invalid/octo/project")).toBeUndefined();
+    expect(
+      builtInIssueProvider("https://atlassian.net.example.invalid/browse/PROJ"),
+    ).toBeUndefined();
+  });
+
+  it("reads a provider discriminator as a stable lower-case name", function* () {
+    expect(issueProviderName("github")).toBe("github");
+    expect(issueProviderName("self-hosted-2")).toBe("self-hosted-2");
+    for (const value of ["", "GitHub", "1provider", "with space", 7, null]) {
+      expect(issueProviderName(value)).toBeUndefined();
+    }
+  });
+
+  it("narrows a ceiling by whole path segments", function* () {
+    expect(withinIssueCeiling([TARGET], TARGET)).toBe(true);
+    expect(withinIssueCeiling([TARGET], `${TARGET}/issues`)).toBe(true);
+    expect(withinIssueCeiling([TARGET], "https://github.com/octo/project-two")).toBe(false);
+    expect(withinIssueCeiling([TARGET], "https://github.com/other/project")).toBe(false);
+    expect(withinIssueCeiling([], TARGET)).toBe(false);
+  });
+
+  it("names the repository both spellings of an issue collection describe", function* () {
+    expect(parseGitHubIssueTarget(TARGET)).toEqual({ owner: "octo", repository: "project" });
+    expect(parseGitHubIssueTarget(`${TARGET}/issues`)).toEqual({
+      owner: "octo",
+      repository: "project",
     });
-    const closed = readIssue({ ...PAYLOAD, state: "closed" });
-    expect(closed === undefined ? undefined : openIssue(closed)).toBeUndefined();
+    for (const value of [
+      "https://github.com/octo",
+      "https://github.com/octo/project/pulls",
+      "https://github.com/octo/project/issues/1",
+      "https://github.com:8443/octo/project",
+      "http://github.com/octo/project",
+      "https://gitlab.com/octo/project",
+    ]) {
+      expect(parseGitHubIssueTarget(value)).toBeUndefined();
+    }
+  });
+});
+
+describe("workflow Issue tag normalization", () => {
+  it("is a set, ordered by code point", function* () {
+    expect(normalizedTags(["b", "a", "b"])).toEqual(["a", "b"]);
+    expect(normalizedTags(undefined)).toEqual([]);
+    expect(normalizedTags([])).toEqual([]);
+    // Code point rather than UTF-16 code unit: a supplementary character sorts
+    // after every character in the private-use area, which the default
+    // comparison gets the other way round.
+    expect(normalizedTags(["\u{10000}", ""])).toEqual(["", "\u{10000}"]);
+  });
+
+  it("names no tag set for a value that is not one", function* () {
+    for (const value of ["a", 1, {}, ["a", ""], ["a", 1], [null]]) {
+      expect(normalizedTags(value)).toBeUndefined();
+    }
   });
 });
 
 describe("workflow GitHub issue observation", () => {
-  it("finds the one issue carrying this obligation's marker", function* () {
+  it("finds the one issue carrying this position's marker", function* () {
     const state = store([held()]);
-    const observed = yield* issues(state).observe(INPUTS, WHERE);
-    expect(observed).toEqual({
-      state: "found",
-      issue: {
-        providerId: "I_node_1",
-        number: 3,
-        url: HELD_URL,
-        state: "open",
-        title: INPUTS.title,
-        body: BODY,
-      },
-    });
-    // Every issue in the repository, in one listing, and nothing else.
+    const observed = yield* provider(state).observe(REQUEST);
+    expect(observed.ok).toBe(true);
+    expect(observed.ok && observed.value.state).toBe("compatible");
+    // One listing of the repository, and nothing else.
     expect(issueCalls(state)).toEqual(["GET /repos/octo/project/issues"]);
   });
 
-  it("reports absence for an issue carrying somebody else's marker", function* () {
-    const other = { ...INPUTS, finding: "F-18" };
-    const state = store([held({ body: issueBody(other, WHERE) })]);
-    expect(yield* issues(state).observe(INPUTS, WHERE)).toEqual({ state: "absent" });
+  it("reports absence for an issue carrying another position's marker", function* () {
+    const other = { ...REQUEST, identity: { ...IDENTITY, expansionId: "expansion-2" } };
+    const marker = issueOriginMarker(issueNaturalKeyJson(issueNaturalKey(other.identity, TARGET)));
+    const state = store([held({ body: issueBodyFor(INPUTS, marker) })]);
+    const observed = yield* provider(state).observe(REQUEST);
+    expect(observed.ok && observed.value.state).toBe("absent");
   });
 
   it("never reads a pull request as the issue it is looking for", function* () {
-    // GitHub lists pull requests among a repository's issues, and one could
-    // carry this marker in its own body — a document quoting the evidence into
-    // the pull request would do it. It is still not an issue.
     const state = gitHubStore({
       pullRequests: [
         {
           nodeId: "PR_node_1",
-          number: 7,
+          number: 1,
           state: "open",
           title: INPUTS.title,
           body: BODY,
           draft: false,
-          headRef: "publish/1.4",
+          headRef: "publish",
           headSha: "a".repeat(40),
           baseRef: "main",
           baseSha: "b".repeat(40),
         },
       ],
     });
-    expect(yield* issues(state).observe(INPUTS, WHERE)).toEqual({ state: "absent" });
+    const observed = yield* provider(state).observe(REQUEST);
+    expect(observed.ok && observed.value.state).toBe("absent");
   });
 
-  it("refuses two issues carrying one marker rather than adopting either", function* () {
-    const state = store([held(), held({ nodeId: "I_node_2", number: 4 })]);
-    expect(yield* issues(state).observe(INPUTS, WHERE)).toEqual({ state: "ambiguous" });
-    expect(issueCreations(state)).toBe(0);
-  });
+  it("refuses two issues carrying one marker, a closed one, and a foreign one", function* () {
+    const two = store([held(), held({ nodeId: "I_node_2", number: 2 })]);
+    expect((yield* provider(two).observe(REQUEST)).ok && true).toBe(true);
+    const ambiguous = yield* provider(two).observe(REQUEST);
+    expect(ambiguous.ok && ambiguous.value.state).toBe("ambiguous");
 
-  it("refuses a marked issue somebody closed, and one in another repository", function* () {
     const closed = store([held({ state: "closed" })]);
-    expect(yield* issues(closed).observe(INPUTS, WHERE)).toEqual({ state: "conflict" });
+    const conflicted = yield* provider(closed).observe(REQUEST);
+    expect(conflicted.ok && conflicted.value.state).toBe("conflict");
 
     const elsewhere = store([held({ repository: `${ENDPOINT}/repos/octo/other` })]);
-    expect(yield* issues(elsewhere).observe(INPUTS, WHERE)).toEqual({ state: "conflict" });
+    const foreign = yield* provider(elsewhere).observe(REQUEST);
+    expect(foreign.ok && foreign.value.state).toBe("conflict");
   });
 
-  it("finds a marked issue whose text has moved, so the update can be described", function* () {
-    const state = store([held({ title: "Something else entirely" })]);
-    const observed = yield* issues(state).observe(INPUTS, WHERE);
-    expect(observed.state).toBe("found");
-    expect(observed.state === "found" && observed.issue.title).toBe("Something else entirely");
+  it("refuses a target outside the ceiling before anything is sent", function* () {
+    const state = store();
+    const refused = yield* provider(state, ["https://github.com/other/repo"]).observe(REQUEST);
+    expect(refused.ok).toBe(false);
+    expect(state.requests).toHaveLength(0);
+  });
+
+  it("refuses a request whose discriminator is not this adapter's", function* () {
+    const state = store();
+    const refused = yield* provider(state).observe({ ...REQUEST, provider: "atlassian" });
+    expect(refused.ok).toBe(false);
+    expect(state.requests).toHaveLength(0);
   });
 });
 
@@ -276,159 +276,201 @@ describe("workflow GitHub issue unavailability", () => {
       },
       () => ({ status: 500, body: "{}" }),
       () => ({ status: 403, body: JSON.stringify({ message: "rate limited" }) }),
-      // A 404 is a permission check as often as it is absence.
       () => ({ status: 404, body: JSON.stringify({ message: "Not Found" }) }),
       () => ({ status: 200, body: "{" }),
       () => ({ status: 200, body: JSON.stringify({ items: [] }) }),
-      // One member of the page this adapter cannot read leaves the set unknown.
-      () => listed(PAYLOAD, { node_id: "I_node_9" }),
+      () => ({ status: 200, body: JSON.stringify([{ node_id: "I9" }]) }),
     ];
     for (const answers of refusals) {
-      const { access } = scripted(answers);
-      const observed = yield* gitHubIssues(access, {
-        owner: "octo",
-        repository: "project",
-      }).observe(INPUTS, WHERE);
-      expect(observed).toEqual({ state: "unavailable" });
+      const refused = yield* gitHubIssueProvider({
+        ceiling: [TARGET],
+        access: scripted(answers),
+      }).observe(REQUEST);
+      expect(refused.ok).toBe(false);
     }
   });
 
   it("answers unavailable with no credential, before anything is sent", function* () {
-    const { access, requests } = scripted(() => listed(), null);
-    const adapter = gitHubIssues(access, { owner: "octo", repository: "project" });
-    expect(yield* adapter.observe(INPUTS, WHERE)).toEqual({ state: "unavailable" });
-    expect(yield* adapter.create(INPUTS, WHERE)).toEqual({ state: "uncertain" });
-    expect(requests).toHaveLength(0);
-  });
-
-  it("carries the credential on every call it does make", function* () {
-    const state = store([held()]);
-    yield* issues(state).observe(INPUTS, WHERE);
-    expect(state.requests).not.toHaveLength(0);
-    for (const request of state.requests) {
-      expect(request.headers["Authorization"]).toBe(`Bearer ${state.token}`);
-    }
+    let sent = 0;
+    const access = scripted(() => {
+      sent += 1;
+      return { status: 200, body: "[]" };
+    }, null);
+    const adapter = gitHubIssueProvider({ ceiling: [TARGET], access });
+    expect((yield* adapter.observe(REQUEST)).ok).toBe(false);
+    expect(sent).toBe(0);
   });
 
   it("refuses a next page it will not follow rather than reporting absence", function* () {
     const unfollowable = store();
     unfollowable.issueLink = '<https://evil.test/repos/octo/project/issues?page=2>; rel="next"';
-    expect(yield* issues(unfollowable).observe(INPUTS, WHERE)).toEqual({ state: "unavailable" });
+    expect((yield* provider(unfollowable).observe(REQUEST)).ok).toBe(false);
 
-    // And a walk it can follow is followed to the end, so a marked issue on a
-    // later page is found rather than missed.
-    const paged = store([
-      held({ nodeId: "I_node_0", number: 1, body: "unrelated" }),
-      held({ nodeId: "I_node_0b", number: 2, body: "also unrelated" }),
-      held(),
-    ]);
+    // And a walk it can follow is followed to the end.
+    const paged = store([held({ nodeId: "I0", number: 9, body: "unrelated" }), held()]);
     paged.issuePageSize = 1;
-    const observed = yield* issues(paged).observe(INPUTS, WHERE);
-    expect(observed.state).toBe("found");
-    expect(observed.state === "found" && observed.issue.number).toBe(3);
+    const observed = yield* provider(paged).observe(REQUEST);
+    expect(observed.ok && observed.value.state).toBe("compatible");
+  });
+
+  it("carries the credential on every call it makes", function* () {
+    const state = store([held()]);
+    yield* provider(state).observe(REQUEST);
+    expect(state.requests).not.toHaveLength(0);
+    for (const request of state.requests) {
+      expect(request.headers["Authorization"]).toBe(`Bearer ${state.token}`);
+    }
   });
 });
 
 describe("workflow GitHub issue mutation", () => {
-  it("creates one issue whose title and body are what the request says", function* () {
+  it("creates one issue whose title, body, labels and assignee are the request", function* () {
     const state = store();
-    const created = yield* issues(state).create(INPUTS, WHERE);
-    expect(created.state).toBe("settled");
-    expect(created.state === "settled" && created.issue.title).toBe(INPUTS.title);
-    expect(created.state === "settled" && created.issue.body).toBe(BODY);
+    const absent = yield* provider(state).observe(REQUEST);
+    expect(absent.ok && absent.value.state).toBe("absent");
+
+    const performed = yield* provider(state).perform(
+      REQUEST,
+      absent.ok ? absent.value : { state: "absent", preState: issuePreStateJson({ issue: null }) },
+    );
+    expect(performed.ok).toBe(true);
     expect(issueCreations(state)).toBe(1);
 
-    // The marker is in the body it wrote, which is what makes the next
-    // observation find it.
-    expect(state.issues[0]?.body).toContain(MARKER);
-    // And the evidence is in it verbatim, with the rest recorded around it.
-    expect(state.issues[0]?.body).toContain(INPUTS.body);
-    expect(state.issues[0]?.body).toContain(INPUTS.rationale);
-    expect(state.issues[0]?.body).toContain(INPUTS.dependencyImpact);
-    expect(state.issues[0]?.body).toContain(INPUTS.intendedTiming);
-    expect(state.issues[0]?.body).toContain(PULL_REQUEST.url);
-    expect(state.issues[0]?.body).toContain(WHERE.runId);
-    expect(state.issues[0]?.body).toContain(WHERE.expansionId);
+    const [created] = state.issues;
+    expect(created?.title).toBe(INPUTS.title);
+    expect(created?.labels).toEqual(["publish", "reliability"]);
+    expect(created?.assignee).toBeNull();
+    // The description verbatim, and the marker after it rather than inside it.
+    expect(created?.body).toContain(INPUTS.description);
+    expect(created?.body).toContain(MARKER);
   });
 
-  it("reports a creation it cannot read, and one that is not this repository's", function* () {
-    const unreadable = scripted(() => ({ status: 201, body: "{" }));
-    expect(
-      yield* gitHubIssues(unreadable.access, { owner: "octo", repository: "project" }).create(
-        INPUTS,
-        WHERE,
-      ),
-    ).toEqual({ state: "unreadable" });
-
-    const foreign = scripted(() => ({
-      status: 201,
-      body: JSON.stringify({ ...PAYLOAD, repository_url: `${ENDPOINT}/repos/octo/other` }),
-    }));
-    expect(
-      yield* gitHubIssues(foreign.access, { owner: "octo", repository: "project" }).create(
-        INPUTS,
-        WHERE,
-      ),
-    ).toEqual({ state: "unreadable" });
-  });
-
-  it("reports a rejected creation as uncertain rather than as a failure", function* () {
+  it("sends one assignee when the request names one", function* () {
     const state = store();
-    state.fault = { on: "issue-create", status: 422 };
-    expect(yield* issues(state).create(INPUTS, WHERE)).toEqual({ state: "uncertain" });
+    const request = { ...REQUEST, inputs: issueInputsJson({ ...INPUTS, assignee: "octocat" }) };
+    const absent = yield* provider(state).observe(request);
+    yield* provider(state).perform(
+      request,
+      absent.ok ? absent.value : { state: "absent", preState: issuePreStateJson({ issue: null }) },
+    );
+    expect(state.issues[0]?.assignee).toBe("octocat");
   });
 
-  it("updates the two fields it owns, once, and then observes exactly once", function* () {
-    const state = store([held({ title: "Stale", body: "stale body" })]);
-    const before: IssueSnapshot = Object.freeze({
-      providerId: "I_node_1",
-      number: 3,
-      url: HELD_URL,
-      state: "open",
-      title: "Stale",
-      body: "stale body",
-    });
-    const updated = yield* issues(state).update(INPUTS, WHERE, before);
-    expect(updated.state).toBe("settled");
-    expect(updated.state === "settled" && updated.issue.title).toBe(INPUTS.title);
-    expect(updated.state === "settled" && updated.issue.body).toBe(BODY);
+  it("updates every field it owns once, then observes exactly once", function* () {
+    const state = store([held({ title: "Stale", labels: ["stale"], assignee: "someone" })]);
+    const observed = yield* provider(state).observe(REQUEST);
+    expect(observed.ok && observed.value.state).toBe("absent");
+    state.requests.length = 0;
+
+    const performed = yield* provider(state).perform(
+      REQUEST,
+      observed.ok
+        ? observed.value
+        : { state: "absent", preState: issuePreStateJson({ issue: null }) },
+    );
+
+    expect(performed.ok).toBe(true);
     expect(issuePatches(state)).toBe(1);
     expect(issueCreations(state)).toBe(0);
     expect(issueCalls(state)).toEqual([
-      "PATCH /repos/octo/project/issues/3",
-      "GET /repos/octo/project/issues/3",
+      "PATCH /repos/octo/project/issues/1",
+      "GET /repos/octo/project/issues/1",
     ]);
+    expect(state.issues[0]?.title).toBe(INPUTS.title);
+    expect(state.issues[0]?.labels).toEqual(["publish", "reliability"]);
+    expect(state.issues[0]?.assignee).toBeNull();
   });
 
-  it("sends no mutation when both fields already say what was asked", function* () {
-    const state = store([held()]);
-    const before: IssueSnapshot = Object.freeze({
-      providerId: "I_node_1",
-      number: 3,
-      url: HELD_URL,
+  it("reports a rejected creation without creating a second issue", function* () {
+    const state = store();
+    state.fault = { on: "issue-create", status: 422 };
+    const performed = yield* provider(state).perform(REQUEST, {
+      state: "absent",
+      preState: issuePreStateJson({ issue: null }),
+    });
+    expect(performed.ok).toBe(false);
+    expect(state.issues).toHaveLength(0);
+  });
+
+  it("adopts an issue a rejected creation had already filed", function* () {
+    const state = store();
+    // The state an interrupted creation leaves: the issue exists, and this end
+    // never learned that it does.
+    state.fault = { on: "issue-create", status: 500, afterEffect: true };
+    const performed = yield* provider(state).perform(REQUEST, {
+      state: "absent",
+      preState: issuePreStateJson({ issue: null }),
+    });
+    expect(performed.ok).toBe(true);
+    expect(state.issues).toHaveLength(1);
+    expect(issueCreations(state)).toBe(1);
+  });
+});
+
+describe("workflow GitHub issue payloads", () => {
+  const PAYLOAD = {
+    node_id: "I_node_1",
+    number: 1,
+    html_url: "https://github.com/octo/project/issues/1",
+    state: "open",
+    title: INPUTS.title,
+    body: BODY,
+    repository_url: `${ENDPOINT}/repos/octo/project`,
+    labels: [{ name: "reliability" }, { name: "publish" }],
+    assignees: [{ login: "octocat" }],
+  };
+
+  it("reads the facts an issue answer has to carry, and normalizes them", function* () {
+    expect(readGitHubIssue(PAYLOAD)).toEqual({
       state: "open",
+      providerId: "I_node_1",
+      number: 1,
+      url: "https://github.com/octo/project/issues/1",
       title: INPUTS.title,
       body: BODY,
+      tags: ["publish", "reliability"],
+      assignee: "octocat",
+      repository: `${ENDPOINT}/repos/octo/project`,
+      pullRequest: false,
     });
-    expect((yield* issues(state).update(INPUTS, WHERE, before)).state).toBe("settled");
-    expect(issuePatches(state)).toBe(0);
-    // The observation still happens: what the issue holds is never decided from
-    // the absence of a call.
-    expect(issueCalls(state)).toEqual(["GET /repos/octo/project/issues/3"]);
+    expect(readGitHubIssue({ ...PAYLOAD, body: null })?.body).toBe("");
+    expect(readGitHubIssue({ ...PAYLOAD, assignees: [] })?.assignee).toBeNull();
+    expect(readGitHubIssue({ ...PAYLOAD, pull_request: { url: "…" } })?.pullRequest).toBe(true);
   });
 
-  it("reports an update it could not confirm as uncertain, having sent one patch", function* () {
-    const state = store([held({ title: "Stale" })]);
-    state.fault = { on: "issue-lookup", status: 500 };
-    const before: IssueSnapshot = Object.freeze({
+  it("reads no issue out of an answer missing or contradicting one", function* () {
+    for (const damage of [
+      { node_id: "" },
+      { number: 0 },
+      { html_url: "" },
+      { state: "merged" },
+      { title: "" },
+      { body: 1 },
+      { repository_url: "" },
+      { labels: "reliability" },
+      { labels: [{ name: "" }] },
+      { assignees: "octocat" },
+      // Two assignees is a state this primitive cannot express, and reading the
+      // first would report an issue as agreeing when it does not.
+      { assignees: [{ login: "one" }, { login: "two" }] },
+    ]) {
+      expect(readGitHubIssue({ ...PAYLOAD, ...damage })).toBeUndefined();
+    }
+  });
+
+  it("round-trips a snapshot through the durable shape", function* () {
+    const reading = readGitHubIssue(PAYLOAD);
+    expect(reading).toBeDefined();
+    const snapshot = {
       providerId: "I_node_1",
-      number: 3,
-      url: HELD_URL,
-      state: "open",
-      title: "Stale",
-      body: BODY,
-    });
-    expect(yield* issues(state).update(INPUTS, WHERE, before)).toEqual({ state: "uncertain" });
-    expect(issuePatches(state)).toBe(1);
+      url: "https://github.com/octo/project/issues/1",
+      state: "open" as const,
+      title: INPUTS.title,
+      description: INPUTS.description,
+      tags: ["publish", "reliability"],
+      assignee: "octocat",
+    };
+    expect(issueSnapshotJson(snapshot)).toEqual({ ...snapshot, tags: [...snapshot.tags] });
+    expect(Ok(snapshot).ok).toBe(true);
   });
 });

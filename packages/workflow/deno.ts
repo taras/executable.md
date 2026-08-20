@@ -57,6 +57,11 @@ export type {
   CompositionProviderOptions,
 } from "./src/deno/composition/provider.ts";
 export { denoRepositoryHost } from "./src/deno/composition/host.ts";
+export { useIssueProviders } from "./src/deno/issue/provider.ts";
+export type { InstalledIssueProvider, IssueProviderOptions } from "./src/deno/issue/provider.ts";
+export { GITHUB, gitHubIssueProvider, parseGitHubIssueTarget } from "./src/deno/issue/github.ts";
+export { builtInIssueProvider } from "./src/deno/issue/resolution.ts";
+export type { GitHubIssueProviderOptions } from "./src/deno/issue/github.ts";
 export type { GitInvocation, GitOutcome, RepositoryHost } from "./src/deno/composition/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
 export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";

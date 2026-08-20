@@ -1,9 +1,7 @@
 /**
- * The first Git-host adapter: pull requests and issues on `github.com`, over
- * REST.
+ * The first Git-host adapter: pull requests on `github.com`, over REST.
  *
- * Everything provider-specific about `<PullRequest>` and `<Issue>` is here —
- * which locators
+ * Everything provider-specific about `<PullRequest>` is here — which locators
  * this adapter recognizes, where the credential comes from, what is sent, and
  * how an answer becomes one of a closed set of normalized shapes. None of it is
  * reachable from a document, from public Git-host middleware or from the
@@ -32,8 +30,7 @@
  * check, a page that could not be followed and a body that could not be read
  * are all *unavailable*: none of them proves that no pull request is there, and
  * treating any of them as absence is the one mistake that creates a second pull
- * request for the same branch. Issues answer the same four ways, for the same
- * reason.
+ * request for the same branch.
  */
 
 import { ensure, scoped, until } from "effection";
@@ -42,15 +39,6 @@ import process from "node:process";
 import { gitObjectId } from "../../composition/git-push-records.ts";
 import type { GitObjectFormat } from "../../composition/records.ts";
 import { OPEN, pullRequestNumber } from "../../composition/pull-request-records.ts";
-import {
-  issueBody,
-  issueNaturalKey,
-  issueNumber,
-  issueOriginMarker,
-  type IssueInputs,
-  type IssueSnapshot,
-} from "../../composition/issue-records.ts";
-import type { GitHostEffectIdentity } from "../../git-host/records.ts";
 import type {
   PullRequestInputs,
   PullRequestSnapshot,
@@ -67,10 +55,10 @@ const API_VERSION = "2022-11-28";
 const USER_AGENT = "executablemd-workflow";
 
 /** How many pages of candidates are followed before the answer is "unknown". */
-const PAGE_LIMIT = 32;
+export const PAGE_LIMIT = 32;
 
 /** How many candidates a page is asked for. */
-const PAGE_SIZE = 100;
+export const PAGE_SIZE = 100;
 
 /** One repository on `github.com`, as this adapter addresses it. */
 export interface GitHubRepositoryName {
@@ -209,7 +197,7 @@ export function denoGitHubAccess(endpoint: string = GITHUB_API): GitHubAccess {
  * that needs one. An absent one is not an error to raise: it is a call that
  * cannot be made, which every caller already has a word for.
  */
-function* authorizedHeaders(
+export function* authorizedHeaders(
   access: GitHubAccess,
   json: boolean,
 ): Operation<Record<string, string> | undefined> {
@@ -252,7 +240,7 @@ const ABSENT: GitHubObservation = Object.freeze({ state: "absent" });
  * different answers, and collapsing them is how an incomplete walk becomes a
  * complete one. Only `complete` may be read as the whole candidate set.
  */
-type PageWalk =
+export type PageWalk =
   | { readonly kind: "complete" }
   | { readonly kind: "next"; readonly url: string }
   | { readonly kind: "unfollowable" };
@@ -557,7 +545,7 @@ export function gitHubPullRequests(
   };
 }
 
-function readJson(body: string): unknown {
+export function readJson(body: string): unknown {
   try {
     return JSON.parse(body);
   } catch {
@@ -574,7 +562,7 @@ function readJson(body: string): unknown {
  * where the credential goes; treating it as the end would be reporting a
  * complete candidate set nobody read.
  */
-function nextPage(link: string | undefined, endpoint: string): PageWalk {
+export function nextPage(link: string | undefined, endpoint: string): PageWalk {
   if (link === undefined) {
     return COMPLETE;
   }
@@ -598,7 +586,7 @@ function nextPage(link: string | undefined, endpoint: string): PageWalk {
   return /rel\s*=\s*"?next"?/.test(link) ? UNFOLLOWABLE : COMPLETE;
 }
 
-function member(value: unknown, name: string): unknown {
+export function member(value: unknown, name: string): unknown {
   try {
     return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
   } catch {
@@ -606,7 +594,7 @@ function member(value: unknown, name: string): unknown {
   }
 }
 
-function nonEmpty(value: unknown): string | undefined {
+export function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
@@ -736,336 +724,4 @@ export function sameRepository(reading: GitHubReading, full: string): boolean {
     reading.headRepository.toLowerCase() === full.toLowerCase() &&
     reading.baseRepository.toLowerCase() === full.toLowerCase()
   );
-}
-
-/** What one observation of a Git host's issues proved, from a closed set of five. */
-export type GitHubIssueObservation =
-  | { readonly state: "absent" }
-  | { readonly state: "found"; readonly issue: IssueSnapshot }
-  | { readonly state: "conflict" }
-  | { readonly state: "ambiguous" }
-  | { readonly state: "unavailable" };
-
-/** What one issue mutation attempt produced, from a closed set of three. */
-export type GitHubIssueMutation =
-  | { readonly state: "settled"; readonly issue: IssueSnapshot }
-  | { readonly state: "uncertain" }
-  | { readonly state: "unreadable" };
-
-const ISSUE_UNAVAILABLE: GitHubIssueObservation = Object.freeze({ state: "unavailable" });
-const ISSUE_AMBIGUOUS: GitHubIssueObservation = Object.freeze({ state: "ambiguous" });
-const ISSUE_CONFLICT: GitHubIssueObservation = Object.freeze({ state: "conflict" });
-const ISSUE_ABSENT: GitHubIssueObservation = Object.freeze({ state: "absent" });
-
-/**
- * One issue, read whole, before anything is decided about it.
- *
- * The six facts a snapshot holds plus the two a snapshot does not: which
- * repository the entry belongs to, and whether it is an issue at all. GitHub
- * answers a repository's issue listing with its pull requests in it — a pull
- * request *is* an issue there — and a pull request is not something this
- * element ever acts on, so the payload's own `pull_request` member is what
- * tells them apart.
- *
- * State is read rather than required. A closed issue is a fact this adapter has
- * to be able to state, and refusing to read one would report it as a host that
- * could not be understood.
- */
-export interface GitHubIssueReading {
-  readonly state: "open" | "closed";
-  readonly providerId: string;
-  readonly number: number;
-  readonly url: string;
-  readonly title: string;
-  readonly body: string;
-  /** The API URL of the repository this entry belongs to, as GitHub reports it. */
-  readonly repository: string;
-  readonly pullRequest: boolean;
-}
-
-/** The issue this payload describes, or `undefined` when it describes none. */
-export function readIssue(payload: unknown): GitHubIssueReading | undefined {
-  const state = member(payload, "state");
-  const providerId = nonEmpty(member(payload, "node_id"));
-  const number = issueNumber(member(payload, "number"));
-  const url = nonEmpty(member(payload, "html_url"));
-  const title = nonEmpty(member(payload, "title"));
-  const rawBody = member(payload, "body");
-  // GitHub writes an absent body as `null`, and an absent body is an empty one.
-  const body = rawBody === null ? "" : typeof rawBody === "string" ? rawBody : undefined;
-  const repository = nonEmpty(member(payload, "repository_url"));
-  const pullRequest = member(payload, "pull_request");
-  if (
-    (state !== OPEN && state !== "closed") ||
-    providerId === undefined ||
-    number === undefined ||
-    url === undefined ||
-    title === undefined ||
-    body === undefined ||
-    repository === undefined
-  ) {
-    return undefined;
-  }
-  return Object.freeze({
-    state,
-    providerId,
-    number,
-    url,
-    title,
-    body,
-    repository,
-    pullRequest: pullRequest !== undefined && pullRequest !== null,
-  });
-}
-
-/** The snapshot this reading is, when it is of an open issue. */
-export function openIssue(reading: GitHubIssueReading): IssueSnapshot | undefined {
-  return reading.state === OPEN
-    ? Object.freeze({
-        providerId: reading.providerId,
-        number: reading.number,
-        url: reading.url,
-        state: OPEN,
-        title: reading.title,
-        body: reading.body,
-      })
-    : undefined;
-}
-
-/** The issue half of this adapter, bound to one repository. */
-export interface GitHubIssues {
-  /** What is there now for the obligation these inputs name. */
-  observe(inputs: IssueInputs, identity: GitHostEffectIdentity): Operation<GitHubIssueObservation>;
-  /** Create the issue these inputs describe. */
-  create(inputs: IssueInputs, identity: GitHostEffectIdentity): Operation<GitHubIssueMutation>;
-  /**
-   * Bring an existing issue to what these inputs say.
-   *
-   * `before` is the snapshot the observation proved, so this knows which
-   * mutations are required. Each required one is issued at most once, and one
-   * exact observation afterwards is what decides the outcome — never the status
-   * of a mutation, which cannot say what the issue now holds.
-   */
-  update(
-    inputs: IssueInputs,
-    identity: GitHostEffectIdentity,
-    before: IssueSnapshot,
-  ): Operation<GitHubIssueMutation>;
-}
-
-/**
- * The issue adapter for one repository, over one access.
- *
- * Every URL is built from the endpoint and the two parsed names; nothing a
- * response says is ever used as a place to go next except a `Link` header,
- * which is held to the endpoint's own origin before it is followed.
- *
- * There is no issue search here, and that is deliberate. GitHub's search index
- * is eventually consistent, so an issue an interrupted attempt created a moment
- * ago can be missing from it — and reading that as absence is exactly what
- * would create the second issue this reconciliation exists to prevent. The
- * repository's own issue listing answers from the same state a creation writes
- * to, and a walk of it that cannot be completed says so.
- */
-export function gitHubIssues(access: GitHubAccess, name: GitHubRepositoryName): GitHubIssues {
-  const home = `${access.endpoint}/repos/${name.owner}/${name.repository}`;
-  const issues = `${home}/issues`;
-
-  function headers(json: boolean): Operation<Record<string, string> | undefined> {
-    return authorizedHeaders(access, json);
-  }
-
-  /** Whether this reading is of an issue in the repository that was asked about. */
-  function here(reading: GitHubIssueReading): boolean {
-    return reading.repository.toLowerCase() === home.toLowerCase();
-  }
-
-  /**
-   * Every issue in this repository carrying this marker, or `undefined` when
-   * the set is unknown.
-   *
-   * Each member is read before anything is counted. A member this adapter
-   * cannot read leaves the set unknown — a listing is not "one candidate" or
-   * "several" until every one of them has been understood, and counting
-   * unreadable members would turn a host that answered badly into an ambiguity
-   * or a conflict. Pull requests are excluded here rather than counted: GitHub
-   * lists them among a repository's issues, and they are not issues this
-   * element acts on.
-   */
-  function* carrying(marker: string): Operation<GitHubIssueReading[] | undefined> {
-    const sent = yield* headers(false);
-    if (sent === undefined) {
-      return undefined;
-    }
-    const query = new URLSearchParams({ state: "all", per_page: String(PAGE_SIZE) });
-    let url = `${issues}?${query.toString()}`;
-    const candidates: GitHubIssueReading[] = [];
-    for (let page = 0; page < PAGE_LIMIT; page += 1) {
-      let response: GitHubHttpResponse;
-      try {
-        response = yield* access.send({ method: "GET", url, headers: sent });
-      } catch {
-        // Whatever the transport raised stays here. It is not absence, and its
-        // text is a provider's to keep.
-        return undefined;
-      }
-      if (response.status !== 200) {
-        return undefined;
-      }
-      const listed = readJson(response.body);
-      if (!Array.isArray(listed)) {
-        return undefined;
-      }
-      for (const candidate of listed) {
-        const reading = readIssue(candidate);
-        if (reading === undefined) {
-          return undefined;
-        }
-        if (!reading.pullRequest && reading.body.includes(marker)) {
-          candidates.push(reading);
-        }
-      }
-      const walk = nextPage(response.link, access.endpoint);
-      if (walk.kind === "complete") {
-        return candidates;
-      }
-      if (walk.kind === "unfollowable") {
-        // A next page this adapter will not follow leaves the candidate set
-        // unknown. Answering with what was collected would report absence on
-        // the strength of a page nobody read.
-        return undefined;
-      }
-      url = walk.url;
-    }
-    // More pages than this adapter will follow is not "no more pages".
-    return undefined;
-  }
-
-  /** The open issue this number names in this repository, or nothing provable. */
-  function* lookup(number: number): Operation<IssueSnapshot | undefined> {
-    const sent = yield* headers(false);
-    if (sent === undefined) {
-      return undefined;
-    }
-    let response: GitHubHttpResponse;
-    try {
-      response = yield* access.send({ method: "GET", url: `${issues}/${number}`, headers: sent });
-    } catch {
-      return undefined;
-    }
-    if (response.status !== 200) {
-      return undefined;
-    }
-    const found = readIssue(readJson(response.body));
-    if (found === undefined || found.pullRequest || found.number !== number || !here(found)) {
-      return undefined;
-    }
-    return openIssue(found);
-  }
-
-  /** The issue this creation or update answered with, when it is usable. */
-  function settled(payload: unknown): GitHubIssueMutation {
-    const created = readIssue(payload);
-    if (created === undefined || created.pullRequest || !here(created)) {
-      return { state: "unreadable" };
-    }
-    const issue = openIssue(created);
-    return issue === undefined ? { state: "unreadable" } : { state: "settled", issue };
-  }
-
-  return {
-    *observe(
-      inputs: IssueInputs,
-      _identity: GitHostEffectIdentity,
-    ): Operation<GitHubIssueObservation> {
-      const found = yield* carrying(issueOriginMarker(issueNaturalKey(inputs)));
-      if (found === undefined) {
-        return ISSUE_UNAVAILABLE;
-      }
-      if (found.length > 1) {
-        // Even if one of them looks right. Two issues carrying one obligation's
-        // marker is a state this effect cannot name, and naming it anyway would
-        // adopt one of them arbitrarily.
-        return ISSUE_AMBIGUOUS;
-      }
-      const only = found[0];
-      if (only === undefined) {
-        return ISSUE_ABSENT;
-      }
-      if (!here(only) || only.state !== OPEN) {
-        // This obligation's own marker, on an issue in another repository or on
-        // one somebody has closed. Neither is absence and neither is something
-        // to reopen or overwrite: the marker says the obligation is already
-        // recorded somewhere this attempt may not act.
-        return ISSUE_CONFLICT;
-      }
-      const issue = openIssue(only);
-      return issue === undefined ? ISSUE_UNAVAILABLE : Object.freeze({ state: "found", issue });
-    },
-
-    *create(inputs: IssueInputs, identity: GitHostEffectIdentity): Operation<GitHubIssueMutation> {
-      const sent = yield* headers(true);
-      if (sent === undefined) {
-        return { state: "uncertain" };
-      }
-      let response: GitHubHttpResponse;
-      try {
-        response = yield* access.send({
-          method: "POST",
-          url: issues,
-          headers: sent,
-          body: JSON.stringify({ title: inputs.title, body: issueBody(inputs, identity) }),
-        });
-      } catch {
-        return { state: "uncertain" };
-      }
-      if (response.status !== 201) {
-        // A race, a rejection and a failure this adapter has no word for are
-        // the same thing here: what happened is not decided from a status, it
-        // is decided by observing once more.
-        return { state: "uncertain" };
-      }
-      return settled(readJson(response.body));
-    },
-
-    *update(
-      inputs: IssueInputs,
-      identity: GitHostEffectIdentity,
-      before: IssueSnapshot,
-    ): Operation<GitHubIssueMutation> {
-      const sent = yield* headers(true);
-      if (sent === undefined) {
-        return { state: "uncertain" };
-      }
-
-      // The two mutable fields, in one call, at most once. What the issue holds
-      // afterwards is decided by the observation below rather than by what this
-      // call said.
-      const fields: Record<string, string> = {};
-      const body = issueBody(inputs, identity);
-      if (before.title !== inputs.title) {
-        fields["title"] = inputs.title;
-      }
-      if (before.body !== body) {
-        fields["body"] = body;
-      }
-      if (Object.keys(fields).length > 0) {
-        try {
-          yield* access.send({
-            method: "PATCH",
-            url: `${issues}/${before.number}`,
-            headers: sent,
-            body: JSON.stringify(fields),
-          });
-        } catch {
-          // Held, and answered by the observation below.
-        }
-      }
-
-      const observed = yield* lookup(before.number);
-      return observed === undefined
-        ? { state: "uncertain" }
-        : { state: "settled", issue: observed };
-    },
-  };
 }

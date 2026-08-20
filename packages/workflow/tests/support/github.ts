@@ -58,6 +58,10 @@ export interface StoredIssue {
   state: "open" | "closed";
   title: string;
   body: string | null;
+  /** The label names this issue carries, as GitHub reports them. */
+  labels?: string[];
+  /** The one login assigned, or nothing. */
+  assignee?: string | null;
   /** The whole `repository_url` this issue reports, when it is not this one's. */
   repository?: string;
   /** Overrides the payload this issue is reported as, member by member. */
@@ -443,10 +447,12 @@ function issuePayloadOf(
     title: issue.title,
     body: issue.body,
     repository_url: issue.repository ?? `${origin}/repos/${store.owner}/${store.repository}`,
+    labels: (issue.labels ?? []).map((name) => ({ id: 1, name })),
+    assignees:
+      issue.assignee === undefined || issue.assignee === null ? [] : [{ login: issue.assignee }],
     // The members a real payload is full of, so a suite can prove none of them
     // reaches the journal, the result or a routing observation.
     user: { login: "octocat" },
-    labels: [],
     comments: 0,
     ...issue.payload,
   };
@@ -466,6 +472,8 @@ function pullRequestAsIssue(
     title: pullRequest.title,
     body: pullRequest.body,
     repository_url: `${origin}/repos/${store.owner}/${store.repository}`,
+    labels: [],
+    assignees: [],
     pull_request: {
       url: `${origin}/repos/${store.owner}/${store.repository}/pulls/${pullRequest.number}`,
     },
@@ -522,6 +530,13 @@ function issuePatched(
   if (typeof asked.body === "string") {
     found.body = asked.body === "" ? null : asked.body;
   }
+  if (Array.isArray(asked.labels)) {
+    found.labels = asked.labels.map((label: unknown) => String(label));
+  }
+  if (Array.isArray(asked.assignees)) {
+    const [first] = asked.assignees;
+    found.assignee = first === undefined ? null : String(first);
+  }
   return { status: 200, body: JSON.stringify(issuePayloadOf(store, found, origin)) };
 }
 
@@ -544,6 +559,11 @@ function issueCreation(
     state: "open",
     title,
     body: typeof asked.body === "string" && asked.body !== "" ? asked.body : null,
+    labels: Array.isArray(asked.labels) ? asked.labels.map((l: unknown) => String(l)) : [],
+    assignee:
+      Array.isArray(asked.assignees) && asked.assignees.length > 0
+        ? String(asked.assignees[0])
+        : null,
   };
   store.issues.push(created);
   return { status: 201, body: JSON.stringify(issuePayloadOf(store, created, origin)) };

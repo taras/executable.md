@@ -40,7 +40,6 @@ import type {
   PullRequestOutcome,
   PullRequestRequest,
 } from "../../composition/pull-request-records.ts";
-import type { IssueOutcome, IssueRequest } from "../../composition/issue-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -61,7 +60,6 @@ import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
 import { createGitPush } from "./push.ts";
 import { upsertPullRequest } from "./pull-request.ts";
-import { upsertIssue } from "./issue.ts";
 import type { GitHubAccess } from "./github.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
@@ -85,8 +83,7 @@ export interface CompositionProviderOptions {
   readonly host?: RepositoryHost;
   readonly observe?: CompositionObserver;
   /**
-   * The Git host `<PullRequest>` and `<Issue>` reach, when it is not the
-   * platform's own.
+   * The Git host `<PullRequest>` reaches, when it is not the platform's own.
    *
    * Adapter-private, and deliberately not a contextual surface: a suite drives
    * the whole adapter against a local server or a fake without there being
@@ -230,11 +227,6 @@ export function useGitComposition(
       *upsertPullRequest([request]: [PullRequestRequest]): Operation<PullRequestOutcome> {
         observe.effect?.("git", "pull-request");
         return yield* upsertPullRequest(database, host, request, options.gitHub);
-      },
-
-      *upsertIssue([request]: [IssueRequest]): Operation<IssueOutcome> {
-        observe.effect?.("git", "issue");
-        return yield* upsertIssue(database, request, options.gitHub);
       },
     },
     { at: "min" },
