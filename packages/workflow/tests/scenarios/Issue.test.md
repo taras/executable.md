@@ -30,20 +30,20 @@ providers — which is the one thing this primitive is for.
 The element renders nothing at all, so the text around it is the whole of what
 a reader of the run sees.
 
-<Test name="The element contributes nothing to the rendering">
+<Test name="The element renders exactly nothing">
 <IssueFixture />
 <Capture as="rendered">
 <IssueTracker url="https://github.com/octo/project">
-before
 <Issue title="Retry the publish step" description="It failed twice on 503." as="issue" />
-after
 </IssueTracker>
 </Capture>
-<AssertStringIncludes actual={rendered} expected="before" />
-<AssertStringIncludes actual={rendered} expected="after" />
-<AssertNotMatch actual={rendered} expected={/Retry the publish step/} />
-<AssertNotMatch actual={rendered} expected={/It failed twice on 503/} />
+<AssertEquals actual={rendered} expected="" />
 </Test>
+
+Written among other content it still occupies a line, and a line is a block
+boundary in Markdown like any other: two paragraphs either side of it stay two
+paragraphs. What it does not do is put anything of its own between them.
+
 
 ## What it refuses
 
@@ -90,6 +90,35 @@ text nobody would ever see
 <AssertThrows message="takes no content">
 <PrintErrors>
 <Issue title="T" description="D" as="issue"></Issue>
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+<IssueState as="state" />
+<AssertEquals actual={state.requests} expected={0} />
+</Test>
+
+A required prop that is empty is not a prop that was given. Neither is refused
+by the tracker or by a provider — the shape of the invocation decides it.
+
+<Test name="An empty title is refused">
+<IssueFixture />
+<IssueTracker url="https://github.com/octo/project">
+<AssertThrows message="Prop validation failed">
+<PrintErrors>
+<Issue title="" description="D" as="issue" />
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+<IssueState as="state" />
+<AssertEquals actual={state.requests} expected={0} />
+</Test>
+
+<Test name="An empty description is refused">
+<IssueFixture />
+<IssueTracker url="https://github.com/octo/project">
+<AssertThrows message="Prop validation failed">
+<PrintErrors>
+<Issue title="T" description="" as="issue" />
 </PrintErrors>
 </AssertThrows>
 </IssueTracker>
@@ -192,6 +221,23 @@ A nested tracker replaces the whole value for its descendants, and the outer one
 is what the siblings after it use again. Members are never merged: a child that
 kept its parent's provider while replacing its URL would ask one service about
 another's container.
+
+<Test name="A nested tracker does not inherit its parent's provider">
+<IssueFixture />
+<IssueTracker url="https://github.com/octo/project" provider="github">
+<IssueTracker url="https://acme.atlassian.net/browse/PROJ">
+<Issue title="Inner" description="D" as="inner" />
+</IssueTracker>
+</IssueTracker>
+<AssertStringIncludes actual={inner.url} expected="acme.atlassian.net" />
+<IssueState as="state" />
+<AssertEquals actual={state.atlassian} expected={1} />
+<AssertEquals actual={state.issues} expected={0} />
+</Test>
+
+Had the members merged, the parent's `github` would have selected GitHub for an
+Atlassian URL — one service asked about another's container, which is the
+mistake nesting must not be able to make.
 
 <Test name="A nested tracker replaces the whole value and then restores it">
 <IssueFixture />

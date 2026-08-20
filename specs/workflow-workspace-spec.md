@@ -1512,7 +1512,7 @@ durable observations and mutations restore.
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
 | Git.Push/PullRequest | restore the retained reconciliation record, or observe the Git host again under the same external identity and adopt only a proven compatible completion |
-| Issue | restore the retained `issue_effect` record without resolving a provider or reaching one, or observe the resolved provider again under the same external identity and adopt only a proven compatible completion |
+| Issue | restore the retained `issue_effect` record without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
 
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
@@ -1790,7 +1790,7 @@ text nobody ever saw is worse than one not created at all.
 
 Deferral classification, typed approval, PullRequest provenance, rationale,
 dependency impact and intended timing are workflow policy. A workflow expresses
-them through ordinary document structure or Issue routing middleware before it
+them through ordinary document structure or `IssueApi` middleware before it
 delegates the generic request. The primitive neither classifies a finding nor
 publishes an approval suspension.
 
@@ -1837,12 +1837,12 @@ before external observation.
 **The ceiling.** The trusted host installs an adapter-private target ceiling
 beside provider credentials. Before external observation, the selected provider
 admits the requested canonical URL and discriminator against that ceiling.
-Context and routing middleware select and narrow within it and can never widen
+A tracker and any nearer middleware select and narrow within it and can never widen
 it. A target outside the ceiling fails locally and produces no durable Issue
 outcome. This is what keeps a replaceable context from being a grant.
 
-The resolved provider name and canonical target URL are part of the normalized
-durable request. Credentials, endpoints derived from credentials, transports and
+The canonical target URL and the discriminator a tracker stated are part of the
+normalized durable request. Credentials, endpoints derived from credentials, transports and
 raw provider payloads are not context values and stay in the selected provider's
 per-invocation closure.
 

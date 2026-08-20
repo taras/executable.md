@@ -15,7 +15,7 @@
 
 import { scoped, type Operation } from "effection";
 import { fileURLToPath } from "node:url";
-import { collect, registerComponents } from "@executablemd/core";
+import { collect, content, hasContent, registerComponents } from "@executablemd/core";
 import type { Json, PropsSchema, ReturnsSchema } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -78,6 +78,10 @@ export interface IssueFault {
 
 export interface IssueFixture {
   readonly github: GitHubStore;
+  /** Every idempotency key a provider was handed, in order. */
+  readonly keys: string[];
+  /** How many requests a nearer lexical override answered. */
+  overrides: number;
   readonly atlassian: Map<string, AtlassianIssue>;
   /** Every request the Atlassian-shaped middleware was given. */
   readonly atlassianRequests: IssueUpsertOptions[];
@@ -91,12 +95,16 @@ export interface IssueFixture {
 export function issueFixture(): IssueFixture {
   const fixture: IssueFixture = {
     github: gitHubStore({ token: TOKEN }),
+    keys: [],
+    overrides: 0,
     atlassian: new Map(),
     atlassianRequests: [],
     atlassianRefuses: false,
     fault: {},
     ceiling: [GITHUB_TARGET, ATLASSIAN_TARGET, SELF_HOSTED_TARGET],
     reset(): void {
+      fixture.keys.length = 0;
+      fixture.overrides = 0;
       fixture.github.issues.length = 0;
       fixture.github.pullRequests.length = 0;
       fixture.github.requests.length = 0;
@@ -215,9 +223,12 @@ function* useFixtureComponents(fixture: IssueFixture, journals: Journals): Opera
       updates: { type: "integer" },
       requests: { type: "integer" },
       titles: { type: "array", items: { type: "string" } },
+      states: { type: "array", items: { type: "string" } },
+      keys: { type: "array", items: { type: "string" } },
       labels: { type: "array", items: { type: "array", items: { type: "string" } } },
       assignees: { type: "array" },
       atlassian: { type: "integer" },
+      overrides: { type: "integer" },
       atlassianRequests: { type: "integer" },
     },
     required: [
@@ -226,10 +237,13 @@ function* useFixtureComponents(fixture: IssueFixture, journals: Journals): Opera
       "updates",
       "requests",
       "titles",
+      "states",
+      "keys",
       "labels",
       "assignees",
       "atlassian",
       "atlassianRequests",
+      "overrides",
     ],
     additionalProperties: false,
   };
@@ -265,6 +279,94 @@ function* useFixtureComponents(fixture: IssueFixture, journals: Journals): Opera
           ...(props.transportFails === true ? { transport: true } : {}),
           ...(props.interruptAfterCreate === true ? { interruptAfterCreate: true } : {}),
         };
+        return "";
+      },
+    },
+    {
+      name: "IssueOverride",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: { url: { type: "string", minLength: 1 } },
+        required: ["url"],
+        additionalProperties: false,
+      },
+      *fn(props: Record<string, Json>): Operation<string> {
+        if (!(yield* hasContent())) {
+          return "";
+        }
+        const answered = typeof props.url === "string" ? props.url : "";
+        // Installed nearer than the host's, for this content and nothing else:
+        // an override is lexical, so the siblings outside it are untouched.
+        yield* IssueApi.around({
+          // deno-lint-ignore require-yield
+          *upsert(): Operation<IssueResult> {
+            fixture.overrides += 1;
+            return { url: answered };
+          },
+        });
+        return yield* content();
+      },
+    },
+    {
+      name: "IssueFault",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          transportFails: { type: "boolean" },
+          interruptAfterCreate: { type: "boolean" },
+          atlassianRefuses: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        // Faults only. The tracker's contents and the journals stay exactly as
+        // the attempt before this left them, which is the whole of what a
+        // recovery scenario is standing on.
+        fixture.fault = {
+          ...(props.transportFails === true ? { transport: true } : {}),
+          ...(props.interruptAfterCreate === true ? { interruptAfterCreate: true } : {}),
+        };
+        fixture.atlassianRefuses = props.atlassianRefuses === true;
+        return "";
+      },
+    },
+    {
+      name: "IssueRemote",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          retitle: { type: "string", minLength: 1 },
+          duplicate: { type: "boolean" },
+          close: { type: "boolean" },
+          move: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        // What somebody else did to the tracker between two attempts. Every
+        // one of these keeps the origin marker, because the state worth
+        // staging is the one where this attempt's own issue has moved.
+        const held = fixture.github.issues[0];
+        if (held === undefined) {
+          throw new Error("the fixture holds no issue to stage a remote state on");
+        }
+        if (typeof props.retitle === "string") {
+          held.title = props.retitle;
+        }
+        if (props.close === true) {
+          held.state = "closed";
+        }
+        if (props.move === true) {
+          held.repository = `${ENDPOINT}/repos/octo/elsewhere`;
+        }
+        if (props.duplicate === true) {
+          fixture.github.issues.push({ ...held, nodeId: "I_node_2", number: 2 });
+        }
         return "";
       },
     },
@@ -334,9 +436,12 @@ function* useFixtureComponents(fixture: IssueFixture, journals: Journals): Opera
           updates: requests.filter((request) => request.method === "PATCH").length,
           requests: requests.length,
           titles: fixture.github.issues.map((issue) => issue.title),
+          states: fixture.github.issues.map((issue) => issue.state),
+          keys: [...fixture.keys],
           labels: fixture.github.issues.map((issue) => [...(issue.labels ?? [])]),
           assignees: fixture.github.issues.map((issue) => issue.assignee ?? null),
           atlassian: fixture.atlassian.size,
+          overrides: fixture.overrides,
           atlassianRequests: fixture.atlassianRequests.length,
         };
       },
@@ -395,9 +500,18 @@ function* attemptOnce(
     error = raised instanceof Error ? raised.message : String(raised);
   }
   const events = yield* stream.readAll();
+  // What a died process leaves. The fixture interrupts by throwing, which the
+  // durable machinery would journal as this effect's failed result — but a
+  // process that died after the tracker accepted its issue published nothing at
+  // all, and that difference is the whole state the next attempt stands on.
+  const died = fixture.fault.interruptAfterCreate === true;
   journals.truncate(
     id,
-    events.filter((event) => !(event.type === "close" && event.coroutineId === "root")),
+    events.filter(
+      (event) =>
+        !(event.type === "close" && event.coroutineId === "root") &&
+        !(died && event.type === "yield" && event.description.type === ISSUE_EFFECT),
+    ),
   );
   return {
     ok,
@@ -479,6 +593,15 @@ export function runScenario(path: string): Operation<ScenarioRun> {
 
     yield* useCompositionComponents();
     yield* useFixtureComponents(fixture, held);
+    // Outermost, so it sees every request whichever provider ends up handling
+    // it: what a recovery scenario needs to prove is that two attempts at one
+    // position present one key, not which adapter was asked.
+    yield* IssueApi.around({
+      *upsert([issue, upsert], next): Operation<IssueResult> {
+        fixture.keys.push(upsert.idempotencyKey);
+        return yield* next(issue, upsert);
+      },
+    });
     yield* useAtlassianIssues(fixture);
     yield* useGitHubIssues({ ceiling: fixture.ceiling, access: access(fixture) });
 

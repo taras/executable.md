@@ -56,6 +56,26 @@ Once middleware matches, it owns the answer. It does not delegate afterwards,
 and nothing catches its refusal to try somebody else — because a search is how a
 document that named one service quietly reaches another.
 
+The discriminating case is a URL the *other* provider would have taken. An
+explicit discriminator selects a provider that refuses, and the provider that
+matches the URL is never asked — which is what "no fallback" means when it costs
+something.
+
+<Test name="An explicitly named provider's refusal is not somebody else's opportunity">
+<IssueFixture atlassianRefuses={true} />
+<IssueTracker url="https://github.com/octo/project" provider="atlassian">
+<AssertThrows message="temporarily unavailable">
+<PrintErrors>
+<Issue title="Refused" description="D" as="issue" />
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+<IssueState as="state" />
+<AssertEquals actual={state.atlassianRequests} expected={1} />
+<AssertEquals actual={state.issues} expected={0} />
+<AssertEquals actual={state.requests} expected={0} />
+</Test>
+
 <Test name="The matched provider's refusal reaches the document untouched">
 <IssueFixture atlassianRefuses={true} />
 <IssueTracker url="https://acme.atlassian.net/browse/PROJ">
@@ -137,4 +157,27 @@ authorized one is.
 <AssertExists actual={issue.url} />
 <IssueState as="state" />
 <AssertEquals actual={state.issues} expected={1} />
+</Test>
+
+## A nearer surface is lexical
+
+`IssueApi` is an ordinary contextual operation, so middleware installed nearer
+answers for its own content and for nothing else. That is how one subtree is
+redirected without changing what its siblings do, and it is the same mechanism
+providers themselves use.
+
+<Test name="A nearer override answers its own content and no sibling">
+<IssueFixture />
+<IssueTracker url="https://github.com/octo/project">
+<IssueOverride url="https://example.test/issues/99">
+<Issue title="Overridden" description="D" as="inner" />
+</IssueOverride>
+<Issue title="Ordinary" description="D" as="outer" />
+</IssueTracker>
+<AssertEquals actual={inner} expected={{ url: "https://example.test/issues/99" }} />
+<AssertStringIncludes actual={outer.url} expected="github.com" />
+<IssueState as="state" />
+<AssertEquals actual={state.overrides} expected={1} />
+<AssertEquals actual={state.issues} expected={1} />
+<AssertEquals actual={state.titles} expected={["Ordinary"]} />
 </Test>

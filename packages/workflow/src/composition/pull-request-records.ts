@@ -588,50 +588,32 @@ export function parsePullRequestResult(
   value: unknown,
   expected: PullRequestExpectation,
 ): PullRequestResult | undefined {
-  const result = parsePullRequestEvidence(value);
-  if (result === undefined) {
-    return undefined;
-  }
-  return sameRepositoryIdentity(result.repository, expected.repository) &&
-    result.headSha === expected.headSha &&
-    (expected.number === null || result.number === expected.number)
-    ? result
-    : undefined;
-}
-
-/**
- * The pull-request result this value describes, judged on its own.
- *
- * The same closed shape {@link parsePullRequestResult} reads, without a request
- * to hold it to. It exists because a result is also carried *forward*: `<Issue>`
- * is handed one as a prop and has to read it before it has anything to compare
- * it with, and reading it a second way there would be a second thing to keep
- * exact. What the value itself decides is everything except which invocation it
- * belongs to — including the object format, which is the Repository identity's
- * own word and is what the two commits are then read in.
- */
-export function parsePullRequestEvidence(value: unknown): PullRequestResult | undefined {
   const record = members(value, RESULT_MEMBERS);
   if (record === undefined) {
     return undefined;
   }
+  const format = expected.repository.objectFormat;
   const repository = parseGitPushRepositoryIdentity(record.repository);
-  if (repository === undefined) {
-    return undefined;
-  }
-  const format = repository.objectFormat;
   const providerId = text(record.providerId);
   const number = pullRequestNumber(record.number);
   const url = text(record.url);
   const headSha = gitObjectId(record.headSha, format);
   const baseSha = gitObjectId(record.baseSha, format);
   if (
+    repository === undefined ||
     providerId === undefined ||
     number === undefined ||
     url === undefined ||
     headSha === undefined ||
     baseSha === undefined ||
     record.state !== OPEN
+  ) {
+    return undefined;
+  }
+  if (
+    !sameRepositoryIdentity(repository, expected.repository) ||
+    headSha !== expected.headSha ||
+    (expected.number !== null && number !== expected.number)
   ) {
     return undefined;
   }
@@ -644,29 +626,6 @@ export function parsePullRequestEvidence(value: unknown): PullRequestResult | un
     headSha,
     baseSha,
   });
-}
-
-/**
- * Whether two readings of a pull-request result describe the same pull request
- * in the same state.
- *
- * Every member, because this is what decides that evidence a document supplied
- * is evidence this run produced. A comparison of the number alone would admit a
- * result whose URL, head or Repository was rewritten on the way.
- */
-export function samePullRequestEvidence(
-  left: PullRequestResult,
-  right: PullRequestResult,
-): boolean {
-  return (
-    sameRepositoryIdentity(left.repository, right.repository) &&
-    left.providerId === right.providerId &&
-    left.number === right.number &&
-    left.url === right.url &&
-    left.state === right.state &&
-    left.headSha === right.headSha &&
-    left.baseSha === right.baseSha
-  );
 }
 
 /**

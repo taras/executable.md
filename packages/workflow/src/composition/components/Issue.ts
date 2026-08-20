@@ -37,7 +37,7 @@
  * Deferral classification, typed approval, PullRequest provenance, rationale,
  * dependency impact and intended timing are workflow policy. A workflow
  * expresses them through ordinary document structure — an `<If>` around the
- * element, a suspension before it — or through Issue routing middleware that
+ * element, a suspension before it — or through `IssueApi` middleware that
  * inspects the request before delegating it. Folding any of them into this
  * component would make one team's review process part of the portable contract
  * every other integration has to satisfy.

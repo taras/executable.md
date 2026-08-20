@@ -40,8 +40,9 @@ the first attempt's URL and look like a passing test of the opposite claim.
 ## What the run retains
 
 The journal holds what a document asked for and the URL it got back. A
-credential, a private endpoint, the marker a provider writes and a host path are
-all things the provider holds and the boundary never carries.
+credential, a private endpoint, the marker a provider writes, a provider's own
+identity for the issue and a host path are all things the provider or the host
+holds and the boundary never carries.
 
 <Test name="No credential, endpoint, marker or host path is retained">
 <IssueFixture />
@@ -53,5 +54,8 @@ all things the provider holds and the boundary never carries.
 <AssertNotMatch actual={journal.text} expected={/Bearer/} />
 <AssertNotMatch actual={journal.text} expected={/executablemd-issue:/} />
 <AssertNotMatch actual={journal.text} expected={/node_id/} />
+<AssertNotMatch actual={journal.text} expected={/\/private\/tmp/} />
+<AssertNotMatch actual={journal.text} expected={/\/var\/folders/} />
+<AssertNotMatch actual={journal.text} expected={/scenarios\/fixtures/} />
 <AssertStringIncludes actual={journal.text} expected="https://github.com/octo/project" />
 </Test>

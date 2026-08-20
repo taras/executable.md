@@ -24,14 +24,7 @@ import {
   issueProviderName,
   withinIssueCeiling,
 } from "../src/issue/tracker.ts";
-import {
-  issueIdempotencyKey,
-  issueRequestFingerprint,
-  normalizedTags,
-  parseIssueInput,
-  parseIssueRecord,
-  type IssueRequest,
-} from "../src/issue/records.ts";
+import { issueIdempotencyKey, normalizedTags } from "../src/issue/records.ts";
 import type { IssueInput } from "../src/issue/api.ts";
 import type { StoredIssue } from "./support/github.ts";
 
@@ -44,13 +37,6 @@ const ISSUE: IssueInput = Object.freeze({
   description: "The publish step failed twice in a row on 503.",
   tags: Object.freeze(["publish", "reliability"]),
   assignee: null,
-});
-
-const REQUEST: IssueRequest = Object.freeze({
-  identity: IDENTITY,
-  target: TARGET,
-  provider: null,
-  issue: ISSUE,
 });
 
 const MARKER = issueOriginMarker(issueIdempotencyKey(IDENTITY, TARGET));
@@ -207,57 +193,6 @@ describe("workflow GitHub issue payloads", () => {
     const edited = readGitHubIssue({ ...PAYLOAD, body: "somebody rewrote this" });
     const moved = edited === undefined ? undefined : openSnapshot(edited, MARKER);
     expect(moved?.description).toBe("somebody rewrote this");
-  });
-});
-
-describe("workflow Issue durable identity", () => {
-  it("keys an attempt by its destination and its position, not by its text", function* () {
-    const key = issueIdempotencyKey(IDENTITY, TARGET);
-    expect(issueIdempotencyKey(IDENTITY, TARGET)).toBe(key);
-    // Title is never identity: a document that edits its own title between
-    // attempts is still asking about the issue its position already created.
-    expect(issueIdempotencyKey({ ...IDENTITY, expansionId: "expansion-2" }, TARGET)).not.toBe(key);
-    expect(issueIdempotencyKey({ ...IDENTITY, runId: "other" }, TARGET)).not.toBe(key);
-    expect(issueIdempotencyKey(IDENTITY, "https://github.com/octo/other")).not.toBe(key);
-  });
-
-  it("names a different durable operation for every member of the request", function* () {
-    const variants: IssueRequest[] = [
-      REQUEST,
-      { ...REQUEST, provider: "github" },
-      { ...REQUEST, target: "https://github.com/octo/other" },
-      { ...REQUEST, identity: { ...IDENTITY, runId: "other" } },
-      { ...REQUEST, identity: { ...IDENTITY, expansionId: "expansion-2" } },
-      { ...REQUEST, issue: { ...ISSUE, title: "Other" } },
-      { ...REQUEST, issue: { ...ISSUE, description: "Other" } },
-      { ...REQUEST, issue: { ...ISSUE, tags: ["urgent"] } },
-      { ...REQUEST, issue: { ...ISSUE, assignee: "octocat" } },
-    ];
-    const names: string[] = [];
-    for (const variant of variants) {
-      names.push(yield* issueRequestFingerprint(variant));
-    }
-    expect(new Set(names).size).toBe(variants.length);
-
-    // And tag order is not one of them: a reordered set is the same question.
-    expect(
-      yield* issueRequestFingerprint({ ...REQUEST, issue: { ...ISSUE, tags: ["a", "b"] } }),
-    ).toBe(yield* issueRequestFingerprint({ ...REQUEST, issue: { ...ISSUE, tags: ["a", "b"] } }));
-  });
-
-  it("reads back only what the boundary wrote", function* () {
-    expect(parseIssueRecord({ url: "https://example.test/issues/1" })).toEqual({
-      url: "https://example.test/issues/1",
-    });
-    // A provider that answered with more than a URL answered with something
-    // this boundary will not retain.
-    expect(parseIssueRecord({ url: "https://example.test/issues/1", id: "I_1" })).toBeUndefined();
-    expect(parseIssueRecord({ url: "" })).toBeUndefined();
-    expect(parseIssueRecord({})).toBeUndefined();
-
-    expect(parseIssueInput({ ...ISSUE, tags: [...ISSUE.tags] })).toEqual(ISSUE);
-    // Out of order is not a set this boundary wrote.
-    expect(parseIssueInput({ ...ISSUE, tags: ["reliability", "publish"] })).toBeUndefined();
   });
 });
 

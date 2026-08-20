@@ -182,9 +182,7 @@ export {
   pullRequestResultJson,
   pullRequestResultOf,
   pullRequestSnapshotJson,
-  parsePullRequestEvidence,
   sameNaturalKey,
-  samePullRequestEvidence,
   samePullRequestIdentity,
 } from "./src/composition/pull-request-records.ts";
 export type {
@@ -230,20 +228,6 @@ export {
   withinIssueCeiling,
 } from "./src/issue/tracker.ts";
 export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
-export {
-  byCodePoint,
-  issueIdempotencyKey,
-  issueInputJson,
-  issueRecordJson,
-  issueRequestFingerprint,
-  issueRequestJson,
-  normalizedTags,
-  parseIssueInput,
-  parseIssueRecord,
-  parseIssueRequest,
-  sameIssueRequest,
-} from "./src/issue/records.ts";
-export type { IssueEffectIdentity, IssueRecord, IssueRequest } from "./src/issue/records.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
 export type {

@@ -5,15 +5,16 @@ accepting one and this run's journal recording that it did. A process that dies
 in that gap leaves an issue nobody knows about, and the next attempt has to
 recognize it rather than file a second.
 
-Each scenario runs a checked-in document more than once against one journal.
-`<IssueAttempt>` is this suite's own component: it executes one of the fixture
-documents under a named run and hands back what that attempt settled on.
+`<IssueAttempt>` runs one of the checked-in fixture documents under a named run.
+`<IssueFixture>` resets everything; `<IssueFault>` changes only what is failing,
+which is what lets an attempt continue from the state the one before it left —
+the tracker's contents and the journal both survive it.
 
 ## An interrupted completion is adopted, not repeated
 
 The first attempt reaches the tracker, the tracker files the issue, and the
 attempt dies before anything local is written. The next attempt derives the same
-idempotency key, finds the issue the first one filed, and adopts it.
+key, finds what the first one filed, and adopts it.
 
 <Test name="An attempt interrupted after the tracker accepted it files no duplicate">
 <IssueFixture interruptAfterCreate={true} />
@@ -23,15 +24,17 @@ idempotency key, finds the issue the first one filed, and adopts it.
 <AssertEquals actual={afterCrash.issues} expected={1} />
 <AssertEquals actual={afterCrash.creates} expected={1} />
 
-<IssueFixture />
-<IssueAttempt document="one-issue.md" as="first" />
-<AssertEquals actual={first.ok} expected={true} />
-<IssueAttempt document="one-issue.md" as="second" />
-<AssertEquals actual={second.ok} expected={true} />
-<AssertEquals actual={second.url} expected={first.url} />
+<IssueFault />
+<IssueAttempt document="one-issue.md" as="recovered" />
+<AssertEquals actual={recovered.ok} expected={true} />
+<AssertExists actual={recovered.url} />
+
 <IssueState as="state" />
 <AssertEquals actual={state.issues} expected={1} />
 <AssertEquals actual={state.creates} expected={1} />
+<AssertEquals actual={state.keys.length} expected={2} />
+<AssertEquals actual={state.keys[0]} expected={state.keys[1]} />
+<AssertGreater actual={recovered.calls} expected={0} />
 </Test>
 
 ## Uncertainty is never absence
@@ -49,23 +52,77 @@ whole design exists to prevent, so it fails instead — and files nothing.
 <AssertEquals actual={state.creates} expected={0} />
 </Test>
 
-## A changed field is brought back, once
+## A changed remote state is brought back, once
 
-An issue that already exists for this attempt and says something else is not a
-reason to file another one. It is updated once, and one observation decides what
-it now holds.
+An issue that already carries this attempt's mark and says something else is not
+a reason to file another one. It is updated once, and one observation decides
+what it now holds.
 
-<Test name="A moved title is restored with one update and no second issue">
-<IssueFixture />
-<IssueAttempt document="one-issue.md" as="first" />
-<AssertEquals actual={first.ok} expected={true} />
-<IssueState as="filed" />
-<AssertEquals actual={filed.titles} expected={["Retry the publish step"]} />
+<Test name="A retitled issue is restored with one update and no second issue">
+<IssueFixture interruptAfterCreate={true} />
+<IssueAttempt document="one-issue.md" as="interrupted" />
+<AssertFalse expr={interrupted.ok} />
+<IssueRemote retitle="Somebody rewrote this" />
 
-<IssueAttempt document="one-issue.md" as="again" />
-<AssertEquals actual={again.url} expected={first.url} />
+<IssueFault />
+<IssueAttempt document="one-issue.md" as="recovered" />
+<AssertEquals actual={recovered.ok} expected={true} />
 <IssueState as="state" />
 <AssertEquals actual={state.issues} expected={1} />
+<AssertEquals actual={state.creates} expected={1} />
+<AssertEquals actual={state.updates} expected={1} />
+<AssertEquals actual={state.titles} expected={["Retry the publish step"]} />
+</Test>
+
+## Ambiguity, conflict and a closed issue each refuse
+
+Two issues carrying one mark is a state this attempt cannot name. An issue that
+has moved to another repository, and one somebody has closed, are each proven to
+be *this* attempt's issue and not something to act on. None of them is absence,
+and none of them files a second issue.
+
+<Test name="Two issues carrying one mark refuse rather than adopt either">
+<IssueFixture interruptAfterCreate={true} />
+<IssueAttempt document="one-issue.md" as="interrupted" />
+<AssertFalse expr={interrupted.ok} />
+<IssueRemote duplicate={true} />
+
+<IssueFault />
+<IssueAttempt document="one-issue.md" as="recovered" />
+<AssertFalse expr={recovered.ok} />
+<IssueState as="state" />
+<AssertEquals actual={state.issues} expected={2} />
+<AssertEquals actual={state.creates} expected={1} />
+<AssertEquals actual={state.updates} expected={0} />
+</Test>
+
+<Test name="An issue that moved to another repository refuses">
+<IssueFixture interruptAfterCreate={true} />
+<IssueAttempt document="one-issue.md" as="interrupted" />
+<AssertFalse expr={interrupted.ok} />
+<IssueRemote move={true} />
+
+<IssueFault />
+<IssueAttempt document="one-issue.md" as="recovered" />
+<AssertFalse expr={recovered.ok} />
+<IssueState as="state" />
+<AssertEquals actual={state.issues} expected={1} />
+<AssertEquals actual={state.creates} expected={1} />
+<AssertEquals actual={state.updates} expected={0} />
+</Test>
+
+<Test name="An issue somebody closed refuses rather than reopening or duplicating">
+<IssueFixture interruptAfterCreate={true} />
+<IssueAttempt document="one-issue.md" as="interrupted" />
+<AssertFalse expr={interrupted.ok} />
+<IssueRemote close={true} />
+
+<IssueFault />
+<IssueAttempt document="one-issue.md" as="recovered" />
+<AssertFalse expr={recovered.ok} />
+<IssueState as="state" />
+<AssertEquals actual={state.issues} expected={1} />
+<AssertEquals actual={state.states} expected={["closed"]} />
 <AssertEquals actual={state.creates} expected={1} />
 <AssertEquals actual={state.updates} expected={0} />
 </Test>
