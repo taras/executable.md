@@ -668,12 +668,14 @@ because its contents still enter model context.
 
 ### Agent authority and generated XMD
 
-Under `xmd workflow` an Agent is mandatorily read-only. Enforcement has three
+Under `xmd workflow` an Agent is mandatorily read-only. Enforcement has two
 layers: the provider permission bridge allows only read and search operations,
-the provider runs in its native read-only sandbox, and registered Workspace paths
-are presented as read-only filesystem views. `<ApproveAll>`, repository `.codex`
-or `.claude` configuration, and prompt content cannot exceed that host ceiling,
-and a provider that cannot enforce it fails before Prompt execution (#302).
+and the provider runs in its native read-only sandbox. There is no third layer
+presenting Workspace paths as read-only filesystem views, because no Workspace
+path is registered with an Agent in the first place. `<ApproveAll>`, repository
+`.codex` or `.claude` configuration, and prompt content cannot exceed that host
+ceiling, and a provider that cannot enforce it fails before Prompt execution
+(#302).
 
 The ceiling is therefore the host's, not the document's. There is no `<Sandbox>`
 component and no document prop that grants an Agent write access; earlier
