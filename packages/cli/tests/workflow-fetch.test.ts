@@ -24,9 +24,9 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
-import { DatabaseSync } from "node:sqlite";
 import { cliCommand, runCli } from "@executablemd/test-support/launch";
 import { workflowRunPath } from "@executablemd/workflow/deno";
+import { readRunDatabase } from "./support/run-database.ts";
 
 const RUN_ID = "fetch-run";
 
@@ -160,20 +160,18 @@ interface JournalRecord {
 }
 
 /** Everything a second connection can read of the run's journal. */
-function rows(path: string): JournalRecord[] {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
-    return database
+function rows(path: string): Operation<JournalRecord[]> {
+  return readRunDatabase(path, (database) =>
+    database
       .prepare("SELECT record FROM journal_events ORDER BY sequence")
       .all()
-      .map((row) => JSON.parse(typeof row["record"] === "string" ? row["record"] : "{}"));
-  } finally {
-    database.close();
-  }
+      .map((row) => JSON.parse(typeof row["record"] === "string" ? row["record"] : "{}")),
+  );
 }
 
-function committedFetches(path: string): JournalRecord[] {
-  return rows(path).filter(
+function* committedFetches(path: string): Operation<JournalRecord[]> {
+  const records = yield* rows(path);
+  return records.filter(
     (record) =>
       record.type === "yield" &&
       record.description?.type === "fetch" &&
@@ -181,8 +179,9 @@ function committedFetches(path: string): JournalRecord[] {
   );
 }
 
-function rootCloses(path: string): number {
-  return rows(path).filter((record) => record.type === "close" && record.coroutineId === "root")
+function* rootCloses(path: string): Operation<number> {
+  const records = yield* rows(path);
+  return records.filter((record) => record.type === "close" && record.coroutineId === "root")
     .length;
 }
 
@@ -214,7 +213,7 @@ describe("Tier FE — a workflow run's Fetch", () => {
 
         yield* when(
           function* () {
-            expect(committedFetches(path)).toHaveLength(1);
+            expect(yield* committedFetches(path)).toHaveLength(1);
           },
           { timeout: 60_000 },
         );
@@ -222,7 +221,7 @@ describe("Tier FE — a workflow run's Fetch", () => {
         yield* child.join();
       });
 
-      const [committed] = committedFetches(path);
+      const [committed] = yield* committedFetches(path);
       expect(server.requests).toEqual(["GET /greeting"]);
       expect(committed?.description?.input).toEqual({
         url: `${server.origin}/greeting`,
@@ -248,7 +247,7 @@ describe("Tier FE — a workflow run's Fetch", () => {
       expect(names).toEqual(names.map((name) => name.toLowerCase()));
       expect(named["content-type"]).toBe("application/json");
       // The killed run left the root open, which is what makes it resumable.
-      expect(rootCloses(path)).toBe(0);
+      expect(yield* rootCloses(path)).toBe(0);
 
       // Open the gate the document waits on, then resume.
       yield* writeTextFile(fixture.gate, "open\n");
@@ -264,10 +263,10 @@ describe("Tier FE — a workflow run's Fetch", () => {
       // The response came from the journal: the server was never asked again,
       // and the run still holds exactly one Fetch observation.
       expect(server.requests).toEqual(["GET /greeting"]);
-      const after = committedFetches(path);
+      const after = yield* committedFetches(path);
       expect(after).toHaveLength(1);
       expect(after[0]).toEqual(committed);
-      expect(rootCloses(path)).toBe(1);
+      expect(yield* rootCloses(path)).toBe(1);
     });
   });
 });
