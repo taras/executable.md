@@ -43,7 +43,7 @@ import {
   useRepositoryComposition,
   type CompositionProviderOptions,
 } from "../composition/provider.ts";
-import { useIssueProviders, type IssueProviderOptions } from "../issue/provider.ts";
+import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import { withWorkspaceEffects } from "./effect.ts";
 import { useWorkflowFiles } from "./files.ts";
 import { WORKSPACE_ROOT } from "./logical-path.ts";
@@ -79,13 +79,15 @@ function useLogicalWorkspaceCwd(): Operation<void> {
 export interface WorkflowWorkspaceOptions {
   readonly composition?: CompositionProviderOptions;
   /**
-   * Which issue providers this host installs, and what they may reach.
+   * What GitHub issue handling this host installs, and what it may reach.
    *
    * Separate from `composition` because `<Issue>` is not Repository
    * composition: it reaches a service that need not own a Git repository, so
-   * its providers, its ceiling and its credentials are configured on their own.
+   * its middleware, its ceiling and its credentials are configured on their
+   * own. Absent installs none, and a document that writes `<Issue>` then
+   * reaches `IssueApi`'s own base error.
    */
-  readonly issue?: IssueProviderOptions;
+  readonly gitHubIssues?: GitHubIssuesOptions;
 }
 
 /** Run `operation` with this run's Workspace attached to the document. */
@@ -101,7 +103,9 @@ export function withWorkflowWorkspace<T>(
       yield* useWorkflowFiles(database);
       yield* useRepositoryComposition(database, options.composition);
       yield* useGitComposition(database, options.composition);
-      yield* useIssueProviders(options.issue);
+      if (options.gitHubIssues !== undefined) {
+        yield* useGitHubIssues(options.gitHubIssues);
+      }
       yield* useCompositionComponents();
       return yield* operation;
     }),

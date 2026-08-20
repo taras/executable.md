@@ -52,27 +52,21 @@
  *
  * ## Failure
  *
- * Content written around it, a missing context, a URL that is not a
- * credential-free container, and a URL the host maps no provider to are decided
- * here, before routing exists in the story. What a provider answers — a conflict, an ambiguity, an
- * unavailability, a target outside the host's ceiling — travels under §10.3's
- * vocabulary.
+ * Content written around it, a missing tracker and a URL that is not a
+ * credential-free container are decided here, before the boundary exists in the
+ * story. What a provider answers — a conflict, an ambiguity, an unavailability,
+ * a target outside its ceiling — is the provider's own closed vocabulary. What a provider answers — a conflict, an ambiguity, an
  */
 
 import { hasContent } from "@executablemd/core";
 import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { currentIssueTracker, issueProviderFor } from "../../issue/context.ts";
-import { resolveIssueDestination } from "../../issue/target.ts";
-import { reconcileIssueEffect } from "../../issue/effect.ts";
-import {
-  issueInputsJson,
-  issueResultJson,
-  normalizedTags,
-  parseIssueRecordResult,
-  type IssueInputs,
-} from "../../issue/records.ts";
+import { currentIssueTracker } from "../../issue/context.ts";
+import { resolveIssueDestination } from "../../issue/tracker.ts";
+import { upsertIssue } from "../../issue/effect.ts";
+import type { IssueInput } from "../../issue/api.ts";
+import { normalizedTags } from "../../issue/records.ts";
 import { IssueContentError, IssueProtocolError } from "../../issue/errors.ts";
 
 /** The component name, as a document writes it and as a refusal names it. */
@@ -132,14 +126,10 @@ export default function* Issue(props: Record<string, Json>): Operation<Json> {
     );
   }
 
-  // The destination next, and locally. A document that named no container, or
-  // one nothing can resolve a provider for, is refused before an effect
-  // identity exists and before any surface has been asked anything.
-  const target = yield* currentIssueTracker();
-  // The mapping is the host's, read here and applied by the shared resolution
-  // so that one place decides what a destination is.
-  const resolved = target === undefined ? undefined : yield* issueProviderFor(target.url);
-  const destination = resolveIssueDestination(target, () => resolved);
+  // The destination next, and locally. A document that named no tracker, or one
+  // whose URL is not a credential-free container, is refused before an effect
+  // identity exists and before the boundary has been asked anything.
+  const destination = resolveIssueDestination(yield* currentIssueTracker());
 
   const tags = normalizedTags(props.tags);
   if (tags === undefined) {
@@ -147,7 +137,7 @@ export default function* Issue(props: Record<string, Json>): Operation<Json> {
       "the tags this invocation was given are not a list of non-empty strings",
     );
   }
-  const inputs: IssueInputs = Object.freeze({
+  const issue: IssueInput = Object.freeze({
     title: typeof props.title === "string" ? props.title : "",
     description: typeof props.description === "string" ? props.description : "",
     tags,
@@ -155,20 +145,10 @@ export default function* Issue(props: Record<string, Json>): Operation<Json> {
     assignee: typeof props.assignee === "string" && props.assignee !== "" ? props.assignee : null,
   });
 
-  const record = yield* reconcileIssueEffect({
-    provider: destination.provider,
+  const result = yield* upsertIssue({
     target: destination.target,
-    inputs: issueInputsJson(inputs),
+    provider: destination.provider,
+    issue,
   });
-
-  // Read for this invocation rather than merely read. The shared engine has
-  // already held the record's request to the request being made; what is
-  // decided here is that its result names this exact destination.
-  const result = parseIssueRecordResult(record.result, destination);
-  if (result === undefined) {
-    throw new IssueProtocolError(
-      "the journal holds an issue result that does not describe this invocation's destination",
-    );
-  }
-  return issueResultJson(result);
+  return { url: result.url };
 }

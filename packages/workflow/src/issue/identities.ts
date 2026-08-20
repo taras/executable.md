@@ -3,20 +3,20 @@
  * nothing replaceable can reach it and claimed one position at a time.
  *
  * An Issue effect is named by a digest that includes the run id, and its
- * natural key holds the run id outright, so a record a fork inherited would
- * compute a different name under the fork and replay would diverge before any
- * provider question arose — and the fork would then create a second issue for
- * an obligation already filed. Deciding the name therefore needs to know what
- * this run already retains at this position.
+ * idempotency key is derived from the run id outright, so a record a fork
+ * inherited would compute a different name under the fork and replay would
+ * diverge before any provider question arose — and the fork would then file a
+ * second issue for one already filed. Deciding the name therefore needs to know
+ * what this run already retains at this position.
  *
  * This is a parallel module rather than a parameterization of the Git-host one,
  * and deliberately. The two request shapes differ — a Git-host request is named
- * by a `kind`, an Issue request by a resolved provider and a canonical target —
- * so a shared engine would take a parser and a projection as arguments and be
- * read at both call sites anyway. The Git-host table is also a settled
- * compatibility boundary that a second effect type should not be able to move.
- * If a third external effect appears, unifying them is a mechanical change with
- * both shapes already written down.
+ * by a `kind`, an Issue request by a canonical target and a discriminator — so a
+ * shared engine would take a parser and a projection as arguments and be read at
+ * both call sites anyway. The Git-host table is also a settled compatibility
+ * boundary that a second effect type should not be able to move. If a third
+ * external effect appears, unifying them is a mechanical change with both shapes
+ * already written down.
  *
  * The reasoning about *why* the table is built where it is belongs to
  * `git-host/identities.ts` and holds identically here: every obvious way of
@@ -31,8 +31,8 @@
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { canonicalJson } from "../storage/record.ts";
 import { ISSUE_EFFECT } from "./effect-type.ts";
-import { parseIssueReconciliationRecord } from "./records.ts";
-import type { CompleteIssueRequest } from "./records.ts";
+import { parseIssueRequest } from "./records.ts";
+import type { IssueRequest } from "./records.ts";
 
 /** One retained record's identity, and what it was a record of. */
 export interface RetainedIssueIdentity {
@@ -83,7 +83,7 @@ export function exhaustRetainedIssueIdentities(held: RetainedIssueIdentity[] | u
  */
 export function claimRetainedIssueIdentity(
   held: RetainedIssueIdentity[] | undefined,
-  request: CompleteIssueRequest,
+  request: IssueRequest,
 ): string | undefined {
   if (held === undefined) {
     return undefined;
@@ -114,12 +114,17 @@ function exhaust(held: RetainedIssueIdentity[]): void {
  * in the document. The natural key is left out too — it is derived from the run
  * and the target, so including it would put the undecided run id back in.
  */
-function asked(request: CompleteIssueRequest): string {
+function asked(request: IssueRequest): string {
   return canonicalJson({
     expansionId: request.identity.expansionId,
     provider: request.provider,
     target: request.target,
-    inputs: request.inputs,
+    issue: {
+      title: request.issue.title,
+      description: request.issue.description,
+      tags: [...request.issue.tags],
+      assignee: request.issue.assignee,
+    },
   });
 }
 
@@ -131,7 +136,7 @@ function asked(request: CompleteIssueRequest): string {
  * outcome is the durable operation's failed result — and there is nothing there
  * to name an identity with.
  */
-function requestOf(event: DurableEvent): CompleteIssueRequest | undefined {
+function requestOf(event: DurableEvent): IssueRequest | undefined {
   try {
     if (event.type !== "yield" || event.description.type !== ISSUE_EFFECT) {
       return undefined;
@@ -139,7 +144,7 @@ function requestOf(event: DurableEvent): CompleteIssueRequest | undefined {
     if (event.result.status !== "ok") {
       return undefined;
     }
-    return parseIssueReconciliationRecord(event.result.value)?.request;
+    return parseIssueRequest(event.description["request"]);
   } catch {
     return undefined;
   }

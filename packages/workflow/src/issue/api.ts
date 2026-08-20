@@ -1,132 +1,113 @@
 /**
- * The one Issue middleware surface, and what an Issue provider is.
+ * The one Issue surface: upsert an issue in the tracker a document named.
  *
- * There is exactly one contextual operation here, and it routes. Public
- * middleware receives one frozen, one-use request describing the complete
- * detached Issue request, its canonical target and its resolved provider; it
- * may read it, refuse by throwing, suspend before delegating, install narrower
- * policy, or delegate that exact request onward. It receives no credential, no
- * capability, no answer operation and no phase evidence, and the value it
- * returns is ignored. Nothing a handler can hold or combine adds up to
- * completion authority — which is the whole reason there is one surface here
- * rather than two.
+ * There is no registry here, no resolver, no routing protocol, no phase API and
+ * no private terminal. A provider is ordinary middleware around this operation,
+ * which is the whole mechanism: an adapter composes `IssueApi.around(...)`,
+ * looks at the destination it was handed, and either handles the request or
+ * delegates it untouched.
  *
- * ## Providers are selected by discriminator, not by search
+ * ## Matching, and what matching commits a provider to
  *
- * Several providers may be installed at once. Each registers for one
- * discriminator and answers only requests whose resolved provider is that
- * name; anything else it delegates untouched. There is no capability
- * discovery, no negotiation and no fallback: a request whose discriminator
- * nobody registered for reaches this surface's own default, which completes
- * nothing.
+ * Without an explicit discriminator a provider matches its own URLs — GitHub's
+ * middleware recognizes the URLs it can act on and passes everything else
+ * along. With one, only the provider registered under that exact name may
+ * handle the request, which is what makes a self-hosted deployment addressable.
  *
- * That is what makes an explicit `provider` on an Issue context meaningful. It
- * does not ask for a preference among installed adapters — it names the only
- * adapter allowed to act, and a refusal from that adapter is the end of the
- * request rather than the start of a search for another one.
+ * Once middleware matches, it owns the answer. Its validation and its refusal
+ * are final: it does not delegate after matching, and no provider catches
+ * {@link NoIssueProvider} to implement a fallback. A refusal from the selected
+ * provider is the end of the request rather than the start of a search for
+ * another one, because a search is how a document that named one service
+ * quietly reaches a different one.
+ *
+ * ## What may not cross this boundary
+ *
+ * A credential, an endpoint, a raw payload, a provider's own identity for the
+ * issue and every reconciliation detail stay inside the middleware that holds
+ * them. What comes back is the issue's URL, and nothing else.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Operation, Result } from "effection";
-import { IssueProviderError } from "./errors.ts";
-import type { CompleteIssueRequest, IssueCompletion, IssueObservation } from "./records.ts";
+import type { Operation } from "effection";
 
 /** The stable name every loaded copy composes through. */
 export const ISSUE_API = "executablemd.workflow.issue";
 
-/** Which half of one reconciliation attempt is running. */
-export type IssuePhase = "observe" | "perform";
+/** What a document asked for, normalized. */
+export interface IssueInput {
+  readonly title: string;
+  readonly description: string;
+  /** Deduplicated and code-point sorted. Empty is `[]`, never absent. */
+  readonly tags: readonly string[];
+  /** The opaque provider account identifier, or `null` for none. */
+  readonly assignee: string | null;
+}
 
-/**
- * What public routing middleware sees: one frozen, one-use routing request.
- *
- * It describes what is being asked, where it is being asked, and which provider
- * was selected, so a handler can route or refuse on the facts. It carries no
- * evidence only the provider is entitled to, and no member of it is a
- * capability.
- */
-export interface IssueRoutingRequest {
-  readonly intent: "route";
-  readonly phase: IssuePhase;
-  readonly request: CompleteIssueRequest;
+/** Where the issue goes, and what makes two attempts at it the same one. */
+export interface IssueUpsertOptions {
+  /** The canonical target URL of the container new issues are created in. */
+  readonly url: string;
+  /** The explicit discriminator, when the tracker named one. */
+  readonly provider?: string;
+  /**
+   * What makes a second attempt the same attempt.
+   *
+   * Derived by the durable envelope from the canonical target and this run's
+   * own effect identity, so a provider never invents it and an interrupted
+   * attempt is recognized by the next one. A provider carries it wherever its
+   * service can hold a mark, which is how "already created" is answered
+   * without a local record.
+   */
+  readonly idempotencyKey: string;
+}
+
+/** What a document binds: the issue's URL, and nothing else. */
+export interface IssueResult {
+  readonly url: string;
 }
 
 /**
- * What the selected provider's handler is told, once, by the invocation itself.
+ * No middleware matched the destination.
  *
- * Reached only through that handler's own continuation, so the phase — and, for
- * a perform, the proven absence it acts on — is never visible to the middleware
- * the request travelled through.
+ * The base error, reported unchanged when every provider delegated. It names
+ * the URL and the discriminator because those are the document's own words and
+ * the thing an author has to fix; it names nothing a provider holds.
  */
-export type IssuePhaseDetails =
-  | { readonly phase: "observe"; readonly request: CompleteIssueRequest }
-  | {
-      readonly phase: "perform";
-      readonly request: CompleteIssueRequest;
-      readonly observation: IssueObservation;
-    };
+export class NoIssueProvider extends Error {
+  override name = "NoIssueProvider";
 
-/**
- * One message on the Issue operation.
- *
- * Public middleware only ever receives {@link IssueRoutingRequest}. The two
- * private members are how the selected provider's handler speaks to the
- * invocation's own terminal through the continuation it captured, and they are
- * declared here only because they travel on the same operation. Constructing
- * one grants nothing: the terminal is reachable from that continuation alone.
- */
-export type IssueCall =
-  | IssueRoutingRequest
-  | { readonly intent: "inspect"; readonly routing: IssueRoutingRequest }
-  | {
-      readonly intent: "answer";
-      readonly routing: IssueRoutingRequest;
-      readonly answer: unknown;
-    };
+  readonly url: string;
+  readonly provider: string | undefined;
 
-/**
- * What an Issue provider can be asked, in the order the state machine asks it.
- *
- * `observe` always runs first and answers what is provably there. `perform` is
- * reached only from proven absence, and receives that observation as the
- * evidence it acts on.
- *
- * Both answer with Effection's `Result`. The success channel carries a closed
- * normalized shape; the failure channel carries a temporary unavailability, or
- * — from `observe` only — a refusal of a target this provider will not act on.
- * Anything else it puts there is outside the vocabulary it agreed to speak.
- */
-export interface IssueProvider {
-  observe(request: CompleteIssueRequest): Operation<Result<IssueObservation>>;
-  perform(
-    request: CompleteIssueRequest,
-    observation: IssueObservation,
-  ): Operation<Result<IssueCompletion>>;
+  constructor(url: string, provider: string | undefined) {
+    super(
+      provider === undefined
+        ? `no issue provider handles ${url}. Install one, or name the provider on the ` +
+            `<IssueTracker> so a provider that does not recognize the URL can still be asked.`
+        : `no issue provider is installed under ${provider}, so nothing can create an issue ` +
+            `in ${url}.`,
+    );
+    this.url = url;
+    this.provider = provider;
+  }
 }
 
 export interface IssueApi {
-  /**
-   * Route one Issue request.
-   *
-   * The public call answers nothing: a return value is not evidence, and
-   * `reconcileIssueEffect()` ignores it.
-   */
-  route(call: IssueCall): Operation<unknown>;
+  /** Create or bring up to date one issue in the tracker these options name. */
+  upsert(issue: IssueInput, options: IssueUpsertOptions): Operation<IssueResult>;
 }
 
 /**
- * The public Issue surface. Its own default always refuses.
+ * The public Issue surface. Its own default reports that nothing handled it.
  *
- * Invoking this descriptor with a captured request outside a live invocation
- * reaches this default and completes nothing. A live attempt invokes its own
- * descriptor, which shares this stable name — and so this middleware chain —
- * while terminating in that invocation's private authoritative terminal.
+ * Reaching this default means every installed provider delegated, which is an
+ * ordinary authoring outcome rather than a failure of the boundary: the
+ * document named a destination this deployment has no adapter for.
  */
-export const IssueRouting: Api<IssueApi> = createApi<IssueApi>(ISSUE_API, {
+export const IssueApi: Api<IssueApi> = createApi<IssueApi>(ISSUE_API, {
   // deno-lint-ignore require-yield
-  *route(): Operation<unknown> {
-    throw new IssueProviderError(
-      "no issue provider accepted this request, and this surface completes nothing on its own",
-    );
+  *upsert(_issue: IssueInput, options: IssueUpsertOptions): Operation<IssueResult> {
+    throw new NoIssueProvider(options.url, options.provider);
   },
 });

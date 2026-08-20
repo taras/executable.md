@@ -7,23 +7,17 @@
  * The provider is then resolved from that canonical URL unless the context
  * named one.
  *
- ## Automatic mapping belongs to the host, not to this module
+ ## Which provider acts is not decided here
  *
- * A canonical URL with no explicit discriminator is resolved by asking the
- * trusted host, which is where the table of well-known hosts lives. It is not
- * here, and that is enforced rather than merely intended: this is the shared
- * coordination surface, and the shared surface naming its first adapter is
- * exactly how a neutral boundary quietly becomes one provider's.
+ * A tracker naming no discriminator is matched by URL: every installed provider
+ * sees the destination and the one that recognizes it handles the request. This
+ * module knows no provider's name, and that is enforced rather than intended —
+ * the shared surface naming its first adapter is exactly how a neutral boundary
+ * quietly becomes one provider's.
  *
- * The mapping is still a compatibility contract wherever it lives, because the
- * resolved provider is part of durable identity: a target that resolved to one
- * provider yesterday and another today would ask a different service for the
- * same retained position.
- *
- * A URL the host resolves nothing for is refused rather than guessed at. The
- * remedy is in the refusal — install a context carrying `provider` — because a
- * self-hosted tracker is an ordinary deployment and the document's author is
- * the one who knows which service is behind that host name.
+ * A tracker naming a discriminator names the only provider allowed to act. That
+ * is what makes a self-hosted deployment addressable, and it is why a refusal
+ * from that provider ends the request instead of starting a search.
  *
  * ## Canonical means refused, not repaired
  *
@@ -47,8 +41,14 @@ export interface IssueTracker {
 export interface IssueDestination {
   /** The canonical container URL, as the durable request and key hold it. */
   readonly target: string;
-  /** The resolved discriminator. Only a provider registered under it may act. */
-  readonly provider: string;
+  /**
+   * The explicit discriminator, when the tracker named one.
+   *
+   * Absent means the destination is matched by URL: every provider looks at it
+   * and the one that recognizes it handles the request. Present means only the
+   * provider of that exact name may.
+   */
+  readonly provider: string | undefined;
 }
 
 /** The stable name of a provider: lower case, and a name rather than a phrase. */
@@ -94,11 +94,7 @@ export function issueProviderName(value: unknown): string | undefined {
  * excuse the URL from being a URL, and the provider that receives it still
  * decides whether the target is one of its own.
  */
-export function resolveIssueDestination(
-  target: IssueTracker | undefined,
-  /** What the host maps a canonical URL to, when the context named nothing. */
-  resolve: (canonical: string) => string | undefined,
-): IssueDestination {
+export function resolveIssueDestination(target: IssueTracker | undefined): IssueDestination {
   if (target === undefined) {
     throw new IssueTrackerError(
       "no-issue-tracker",
@@ -115,16 +111,9 @@ export function resolveIssueDestination(
     );
   }
   if (target.provider === undefined) {
-    const resolved = resolve(canonical);
-    if (resolved === undefined) {
-      throw new IssueTrackerError(
-        "unresolved-provider",
-        "this host maps no provider to that URL, and guessing one would ask an unrelated " +
-          "service to create the issue. Install a context that names one, as " +
-          '<IssueTracker url="…" provider="…">.',
-      );
-    }
-    return Object.freeze({ target: canonical, provider: resolved });
+    // No discriminator: providers match their own URLs, and which one does is
+    // decided by the middleware chain rather than by a table here.
+    return Object.freeze({ target: canonical, provider: undefined });
   }
   const named = issueProviderName(target.provider);
   if (named === undefined) {

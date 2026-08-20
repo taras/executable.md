@@ -204,35 +204,23 @@ export type {
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
-export { ISSUE_API, IssueRouting } from "./src/issue/api.ts";
-export type {
-  IssueApi,
-  IssueCall,
-  IssuePhase,
-  IssuePhaseDetails,
-  IssueProvider,
-  IssueRoutingRequest,
-} from "./src/issue/api.ts";
+export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
+export type { IssueInput, IssueResult, IssueUpsertOptions } from "./src/issue/api.ts";
 export {
   ISSUE_TRACKER_CONTEXT,
   IssueTrackerContext,
   currentIssueTracker,
 } from "./src/issue/context.ts";
-export type { IssueTrackerContextApi } from "./src/issue/context.ts";
 export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
-export { reconcileIssueEffect, useIssueProvider, withIssueProvider } from "./src/issue/effect.ts";
+export { upsertIssue } from "./src/issue/effect.ts";
 export type { IssueEffectRequest } from "./src/issue/effect.ts";
 export {
   IssueAmbiguousError,
   IssueConflictError,
   IssueContentError,
   IssueProtocolError,
-  IssueProviderError,
   IssueTrackerError,
   IssueUnavailableError,
-  issueFailure,
-  isIssueRefused,
-  isIssueUnavailable,
 } from "./src/issue/errors.ts";
 export type { IssueTrackerReason } from "./src/issue/errors.ts";
 export {
@@ -240,51 +228,22 @@ export {
   issueProviderName,
   resolveIssueDestination,
   withinIssueCeiling,
-} from "./src/issue/target.ts";
-export type { IssueDestination, IssueTracker } from "./src/issue/target.ts";
+} from "./src/issue/tracker.ts";
+export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
 export {
   byCodePoint,
-  completeIssueRequestJson,
-  issueAgrees,
-  issueInputsJson,
-  issueNaturalKey,
-  issueNaturalKeyJson,
-  issueObservationsJson,
-  issuePreStateJson,
-  issueReconciliationRecordJson,
-  issueRecordResultJson,
+  issueIdempotencyKey,
+  issueInputJson,
+  issueRecordJson,
   issueRequestFingerprint,
-  issueResultJson,
-  issueSnapshotJson,
+  issueRequestJson,
   normalizedTags,
-  parseCompleteIssueRequest,
-  parseIssueCompletion,
-  parseIssueInputs,
-  parseIssueNaturalKey,
-  parseIssueObservation,
-  parseIssueObservations,
-  parseIssuePreState,
-  parseIssueReconciliationRecord,
-  parseIssueRecordResult,
-  parseIssueSnapshot,
-  sameIssueIdentity,
-  sameIssueNaturalKey,
+  parseIssueInput,
+  parseIssueRecord,
+  parseIssueRequest,
   sameIssueRequest,
 } from "./src/issue/records.ts";
-export type {
-  CompleteIssueRequest,
-  IssueCompletion,
-  IssueDecision,
-  IssueEffectIdentity,
-  IssueInputs,
-  IssueNaturalKey,
-  IssueObservation,
-  IssueObservations,
-  IssuePreState,
-  IssueReconciliationRecord,
-  IssueRecordResult,
-  IssueSnapshot,
-} from "./src/issue/records.ts";
+export type { IssueEffectIdentity, IssueRecord, IssueRequest } from "./src/issue/records.ts";
 
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
 export type {

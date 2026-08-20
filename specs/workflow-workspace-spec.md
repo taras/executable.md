@@ -1739,8 +1739,9 @@ not layering taste. An Issue provider does not necessarily own a Git repository:
 Atlassian issue tracking owns none, so an Atlassian issue cannot truthfully
 execute or persist as a `git_host_effect`. `<Issue>` therefore has its own
 contextual routing operation and its own durable effect type. What it reuses
-from §10.2 is the reconciliation algorithm and the one-surface authority rule,
-internally. What is Issue-owned — and therefore an Issue compatibility boundary
+from §10.2 is the shape of the reconciliation — observe before mutating, adopt a
+compatible completion, perform a proven absence once, refuse conflict and
+ambiguity — applied inside a provider rather than by a shared state machine. What is Issue-owned — and therefore an Issue compatibility boundary
 — is the stable API name, the normalized request, the provider identity, the
 natural key, the result and the durable effect type.
 
@@ -1845,67 +1846,58 @@ durable request. Credentials, endpoints derived from credentials, transports and
 raw provider payloads are not context values and stay in the selected provider's
 per-invocation closure.
 
-**Routing.** Issue reconciliation is reached through exactly one stable
-contextual operation, `executablemd.workflow.issue`, under §10.2's one-surface
-authority rule and for the same reason: two public surfaces that are
-individually harmless compose into completion authority.
+**One operation, and providers as middleware.** Issue upsert is reached through
+exactly one stable contextual operation, `executablemd.workflow.issue`, whose
+only member is `upsert(issue, options)`. There is no registry, no resolver, no
+routing protocol, no phase API and no private terminal. A provider is ordinary
+middleware around that operation: it looks at the destination it was handed and
+either handles the request or delegates it untouched.
 
-Public middleware receives one frozen, one-use routing request carrying the
-complete detached Issue request, its canonical target, its resolved provider and
-the engine-derived effect identity. It may inspect it, refuse it, suspend before
-delegating, install narrower policy, or delegate that exact request. It receives
-no credential, provider transport, phase evidence, answer operation or
-completion capability, and its return value is ignored.
+Without an explicit discriminator a provider matches its own URLs. With one,
+only the provider registered under that exact name may handle the request, which
+is what makes a self-hosted deployment addressable — and which is why a provider
+validates a URL by its shape rather than by its host once it has been named.
 
-A provider handler registered for the resolved discriminator either delegates
-untouched or consumes the exact live request through its captured continuation.
-Only the invocation's private terminal accepts the provider's normalized
-observation or completion. A short circuit, a synthetic return, a copied
-request, a provider substitution, a reconstructed stable API name and a throw
-each publish nothing.
+Once middleware matches, it owns the answer. Its validation and its refusal are
+final: it does not delegate after matching, and no provider catches the base
+error to implement a fallback. A refusal from the selected provider ends the
+request rather than starting a search for another one, because a search is how a
+document that named one service quietly reaches a different one.
 
-This is what lets GitHub and Atlassian providers be installed at once. URL
-resolution chooses the default; the explicit discriminator selects an override;
-ordinary lexical middleware replaces handling for one subtree without changing
-its siblings or the host default.
+A destination every provider delegated reaches the operation's own base error,
+`NoIssueProvider`, unchanged. It names the URL and the discriminator, which are
+the document's own words and the thing an author has to fix.
 
-**Identity.** The engine derives Issue effect identity from the WorkflowRun and
-the expansion; neither the document, the context, middleware nor a provider
-supplies it. Within the resolved provider's namespace the external natural key
-is:
+**The envelope.** `issue_effect` derives the idempotency key and durably wraps
+the one `upsert()` call. It guarantees that the call happens at most once per
+position, that a replay returns the retained URL without invoking the operation
+at all, and that a changed request diverges rather than consuming another
+request's result. It does not guarantee that the *service* was touched once:
+that is the provider's, and the key is what this side hands over so the provider
+can make it true. An attempt interrupted after the service accepted its issue
+leaves no journal entry, and the next attempt presents the same key.
 
-```text
-{ canonicalTargetUrl, runId, expansionId }
-```
+The key is derived from the canonical target and the run's own effect identity —
+the run and the expansion — which the engine derives from the host-established
+run and its own expansion. Neither the document, the tracker, middleware nor a
+provider supplies either member. Title is never identity. The complete request
+fingerprint, which is what the durable operation is named by, covers the
+canonical target, the discriminator, the title, the description, the normalized
+tags and the assignee.
 
-The complete request fingerprint covers the resolved provider, the canonical
-target URL, the title, the description, the normalized tags and the assignee.
-Changing any member at the same durable position diverges rather than consuming
-another request's result. A different workflow run creates a different issue
-unless workflow policy deliberately reuses retained history through an existing
-supported mechanism. Title is never identity.
-
-**The decision.** One live attempt observes before it mutates:
-
-```text
-definitely absent             create once
-definitely compatible         adopt
-same identity, fields differ  update once, then observe
-closed or conflicting         fail
-multiple matches              permanent ambiguity
-temporarily unobservable      fail as unavailable; never absence
-```
-
-Providers carry a provider-visible origin marker derived from the natural key,
-or an equivalent provider-native idempotency key. An interruption after external
-success and before local publication is recovered by observing and adopting that
-same issue. Replay of a retained completion selects no provider, performs no
-network request, re-resolves no target and returns the retained evidence.
+**Reconciliation belongs to the provider.** Observing before mutating, adopting
+a compatible issue, creating once, recovering an interrupted creation, and
+refusing conflict, permanent ambiguity and temporary unavailability are all
+knowledge about what a particular service can prove. A provider carries the
+idempotency key wherever its service can hold a mark, which is how "already
+created" is answered without a local record. Nothing it could not observe ever
+becomes absence, because that is the one mistake that files a second issue.
 
 **The journal.** The durable effect type is `issue_effect`. Its filtered record
-retains the normalized request, the selected provider name, the pre-state, the
-observations, the reconciliation decision and the normalized result. It retains
-no credential, provider payload, provider-specific endpoint or host-local path.
+retains the request a document made — the canonical target, the discriminator
+and the four authored fields — and the URL that came back. It retains no
+credential, provider payload, provider-specific endpoint, provider-owned
+identity or host-local path.
 
 **The provider contract.** An Issue provider normalizes its service into the
 common fields: `title`, `description`, a set of `tags`, an optional `assignee`,
