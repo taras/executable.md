@@ -51,6 +51,8 @@ Existing documents and code get aligned to this section retroactively.
 | workflow executor | the live host invocation that advances or settles one workflow run |
 | executor lock | the scope-owned, non-blocking exclusive host lock that permits at most one workflow executor for a run |
 | stale execution | an unfinished retained document execution found after acquiring the executor lock proves its previous workflow executor is gone |
+| inspection recovery coordination | provider-private cross-process exclusion between copying a crashed run's database-and-journal pair for inspection and opening the retained database write-capably for SQLite recovery; it grants no executor or lifecycle authority |
+| recovered inspection snapshot | an immutable lifecycle snapshot read from a private scratch copy after SQLite rolls that copy's hot journal back to the retained store's last committed state; the retained database and journal are not changed |
 | Workspace | the provider-neutral, run-owned environment that supplies retained filesystem, repository, process and working-directory capabilities to a workflow |
 | document filesystem | the files a document names in its own text, reached only through `API.Files`; distinct from the host paths the engine's own control plane reads |
 | Files provider | the installed implementation of `API.Files` for a document execution: the host provider under `xmd run`, a transaction-bound provider under a workflow run. There is no default, and no provider falls back to another |
@@ -631,11 +633,50 @@ only that surface. They never invoke canonical execution, read through replay,
 attach a Workspace, materialize a root, import a document, contact an Agent,
 process or external provider, or append.
 
+The Deno provider first reads each retained database through its ordinary
+read-only connection. A host crash may leave a hot rollback journal: that is a
+healthy database one SQLite rollback away from the last committed state, but
+SQLite cannot perform that rollback through a read-only connection. Only the
+exact `SQLITE_READONLY_ROLLBACK` condition enters recovered inspection. Another
+read-only failure is reported as itself rather than treated as crash recovery.
+
+Recovered inspection acquires inspection recovery coordination and retries the
+retained database read-only. If a write-capable owner recovered it first, that
+ordinary source snapshot is the answer. If it remains hot, inspection copies
+the database and its rollback journal together into a private scratch directory
+while it holds the coordination, then releases the retained source and lets
+SQLite recover the copy. The copy keeps the candidate's exact database name and
+passes through the same strict schema, retained-content, live/current and
+location recognition as an ordinary snapshot. Recovery discards only the
+uncommitted transaction, so the resulting recovered inspection snapshot is the
+committed state the retained database describes rather than a repaired or
+alternative run.
+
+Every write-capable opening of a retained workflow database holds the same
+coordination through the first read that performs or proves recovery complete.
+The coordination is separate from the executor lock, produces no public
+capability, authorizes no transition and cannot make an inspector appear to be
+a workflow executor. Its deterministic empty sidecar occupies a provider-owned
+non-candidate namespace and may remain after run deletion like the executor-lock
+sidecar; it is host arrangement rather than retained state.
+
+Scratch state is owner-private, belongs to the inspection scope and is processed
+one candidate at a time. Every success, failure and cancellation attempts its
+complete removal during teardown. A successful snapshot is observable only
+after removal succeeds. A permanent removal failure instead returns a typed
+inspection-recovery storage error after every cleanup attempt; it identifies the
+host-selected scratch location so the operator can remove it and never repeats
+retained content. Cancellation remains Effection control flow unless cleanup
+itself fails. Private non-candidate scratch may therefore remain only behind an
+explicit cleanup failure. Inspection never retries removal indefinitely, starts
+background cleanup or reports successful inspection while such residue is
+known.
+
 Discovery remains arithmetic over the one run-storage root; there is no list
 registry. Each run contributes one database candidate. Exact advisory-lock
 sidecar names occupy a distinct provider-owned namespace and are not candidates.
-The Deno provider opens database candidates read-only and applies the same
-strict schema, retained-content and live/current recognition as execution.
+The Deno provider applies the same strict schema, retained-content and
+live/current recognition as execution to the direct or recovered snapshot.
 One absent, foreign, incompatible, damaged or unparseable candidate fails the
 whole list request with its distinct condition. Healthy rows are not returned
 as though they were a complete list, and every candidate remains unchanged.
@@ -1260,10 +1301,12 @@ it and keeps its existing behavior.
 Losing the host is not one of those outcomes, because nothing runs to handle
 it. No cleanup, commit or rollback happens after the process dies: the
 operating system closes its connection and releases the locks it held, and the
-interrupted transaction is left for the next connection to recover. The
-mutation, the immutable root, the current-root pointer and the routed event
-have all been written by then, and recovery exposes the last committed state
-and none of them.
+interrupted transaction is left for the next write-capable source connection to
+recover. Read-only lifecycle inspection may instead recover a private copy under
+the coordination described above; it never takes recovery away from that next
+source owner. The mutation, the immutable root, the current-root pointer and the
+routed event have all been written by then, and recovery exposes the last
+committed state and none of them.
 
 That is the same boundary every other reader already observes rather than a
 second rule for crashes. A second connection sees the last committed state for
@@ -2452,7 +2495,7 @@ Status is measured against main.
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation carries authority — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of authority, of retained state or of an unrecognized native condition fails the run instead of publishing a result | built on the #294 stack, Deno provider only |
 | `Git.Push` | publishes the selected checkout's exact current named branch and commit to the same branch on the retained Repository's canonical `origin`, reconciled through the shared Git-host state machine rather than through a Workspace transaction: no props and no component result, no force, no upstream mutation and no implicit staging or committing; the durable request and record carry the Repository's filtered identity without its checkout path, and the transport runs in a provider-owned isolated control repository reading the checkout's objects through an object-source attachment whose alternates chain and object tree are proven contained before the first remote observation, aimed at the exact private retained locator | built on the #370 stack, Deno provider only |
 | `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan that requires the record's natural key, inputs and result to describe one publication — and a missing, conflicting or unreadable one fails locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN` then `GITHUB_TOKEN`, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
-| workflow lifecycle inspection and control | reads status/list/history without advancing a run, enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | built on the #367 stack |
+| workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection defined by #513 and unbuilt |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
