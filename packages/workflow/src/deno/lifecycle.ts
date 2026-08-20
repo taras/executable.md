@@ -32,11 +32,11 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { copyFile, exists, readdir, rm } from "@effectionx/fs";
 import { useWorkflowRunConnections, type WorkflowRunConnections } from "./connections.ts";
-import { ensure, Err, Ok, type Operation, type Result, scoped, until } from "effection";
+import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import type {
   DurableObjectStorageLike,
@@ -919,7 +919,14 @@ function* produceRecovered<T>(
         return owned;
       }
 
-      const scratch = yield* until(mkdtemp(join(tmpdir(), "xmd-inspection-")));
+      // Created synchronously, and handed to its owner before anything can
+      // suspend. `until()` stops observing a promise; it does not cancel one,
+      // so an asynchronous `mkdtemp` halted mid-flight would still go on to
+      // create a directory — after this generator had stopped, with nothing
+      // holding its path and nothing left to remove it. Naming and creating at
+      // once also means this is never a directory an earlier attempt left.
+      // oxlint-disable-next-line local/no-sync-filesystem
+      const scratch = mkdtempSync(join(tmpdir(), "xmd-inspection-"));
       directory = scratch;
       created(scratch);
       yield* observe({ phase: "scratch-created", directory: scratch });
