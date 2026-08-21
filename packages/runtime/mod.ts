@@ -140,5 +140,14 @@ export type {
   NativeLaunchOutcome,
   NativeLaunchRequest,
 } from "./launcher.ts";
+export { ExecutableBinding, ExecutableObservationError } from "./executable-binding.ts";
+export { SessionLease } from "./session-lease.ts";
+export type { SessionLeaseApi, SessionLeaseOutcome } from "./session-lease.ts";
+export { hasDenoSessionLease, installDenoSessionLease } from "./deno-session-lease.ts";
+export type {
+  ExecutableBindingApi,
+  ExecutableRefusal,
+  LiveExecutable,
+} from "./executable-binding.ts";
 export { hostFilesHandler, useHostFiles } from "./host-files.ts";
 export type { HostFilesEvent, HostFilesObserver, HostFilesOptions } from "./host-files.ts";

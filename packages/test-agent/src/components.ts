@@ -38,7 +38,8 @@ import type { ErrorSegment, Json, PropsSchema, Segment, Session } from "@executa
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, cwd as contextualCwd, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
-import { useTestAgentController } from "./controller.ts";
+import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
+import { installControlledLauncher } from "@executablemd/runtime";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
 import { useTestAgentProvider } from "./provider.ts";
 
@@ -139,6 +140,16 @@ export function* installTestAgentComponents(): Operation<void> {
     // here would be invisible to the body. The invocation is already the bound
     // this region needs — it is dismantled with the component.
     {
+      // The test agent's native UI is not a program. Its launcher records what
+      // it was asked to start and reports the child exited cleanly, so a
+      // document can author a real `<Session.Launch>` and get a real result
+      // without a terminal, a window, or an executable that does not exist.
+      const launchHarness = yield* NativeLaunchObserver.get();
+      yield* installControlledLauncher({
+        record: (request) => launchHarness?.record?.(request),
+        outcome: () => launchHarness?.outcome?.() ?? { exitCode: 0 },
+      });
+
       const controller = yield* useTestAgentController();
       const declarations = new Map<string, ScenarioDeclaration>();
       const boundaries = new Map<EvalScope | "test-agent-scope", BoundaryState>();

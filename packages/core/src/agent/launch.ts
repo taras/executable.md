@@ -28,10 +28,38 @@
  */
 
 import { type Api, createApi } from "@effectionx/context-api";
-import type { Operation } from "effection";
+import { type Context, createContext, type Operation, scoped } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
 
 export type LaunchPhase = "prepared" | "detached" | "launched" | "exited";
+
+/**
+ * Set while an agent is being resolved *for* a launch, ahead of its journal.
+ *
+ * A launch resolves its agent before `AgentLaunchJournal` is installed, which
+ * is the right order for reporting a missing agent as an expansion failure
+ * rather than as a retained refusal. It is the wrong order for a provider that
+ * answers "is this agent available?" by inspecting something in the world: a
+ * completed launch replays without performing any phase, so an inspection made
+ * here would be made on every replay of a launch that does nothing at all.
+ *
+ * A provider that reads this defers such an inspection into its own `prepared`
+ * work, where the journal decides whether it runs. Availability asked for any
+ * other reason is unaffected — this is only ever set around a launch's own
+ * resolution.
+ */
+export const LaunchResolution: Context<boolean> = createContext<boolean>(
+  "agent.launch.resolution",
+  false,
+);
+
+/** Resolve `agent` as a launch's own, so a provider can defer live checks. */
+export function resolvingLaunch<T>(agent: () => Operation<T>): Operation<T> {
+  return scoped(function* () {
+    yield* LaunchResolution.set(true);
+    return yield* agent();
+  });
+}
 
 /**
  * What a launch did about the instruction layer, so the choice is observable
@@ -60,11 +88,77 @@ export type LaunchFailureClass =
   | "directory-authority"
   | "detach-failed"
   | "process-creation-failed"
-  | "native-exit";
+  | "native-exit"
+  | "executable-binding-refused"
+  | "session-busy";
 
+/**
+ * `session-busy` is contention, not breakage. Another XMD owner holds the
+ * logical session right now — a native UI someone is working in, or a turn in
+ * another process — and this launch refused instead of queueing behind it. The
+ * same command run again after that owner exits succeeds.
+ */
 export interface LaunchFailure {
   class: LaunchFailureClass;
   message: string;
+}
+
+/**
+ * Who chose the provider-native session identity.
+ *
+ * `provider-returned` — the provider created the session and told XMD what it
+ *   is called. Whatever it returns is the identity.
+ * `client-allocated` — XMD chose the identity before the provider existed and
+ *   supplied it unchanged. Nothing the provider says can replace it, which is
+ *   the property that lets a native UI and a later ACP attachment name the
+ *   same conversation.
+ *
+ * The distinction is retained rather than inferred, because the two are
+ * indistinguishable after the fact: a returned identity and a supplied one are
+ * both just a string in the record.
+ */
+export type IdentityProvenance = "provider-returned" | "client-allocated";
+
+/**
+ * Which build of a provider executable a session was established against.
+ *
+ * A client-allocated session is only meaningful while the build that created
+ * it can be reproduced. Two builds of the same provider will accept the same
+ * identity and disagree silently about what it names — the observed cause of
+ * issue #519's first failed gate, where one Claude build created a session and
+ * a second was asked to resume it and produced an empty conversation.
+ *
+ * So the binding is retained and compared, and a session whose build cannot be
+ * reproduced is refused rather than resumed. What is retained is deliberately
+ * not a path: a path says where a build was, which stops being true, while a
+ * version and a digest say which build it was, which does not. That also keeps
+ * the record free of host layout.
+ */
+export interface ExecutableBuildBindingV1 {
+  schema: "executable-build.v1";
+  reportedVersion: string;
+  executableDigest: {
+    algorithm: "sha256";
+    value: string;
+  };
+}
+
+/**
+ * Whether two bindings name the same build.
+ *
+ * Equality is over what was retained, so the same build reached through a
+ * different path is compatible and a different build at the same path is not.
+ */
+export function sameExecutableBuild(
+  left: ExecutableBuildBindingV1,
+  right: ExecutableBuildBindingV1,
+): boolean {
+  return (
+    left.schema === right.schema &&
+    left.reportedVersion === right.reportedVersion &&
+    left.executableDigest.algorithm === right.executableDigest.algorithm &&
+    left.executableDigest.value === right.executableDigest.value
+  );
 }
 
 /**
@@ -88,6 +182,18 @@ export interface PreparedLaunchRecord {
   sessionState: "created" | "resumed";
   instructionChannel: string;
   instructionReconciliation: InstructionReconciliation;
+  /**
+   * Retained rather than derived from the provider, because a client-allocated
+   * identity that a reader cannot distinguish from a returned one is an
+   * identity a replay could silently replace.
+   */
+  identityProvenance: IdentityProvenance;
+  /**
+   * Present exactly when the provider binds one executable build, which today
+   * is the client-allocated path. A provider that returns its own identity
+   * owns its own session lifetime and binds nothing.
+   */
+  executableBinding?: ExecutableBuildBindingV1;
   instructionsDigest: string;
   instructions: string;
   cwd: string;

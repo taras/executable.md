@@ -8,6 +8,7 @@
     "**/*.md",
     "scripts/tests/fixtures/**",
     "**/npm/**",
-    "packages/workflow/vendor/cloudflare-computer-dofs/**"
+    "packages/workflow/vendor/cloudflare-computer-dofs/**",
+    "packages/acp/vendor/acpx/**"
   ]
 }

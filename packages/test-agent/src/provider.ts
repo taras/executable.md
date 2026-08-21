@@ -10,7 +10,7 @@
  */
 
 import type { Operation } from "effection";
-import { useAcpxProvider } from "@executablemd/acp";
+import { createMemorySessionRouteStore, useAcpxProvider } from "@executablemd/acp";
 import type {
   AcpxProvider,
   AcpxProviderDependencies,
@@ -56,6 +56,10 @@ export const TEST_AGENT_LAUNCHER = "test-agent";
 
 export const TEST_AGENT_NATIVE_ADAPTER: NativeAdapter = {
   launcher: TEST_AGENT_LAUNCHER,
+  // The worker asserts the identity, so there is nothing for XMD to allocate
+  // and no executable build to bind: this agent's session lives entirely
+  // inside the harness that created it.
+  identity: "provider-returned",
   resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
 };
 
@@ -80,6 +84,12 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
     { defaultAgent: options.defaultAgent, permissionMode: "deny-all" },
     {
       sessionStore: createMemorySessionStore(),
+      // In memory for the same reason the ACPX store is: a scenario's sessions
+      // end with the scenario. The production default is a directory beneath
+      // the reader's home that real invocations coordinate through, and a test
+      // publishing route claims into it would be deciding how their sessions
+      // were constructed.
+      nativeSessionStore: createMemorySessionRouteStore(),
       agentRegistry: registry,
       advertiseNativeLaunch: options.agents,
       nativeAdapters: Object.fromEntries(

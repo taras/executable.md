@@ -23,7 +23,7 @@ import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
 import { Agent } from "./agent-api.ts";
 import type { LaunchOptions, PromptOptions, Session, SessionLaunchResult } from "./agent-api.ts";
-import { AgentLaunchError, AgentLaunchJournal } from "./launch.ts";
+import { AgentLaunchError, AgentLaunchJournal, resolvingLaunch } from "./launch.ts";
 import type {
   DetachedLaunchRecord,
   ExitedLaunchRecord,
@@ -401,8 +401,14 @@ export function* SessionLaunch(props: Record<string, Json>): Operation<Json> {
 
     // Resolving here is the availability boundary: an agent that is not there
     // fails expansion rather than being retained as a refused launch.
+    //
+    // Marked as a launch's own resolution, because this happens before the
+    // journal below exists. A provider whose availability answer costs a look
+    // at the world defers that look into `prepared`, where a completed replay
+    // performs nothing; anything a provider can answer without looking still
+    // answers here.
     const options: LaunchOptions = {
-      agent: yield* Agent.operations.agent(asString(props.agent)),
+      agent: yield* resolvingLaunch(() => Agent.operations.agent(asString(props.agent))),
     };
     if (sessionProp !== undefined) {
       options.session = sessionProp;
@@ -485,6 +491,8 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "detach-failed":
     case "process-creation-failed":
     case "native-exit":
+    case "executable-binding-refused":
+    case "session-busy":
       return value;
     default:
       return "unsupported-capability";

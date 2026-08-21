@@ -508,6 +508,19 @@ function* runNativeToAcp(result: NativeToAcpResult): Operation<void> {
     return;
   }
 
+  // Registered as soon as the handle exists, rather than in a `finally`:
+  // cleanup that suspends there is not guaranteed to run when the operation is
+  // halted, and this probe's whole point is that it leaves nothing behind.
+  yield* ensure(function* () {
+    try {
+      // Not discarding persistent state: the native session is what the
+      // operator would keep.
+      yield* until(runtime.close({ handle, reason: "issue-519 probe complete" }));
+    } catch {
+      // Teardown trouble is reported through the cleanup counters.
+    }
+  });
+
   // Absence is not substitution; a different identity is.
   result.substitutedIdentity =
     handle.agentSessionId !== undefined && handle.agentSessionId !== allocated;
@@ -537,14 +550,6 @@ function* runNativeToAcp(result: NativeToAcpResult): Operation<void> {
     result.verdict = "ENVIRONMENT_BLOCKED";
     result.detail = `ACP turn failed before an observation: ${classify(error)}`;
     return;
-  } finally {
-    try {
-      // Not discarding persistent state: the native session is what the
-      // operator would keep.
-      yield* until(runtime.close({ handle, reason: "issue-519 probe complete" }));
-    } catch {
-      // Teardown trouble is reported through the cleanup counters.
-    }
   }
 
   if (!result.markerRecovered) {
@@ -798,7 +803,11 @@ function ptySession(
 
     const refused = text.includes("No conversation found with session ID");
     return {
-      surface: refused ? "no-session" : affordanceSeen ? "conversation-ready" : classifySurface(text),
+      surface: refused
+        ? "no-session"
+        : affordanceSeen
+          ? "conversation-ready"
+          : classifySurface(text),
       settled,
       trustAnswered,
       repeatedTrust,
@@ -1036,11 +1045,7 @@ function* resolveClaudeExecutable(root: string, live: Set<number>): Operation<st
 }
 
 /** `claude --version` for one exact executable. */
-function* claudeVersion(
-  executable: string,
-  root: string,
-  live: Set<number>,
-): Operation<string> {
+function* claudeVersion(executable: string, root: string, live: Set<number>): Operation<string> {
   const reported = yield* bounded("claude-version", 30_000, () =>
     runChild(executable, ["--version"], { cwd: root, live }),
   );

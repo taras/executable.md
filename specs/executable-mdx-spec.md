@@ -3567,7 +3567,9 @@ xmd README.md#Release/*
 
 Only a file-backed run argument is read as a reference. An inline `-e` document
 is untargeted, and `xmd test` keeps its own path grammar: a test path containing
-a literal `#` or `%` still names that file.
+a literal `#` or `%` still names that file. `xmd test` selects a section with
+`--target <selector>` instead, whose value uses this same selector grammar and
+projection; see §Testing.
 
 **The selector is replaced by its answer before anything executes.** The command
 inspects the document to discover its properties, and the run then reads the
@@ -3611,7 +3613,8 @@ A filename containing `#` is written `%23`, and every literal `%` is written
 starts escape syntax wherever it appears. This is a deliberate change to
 `xmd run` path grammar for any filename holding either character, and the reason
 target selection can be written at all. `xmd test` is exempt and still reads its
-path literally.
+path literally; its explicit `--target` value uses the same selector and
+projection contract, so the exemption costs it no target selection.
 
 Tier CT — CLI document targets covers the described catalog, its ordering and
 duplicates, an absent section for a targetless file, help running and installing
@@ -3621,7 +3624,8 @@ outranking a schema failure. Tier CH covers the help surfaces and the absence of
 a `targets` command, Tier PC properties and targets in one response, Tier VR
 targeted value and `<Output>` roots, Tier IE an inline root's absent target
 section, and Tier DT description extraction, the catalog's agreement with the
-canonical target array, and the unchanged `xmd test` path grammar.
+canonical target array, the unchanged `xmd test` path grammar, and its separate
+`--target` selection over one document.
 
 ### 5.5 The Component Api
 

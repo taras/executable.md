@@ -20,6 +20,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 // node:fs/promises primitive directly.
 import { realpath } from "node:fs/promises";
 import { readTextFile, stat } from "@executablemd/runtime";
+import type { NativeLaunchRequest } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, formatRoute, parseWorkerMessage, PROBE_INSTANCE } from "./protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "./protocol.ts";
@@ -64,6 +65,29 @@ export const NativeSessionObserver: Context<((report: NativeSessionReport) => vo
     "testAgent.nativeSessionObserver",
     undefined,
   );
+
+/**
+ * How a harness watches and steers the test agent's native UI.
+ *
+ * The launch itself is the document's to assert: it can see whether the
+ * handoff completed and what a later prompt got back. What a document cannot
+ * see is the argument vector and environment a child was handed — the two
+ * surfaces prepared instructions must never appear on — or what happens when
+ * that child exits badly. Both are supplied here.
+ *
+ * Unset by default, which is a native UI that starts nothing and exits
+ * cleanly.
+ */
+export interface NativeLaunchHarness {
+  /** Called with each launch request, before the child "runs". */
+  record?(request: NativeLaunchRequest): void;
+  /** How the native child exits. Defaults to a clean exit. */
+  outcome?(): { exitCode?: number; signal?: string };
+}
+
+export const NativeLaunchObserver: Context<NativeLaunchHarness | undefined> = createContext<
+  NativeLaunchHarness | undefined
+>("testAgent.nativeLaunchObserver", undefined);
 
 /** How a turn failed. Recorded against the scenario, never published. */
 export interface ScenarioFailure {

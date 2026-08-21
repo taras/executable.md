@@ -332,6 +332,52 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     expect(encoded.code).toBe(1);
   });
 
+  it("DT32: --target runs one section, preamble included, and leaves its siblings inert", function* () {
+    const document = fixture("targeted", "two-sections.test.md");
+
+    const selected = yield* runCli(["test", document, "--target", "Selected"]).join();
+
+    expect(selected.code).toBe(0);
+    expect(selected.stderr).not.toContain("tests failed");
+    // The selected test reads a value the preamble established, so passing
+    // proves the preamble was retained rather than projected away — a
+    // projection that dropped it would fail on an undefined binding.
+    expect(selected.stdout).toContain("PREAMBLE_TOKEN");
+    // And the sibling is absent rather than merely failing quietly: its own
+    // content never reached the output.
+    expect(selected.stdout).not.toContain("SIBLING_MARKER");
+
+    // The sibling fails whenever it runs, so the run above passing is evidence
+    // that it did not — an inert sibling would prove nothing on its own.
+    const sibling = yield* runCli(["test", document, "--target", "Untouched"]).join();
+    expect(sibling.code).toBe(1);
+    expect(sibling.stderr).toContain("tests failed");
+    expect(sibling.stdout).toContain("SIBLING_MARKER");
+  });
+
+  it("DT33: --target names a section of a document, and a directory runs nothing", function* () {
+    // The directory holds a document that passes when it runs, so "no failure
+    // reported" is not evidence. What proves the refusal happened first is
+    // that nothing the directory contains was executed or printed at all.
+    // Its own directory, holding only documents that pass when they run, so a
+    // green result cannot be mistaken for a refusal.
+    const directory = fixture("target-directory");
+    const discovered = yield* runCli(["test", directory]).join();
+    expect(discovered.code).toBe(0);
+    expect(discovered.stdout).toContain("DIRECTORY_MARKER");
+
+    const refused = yield* runCli(["test", directory, "--target", "Selected"]).join();
+
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("--target selects a section of one document");
+    // No heading, no test result, no authored marker from any document beneath
+    // it — the refusal settles before discovery executes anything.
+    expect(headings(refused.stdout)).toEqual([]);
+    expect(refused.stdout).not.toContain("DIRECTORY_MARKER");
+    expect(refused.stdout).not.toContain("PREAMBLE_TOKEN");
+    expect(refused.stderr).not.toContain("tests failed");
+  });
+
   /**
    * The containment contract, as `xmd test` performs it (#441).
    *

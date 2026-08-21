@@ -17,14 +17,23 @@
  * it is what stops the adapter being advertised on the strength of a test
  * nobody ran.
  *
+ * It resolves the ACP adapter through the same pin the provider uses, because
+ * every claim below is a claim about adapter behavior: a registry left to
+ * ACPX's own `^0.37.0` range would settle them against a version the
+ * capability never runs.
+ *
  * ## What running it established
  *
- * Run against Claude Code 2.1.235 and
- * `@agentclientprotocol/claude-agent-acp@^0.37.0`, it fails at the first
- * claim. `ensureSession` succeeds and returns a handle carrying
- * `backendSessionId` — the ACP session id — and no `agentSessionId` at all.
- * No Claude session file appears under `~/.claude/projects` either, so the
- * adapter's `session/new` materializes nothing native Claude could resume.
+ * It fails at the first claim. `ensureSession` succeeds and returns a handle
+ * carrying `backendSessionId` — the ACP session id — and no `agentSessionId`
+ * at all. No Claude session file appears under `~/.claude/projects` either, so
+ * the adapter's `session/new` materializes nothing native Claude could resume.
+ *
+ * That is the reading under two adapters, not one. It was first observed
+ * against ACPX's unpinned `^0.37.0` range, which resolves to `0.37.0`, and it
+ * is unchanged under the pinned `0.70.0` this now runs — the current published
+ * version. So the gap is not a stale adapter selected by a loose range: it
+ * survives every release between the two.
  *
  * The ACP session id is a UUID, and `claude --resume` takes a UUID, which is
  * exactly the inference this contract forbids: two values being shaped alike
@@ -34,7 +43,8 @@
  *
  * Advertising it needs a change in the adapter, not here: `session/new` must
  * create resumable Claude state and return its id as `_meta.agentSessionId`,
- * which is where ACPX already reads one from. When that lands, run this.
+ * which is where ACPX already reads one from. When that lands, raise the pin
+ * to that version and run this.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
@@ -48,7 +58,11 @@ import * as os from "node:os";
 import process from "node:process";
 import { createAgentRegistry, createRuntimeStore } from "acpx/runtime";
 import { createAcpRuntime } from "acpx/runtime";
-import { ADVERTISED_NATIVE_LAUNCH, nativeAdapterFor } from "../src/native-launch.ts";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  nativeAdapterFor,
+  pinnedAdapterCommands,
+} from "../src/native-launch.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 
 const ENABLED = process.env.XMD_CLAUDE_LAUNCH_PROOF === "1";
@@ -106,7 +120,10 @@ describe("Tier CI — Claude native launch", { sanitizeOps: false, sanitizeResou
     {
       {
         const store = createRuntimeStore({ stateDir: path.join(root, "acpx") });
-        const registry = createAgentRegistry();
+        // The adapter the capability pins, not whatever ACPX's own range
+        // selects. What this proof measures is adapter behavior, so resolving
+        // it any other way would describe a version the provider never runs.
+        const registry = createAgentRegistry({ overrides: pinnedAdapterCommands() });
         const runtime = createAcpRuntime({
           cwd: work,
           sessionStore: store,

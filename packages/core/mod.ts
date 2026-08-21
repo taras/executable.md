@@ -233,11 +233,19 @@ export type {
 export { AgentPromptError } from "./src/agent/errors.ts";
 // Native session launch — the phase journal one <Session.Launch> lends its
 // provider, and the records that journal retains.
-export { AgentLaunchError, AgentLaunchJournal } from "./src/agent/launch.ts";
+export {
+  AgentLaunchError,
+  AgentLaunchJournal,
+  LaunchResolution,
+  resolvingLaunch,
+  sameExecutableBuild,
+} from "./src/agent/launch.ts";
 export type {
   AgentLaunchJournalApi,
   DetachedLaunchRecord,
+  ExecutableBuildBindingV1,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,

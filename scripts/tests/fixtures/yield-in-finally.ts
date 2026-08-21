@@ -58,3 +58,23 @@ export {
   removesAfterTheBody,
   reportsTheGuardedCleanupOfANestedTry,
 };
+
+/**
+ * The shape that reached `main` in PR #518's probe fixture: one suspending
+ * cleanup inside a `finally`, wrapped in a `try`/`catch` that swallows
+ * whatever it throws. Swallowing the failure does not make the suspension
+ * safe — a halt still abandons the cleanup partway.
+ */
+function* swallowsTheFailureOfASuspendingCleanup(handle: string): Operation<void> {
+  try {
+    yield* body();
+  } finally {
+    try {
+      yield* close(handle);
+    } catch {
+      // deliberately ignored
+    }
+  }
+}
+
+export { swallowsTheFailureOfASuspendingCleanup };

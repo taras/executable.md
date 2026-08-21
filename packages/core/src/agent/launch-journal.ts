@@ -20,7 +20,9 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import type {
   DetachedLaunchRecord,
+  ExecutableBuildBindingV1,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,
@@ -65,6 +67,8 @@ const FAILURE_CLASSES: readonly LaunchFailureClass[] = [
   "detach-failed",
   "process-creation-failed",
   "native-exit",
+  "executable-binding-refused",
+  "session-busy",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +119,50 @@ function reconciliation(value: unknown): InstructionReconciliation | undefined {
   return RECONCILIATIONS.find((candidate) => candidate === value);
 }
 
+function provenance(value: unknown): IdentityProvenance | undefined {
+  return value === "provider-returned" || value === "client-allocated" ? value : undefined;
+}
+
+function serializeBinding(binding: ExecutableBuildBindingV1): Json {
+  return {
+    schema: binding.schema,
+    reportedVersion: binding.reportedVersion,
+    executableDigest: {
+      algorithm: binding.executableDigest.algorithm,
+      value: binding.executableDigest.value,
+    },
+  };
+}
+
+/**
+ * A binding is read strictly and never repaired.
+ *
+ * An unknown schema is a record this build cannot compare, and a binding it
+ * cannot compare is one it must not act on — so it refuses instead of ignoring
+ * the field and continuing against an unverified build.
+ */
+function parseBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
+  if (!isRecord(value) || value.schema !== "executable-build.v1") {
+    return undefined;
+  }
+  const { reportedVersion, executableDigest } = value;
+  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+    return undefined;
+  }
+  if (!isRecord(executableDigest) || executableDigest.algorithm !== "sha256") {
+    return undefined;
+  }
+  const digest = executableDigest.value;
+  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+    return undefined;
+  }
+  return {
+    schema: "executable-build.v1",
+    reportedVersion,
+    executableDigest: { algorithm: "sha256", value: digest },
+  };
+}
+
 function permissionMode(value: unknown): PermissionMode | undefined {
   if (value === "approve-all" || value === "approve-reads" || value === "deny-all") {
     return value;
@@ -122,7 +170,15 @@ function permissionMode(value: unknown): PermissionMode | undefined {
   return undefined;
 }
 
-function serializePrepared(record: PreparedLaunchRecord): Json {
+/**
+ * Round-trip the retained shape of a prepared record.
+ *
+ * Exported so the durable shape can be exercised directly. What a replay is
+ * allowed to accept is a contract in its own right — a record this build reads
+ * back differently from how it wrote it is a session it would resume as
+ * something else.
+ */
+export function serializePrepared(record: PreparedLaunchRecord): Json {
   const payload: Record<string, Json> = {
     phase: record.phase,
     agent: record.agent,
@@ -138,7 +194,11 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
     additionalDirectories: [...record.additionalDirectories],
     permissionMode: record.permissionMode,
     launcher: record.launcher,
+    identityProvenance: record.identityProvenance,
   };
+  if (record.executableBinding !== undefined) {
+    payload.executableBinding = serializeBinding(record.executableBinding);
+  }
   if (record.requestedModel !== undefined) {
     payload.requestedModel = record.requestedModel;
   }
@@ -151,7 +211,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   return payload;
 }
 
-function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
+export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   if (!isRecord(value) || value.phase !== "prepared") {
     return undefined;
   }
@@ -192,7 +252,23 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   const directories = stringList(additionalDirectories);
   const mode = permissionMode(value.permissionMode);
   const reconciled = reconciliation(value.instructionReconciliation);
-  if (!directories || !mode || !reconciled) {
+  const provenanceValue = provenance(value.identityProvenance);
+  if (!directories || !mode || !reconciled || !provenanceValue) {
+    return undefined;
+  }
+  // A client-allocated identity outlives the process that chose it, so the
+  // build it was established against has to come back with it. Without the
+  // binding there is nothing to compare a later resume against, and the
+  // failure that leaves is the silent one: a healthy-looking session that has
+  // lost its history. A provider that returns its own identity binds nothing,
+  // so a binding there describes a state nothing produces.
+  let binding: ExecutableBuildBindingV1 | undefined;
+  if (provenanceValue === "client-allocated") {
+    binding = parseBinding(value.executableBinding);
+    if (!binding) {
+      return undefined;
+    }
+  } else if (value.executableBinding !== undefined) {
     return undefined;
   }
   const record: PreparedLaunchRecord = {
@@ -210,7 +286,11 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
     additionalDirectories: directories,
     permissionMode: mode,
     launcher,
+    identityProvenance: provenanceValue,
   };
+  if (binding !== undefined) {
+    record.executableBinding = binding;
+  }
   if (typeof requestedModel === "string") {
     record.requestedModel = requestedModel;
   }

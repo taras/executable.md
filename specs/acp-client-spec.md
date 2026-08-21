@@ -30,7 +30,10 @@ interface AgentApi {
   the terminal for it, returning only after that UI exits
   (specs/native-agent-session-launch-spec.md). It performs no model turn, and a
   provider that answers `prompt()` does not thereby answer it: native session
-  launch is its own capability, installed on its own.
+  launch is its own capability, installed on its own. Native identity
+  provenance and executable-build binding belong to the provider contract in
+  that specification; they add no executable, identity, or binding props to
+  `Agent`, `Session`, `Prompt`, or `Session.Launch`.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
   `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
   **coldly** — the
@@ -128,13 +131,21 @@ boundary runs after the component has returned.
 - **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
   prompts. Self-closing validates only (no output).
 - **`<Session name>`** resolves a session and pins it onto nested prompts and
-  launches. Self-closing validates only.
+  launches. Self-closing validates only. Resolution is eager — the session is
+  established before the body expands — so `<Session>` is ACP choosing how that
+  conversation was constructed. A `<Session.Launch>` inside it is therefore
+  asking to install an instruction layer on a session that already exists, which
+  is refused; a launch that wants to be the thing that establishes the session
+  names it on the launch instead.
 - **`<Session.Launch>`** prepares one durable session from its rendered body and
   hands the provider's native UI the terminal for it, rendering nothing itself
   and returning only after that UI exits
   (specs/native-agent-session-launch-spec.md). Its props are exactly `agent` and
   `session`, which mirror `<Prompt>`; no executable name, native session id,
   argv or instruction-channel selection appears on the document surface. The
+  `session` prop is the native-first authored form: it names the session the
+  launch establishes, rather than joining one an enclosing `<Session>` already
+  made. The
   dotted name addresses a subdirectory, so a repository override for it is
   `components/Session/Launch.md`.
 - **`<Prompt>`** sends one prompt and renders the reply.
@@ -177,7 +188,10 @@ A native session launch is not a prompt and does not reuse `agent_prompt`. It
 retains its own `agent_session_launch` records, one per completed phase, so an
 interrupted launch resumes the provider session it already prepared rather than
 creating a replacement; the shape is specified in
-specs/native-agent-session-launch-spec.md.
+specs/native-agent-session-launch-spec.md. A client-allocated record includes
+filtered identity provenance and executable version-plus-digest binding.
+Completed replay restores the retained result without resolving, reading,
+versioning, or hashing an executable and without starting an ACP runtime.
 
 ## Config
 
@@ -313,6 +327,27 @@ none.
   one at the exact cwd. The resolved `sessionKey` — not the caller cwd — keys the
   session queue. A `Session` value must come from this provider's `session()`; an
   unknown or agent-mismatched session is rejected.
+- **Construction route.** Every logical session has one durable, create-once
+  route keyed by provider, resolved agent and resolved session key. An unbound
+  `ensureSession()` claims `acp-first` before ACPX is contacted, so a native
+  launch can never race that ensure and choose the other path. A native-first
+  session's route is `client-native` and carries the admitted native identity,
+  provenance, instruction digest, launcher, and filtered executable build. A
+  bound ensure supplies the retained native UUID as `resumeSessionId` and
+  refuses when the provider answers with anything else; it never creates an
+  unrelated ACP session and adopts the result as though it were the same
+  history. Routes never convert, and malformed, unknown or ambiguous route state
+  refuses without replacement. `withSessionRoute` is unrelated: it owns registry
+  and environment routing for an embedder, and is neither the ownership
+  primitive nor evidence about what a session holds.
+
+  The default route store is file-backed beneath the coordinator namespace,
+  which is what lets separate processes publish against one another. An
+  embedder whose sessions do not outlive it — `<TestAgent>` — supplies an
+  in-memory route store instead, held to the same create-once publication,
+  natural-key validation and conflict refusal. Supplying one is not optional
+  for such an embedder: falling back to the default would publish claims into
+  the namespace real invocations coordinate through.
 - **Prompts.** `prompt()` returns a cold stream; each subscription is one turn
   owned by the subscriber. Events are normalized to one `started`, `text_delta`
   for output-stream deltas only (thought/status/tool/usage stay private), and one
@@ -323,7 +358,27 @@ none.
   different sessions run concurrently. `withSessionRoute` — the hook an embedder
   supplies through `AcpxProviderDependencies` — wraps registry-dependent work
   (preparation, ensure/start) and is not held across turn consumption. The
-  queues that serialize this are internal to the package.
+  queues that serialize this are internal to the package, and they order work
+  inside one provider rather than deciding ownership.
+- **Live ownership.** Ownership of a `client-native` session is decided by the
+  host-supplied session lease, shared by every provider scope in the same
+  coordination namespace. A bound ensure, a client-native turn and a native
+  launch each reconcile the durable route while holding it, and hold it until
+  that work can no longer act. Acquisition never waits: a contender refuses as
+  busy, and a host that installs no lease refuses a client-native route before
+  any ACPX work rather than acting without knowing who owns the session.
+  Supplying session and route stores whose namespaces cannot identify one
+  coordinator is a configuration refusal, not a reason to fall back to
+  provider-local queues.
+- **Bound runtimes.** A client-allocated session routes every ACP operation
+  through a runtime partition keyed by agent command and retained executable
+  binding. Creating or recreating that runtime first resolves and revalidates a
+  matching live executable, then supplies its canonical path only as
+  `CLAUDE_CODE_EXECUTABLE` in that adapter child's environment. The path is not
+  stored in ACPX session options or any session record. Different bindings do
+  not share a child, stale-handle reattachment never falls back to the default
+  runtime, and production routing neither reads nor mutates process-global
+  environment.
 - **Permissions.** ACPX permission requests are routed — keyed by the record's
   live ACP session id, refreshed on demand — to the in-flight prompt's scope and
   answered through `Agent.requestPermission`; an ambiguous or unknown request

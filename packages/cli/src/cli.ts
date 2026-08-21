@@ -222,6 +222,10 @@ const testConfig = object({
     description: "glob for test documents, relative to a directory target (repeatable)",
     ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
   },
+  target: {
+    description: "run one section of the document instead of all of it",
+    ...field(z.string().optional()),
+  },
   componentDir: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
@@ -833,6 +837,8 @@ interface TestConfig extends Omit<DocumentConfig, "root"> {
    */
   path?: string;
   pattern: string[];
+  /** One section of the document, when the caller named one. */
+  target?: string;
 }
 
 /**
@@ -863,6 +869,12 @@ function* test(
   }
 
   const path = config.path ?? ".";
+  // A test path is a path. `xmd run` reads its argument as a document
+  // reference, where `#` opens a target; `xmd test` deliberately does not, so a
+  // file whose name contains one still means itself. A section is selected
+  // with `--target` instead, which cannot collide with a filename.
+  const selected = config.target;
+  const referenced = selected === undefined ? { path } : { path, target: selected };
   const target = yield* resolveTestTarget(path, config.pattern);
 
   if (target.kind === "file") {
@@ -876,7 +888,7 @@ function* test(
     }
     announceSecretDetection(config.secretDetection);
     const result = yield* runScopedDocument(
-      { ...config, root: { path } },
+      { ...config, root: referenced },
       { testing: true },
       installService,
     );
@@ -884,6 +896,15 @@ function* test(
       reportFailure(result.error);
       yield* exit(1);
     }
+    return;
+  }
+
+  if (selected !== undefined) {
+    console.error(
+      `--target selects a section of one document, and ${path} is a directory — ` +
+        `name the document the section belongs to`,
+    );
+    yield* exit(1);
     return;
   }
 

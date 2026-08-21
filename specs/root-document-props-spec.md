@@ -378,7 +378,11 @@ section is reported instead of a property complaint about a section that does
 not exist.
 
 `xmd test` does not adopt this grammar. A test path containing a literal `#` or
-`%` continues to name that file, and `xmd test` gains no target selection.
+`%` continues to name that file. Target selection reaches `xmd test` through a
+separate channel instead: a single file may select one section with
+`--target <selector>`, which enters the same selector grammar and produces the
+same projection. The two channels never interpret each other — the positional
+value is always a path, and the option value is always a selector.
 
 ## Essential Acceptance Tests
 

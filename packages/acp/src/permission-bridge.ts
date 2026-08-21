@@ -29,7 +29,7 @@ import { on, race } from "effection";
 import type { Operation, Scope } from "effection";
 import { Agent } from "@executablemd/core";
 import type { PermissionOption, PermissionRequest, Session } from "@executablemd/core";
-import type { AcpPermissionDecision, AcpPermissionRequest } from "acpx/runtime";
+import type { AcpPermissionDecision, AcpPermissionRequest } from "./acpx-runtime.ts";
 
 const CANCEL: AcpPermissionDecision = { outcome: "cancel" };
 

@@ -81,6 +81,38 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+## Selecting one section of a document
+
+A test document addresses its own sections. `--target <selector>` runs one of
+them:
+
+```sh
+xmd test packages/test-agent/src/NativeSessionLaunch.test.md --target Implementor
+```
+
+The positional value stays a path. `#` and `%` in it are filename characters,
+exactly as they were before the option existed, and an invocation that omits
+`--target` is unchanged. Only the option's value enters the document-target
+selector grammar, and it must resolve to exactly one addressable static target;
+an invalid, unmatched, or ambiguous selector refuses before any authored work
+runs.
+
+What executes is the projection every document target already produces: the
+document preamble, the direct content of each ancestor needed to reach the
+target, and that target's complete subtree. Sibling subtrees are absent rather
+than skipped — they register no tests, start no services, and invoke no
+components. Selection changes nothing else: testing mode, component search
+paths, journal behavior, secret detection and result containment are as they
+are for a whole document.
+
+`--target` selects a section of one document, so it is valid only when the
+positional value resolves to a single document. A directory refuses the
+invocation, and refuses it before any discovered document executes — no
+heading, no test result and no authored effect from anything beneath that
+directory. Applying a selector across many documents would need its own
+identity, ambiguity, reporting and per-document failure contract, and none of
+that is implied here.
+
 ## Directory Targets
 
 `xmd test` accepts a directory as well as a document, and defaults to the

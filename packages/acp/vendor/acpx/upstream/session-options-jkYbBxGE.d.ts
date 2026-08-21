@@ -1,0 +1,274 @@
+import { AgentCapabilities, AnyMessage, ContentBlock, McpServer, McpServer as McpServer$1, RequestPermissionRequest, SessionConfigOption, SessionNotification, SetSessionConfigOptionResponse, ToolKind } from "@agentclientprotocol/sdk";
+
+//#region src/prompt-content.d.ts
+type PromptInput = ContentBlock[];
+//#endregion
+//#region src/types.d.ts
+type AcpPermissionRequest = {
+  sessionId: string;
+  raw: RequestPermissionRequest;
+  inferredKind: ToolKind | undefined;
+};
+type AcpPermissionDecision = {
+  outcome: "allow_once";
+} | {
+  outcome: "allow_always";
+} | {
+  outcome: "reject_once";
+} | {
+  outcome: "reject_always";
+} | {
+  outcome: "cancel";
+};
+declare const PERMISSION_MODES: readonly ["approve-all", "approve-reads", "deny-all"];
+type PermissionMode = (typeof PERMISSION_MODES)[number];
+declare const AUTH_POLICIES: readonly ["skip", "fail"];
+type AuthPolicy = (typeof AUTH_POLICIES)[number];
+declare const NON_INTERACTIVE_PERMISSION_POLICIES: readonly ["deny", "fail"];
+type NonInteractivePermissionPolicy = (typeof NON_INTERACTIVE_PERMISSION_POLICIES)[number];
+declare const PERMISSION_POLICY_ACTIONS: readonly ["approve", "deny", "escalate"];
+type PermissionPolicyAction = (typeof PERMISSION_POLICY_ACTIONS)[number];
+type PermissionPolicy = {
+  autoApprove?: string[];
+  autoDeny?: string[];
+  escalate?: string[];
+  defaultAction?: PermissionPolicyAction;
+};
+type PermissionEscalationEvent = {
+  type: "permission_escalation";
+  sessionId: string;
+  toolCallId: string;
+  toolName?: string;
+  toolTitle: string;
+  toolInput?: unknown;
+  toolKind?: ToolKind;
+  action: "escalate";
+  matchedRule?: string;
+  message: string;
+  timestamp: string;
+};
+type AcpJsonRpcMessage = AnyMessage;
+type AcpMessageDirection = "outbound" | "inbound";
+type PermissionStats = {
+  requested: number;
+  approved: number;
+  denied: number;
+  cancelled: number;
+};
+type ClientOperationMethod = "fs/read_text_file" | "fs/write_text_file" | "terminal/create" | "terminal/output" | "terminal/wait_for_exit" | "terminal/kill" | "terminal/release";
+type ClientOperationStatus = "running" | "completed" | "failed";
+type ClientOperation = {
+  method: ClientOperationMethod;
+  status: ClientOperationStatus;
+  summary: string;
+  details?: string;
+  timestamp: string;
+};
+type SessionEventLog = {
+  active_path: string;
+  segment_count: number;
+  max_segment_bytes: number;
+  max_segments: number;
+  last_write_at?: string;
+  last_write_error?: string | null;
+};
+type AcpClientOptions = {
+  agentCommand: string;
+  cwd: string;
+  mcpServers?: McpServer[];
+  permissionMode: PermissionMode;
+  nonInteractivePermissions?: NonInteractivePermissionPolicy;
+  permissionPolicy?: PermissionPolicy;
+  authCredentials?: Record<string, string>;
+  authPolicy?: AuthPolicy;
+  terminal?: boolean;
+  suppressSdkConsoleErrors?: boolean;
+  verbose?: boolean;
+  sessionOptions?: {
+    model?: string;
+    allowedTools?: string[];
+    maxTurns?: number;
+    systemPrompt?: string | {
+      append: string;
+    };
+    env?: Record<string, string>;
+  };
+  onAcpMessage?: (direction: AcpMessageDirection, message: AcpJsonRpcMessage) => void;
+  onAcpOutputMessage?: (direction: AcpMessageDirection, message: AcpJsonRpcMessage) => void;
+  onSessionUpdate?: (notification: SessionNotification) => void;
+  onClientOperation?: (operation: ClientOperation) => void;
+  onPermissionEscalation?: (event: PermissionEscalationEvent) => void;
+  onPermissionRequest?: (req: AcpPermissionRequest, ctx: {
+    signal: AbortSignal;
+  }) => Promise<AcpPermissionDecision | undefined>;
+};
+declare const SESSION_RECORD_SCHEMA: "acpx.session.v1";
+type SessionMessageImage = {
+  source: string;
+  size?: {
+    width: number;
+    height: number;
+  } | null;
+};
+type SessionMessageAudio = {
+  source: string;
+  mime_type: string;
+};
+type SessionUserContent = {
+  Text: string;
+} | {
+  Mention: {
+    uri: string;
+    content: string;
+  };
+} | {
+  Image: SessionMessageImage;
+} | {
+  Audio: SessionMessageAudio;
+};
+type SessionToolUse = {
+  id: string;
+  name: string;
+  raw_input: string;
+  input: unknown;
+  is_input_complete: boolean;
+  thought_signature?: string | null;
+};
+type SessionToolResultContent = {
+  Text: string;
+} | {
+  Image: SessionMessageImage;
+};
+type SessionToolResult = {
+  tool_use_id: string;
+  tool_name: string;
+  is_error: boolean;
+  content: SessionToolResultContent;
+  output?: unknown;
+};
+type SessionAgentContent = {
+  Text: string;
+} | {
+  Thinking: {
+    text: string;
+    signature?: string | null;
+  };
+} | {
+  RedactedThinking: string;
+} | {
+  ToolUse: SessionToolUse;
+};
+type SessionUserMessage = {
+  id: string;
+  content: SessionUserContent[];
+};
+type SessionAgentMessage = {
+  content: SessionAgentContent[];
+  tool_results: Record<string, SessionToolResult>;
+  reasoning_details?: unknown;
+};
+type SessionMessage = {
+  User: SessionUserMessage;
+} | {
+  Agent: SessionAgentMessage;
+} | "Resume";
+type SessionTokenUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  thought_tokens?: number;
+  total_tokens?: number;
+};
+type SessionUsageCost = {
+  amount?: number;
+  currency?: string;
+};
+type SessionAvailableCommand = {
+  name: string;
+  description?: string;
+  has_input?: boolean;
+};
+type SessionAcpxState = {
+  reset_on_next_ensure?: boolean;
+  current_mode_id?: string;
+  desired_mode_id?: string;
+  desired_config_options?: Record<string, string>;
+  current_model_id?: string;
+  available_models?: string[];
+  model_control?: "config_option" | "legacy_set_model";
+  available_commands?: SessionAvailableCommand[];
+  config_options?: SessionConfigOption[];
+  session_options?: {
+    model?: string;
+    allowed_tools?: string[];
+    max_turns?: number;
+    system_prompt?: string | {
+      append: string;
+    };
+    env?: Record<string, string>;
+  };
+};
+type SessionImportedFrom = {
+  recordId: string;
+  cwdOriginal: string;
+  exportedBy: string;
+  exportedAt: string;
+};
+type SessionRecord = {
+  schema: typeof SESSION_RECORD_SCHEMA;
+  acpxRecordId: string;
+  acpSessionId: string;
+  agentSessionId?: string;
+  agentCommand: string;
+  cwd: string;
+  name?: string;
+  createdAt: string;
+  lastUsedAt: string;
+  lastSeq: number;
+  lastRequestId?: string;
+  eventLog: SessionEventLog;
+  closed?: boolean;
+  closedAt?: string;
+  pid?: number;
+  agentStartedAt?: string;
+  lastPromptAt?: string;
+  lastAgentExitCode?: number | null;
+  lastAgentExitSignal?: NodeJS.Signals | null;
+  lastAgentExitAt?: string;
+  lastAgentDisconnectReason?: string;
+  protocolVersion?: number;
+  agentCapabilities?: AgentCapabilities;
+  title?: string | null;
+  messages: SessionMessage[];
+  updated_at: string;
+  cumulative_token_usage: SessionTokenUsage;
+  cumulative_cost?: SessionUsageCost;
+  request_token_usage: Record<string, SessionTokenUsage>;
+  acpx?: SessionAcpxState;
+  importedFrom?: SessionImportedFrom;
+};
+//#endregion
+//#region src/runtime/engine/session-options.d.ts
+type SystemPromptOption = string | {
+  append: string;
+};
+type SessionAgentOptions = {
+  model?: string;
+  allowedTools?: string[];
+  maxTurns?: number;
+  systemPrompt?: SystemPromptOption;
+  /**
+   * Per-agent environment variables injected into the spawned agent child
+   * process and persisted with the session record for reconnects. Keys here
+   * override the parent process environment for the spawned child, except
+   * acpx-managed auth credential keys. Do not put secrets here; use
+   * authCredentials for credentials. Callers are responsible for sanitizing
+   * dangerous keys such as `PATH`, `LD_PRELOAD`, and `NODE_OPTIONS` before
+   * passing them to acpx.
+   */
+  env?: Record<string, string>;
+};
+//#endregion
+export { AcpPermissionRequest as a, NonInteractivePermissionPolicy as c, PermissionStats as d, SessionRecord as f, AcpPermissionDecision as i, PermissionMode as l, SystemPromptOption as n, AuthPolicy as o, PromptInput as p, AcpClientOptions as r, McpServer$1 as s, SessionAgentOptions as t, PermissionPolicy as u };
+//# sourceMappingURL=session-options-jkYbBxGE.d.ts.map

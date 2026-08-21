@@ -13,6 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { useSessionCoordination } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import { useDenoService } from "./deno-service.ts";
 
@@ -38,5 +39,10 @@ await main(function* (args) {
   // no host default: a run with no provider must fail rather than reach the
   // host by accident.
   yield* useHostFiles();
+  // Exclusive live ownership of a logical agent session, which only a host with
+  // a kernel-released advisory lock can offer. Installing it here is what lets
+  // a client-native launch run at all: a host that installs nothing refuses
+  // rather than risking two owners of one conversation.
+  yield* useSessionCoordination();
   yield* runXmd(args, useDenoService, useDenoWorkflowHost);
 });

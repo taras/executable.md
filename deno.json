@@ -5,7 +5,9 @@
     ".xmd-eval",
     "**/npm",
     "packages/workflow/vendor/cloudflare-computer-dofs/upstream",
-    "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts"
+    "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts",
+    "packages/acp/vendor/acpx/upstream",
+    "packages/acp/vendor/acpx/generated/**/*.d.ts"
   ],
   "nodeModulesDir": "auto",
   "lock": {

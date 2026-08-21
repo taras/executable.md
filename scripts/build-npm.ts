@@ -312,6 +312,14 @@ function* buildPackage(pkgArg: string, version: string, ctx: BuildContext): Oper
     yield* copyFile(license, new URL("LICENSE", outDir));
   }
 
+  // A package that inlines third-party source carries its notices into the
+  // artifact. dnt bundles a relative import into the output, which is exactly
+  // the case where the upstream license would otherwise be left behind.
+  const notices = new URL("THIRD_PARTY_NOTICES.md", pkgDir);
+  if (yield* exists(notices)) {
+    yield* copyFile(notices, new URL("THIRD_PARTY_NOTICES.md", outDir));
+  }
+
   ctx.built.add(denoJson.name);
   const provenance =
     ctx.localSiblings && workspaceDeps.length > 0 ? " (local siblings — not publishable)" : "";

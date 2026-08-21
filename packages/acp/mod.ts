@@ -17,7 +17,7 @@
 export { createAcpxProvider } from "./src/provider.ts";
 export type { AcpxProviderDependencies, SessionRouteContext } from "./src/provider.ts";
 /** The agent ACPX selects when nothing else is configured. */
-export { DEFAULT_AGENT_NAME } from "acpx/runtime";
+export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
 
 /**
  * Native session launch: the adapters whose resume command shape this package
@@ -30,5 +30,30 @@ export {
 } from "./src/native-launch.ts";
 export type { NativeAdapter } from "./src/native-launch.ts";
 
+export {
+  SessionBusy,
+  sessionLeaseKey,
+  SessionOwnershipUnavailable,
+} from "./src/session-ownership.ts";
+
+/**
+ * The durable construction route, and the two stores that retain one.
+ *
+ * The file-backed store coordinates between processes; the in-memory one is
+ * for an embedder whose sessions do not outlive it, and must not publish
+ * claims into the namespace real invocations share.
+ */
+export {
+  createMemorySessionRouteStore,
+  createSessionRouteStore,
+  NativeSessionConflict,
+} from "./src/native-session-store.ts";
+export type {
+  AcpFirstRoute,
+  ClientNativeRoute,
+  NativeSessionKey,
+  SessionRoute,
+  SessionRouteStore,
+} from "./src/native-session-store.ts";
 export { useAcpxProvider } from "./src/provider.ts";
 export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";

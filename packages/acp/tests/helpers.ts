@@ -24,7 +24,7 @@ import type {
   AcpRuntimeTurnResult,
   AcpSessionRecord,
   AcpSessionStore,
-} from "acpx/runtime";
+} from "../src/acpx-runtime.ts";
 import type { ProbeCapableRuntime } from "../src/provider.ts";
 
 export function makeRecord(agentCommand: string, cwd: string): AcpSessionRecord {
@@ -94,6 +94,14 @@ export interface FakeRuntimeHarness {
   ensureCalls: AcpRuntimeEnsureInput[];
   turns: FakeTurn[];
   closeCalls: AcpRuntimeHandle[];
+  /**
+   * The whole close request, not only its handle.
+   *
+   * Two closes mean different things: releasing a session to a native UI keeps
+   * the record the UI is about to resume, while discarding an unused shell
+   * removes it. A test that can only count closes cannot tell them apart.
+   */
+  closeRequests: { handle: AcpRuntimeHandle; discardPersistentState?: boolean }[];
   closeFailure?: Error;
   /**
    * Create sessions the way an adapter that asserts no provider-native
@@ -101,6 +109,16 @@ export interface FakeRuntimeHarness {
    * shape a client could mistake one of for a native id.
    */
   omitAgentSessionId?: boolean;
+  /**
+   * Answer an ensure with an identity of the runtime's own choosing, whatever
+   * was asked to be resumed.
+   *
+   * The state after interrupted preparation: XMD retained a native identity,
+   * and the provider has no session under it to load.
+   */
+  unresumable?: boolean;
+  /** Fail every `ensureSession`, the way an unreachable agent does. */
+  ensureFailure?: Error;
   script(turn: ScriptedTurn): void;
 }
 
@@ -119,6 +137,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     ensureCalls: [],
     turns: [],
     closeCalls: [],
+    closeRequests: [],
     script(turn) {
       scripted.push(turn);
     },
@@ -135,6 +154,9 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         ensureSession(input) {
           harness.ensureCalls.push(input);
+          if (harness.ensureFailure) {
+            return Promise.reject(harness.ensureFailure);
+          }
           // ACPX persists a record as it establishes a session, including the
           // instruction layer the caller asked for; a fake that skipped that
           // would hide every decision a later launch makes by reading it back.
@@ -156,7 +178,14 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             backendSessionId: `backend:${input.sessionKey}`,
           };
           if (!harness.omitAgentSessionId) {
-            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+            // A resumed session answers to the identity it was resumed under.
+            // Reporting the session key back instead would make a provider
+            // that substituted an identity indistinguishable from one that
+            // loaded the retained conversation.
+            handle.agentSessionId =
+              harness.unresumable === true
+                ? `agent-session:${input.sessionKey}`
+                : (input.resumeSessionId ?? `agent-session:${input.sessionKey}`);
           }
           return Promise.resolve(handle);
         },
@@ -243,6 +272,12 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         close(input) {
           harness.closeCalls.push(input.handle);
+          harness.closeRequests.push({
+            handle: input.handle,
+            ...(input.discardPersistentState === undefined
+              ? {}
+              : { discardPersistentState: input.discardPersistentState }),
+          });
           if (harness.closeFailure) {
             return Promise.reject(harness.closeFailure);
           }

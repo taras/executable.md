@@ -19,6 +19,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
+import { LaunchResolution, resolvingLaunch } from "../src/agent/launch.ts";
+import { parsePrepared, serializePrepared } from "../src/agent/launch-journal.ts";
 import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { Session } from "../src/agent/agent-api.ts";
@@ -45,6 +47,8 @@ interface LaunchStub {
   factory: AgentProviderFactory;
   /** Every agent this provider was asked to resolve, in order. */
   agentLookups: (string | undefined)[];
+  /** Resolutions that were *not* marked as a launch's own. */
+  availabilityChecks: number;
   /** Instructions each *live* preparation received, in order. */
   preparations: string[];
   detaches: number;
@@ -65,6 +69,7 @@ function digest(text: string): string {
 function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
   const stub: LaunchStub = {
     agentLookups: [],
+    availabilityChecks: 0,
     preparations: [],
     detaches: 0,
     exits: 0,
@@ -78,6 +83,13 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
           // deno-lint-ignore require-yield
           *agent([name]) {
             stub.agentLookups.push(name);
+            // What a provider that has to look at the world does here, and the
+            // whole reason the signal exists: a bound agent's availability
+            // costs an observation, so the provider defers it into `prepared`
+            // rather than paying it on every replay.
+            if (!(yield* LaunchResolution.get())) {
+              stub.availabilityChecks += 1;
+            }
             return name ?? "stub-agent";
           },
           // deno-lint-ignore require-yield
@@ -86,7 +98,9 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
             return session;
           },
           *launch([instructions, options]) {
-            const agent = yield* Agent.operations.agent(options?.agent);
+            // Marked, as a provider's own launch resolution is: this runs
+            // before the journal decides whether anything is performed.
+            const agent = yield* resolvingLaunch(() => Agent.operations.agent(options?.agent));
             const sessionKey =
               typeof options?.session === "object"
                 ? options.session.sessionKey
@@ -121,6 +135,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   additionalDirectories: [],
                   permissionMode: "deny-all",
                   launcher: "stub",
+                  identityProvenance: "provider-returned",
                 };
               },
             );
@@ -186,6 +201,8 @@ interface RunOptions {
   /** Blocks the native child until resolved; `arrived` fires when it starts. */
   hold?: WithResolvers<void>;
   arrived?: WithResolvers<void>;
+  /** Refuse the terminal reservation, the way an already-held one does. */
+  contendedTerminal?: boolean;
   secretDetection?: boolean;
 }
 
@@ -227,6 +244,12 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
         onReserve: () => {
           launcher.reserved++;
           launcher.order.push("reserve");
+          if (options.contendedTerminal) {
+            throw new Error(
+              "another <Session.Launch> already holds this run's terminal — one " +
+                "native UI owns the terminal at a time",
+            );
+          }
         },
         onFlush: () => {
           launcher.flushed++;
@@ -523,6 +546,25 @@ describe("Tier SL — native session launch", () => {
     expect(run.stub.detaches).toBe(0);
   });
 
+  it("SL22: a launch that cannot take the terminal never reaches the provider", function* () {
+    // What a second launch meets while the first one's native UI still owns
+    // the run's terminal. The reservation comes before the agent is resolved,
+    // so contention there costs nothing: no availability question, no session,
+    // no preparation, and nothing retained to resume from.
+    const run = yield* runDoc(LAUNCH, { contendedTerminal: true });
+
+    expect(run.result.ok).toBe(false);
+    expect(run.result.ok ? "" : run.result.error.message).toContain(
+      "already holds this run's terminal",
+    );
+    expect(run.launcher.reserved).toBe(1);
+    expect(run.launcher.flushed).toBe(0);
+    expect(run.stub.agentLookups.length).toBe(0);
+    expect(run.stub.preparations.length).toBe(0);
+    expect(run.stub.detaches).toBe(0);
+    expect(run.launcher.requests).toEqual([]);
+  });
+
   it("SL9: the durable record retains identity, channel, digest and authority", function* () {
     const run = yield* runDoc(LAUNCH);
 
@@ -602,6 +644,46 @@ describe("Tier SL — native session launch", () => {
     expect(second.launcher.requests.length).toBe(0);
   });
 
+  it("SL14b: a completed replay resolves no agent availability at the component boundary", function* () {
+    // `<Session.Launch>` resolves its agent *before* installing the journal,
+    // which is right for reporting a missing agent as an expansion failure and
+    // wrong for a provider whose availability answer costs a look at the
+    // world. A completed launch performs no phase, so a look taken here would
+    // be taken on every replay of a launch that does nothing.
+    const stream = new InMemoryStream();
+    const stub = createLaunchStub();
+    const first = yield* runDoc(LAUNCH, { stream, stub });
+    expect(first.result.ok).toBe(true);
+    // Even live, the launch's own resolution is marked, so the provider knows
+    // to defer. Nothing else in the document asks for an agent.
+    expect(stub.agentLookups.length).toBeGreaterThan(0);
+    expect(stub.availabilityChecks).toBe(0);
+
+    const second = yield* runDoc(LAUNCH, { stream, stub });
+
+    expect(second.result.ok).toBe(true);
+    // The agent is still resolved — the launch needs its name — but nothing
+    // that costs an observation happens, on either run.
+    expect(stub.availabilityChecks).toBe(0);
+    expect(second.launcher.requests.length).toBe(0);
+  });
+
+  it("SL14c: the signal is narrowly scoped and does not leak past a resolution", function* () {
+    // The other half of the contract. Only a launch's own resolution defers;
+    // an agent asked for any other reason still gets the provider's full
+    // availability answer, which is what makes an unavailable agent fail that
+    // operation instead of quietly succeeding.
+    expect(yield* LaunchResolution.get()).toBe(false);
+    expect(yield* resolvingLaunch(() => LaunchResolution.get())).toBe(true);
+
+    // And it is gone again afterwards, so a launch cannot leave every later
+    // resolution in the document deferring too.
+    yield* resolvingLaunch(function* () {
+      return yield* LaunchResolution.get();
+    });
+    expect(yield* LaunchResolution.get()).toBe(false);
+  });
+
   it("SL15: partial replay resumes the retained identity without preparing again", function* () {
     const stream = new InMemoryStream();
     const stub = createLaunchStub();
@@ -666,6 +748,165 @@ describe("Tier SL — native session launch", () => {
       .filter((name) => name.endsWith("/prepared"));
     expect(names.length).toBe(2);
     expect(new Set(names).size).toBe(2);
+  });
+
+  it("SL19: a client-allocated record round-trips with the build it was bound to", function* () {
+    const record: PreparedLaunchRecord = {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: "session:main",
+      provider: "acp",
+      nativeSessionId: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      instructionsDigest: digest("body"),
+      instructions: "body",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "claude",
+      identityProvenance: "client-allocated",
+      executableBinding: {
+        schema: "executable-build.v1",
+        reportedVersion: "2.1.235 (Claude Code)",
+        executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+      },
+    };
+
+    // Read back as written: a replay that recovered a different record would
+    // resume a session under terms nobody agreed to.
+    expect(parsePrepared(serializePrepared(record))).toEqual(record);
+  });
+
+  it("SL23: a session-busy refusal round-trips as its own class", function* () {
+    // Contention is not breakage, and the class is what says so: a replay that
+    // read it back as `unsupported-capability` would tell the reader the host
+    // cannot do this at all, when what happened is that someone else was in
+    // the session at that moment.
+    const record: PreparedLaunchRecord = {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: "session:main",
+      provider: "acp",
+      nativeSessionId: "",
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      instructionsDigest: "",
+      instructions: "",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "claude",
+      identityProvenance: "provider-returned",
+      failure: { class: "session-busy", message: "another XMD owner is using it" },
+    };
+
+    expect(parsePrepared(serializePrepared(record))).toEqual(record);
+  });
+
+  it("SL20: an incomplete client allocation is refused rather than repaired", function* () {
+    const complete: PreparedLaunchRecord = {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: "session:main",
+      provider: "acp",
+      nativeSessionId: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      instructionsDigest: digest("body"),
+      instructions: "body",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "claude",
+      identityProvenance: "client-allocated",
+      executableBinding: {
+        schema: "executable-build.v1",
+        reportedVersion: "2.1.235 (Claude Code)",
+        executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+      },
+    };
+    const written = serializePrepared(complete) as Record<string, unknown>;
+
+    // There is no migration reader and no default. A record whose terms this
+    // build cannot fully account for describes a session it must not resume,
+    // and the safe answer to "which build was this?" is never a guess.
+    const cases: Array<[string, unknown]> = [
+      ["no provenance", { ...written, identityProvenance: undefined }],
+      ["allocated with no binding", { ...written, executableBinding: undefined }],
+      [
+        "returned identity carrying a binding",
+        {
+          ...written,
+          identityProvenance: "provider-returned",
+        },
+      ],
+      [
+        "an unknown binding schema",
+        {
+          ...written,
+          executableBinding: { ...complete.executableBinding, schema: "executable-build.v2" },
+        },
+      ],
+      [
+        "a truncated digest",
+        {
+          ...written,
+          executableBinding: {
+            ...complete.executableBinding,
+            executableDigest: { algorithm: "sha256", value: "abc" },
+          },
+        },
+      ],
+      [
+        "an unrecognized digest algorithm",
+        {
+          ...written,
+          executableBinding: {
+            ...complete.executableBinding,
+            executableDigest: { algorithm: "md5", value: "a".repeat(64) },
+          },
+        },
+      ],
+      [
+        "an empty version",
+        {
+          ...written,
+          executableBinding: { ...complete.executableBinding, reportedVersion: "" },
+        },
+      ],
+    ];
+
+    expect(cases.map(([name, value]) => [name, parsePrepared(value)])).toEqual(
+      cases.map(([name]) => [name, undefined]),
+    );
+  });
+
+  it("SL21: a provider-returned record stays valid with no binding at all", function* () {
+    // The TestAgent shape, and every provider that owns its own session
+    // lifetime: nothing to bind, and nothing missing.
+    const record: PreparedLaunchRecord = {
+      phase: "prepared",
+      agent: "test-agent",
+      sessionKey: "session:main",
+      provider: "acp",
+      nativeSessionId: "native-abc",
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      instructionsDigest: digest("body"),
+      instructions: "body",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "test-agent",
+      identityProvenance: "provider-returned",
+    };
+
+    expect(parsePrepared(serializePrepared(record))).toEqual(record);
   });
 
   it("SL18: the terminal lease is released once a launch is done", function* () {

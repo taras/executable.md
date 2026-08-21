@@ -43,6 +43,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "scripts/tests/acpx-vendor.test.ts",
+    reason:
+      "asks what `deno compile` builds the release binary from, by running `deno info` through the current executable; under Node or Bun that executable is not Deno and the question has no answer",
+    issue: "https://github.com/taras/executable.md/issues/519",
+  },
+  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
@@ -365,6 +371,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     reason:
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/366",
+  },
+  {
+    path: "packages/runtime/tests/agent-session-lease.test.ts",
+    reason:
+      "takes real kernel advisory locks through Deno.open()/FsFile.tryLock() and kills a second Deno process to prove the kernel releases one; Node and Bun install no such lease at all, and packages/cli/tests/agent-session-lease.test.ts asserts that absence on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/519",
   },
 ];
 
