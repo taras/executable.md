@@ -60,12 +60,12 @@
  * things a passed-through `HOME` would decide.
  */
 
-import { ensure, type Operation, resource, until } from "effection";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { type Operation, resource } from "effection";
 import { join } from "node:path";
 import process from "node:process";
-import { runProcess } from "./subprocess.ts";
+import { denoCredentialBroker } from "./broker/host.ts";
+import type { CredentialBroker, CredentialRequest } from "./broker/host.ts";
+import { internalModes } from "./broker/main.ts";
 
 /**
  * What an authenticated invocation adds to the command it was going to run.
@@ -220,65 +220,16 @@ function pinned(ssh: string, lease: readonly string[]): readonly string[] {
   return ["-c", `core.sshCommand=${ssh}`, "-c", "credential.helper=", ...lease];
 }
 
-/** One credential-free locator, as a broker is asked about it. */
-export interface CredentialRequest {
-  /** `https` or `http`. The scheme is part of what is being asked about. */
-  readonly protocol: string;
-  /** Host and port, as they appear in the locator. */
-  readonly host: string;
-  /** The repository path, without its leading separator, or none. */
-  readonly path?: string;
-}
-
-/**
- * What one invocation holds instead of a credential.
- *
- * Opaque by construction: there is no member that answers with a username or a
- * password, and nothing outside the broker module can read one out of it. What a
- * caller can do is ask whether the host proved an identity for the exact locator
- * this lease was minted for, and attach the lease to a command. The value stays
- * inside the broker's own closure and reaches Git through the credential
- * protocol, never through XMD.
- */
-export interface CredentialLease {
-  /**
-   * Whether the host actually proved an identity for this lease's locator.
-   *
-   * The distinction the refusal vocabulary needs. A helper being configured is
-   * not authentication: a helper that answered nothing, an unreadable answer and
-   * an answer about somewhere else all leave this `false`, and a transport that
-   * then fails failed for want of authentication.
-   */
-  readonly acquired: boolean;
-  /** What one command attaches to speak for this lease. */
-  attachment(): GitAttachment;
-}
-
-/**
- * Where an HTTP credential comes from, and who owns it.
- *
- * The broker owns the value; a caller owns a lease. It is queried once, for one
- * complete locator, when a live provider invocation opens its session — so an
- * observation and the mutation it decided speak for the same acquisition rather
- * than asking again and possibly being answered differently.
- */
-export interface CredentialBroker {
-  lease(request: CredentialRequest): Operation<CredentialLease>;
-}
-
-/** The lease of a host that proved nothing. */
-const NO_LEASE: CredentialLease = Object.freeze({
-  acquired: false,
-  attachment: () => NOTHING,
-});
+export type { CredentialBroker, CredentialLease, CredentialRequest } from "./broker/host.ts";
 
 /**
  * The credential request this HTTP locator is, or `undefined` for none.
  *
- * The whole locator travels with it — scheme, host and path. A broker asked
- * about less than the whole of it would be answering a different question than
- * the one this invocation is about to perform, which is how one repository's
- * acquisition would come to authorize another on the same host.
+ * The whole locator travels with it — scheme, host with its explicit port, and
+ * path. A broker asked about less than the whole of it would be answering a
+ * different question than the one this invocation is about to perform, which is
+ * how one repository's acquisition would come to authorize another on the same
+ * server.
  */
 export function credentialRequest(locator: string): CredentialRequest | undefined {
   let url: URL;
@@ -296,192 +247,6 @@ export function credentialRequest(locator: string): CredentialRequest | undefine
     host: url.host,
     ...(path === "" ? {} : { path }),
   });
-}
-
-/** One `key=value` record, as Git's credential protocol writes and reads one. */
-function credentialRecord(fields: Readonly<Record<string, string | undefined>>): string {
-  const lines: string[] = [];
-  for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) {
-      lines.push(`${key}=${value}`);
-    }
-  }
-  return `${lines.join("\n")}\n\n`;
-}
-
-/**
- * The fields a helper answered with, as far as they can be read.
- *
- * A value containing a newline cannot exist in this protocol, so a line without
- * a separator ends the reading rather than being skipped: what follows it is not
- * something whose meaning is still known.
- */
-function readCredentialRecord(output: string): Record<string, string> | undefined {
-  const fields: Record<string, string> = {};
-  for (const line of output.split("\n")) {
-    if (line === "") {
-      continue;
-    }
-    const separator = line.indexOf("=");
-    if (separator < 0) {
-      return undefined;
-    }
-    fields[line.slice(0, separator)] = line.slice(separator + 1);
-  }
-  return fields;
-}
-
-/** The two variables a lease speaks through, and nothing else. */
-const LEASE_USERNAME = "XMD_GIT_CREDENTIAL_USERNAME";
-const LEASE_PASSWORD = "XMD_GIT_CREDENTIAL_PASSWORD";
-
-/**
- * The helper a lease installs: Git's credential protocol, answering `get` only.
- *
- * It names the two variables rather than carrying anything, so what appears on
- * an observable command line is a shape and never a value. `store` and `erase`
- * exit without doing anything, which is what makes this acquisition-only in the
- * strict sense — there is no path through it that writes, approves, rejects or
- * forgets a credential, whatever Git decides to send after a success or a
- * rejection.
- */
-const LEASE_HELPER =
-  `!f() { test "$1" = get || exit 0; ` +
-  `test -n "$${LEASE_PASSWORD}" || exit 0; ` +
-  `printf 'username=%s\\npassword=%s\\n' "$${LEASE_USERNAME}" "$${LEASE_PASSWORD}"; }; f`;
-
-/**
- * The invoking user's own Git, asked once what it holds for one exact locator.
- *
- * `git credential fill` is the whole of the standard mechanism: it consults the
- * helpers the user configured, and those are what reach a platform keychain, a
- * cached token or a manager process. It runs with the invoking environment
- * because that is where those helpers are named — with terminal prompting and
- * both askpass hooks off, so an absent credential is an answer that comes back
- * rather than a run that stops on a question nobody is there for.
- *
- * It runs in a directory of its own, not in a checkout, so no repository's
- * retained configuration takes part in the question or in who answers it. And it
- * runs once per lease: the answer is held for the invocation that asked, so the
- * two commands of a reconciliation cannot be answered differently.
- *
- * XMD never calls `git credential approve`, `reject` or `erase`. A run that
- * failed to push has learned nothing about whether the credential it borrowed
- * should still exist, and a helper's own refresh is its business.
- */
-export function denoCredentialBroker(
-  ambient: Readonly<Record<string, string | undefined>> = process.env,
-  observe: GitAuthenticationObserver = {},
-): CredentialBroker {
-  return {
-    lease(request: CredentialRequest): Operation<CredentialLease> {
-      return resource<CredentialLease>(function* (provide) {
-        const directory = yield* until(mkdtemp(join(tmpdir(), "xmd-workflow-credential-")));
-        observe.opened?.(directory);
-        yield* ensure(function* () {
-          yield* until(rm(directory, { recursive: true, force: true }));
-          observe.released?.(directory);
-        });
-
-        const env: Record<string, string> = {};
-        for (const [name, value] of Object.entries(ambient)) {
-          if (value !== undefined) {
-            env[name] = value;
-          }
-        }
-        env["GIT_TERMINAL_PROMPT"] = "0";
-        env["GIT_ASKPASS"] = "";
-        env["SSH_ASKPASS"] = "";
-        env["LC_ALL"] = "C";
-
-        let outcome: { code: number; stdout: string };
-        try {
-          outcome = yield* runProcess({
-            command: "git",
-            // `useHttpPath` is forced rather than hoped for. Without it Git
-            // withholds the path from every helper, so a host's answer is about
-            // the server and one repository's acquisition would silently be the
-            // identity for every repository on it. The question this broker asks
-            // is the whole locator, and this is what makes the helper hear it.
-            args: ["-c", "credential.useHttpPath=true", "credential", "fill"],
-            cwd: directory,
-            env,
-            input: credentialRecord({
-              protocol: request.protocol,
-              host: request.host,
-              path: request.path,
-            }),
-          });
-        } catch {
-          yield* provide(NO_LEASE);
-          return;
-        }
-        if (outcome.code !== 0) {
-          // No credential, a helper that failed and a helper that was
-          // interrupted are one answer here: this host cannot prove an identity
-          // for this locator right now. What Git said about it goes nowhere.
-          yield* provide(NO_LEASE);
-          return;
-        }
-
-        const held = readCredential(outcome.stdout, request);
-        if (held === undefined) {
-          yield* provide(NO_LEASE);
-          return;
-        }
-        // The value lives here and nowhere else. The lease handed out below has
-        // no member that answers with it.
-        yield* provide(
-          Object.freeze({
-            acquired: true,
-            attachment: () =>
-              Object.freeze({
-                environment: Object.freeze({
-                  [LEASE_USERNAME]: held.username,
-                  [LEASE_PASSWORD]: held.password,
-                }),
-                configuration: Object.freeze(["-c", `credential.helper=${LEASE_HELPER}`]),
-              }),
-          }),
-        );
-      });
-    },
-  };
-}
-
-/**
- * The credential in this answer, when the answer is about what was asked.
- *
- * Git echoes the request's own fields back beside the ones a helper supplied,
- * and a helper is free to rewrite them. A rewritten protocol, host or path means
- * the identity that came back belongs to somewhere else — which is exactly the
- * accident that would let a credential for one repository be sent to another.
- */
-function readCredential(
-  output: string,
-  request: CredentialRequest,
-): { username: string; password: string } | undefined {
-  const fields = readCredentialRecord(output);
-  if (fields === undefined) {
-    return undefined;
-  }
-  const username = fields["username"];
-  const password = fields["password"];
-  if (username === undefined || password === undefined || password === "") {
-    return undefined;
-  }
-  if (fields["protocol"] !== request.protocol || fields["host"] !== request.host) {
-    return undefined;
-  }
-  // The path is required, not merely checked when present. An answer that omits
-  // it is an answer about the server, and adopting one would make a single
-  // acquisition the identity for every repository there — which is exactly the
-  // separation the request was phrased to keep. A helper that answered about
-  // another path has not authorized this one either.
-  if (request.path !== undefined && fields["path"] !== request.path) {
-    return undefined;
-  }
-  return Object.freeze({ username, password });
 }
 
 /**
@@ -524,7 +289,8 @@ export interface GitAuthenticationOptions {
 export function denoGitAuthentication(options: GitAuthenticationOptions = {}): GitAuthentication {
   const ambient = options.ambient ?? process.env;
   const observe = options.observe ?? {};
-  const broker = options.broker ?? denoCredentialBroker(ambient, observe);
+  const broker =
+    options.broker ?? denoCredentialBroker({ ambient, observe, internal: internalModes() });
   const ssh = sshCommand(ambient["HOME"], ambient["SSH_AUTH_SOCK"]);
 
   return {

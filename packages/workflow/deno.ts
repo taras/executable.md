@@ -75,3 +75,12 @@ export type {
   SuspensionControllerOptions,
   SuspensionNotice,
 } from "./src/deno/suspension.ts";
+
+/**
+ * The unadvertised internal modes this host runs for its own credential broker.
+ *
+ * Exported so an entrypoint can offer them, not so anyone can call them: neither
+ * mode appears in help or in the public grammar, and neither can acquire a
+ * credential by itself.
+ */
+export { runInternalMode } from "./src/deno/composition/broker/main.ts";

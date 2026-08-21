@@ -1,11 +1,12 @@
 /**
- * Tier WA — the broker, and what a lease is allowed to be.
+ * Tier WA — the broker child, and what a lease is allowed to be.
  *
- * The one component that ever holds a credential value, and the one boundary
- * that must not let one out. Everything a provider gets is a lease: it says
- * whether the host proved an identity for one exact locator, and it can attach
- * itself to a command. There is no member on it that answers with a username or
- * a password, and this suite is where that is checked rather than assumed.
+ * The credential lives in a process of its own now. The provider holds a
+ * capability and an endpoint; the broker child holds whatever the invoking
+ * user's Git could prove for one exact repository; the shim Git runs is the only
+ * program that writes a credential anywhere. So the questions here are about the
+ * boundary rather than about a value: what a lease carries, what the broker
+ * refuses, and what is left when a lease ends.
  *
  * Nothing here reads a developer's real credential. The invoking user is a
  * fixture home with a helper program in it, isolated from the machine's own
@@ -14,9 +15,15 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, type Operation } from "effection";
-import { credentialRequest, denoCredentialBroker } from "../src/deno/composition/authentication.ts";
-import type { CredentialLease } from "../src/deno/composition/authentication.ts";
+import { scoped, until, type Operation } from "effection";
+import { readFile, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { credentialRequest } from "../src/deno/composition/authentication.ts";
+import { denoCredentialBroker } from "../src/deno/composition/broker/host.ts";
+import type { CredentialLease } from "../src/deno/composition/broker/host.ts";
+import { internalModes } from "../src/deno/composition/broker/main.ts";
+import { CAPABILITY_VARIABLE, ENDPOINT_VARIABLE } from "../src/deno/composition/broker/protocol.ts";
 import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
 
 /** The credentials this suite arranges. Never compared, only detected. */
@@ -33,189 +40,252 @@ function carriesCredential(text: string): boolean {
   return false;
 }
 
-/**
- * Which credential a lease speaks for, decided by the fixture rather than read.
- *
- * A lease has no member that answers with a value, so the only way to tell what
- * it holds is to look at the environment it hands a command. That is exactly
- * what this contract permits — the value reaches a subprocess and nothing else —
- * and the answer is reduced to a label so a failure prints one.
- */
-function speaksFor(lease: CredentialLease): string {
-  const attached = JSON.stringify(lease.attachment().environment);
-  if (attached.includes(FIRST.password)) {
-    return "first";
-  }
-  return attached.includes(SECOND.password) ? "second" : "none";
+const HOST = "credential.invalid";
+
+function brokerFor(ambient: Record<string, string>, observe = {}) {
+  return denoCredentialBroker({ ambient, observe, internal: internalModes() });
 }
 
-const HOST = "credential.invalid";
+/**
+ * Ask a lease's shim the way Git asks it, and label what came back.
+ *
+ * The only way to learn what a lease speaks for is to be Git: run the shim it
+ * installed, in the environment it attached, with a credential request on
+ * standard input. That is the contract working rather than a way around it — and
+ * the answer is reduced to a label, so a failure prints one.
+ */
+function ask(
+  lease: CredentialLease,
+  operation: string,
+  request: Readonly<Record<string, string>>,
+): string {
+  const attached = lease.attachment();
+  const named = attached.configuration.find((entry: string) =>
+    entry.startsWith("credential.helper="),
+  );
+  const helper = String(named ?? "").replace("credential.helper=", "");
+  if (helper === "") {
+    return "none";
+  }
+  const lines = Object.entries(request).map(([key, value]) => `${key}=${value}`);
+  const outcome = spawnSync(helper, [operation], {
+    input: `${lines.join("\n")}\n\n`,
+    env: {
+      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+      ...attached.environment,
+    },
+    encoding: "utf8",
+  });
+  const answered = typeof outcome.stdout === "string" ? outcome.stdout : "";
+  if (answered.includes(FIRST.password)) {
+    return "first";
+  }
+  return answered.includes(SECOND.password) ? "second" : "none";
+}
+
+const ONE = { protocol: "https", host: HOST, path: "octo/one.git" } as const;
+const TWO = { protocol: "https", host: HOST, path: "octo/two.git" } as const;
 
 describe("workflow credential broker", () => {
   it("proves an identity for the exact locator its lease was minted for", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
 
     yield* scoped(function* () {
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
       expect(lease.acquired).toBe(true);
-      expect(speaksFor(lease)).toBe("first");
+      expect(ask(lease, "get", ONE)).toBe("first");
     });
   });
 
   it("acquires nothing for another repository on the same host", function* () {
-    // The distinguishing case: one host, two paths, and an invoking user who
-    // can prove an identity for one of them. A broker asked about less than the
-    // whole locator would answer for both.
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
 
     yield* scoped(function* () {
-      const mine = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/one.git" });
-      const other = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/two.git" });
-
-      expect(mine.acquired).toBe(true);
-      expect(speaksFor(mine)).toBe("first");
+      const other = yield* brokerFor(home.ambient).lease(TWO);
       // Not "the same credential for a different path" — no credential at all.
       expect(other.acquired).toBe(false);
-      expect(speaksFor(other)).toBe("none");
-      expect(other.attachment().configuration).toEqual([]);
+      expect(ask(other, "get", TWO)).toBe("none");
     });
   });
 
-  it("tells two repositories on one host apart, each by its own acquisition", function* () {
+  it("tells two repositories on one host apart, each by its own lease", function* () {
     const home = yield* useInvokingHome([
-      { host: HOST, path: "octo/one.git", ...FIRST },
-      { host: HOST, path: "octo/two.git", ...SECOND },
+      { host: HOST, path: ONE.path, ...FIRST },
+      { host: HOST, path: TWO.path, ...SECOND },
     ]);
-    const broker = denoCredentialBroker(home.ambient);
 
     yield* scoped(function* () {
-      const one = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/one.git" });
-      const two = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/two.git" });
-      // Two leases, two identities. Neither was reached by asking about the
-      // host they share.
-      expect(speaksFor(one)).toBe("first");
-      expect(speaksFor(two)).toBe("second");
+      const broker = brokerFor(home.ambient);
+      const one = yield* broker.lease(ONE);
+      const two = yield* broker.lease(TWO);
+      expect(ask(one, "get", ONE)).toBe("first");
+      expect(ask(two, "get", TWO)).toBe("second");
     });
   });
 
-  /**
-   * The invoking user configured no `useHttpPath`, and the helper is asked about
-   * the repository anyway.
-   *
-   * Git withholds the path from every helper unless that setting is on, so a
-   * host whose user never set it would answer about the server — one identity
-   * for every repository on it. The broker forces the setting for its own
-   * acquisition, which is why this fixture deliberately does not.
-   */
   it("forces the path into the question the helper is asked", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
+    // The fixture deliberately configures no `useHttpPath`, and its helper
+    // answers only for an exact host and path — so it could not have answered
+    // at all if the broker had asked about the server.
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
 
     yield* scoped(function* () {
-      // The fixture's helper answers only for an exact `host|path` pair, so it
-      // could not have answered at all if it had been asked about the host.
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
-      expect(lease.acquired).toBe(true);
-      expect(speaksFor(lease)).toBe("first");
+      expect((yield* brokerFor(home.ambient).lease(ONE)).acquired).toBe(true);
     });
   });
 
   it("refuses an answer that omits the repository it was asked about", function* () {
-    // A helper that answers for the host alone. Adopting that would make one
-    // acquisition the identity for every repository on the server.
     const home = yield* useInvokingHome([{ host: HOST, path: "", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
 
     yield* scoped(function* () {
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
-      expect(lease.acquired).toBe(false);
-      expect(speaksFor(lease)).toBe("none");
-    });
-  });
-
-  it("refuses an answer that is about somewhere else", function* () {
-    // A helper is free to rewrite the request's own fields, and an answer about
-    // another host has not authorized this one.
-    const home = yield* useInvokingHome([{ host: "elsewhere.invalid", path: "", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
-
-    yield* scoped(function* () {
-      const lease = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/one.git" });
-      expect(lease.acquired).toBe(false);
-      expect(speaksFor(lease)).toBe("none");
+      expect((yield* brokerFor(home.ambient).lease(ONE)).acquired).toBe(false);
     });
   });
 
   it("acquires nothing when the invoking host holds nothing", function* () {
     const home = yield* useHomeWithoutAuthentication();
-    const broker = denoCredentialBroker(home.ambient);
 
     yield* scoped(function* () {
-      const lease = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/one.git" });
-      // A helper being configured is not authentication, and neither is one
-      // that answered nothing. `acquired` is what the refusal vocabulary reads.
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
       expect(lease.acquired).toBe(false);
-      expect(lease.attachment().configuration).toEqual([]);
-      expect(lease.attachment().environment).toEqual({});
+      expect(ask(lease, "get", ONE)).toBe("none");
+    });
+  });
+});
+
+describe("workflow credential broker refusals", () => {
+  it("answers nothing for a transport that ended up somewhere else", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
+      expect(lease.acquired).toBe(true);
+
+      // A redirect is Git asking about wherever it arrived. The shim restates
+      // that, and a broker leased for somewhere else answers nothing — so a
+      // redirected transport fails closed rather than carrying this identity.
+      expect(ask(lease, "get", { ...ONE, host: "elsewhere.invalid" })).toBe("none");
+      expect(ask(lease, "get", { ...ONE, protocol: "http" })).toBe("none");
+      expect(ask(lease, "get", { ...ONE, host: `${HOST}:8443` })).toBe("none");
+      expect(ask(lease, "get", { ...ONE, path: TWO.path })).toBe("none");
+      expect(ask(lease, "get", { protocol: "https", host: HOST, path: "" })).toBe("none");
+      // And the one it was minted for still answers.
+      expect(ask(lease, "get", ONE)).toBe("first");
     });
   });
 
-  it("puts no credential on a command line, only the shape of one", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
+  it("serves `get` and nothing else", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
 
     yield* scoped(function* () {
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
+      // Git sends these after a success and after a rejection. Neither writes,
+      // forgets, approves or rejects anything: there is no such path.
+      expect(ask(lease, "store", ONE)).toBe("none");
+      expect(ask(lease, "erase", ONE)).toBe("none");
+      expect(ask(lease, "approve", ONE)).toBe("none");
+      expect(ask(lease, "reject", ONE)).toBe("none");
+    });
+  });
+
+  it("answers nothing to a capability that is not this lease's", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
       const attached = lease.attachment();
+      const helper = String(
+        attached.configuration.find((entry: string) => entry.startsWith("credential.helper=")),
+      ).replace("credential.helper=", "");
 
-      // What Git is told is one helper that names two variables. A command line
-      // is observable to anything on the machine, so a value there would be a
-      // credential published rather than borrowed.
-      expect(carriesCredential(attached.configuration.join(" "))).toBe(false);
-      expect(attached.configuration).toHaveLength(2);
-      expect(attached.configuration[0]).toBe("-c");
-      expect(String(attached.configuration[1]).startsWith("credential.helper=!")).toBe(true);
+      // The endpoint is reachable and the question is well formed. Only the
+      // capability is wrong, and it is checked before a credential byte is
+      // emitted — so an endpoint somebody found answers nothing.
+      const outcome = spawnSync(helper, ["get"], {
+        input: `protocol=${ONE.protocol}\nhost=${ONE.host}\npath=${ONE.path}\n\n`,
+        env: {
+          ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+          [ENDPOINT_VARIABLE]: String(attached.environment[ENDPOINT_VARIABLE]),
+          [CAPABILITY_VARIABLE]: "0".repeat(64),
+        },
+        encoding: "utf8",
+      });
+      expect(carriesCredential(String(outcome.stdout ?? ""))).toBe(false);
     });
   });
 
-  it("installs a helper that answers `get` and refuses to store or erase", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
+  it("answers nothing once the lease that owned it has ended", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+    let escaped: CredentialLease | undefined;
 
     yield* scoped(function* () {
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
-      const helper = String(lease.attachment().configuration[1]);
+      escaped = yield* brokerFor(home.ambient).lease(ONE);
+      expect(escaped.acquired).toBe(true);
+    });
 
-      // Acquisition-only in the strict sense: whatever Git decides to send
-      // after a success or a rejection, there is no path through this helper
-      // that writes, approves, rejects or forgets a credential.
-      expect(helper).toContain('test "$1" = get || exit 0');
-      expect(helper).not.toContain("store");
-      expect(helper).not.toContain("erase");
-      expect(helper).not.toContain("approve");
-      expect(helper).not.toContain("reject");
+    // The lease was invalidated before its endpoint was removed, so a shim that
+    // survived its invocation speaks for nothing rather than racing teardown.
+    expect(escaped?.acquired).toBe(false);
+    expect(escaped?.attachment().configuration).toEqual([]);
+    expect(ask(escaped as CredentialLease, "get", ONE)).toBe("none");
+  });
+});
+
+describe("workflow credential lease opacity", () => {
+  it("has no member that answers with a credential", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
+      // Two members, and neither is a value. The credential is in another
+      // process entirely — there is nothing here for one to answer with.
+      expect(Object.keys(lease).sort()).toEqual(["acquired", "attachment"]);
+      expect(carriesCredential(JSON.stringify(lease))).toBe(false);
+      expect(carriesCredential(`${lease}`)).toBe(false);
+    });
+  });
+
+  it("attaches an endpoint and a capability, and no credential at all", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const attached = (yield* brokerFor(home.ambient).lease(ONE)).attachment();
+
+      // What the command carries is where to ask and what to ask with. The
+      // provider process never receives a username or a password, so neither is
+      // here to leak into a command's environment.
+      expect(Object.keys(attached.environment).sort()).toEqual([
+        CAPABILITY_VARIABLE,
+        ENDPOINT_VARIABLE,
+      ]);
+      expect(carriesCredential(JSON.stringify(attached.environment))).toBe(false);
+      // And a command line names a program, never a secret.
+      expect(carriesCredential(attached.configuration.join(" "))).toBe(false);
+      expect(attached.configuration).toHaveLength(4);
+      expect(attached.configuration).toContain("credential.useHttpPath=true");
+      expect(
+        attached.configuration.some((entry: string) => entry.startsWith("credential.helper=/")),
+      ).toBe(true);
+    });
+  });
+
+  it("installs a shim only this user can run, holding no credential", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const attached = (yield* brokerFor(home.ambient).lease(ONE)).attachment();
+      const helper = String(
+        attached.configuration.find((entry: string) => entry.startsWith("credential.helper=")),
+      ).replace("credential.helper=", "");
+
+      const mode = (yield* until(stat(helper))).mode & 0o777;
+      expect(mode & 0o077).toBe(0);
+      // The file is a launcher for this host's own internal mode. Neither the
+      // credential nor the capability is in it — the capability travels in the
+      // environment, which a process listing does not show.
+      const written = yield* until(readFile(helper, "utf8"));
+      expect(carriesCredential(written)).toBe(false);
+      expect(written).not.toContain(String(attached.environment[CAPABILITY_VARIABLE]));
     });
   });
 
@@ -230,76 +300,39 @@ describe("workflow credential broker", () => {
       host: "127.0.0.1:9000",
       path: "project.git",
     });
-    // Nothing a broker of HTTP credentials answers for.
     expect(credentialRequest("ssh://git@example.invalid/owner/project.git")).toBeUndefined();
     expect(credentialRequest("/tmp/xmd-remote/remote.git")).toBeUndefined();
   });
 
-  it("leaves nothing of a lease behind when its scope ends", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
+  it("leaves no endpoint, shim or broker behind when its scope ends", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
     const opened: string[] = [];
     const released: string[] = [];
-    const broker = denoCredentialBroker(home.ambient, {
-      opened: (directory) => opened.push(directory),
-      released: (directory) => released.push(directory),
-    });
+    let helper = "";
 
-    let escaped: CredentialLease | undefined;
     yield* scoped(function* () {
-      escaped = yield* broker.lease({ protocol: "https", host: HOST, path: "octo/one.git" });
-      expect(escaped.acquired).toBe(true);
+      const lease = yield* brokerFor(home.ambient, {
+        opened: (directory: string) => opened.push(directory),
+        released: (directory: string) => released.push(directory),
+      }).lease(ONE);
+      helper = String(
+        lease
+          .attachment()
+          .configuration.find((entry: string) => entry.startsWith("credential.helper=")),
+      ).replace("credential.helper=", "");
+      expect(lease.acquired).toBe(true);
     });
 
-    // The working directory the acquisition needed is gone with the scope that
-    // opened it — one opened, the same one released.
     expect(opened).toHaveLength(1);
     expect(released).toEqual(opened);
-  });
-});
-
-describe("workflow credential lease opacity", () => {
-  it("has no member that answers with a credential", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
-
-    yield* scoped(function* () {
-      const lease = yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      });
-
-      // Two members, and neither is a value. A provider holding this cannot
-      // read an identity out of it — the credential reaches Git through Git's
-      // own protocol and never through XMD.
-      expect(Object.keys(lease).sort()).toEqual(["acquired", "attachment"]);
-      expect(carriesCredential(JSON.stringify(lease))).toBe(false);
-      expect(carriesCredential(String(lease.acquired))).toBe(false);
-      // Including everything a diagnostic would reach for.
-      expect(carriesCredential(`${lease}`)).toBe(false);
-      expect(carriesCredential(JSON.stringify(Object.entries(lease)))).toBe(false);
-    });
-  });
-
-  it("carries a value no further than the subprocess environment", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
-    const broker = denoCredentialBroker(home.ambient);
-
-    yield* scoped(function* () {
-      const attached = (yield* broker.lease({
-        protocol: "https",
-        host: HOST,
-        path: "octo/one.git",
-      })).attachment();
-
-      // The environment of the command this lease speaks for is the only place
-      // it materializes, and it is the same channel the SSH agent already
-      // travels through.
-      expect(Object.keys(attached.environment).sort()).toEqual([
-        "XMD_GIT_CREDENTIAL_PASSWORD",
-        "XMD_GIT_CREDENTIAL_USERNAME",
-      ]);
-      expect(carriesCredential(attached.configuration.join(" "))).toBe(false);
-    });
+    // The launcher and the endpoint go together, and only after the broker they
+    // addressed has been signalled and awaited.
+    expect(
+      yield* until(
+        stat(helper)
+          .then(() => true)
+          .catch(() => false),
+      ),
+    ).toBe(false);
   });
 });
