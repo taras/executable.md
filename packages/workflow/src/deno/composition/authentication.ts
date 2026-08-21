@@ -102,6 +102,14 @@ export interface GitAuthenticationSession {
    * locator was wrong.
    */
   readonly mechanism: GitAuthenticationMechanism;
+  /**
+   * Whether the transport rejected the identity this session gave it.
+   *
+   * Read after a command fails, not before it runs. A host that proved an
+   * identity the remote refused is in the same position as one that could prove
+   * none, and the refusal vocabulary says so.
+   */
+  readonly rejected: boolean;
 }
 
 /**
@@ -134,6 +142,7 @@ const NOTHING: GitAttachment = Object.freeze({
 export const UNAUTHENTICATED: GitAuthenticationSession = Object.freeze({
   attachment: NOTHING,
   mechanism: "none",
+  rejected: false,
 });
 
 /**
@@ -310,6 +319,7 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
               configuration: pinned(ssh, []),
             },
             mechanism: present ? "ssh-agent" : "none",
+            rejected: false,
           });
           return;
         }
@@ -323,6 +333,9 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
           attachment: {
             environment: attached.environment,
             configuration: pinned(ssh, attached.configuration),
+          },
+          get rejected() {
+            return lease?.rejected === true;
           },
           // Acquisition, not configuration. A helper that answered nothing
           // leaves this `none`, and a transport that then fails failed for want
@@ -355,5 +368,12 @@ export function noGitAuthentication(): GitAuthentication {
  * and from a remote that holds nothing.
  */
 export function unauthenticable(locator: string, session: GitAuthenticationSession): boolean {
-  return gitTransport(locator) !== "none" && session.mechanism === "none";
+  if (gitTransport(locator) === "none") {
+    return false;
+  }
+  // Two ways to have no usable identity: none was proved, or one was proved and
+  // the remote refused it. Git tells a helper the second by asking it to erase,
+  // which this provider turns into a signal rather than an erasure. Neither is
+  // a locator that names nothing.
+  return session.mechanism === "none" || session.rejected;
 }

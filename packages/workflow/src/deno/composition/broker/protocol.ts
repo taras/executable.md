@@ -21,8 +21,20 @@
 export const ENDPOINT_VARIABLE = "XMD_CREDENTIAL_ENDPOINT";
 export const CAPABILITY_VARIABLE = "XMD_CREDENTIAL_CAPABILITY";
 
-/** The only operation this service performs. */
+/** The only operation this service answers. */
 export const GET = "get";
+
+/**
+ * The operation a shim sends when Git tells it to forget a credential.
+ *
+ * Not a forwarding of Git's `erase`: nothing is forgotten anywhere, and no
+ * helper, keychain or store is reached. It is a signal, local to this
+ * invocation, that the transport rejected what it was given — which is the one
+ * thing that distinguishes a credential this host could not prove from a
+ * credential it proved and the remote refused. Both are authentication
+ * unavailability; neither is an invalid locator.
+ */
+export const REJECTED = "rejected";
 
 /**
  * One question the shim asks the broker.
@@ -51,6 +63,9 @@ export const READY = "xmd-credential-broker-ready";
 
 /** The line a broker prints when it acquired an identity for its lease. */
 export const ACQUIRED = "xmd-credential-broker-acquired";
+
+/** The line a broker prints when its lease's transport rejected what it gave. */
+export const REFUSED = "xmd-credential-broker-refused";
 
 /** One record, as a line. A value can hold no newline, so a line holds one. */
 export function encodeLine(value: unknown): string {

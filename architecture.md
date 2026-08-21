@@ -1141,14 +1141,22 @@ the mutation it decided go out under one identity rather than two, and the
 session is disposed with the invocation. A later attempt on an interrupted
 request opens its own.
 
-No credential value crosses that boundary and none is written anywhere. A
-host-owned broker is queried once, for the complete locator, and owns whatever
-it acquires; what the invocation holds is an opaque lease, which says whether an
-identity was proved and can attach itself to a command. The value reaches native
-Git through Git's own credential protocol and materializes nowhere but the
-environment of the one subprocess it speaks for. Approving, rejecting, erasing,
-copying and persisting a credential are therefore things the provider cannot do
-rather than things it declines to do. A Git-host API is the same shape in a different
+No credential value reaches the workflow process at all. Acquisition happens in
+a broker child started for one live invocation, which asks the invoking user's
+Git about one exact repository and holds what comes back; the provider holds a
+capability and a private endpoint, and a provider-owned shim is what Git runs.
+Approving, rejecting, erasing, copying and persisting a credential are therefore
+things this process cannot do rather than things it declines to do — there is
+nothing in it to do them with.
+
+The broker answers one operation, for one capability, about one locator, so a
+redirected transport is answered with nothing. `erase` is not forwarded: it
+becomes an invocation-local signal that the remote refused what it was given,
+which is why a rejected credential and an absent one report the same
+unavailability. Teardown is ordered — invalidate, terminate the group, close the
+IPC, await the children, then remove the endpoint and the launcher — because the
+same steps in another sequence would leave a live broker addressable by a path
+nobody owns. A Git-host API is the same shape in a different
 protocol: `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own login, read
 once for the invocation that needs it.
 

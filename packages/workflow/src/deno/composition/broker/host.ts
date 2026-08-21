@@ -39,7 +39,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { CAPABILITY_VARIABLE, ENDPOINT_VARIABLE, READY, ACQUIRED } from "./protocol.ts";
+import { ACQUIRED, CAPABILITY_VARIABLE, ENDPOINT_VARIABLE, READY, REFUSED } from "./protocol.ts";
 
 /** What a lease hands the command it speaks for. */
 export interface GitAttachment {
@@ -63,6 +63,15 @@ export interface CredentialRequest {
 export interface CredentialLease {
   /** Whether the host proved an identity for this lease's exact locator. */
   readonly acquired: boolean;
+  /**
+   * Whether the transport rejected the identity this lease gave it.
+   *
+   * Git's `erase` reaches the shim when a remote refused what it was handed.
+   * Nothing is erased; the signal comes here. A run that proved an identity and
+   * had it refused is in the same position as one that could prove none —
+   * authentication unavailability, never an invalid locator.
+   */
+  readonly rejected: boolean;
   /** What one command attaches to speak for this lease. */
   attachment(): GitAttachment;
 }
@@ -74,7 +83,24 @@ export interface CredentialBroker {
 export interface BrokerObserver {
   opened?: (directory: string) => void;
   released?: (directory: string) => void;
+  /**
+   * Each step of teardown, as it happens.
+   *
+   * The order is the contract — a lease invalidated after its endpoint went
+   * away, or an endpoint removed while a broker still answered on it, would be
+   * the same steps in an unsafe sequence. A suite watches rather than infers.
+   */
+  step?: (name: string) => void;
 }
+
+/** The steps teardown takes, in the order it must take them. */
+export const TEARDOWN = Object.freeze({
+  invalidated: "invalidated",
+  terminated: "terminated",
+  closed: "ipc-closed",
+  awaited: "awaited",
+  removed: "removed",
+});
 
 /**
  * How this host starts one of its own unadvertised internal modes.
@@ -101,15 +127,25 @@ const NOTHING: GitAttachment = Object.freeze({
 
 const NO_LEASE: CredentialLease = Object.freeze({
   acquired: false,
+  rejected: false,
   attachment: () => NOTHING,
 });
 
-/** Where this lease's endpoint lives, by what the platform can protect. */
-function endpointFor(directory: string): string {
-  return process.platform === "win32"
-    ? // A pipe has no directory to hide in, so its name is the secret it has:
-      // random, invocation-local, and created with no all-user access.
-      `\\\\.\\pipe\\xmd-credential-${randomBytes(24).toString("hex")}`
+/**
+ * Where this lease's endpoint lives, by what the platform can protect.
+ *
+ * A Unix socket hides in a directory only this user may enter. A named pipe has
+ * no directory to hide in, so what it has instead is a name nobody can guess:
+ * random, invocation-local, and created with no all-user access option. Neither
+ * is trusted on its own — the capability is checked before a credential byte is
+ * emitted either way.
+ *
+ * The platform is a parameter so a suite can prove the Windows shape on a host
+ * that is not Windows.
+ */
+export function endpointFor(directory: string, platform: string = process.platform): string {
+  return platform === "win32"
+    ? `\\\\.\\pipe\\xmd-credential-${randomBytes(24).toString("hex")}`
     : join(directory, "endpoint");
 }
 
@@ -158,11 +194,13 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
         const finished = withResolvers<void>();
 
         yield* ensure(function* () {
-          // Invalidate first: a shim that connects from here on is answered by
-          // nothing, rather than racing a broker that is going away.
+          // The order is the contract, and each step is announced as it is
+          // taken. Invalidate first, so a shim that connects from here on is
+          // answered by nothing rather than racing a broker that is going away.
           closed = true;
+          observe.step?.(TEARDOWN.invalidated);
           if (child !== undefined) {
-            child.stdin?.end();
+            // The group, so a helper the broker started goes with it.
             try {
               if (child.pid !== undefined) {
                 process.kill(-child.pid, "SIGKILL");
@@ -170,11 +208,18 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
             } catch {
               child.kill("SIGKILL");
             }
+            observe.step?.(TEARDOWN.terminated);
+            // Then the pipe that is the lease's lifetime: a broker that somehow
+            // survived the signal reads end-of-file and exits on its own.
+            child.stdin?.end();
+            observe.step?.(TEARDOWN.closed);
             yield* finished.operation;
+            observe.step?.(TEARDOWN.awaited);
           }
-          // Only now: an endpoint removed while a broker still answered on it
+          // Only now. An endpoint removed while a broker still answered on it
           // would be a live service nobody owns.
           yield* until(rm(directory, { recursive: true, force: true }));
+          observe.step?.(TEARDOWN.removed);
           observe.released?.(directory);
         });
 
@@ -206,11 +251,15 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
         const started = withResolvers<boolean>();
         let announced = "";
         let acquired = false;
+        let rejected = false;
         child.stdout?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: string) => {
           announced += chunk;
           if (announced.includes(ACQUIRED)) {
             acquired = true;
+          }
+          if (announced.includes(REFUSED)) {
+            rejected = true;
           }
           if (announced.includes(READY)) {
             started.resolve(true);
@@ -235,6 +284,9 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
         yield* provide({
           get acquired() {
             return acquired && !closed;
+          },
+          get rejected() {
+            return rejected;
           },
           attachment: () =>
             closed

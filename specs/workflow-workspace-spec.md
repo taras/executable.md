@@ -2360,15 +2360,42 @@ local Git command reaches one, with no XMD-specific credential setup. That is a
 property of the machine the run is standing on, not of the run: authentication is
 a live host input and never retained workflow state.
 
-**Nothing is copied and nothing is persisted.** No credential value crosses the
-provider's authentication boundary, and none is written to any file. The broker
-owns the value; the provider owns a lease, which has no member that answers with
-one. A credential reaches native Git through Git's own credential protocol and
-materializes nowhere but the environment of the one subprocess it speaks for —
-never in an argument, a command line, a configuration file or a stored
-credential. The helper a lease installs answers `get` and nothing else, so
-`store`, `erase`, `approve` and `reject` are paths that do not exist rather than
-paths that are declined.
+**The provider process never holds a credential.** Acquisition happens in a
+broker child started for one live invocation: it asks the invoking user's Git
+about one exact repository and holds whatever comes back. The provider holds a
+lease — a capability and a private endpoint — and learns two facts about it:
+whether an identity was proved, and whether the transport rejected it. A
+provider-owned shim is what Git runs, and it is the only program in the system
+that writes a credential anywhere.
+
+The capability travels in the environment of the Git command the lease was
+attached to, never on a command line, and the shim file holds neither the
+capability nor a credential. Nothing is written to any file, and no
+`credential.*` configuration is copied onto a command line.
+
+The broker answers `get`, for this lease's capability, about this lease's exact
+locator — scheme, host with its explicit port, and full path — so a transport
+that was redirected somewhere else is answered with nothing and fails closed.
+`store`, `approve` and `reject` produce nothing. `erase` is not forwarded and
+produces no output either: it becomes an invocation-local rejection signal, so a
+credential the remote refused is reported as authentication unavailability
+rather than mistaken for an invalid locator. One caller is answered at a time; a
+reconciliation's sequential commands are all this lease's, and overlapping
+callers are not.
+
+The endpoint is protected by what the platform can protect. On a Unix host it is
+a socket inside a directory only the invoking user may enter; on Windows it is a
+random invocation-local named pipe created with no all-user access. Neither is
+trusted alone — the capability is validated before any credential byte is
+emitted.
+
+Teardown is ordered: the lease is invalidated, the Git and helper process group
+is terminated, the broker's IPC is closed, every child is awaited, and only then
+are the endpoint and the launcher removed. A shim that connects during teardown
+is refused rather than racing a broker that is going away, and no endpoint is
+left addressable after its owner is gone. Broker setup, protocol and teardown
+failures are host conditions: they produce no completion and no credential, and
+the run reports ordinary unavailability.
 
 **What is borrowed.** The first Deno host guarantees the equivalent local
 operation only when that operation can authenticate non-interactively through one

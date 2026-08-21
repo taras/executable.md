@@ -26,6 +26,7 @@ import {
   encodeLine,
   ENDPOINT_VARIABLE,
   GET,
+  REJECTED,
 } from "./protocol.ts";
 
 /** The fields Git wrote, as far as they can be read. */
@@ -64,8 +65,9 @@ function readAll(): Promise<string> {
 export async function serveCredentialShim(argv: readonly string[]): Promise<void> {
   const operation = argv[0] ?? "";
   const input = await readAll();
-  if (operation !== GET) {
-    // `store` and `erase` are read to the end and answered with silence.
+  if (operation !== GET && operation !== "erase") {
+    // `store`, `approve` and anything else are read to the end and answered
+    // with silence. Nothing is written, forwarded or remembered.
     return;
   }
 
@@ -78,7 +80,11 @@ export async function serveCredentialShim(argv: readonly string[]): Promise<void
   const asked = readRequest(input);
   const question = encodeLine({
     capability,
-    operation: GET,
+    // `erase` becomes a rejection signal rather than an erasure. Git sends it
+    // when the transport refused what this helper gave, which is the only way
+    // this run can tell "the host proved nothing" from "the host proved
+    // something the remote would not accept". Both are unavailability.
+    operation: operation === GET ? GET : REJECTED,
     protocol: asked.get("protocol") ?? "",
     // Git writes the port into `host` when there is one, which is what makes an
     // explicit port part of what the broker compares.
@@ -99,6 +105,10 @@ export async function serveCredentialShim(argv: readonly string[]): Promise<void
     socket.on("connect", () => socket.write(question));
   });
 
+  if (operation !== GET) {
+    // A rejection produces no output at all, whatever came back.
+    return;
+  }
   const { username, password } = decodeAnswer(answer.split("\n")[0] ?? "");
   if (username === undefined || password === undefined) {
     return;

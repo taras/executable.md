@@ -30,7 +30,16 @@ import { Buffer } from "node:buffer";
 import { createServer, type Socket } from "node:net";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
-import { ACQUIRED, decodeQuestion, encodeLine, GET, READY, sameSecret } from "./protocol.ts";
+import {
+  ACQUIRED,
+  decodeQuestion,
+  encodeLine,
+  GET,
+  READY,
+  REFUSED,
+  REJECTED,
+  sameSecret,
+} from "./protocol.ts";
 
 /** What one broker was started to be about. */
 export interface BrokerSubject {
@@ -132,7 +141,6 @@ function about(
 ): boolean {
   return (
     sameSecret(question.capability, subject.capability) &&
-    question.operation === GET &&
     question.protocol === subject.protocol &&
     question.host === subject.host &&
     question.path === subject.path
@@ -180,7 +188,20 @@ export function serveCredentialBroker(argv: readonly string[]): void {
         return;
       }
       const question = decodeQuestion(buffered.slice(0, end));
-      if (question === undefined || !about(subject, question) || held === undefined) {
+      if (question === undefined || !about(subject, question)) {
+        answer({});
+        return;
+      }
+      if (question.operation === REJECTED) {
+        // Told, not obeyed. Nothing is forgotten, nothing is forwarded and
+        // nothing is answered — the parent learns that this lease's identity
+        // was refused by the remote, which is a live authentication condition
+        // rather than a locator that names nothing.
+        process.stdout.write(`${REFUSED}\n`);
+        answer({});
+        return;
+      }
+      if (question.operation !== GET || held === undefined) {
         answer({});
         return;
       }
