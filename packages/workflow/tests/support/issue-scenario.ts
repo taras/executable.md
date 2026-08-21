@@ -328,6 +328,28 @@ function useScenarioComponents(
       },
     },
     {
+      name: "RetitleIssue",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          number: { type: "integer", minimum: 1 },
+          to: { type: "string", minLength: 1 },
+          when: { type: "boolean" },
+        },
+        required: ["number", "to", "when"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        if (props.when !== true) {
+          return "";
+        }
+        numbered(server, props.number, "retitle").title = String(props.to);
+        return "";
+      },
+    },
+    {
       name: "MoveIssue",
       origin: "@executablemd/workflow/test",
       props: {

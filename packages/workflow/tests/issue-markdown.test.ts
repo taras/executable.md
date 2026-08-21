@@ -19,7 +19,7 @@ import { runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
 
 /** The scenarios, in the order a reader meets them. */
-const SCENARIOS = ["IssueRead.test.md"] as const;
+const SCENARIOS = ["IssueRead.test.md", "IssueUpsert.test.md", "IssueHttp.test.md"] as const;
 
 function pathOf(name: string): string {
   return fileURLToPath(new URL(`./scenarios/${name}`, import.meta.url));
@@ -81,6 +81,7 @@ describe("workflow Issue scenarios", () => {
     "IssueRecoveryDuplicated",
     "IssueRecoveryMoved",
     "IssueRecoveryClosed",
+    "IssueRecoveryEdited",
   ]) {
     it(`${hazard}.test.md states a contract that holds`, function* () {
       const fixture = yield* useScenarioFixture();
