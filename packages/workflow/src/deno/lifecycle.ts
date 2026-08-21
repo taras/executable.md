@@ -32,9 +32,11 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
-import { exists, readdir, rm } from "@effectionx/fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { copyFile, exists, readdir, rm } from "@effectionx/fs";
 import { useWorkflowRunConnections, type WorkflowRunConnections } from "./connections.ts";
-import { Err, Ok, type Operation, type Result, scoped } from "effection";
+import { ensure, Err, Ok, type Operation, type Result, scoped } from "effection";
 import { Database as CloudflareDatabase } from "../../vendor/cloudflare-computer-dofs/generated/storage.js";
 import type {
   DurableObjectStorageLike,
@@ -64,6 +66,7 @@ import {
   type WorkflowHistoryEntry,
 } from "../lifecycle/history.ts";
 import {
+  WorkflowInspectionRecoveryError,
   WorkflowRequestError,
   WorkflowRunIdMismatchError,
   WorkflowRunLocationMismatchError,
@@ -89,7 +92,8 @@ import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
-import { translateSqliteError, verifySchema } from "./schema.ts";
+import { translateSqliteError, verifySchema, WorkflowReadonlyRollbackError } from "./schema.ts";
+import { holdRecoveryCoordination } from "./recovery-coordination.ts";
 
 const SELECT_RUN = "SELECT * FROM workflow_run WHERE id = 1";
 const SELECT_RETRIEVAL = "SELECT * FROM definition_retrieval WHERE id = 1";
@@ -100,6 +104,41 @@ const SELECT_CURRENT_ROOT = "SELECT current_root_id FROM workspace_state WHERE s
 
 /** A run's file: the hash of its id, and nothing else in this namespace. */
 const CANDIDATE = /^[0-9a-f]{64}\.sqlite$/;
+
+/** A point recovered inspection passes, named so a test can stop it there. */
+export type RecoveryPhase =
+  | "scratch-created"
+  | "source-pair-copied"
+  | "scratch-recovered"
+  | "before-cleanup";
+
+/**
+ * What recovered inspection reports about where it has reached.
+ *
+ * The directory is host arrangement this installation just made, which is what
+ * lets a test plant a real filesystem fault or start a real competing process
+ * at the exact moment that matters. It is not retained state, and nothing else
+ * about the run travels with it: no lock, no transition, no database handle and
+ * no value the run kept.
+ */
+export interface RecoveryObservation {
+  readonly phase: RecoveryPhase;
+  readonly directory: string;
+}
+
+/**
+ * A test's view of recovered inspection, and its chance to pause one.
+ *
+ * Internal to this module and the installation that takes it. Production hands
+ * over `unobserved`, so nothing in a shipped run consults an environment
+ * variable, a file or a registry to decide how inspection behaves.
+ */
+export type RecoveryObserver = (observation: RecoveryObservation) => Operation<void>;
+
+// deno-lint-ignore require-yield
+function* unobserved(): Operation<void> {
+  return undefined;
+}
 
 export interface WorkflowLifecycleOptions {
   /** The directory this host keeps runs in. Absolute, as storage requires. */
@@ -133,6 +172,7 @@ export function* useWorkflowLifecycle(options: WorkflowLifecycleOptions): Operat
 export function* installWorkflowLifecycle(
   options: WorkflowLifecycleOptions,
   connections: WorkflowRunConnections,
+  observe: RecoveryObserver = unobserved,
 ): Operation<WorkflowExecutionTransitions> {
   const root = authorizedRoot(options.root);
   const executors = createExecutorLockRegistry();
@@ -148,13 +188,13 @@ export function* installWorkflowLifecycle(
         return yield* remove(root, connections, executors, runId);
       },
       *inspect([runId]) {
-        return yield* inspectRun(root, runId);
+        return yield* inspectRun(root, runId, observe);
       },
       *list() {
-        return yield* listRuns(root);
+        return yield* listRuns(root, observe);
       },
       *history([runId]) {
-        return yield* runHistory(root, runId);
+        return yield* runHistory(root, runId, observe);
       },
     },
     { at: "min" },
@@ -403,6 +443,15 @@ function* remove(
     }
 
     const path = workflowRunPath(root, hold.runId);
+    // Closed before anything reads it, for two reasons. The connection this
+    // host holds on the file has to go before the file does, or the next caller
+    // opens the one that was removed. And a write-capable connection owns the
+    // database-and-journal pair while it is open, so recognizing a crashed run
+    // below would otherwise wait for a connection only this line closes.
+    // Closing changes nothing about the file, so nothing is recognized any
+    // differently for having done it first.
+    connections.close(path);
+
     // Recognized before anything is removed: deleting a file because its name
     // matches would remove whatever happened to be there, and an absent run is
     // reported rather than treated as an idempotent success.
@@ -411,9 +460,6 @@ function* remove(
       return recognized;
     }
 
-    // Closed first: the connection this host holds on the file has to go before
-    // the file does, or the next caller opens the one that was removed.
-    connections.close(path);
     yield* rm(path);
     return Ok({ removed: ["run-storage"] });
   });
@@ -494,34 +540,44 @@ function* acquire(
   return Ok({ kind: "acquired", lock: hold.lock });
 }
 
-function* inspectRun(root: string, runId: string): Operation<Result<WorkflowLifecycleSnapshot>> {
-  return yield* atRun(root, runId, snapshot);
+function* inspectRun(
+  root: string,
+  runId: string,
+  observe: RecoveryObserver = unobserved,
+): Operation<Result<WorkflowLifecycleSnapshot>> {
+  return yield* atRun(root, runId, snapshot, observe);
 }
 
 function* runHistory(
   root: string,
   runId: string,
+  observe: RecoveryObserver,
 ): Operation<Result<readonly WorkflowHistoryEntry[]>> {
-  return yield* atRun(root, runId, (database) => {
-    const entries = readJournalEntries(database);
-    // Classified against the roots this database still holds, read in the same
-    // snapshot as the events. A root that was never retained and a root deleted
-    // since are the same fact to a fork: it cannot be given that Workspace.
-    const forkability = classifyForkability(entries, { retainedRoots: retainedRoots(database) });
-    const inherited = readEventProvenance(database);
-    return Object.freeze(
-      entries.map((entry, index) =>
-        Object.freeze({
-          eventId: entry.eventId,
-          event: entry.event,
-          workspaceRootId: entry.workspaceRootId,
-          ...sourceOf(entry.event),
-          forkability: forkability[index] ?? UNCLASSIFIED,
-          ...provenanceOf(inherited, entry.eventId),
-        }),
-      ),
-    );
-  });
+  return yield* atRun(
+    root,
+    runId,
+    (database) => {
+      const entries = readJournalEntries(database);
+      // Classified against the roots this database still holds, read in the same
+      // snapshot as the events. A root that was never retained and a root deleted
+      // since are the same fact to a fork: it cannot be given that Workspace.
+      const forkability = classifyForkability(entries, { retainedRoots: retainedRoots(database) });
+      const inherited = readEventProvenance(database);
+      return Object.freeze(
+        entries.map((entry, index) =>
+          Object.freeze({
+            eventId: entry.eventId,
+            event: entry.event,
+            workspaceRootId: entry.workspaceRootId,
+            ...sourceOf(entry.event),
+            forkability: forkability[index] ?? UNCLASSIFIED,
+            ...provenanceOf(inherited, entry.eventId),
+          }),
+        ),
+      );
+    },
+    observe,
+  );
 }
 
 /**
@@ -603,6 +659,7 @@ function* atRun<T>(
   root: string,
   runId: string,
   read: (database: DatabaseSync, record: WorkflowRunRecord, path: string) => T,
+  observe: RecoveryObserver = unobserved,
 ): Operation<Result<T>> {
   const checked = checkRunId(runId);
   if (!checked.ok) {
@@ -615,15 +672,22 @@ function* atRun<T>(
   if (!(yield* exists(path))) {
     return Err(new WorkflowRunNotFoundError(checked.value));
   }
-  return withSnapshot(path, (database, record) => {
-    if (record.runId !== checked.value) {
-      throw new WorkflowRunIdMismatchError(checked.value, path);
-    }
-    return read(database, record, path);
-  });
+  return yield* withSnapshot(
+    path,
+    (database, record) => {
+      if (record.runId !== checked.value) {
+        throw new WorkflowRunIdMismatchError(checked.value, path);
+      }
+      return read(database, record, path);
+    },
+    observe,
+  );
 }
 
-function* listRuns(root: string): Operation<Result<readonly WorkflowLifecycleSnapshot[]>> {
+function* listRuns(
+  root: string,
+  observe: RecoveryObserver,
+): Operation<Result<readonly WorkflowLifecycleSnapshot[]>> {
   const snapshots: WorkflowLifecycleSnapshot[] = [];
   for (const path of yield* candidatePaths(root)) {
     // One unreadable candidate ends the request. A list is a claim about every
@@ -631,7 +695,11 @@ function* listRuns(root: string): Operation<Result<readonly WorkflowLifecycleSna
     // caller did not ask. A candidate that is a perfectly good database of
     // *another* run is one of those: `withSnapshot` refuses it because its
     // retained id does not name the file it was found in.
-    const read = withSnapshot(path, (database, record) => snapshot(database, record, path));
+    const read = yield* withSnapshot(
+      path,
+      (database, record) => snapshot(database, record, path),
+      observe,
+    );
     if (!read.ok) {
       return read;
     }
@@ -673,32 +741,242 @@ function* candidatePaths(root: string): Operation<string[]> {
  * to another candidate's name would otherwise be returned as a second, entirely
  * genuine-looking run — so the check belongs here, where every read passes,
  * rather than only where a caller supplied an id to compare against.
+ *
+ * Two paths call this with two different files. The ordinary one reads the
+ * retained database, where `physical` and `source` are the same path. Recovered
+ * inspection reads a private copy, where `physical` is that copy and `source`
+ * is still the retained database every diagnostic and every returned path is
+ * about. Identity is not overridden between them: the copy is made under the
+ * candidate's own filename, so the location check below asks the real file the
+ * same question either way.
  */
-function withSnapshot<T>(
-  path: string,
+function readSnapshot<T>(
+  physical: string,
+  source: string,
   read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
 ): Result<T> {
   let database: DatabaseSync;
   try {
-    database = new DatabaseSync(path, { readOnly: true });
+    database = new DatabaseSync(physical, { readOnly: true });
   } catch (error) {
-    return refusal(error, path);
+    return refusal(error, source);
   }
   try {
     database.exec("PRAGMA foreign_keys = ON");
     database.exec("PRAGMA busy_timeout = 5000");
     return Ok(
       readTransaction(database, () => {
-        verifySchema(database, path, inertDofs(database));
-        const record = readRunRow(database, path);
-        if (basename(path) !== basename(workflowRunPath(dirname(path), record.runId))) {
-          throw new WorkflowRunLocationMismatchError(record.runId, path);
+        verifySchema(database, source, inertDofs(database));
+        const record = readRunRow(database, source);
+        if (basename(physical) !== basename(workflowRunPath(dirname(physical), record.runId))) {
+          throw new WorkflowRunLocationMismatchError(record.runId, source);
         }
         return read(database, record);
       }),
     );
   } catch (error) {
-    return refusal(error, path);
+    return refusal(error, source);
+  } finally {
+    database.close();
+  }
+}
+
+/** The reading, or `undefined` when only a hot rollback journal stopped it. */
+function attemptDirect<T>(
+  physical: string,
+  source: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+): Result<T> | undefined {
+  try {
+    return readSnapshot(physical, source, read);
+  } catch (error) {
+    if (error instanceof WorkflowReadonlyRollbackError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Read one run, recovering a private copy when a lost host left a hot journal.
+ *
+ * The ordinary reading comes first and answers almost always, at the cost of
+ * nothing: no coordination, no scratch, no second open. Only the one condition
+ * a read-only connection genuinely cannot get past falls through to recovery.
+ */
+function* withSnapshot<T>(
+  path: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+  observe: RecoveryObserver,
+): Operation<Result<T>> {
+  const direct = attemptDirect(path, path, read);
+  if (direct !== undefined) {
+    return direct;
+  }
+  return yield* recoverSnapshot(path, read, observe);
+}
+
+/** Where a run keeps the journal that says what to put back. */
+function journalOf(database: string): string {
+  return `${database}-journal`;
+}
+
+/**
+ * Inspect a crashed run without touching what it retained.
+ *
+ * The retained pair is copied under coordination and recovered nowhere near the
+ * original: SQLite rolls the copy's journal back into the copy, and the answer
+ * is read from that. What the run kept is exactly as its lost host left it when
+ * this returns, still waiting for the write-capable owner whose job recovery
+ * actually is.
+ *
+ * Coordination is held for the copy and released before the copy is recovered.
+ * Holding it any longer would make an inspection stand between a real owner and
+ * the run it is entitled to recover, for work that no longer touches the source.
+ */
+function* recoverSnapshot<T>(
+  source: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+  observe: RecoveryObserver,
+): Operation<Result<T>> {
+  return yield* scoped(function* (): Operation<Result<T>> {
+    let directory: string | undefined;
+
+    // The net, and only the net. It has work to do when this operation never
+    // reached its own removal below — it was cancelled, or it failed its way
+    // out — and in that state there is nobody left to answer, so a removal
+    // that cannot happen is raised. Whoever cancelled this receives it, which
+    // is the only way they learn a copy of the run's contents is still on disk.
+    yield* ensure(function* () {
+      if (directory === undefined) {
+        return;
+      }
+      const abandoned = directory;
+      yield* observe({ phase: "before-cleanup", directory: abandoned });
+      if (!(yield* removeScratch(abandoned))) {
+        throw new WorkflowInspectionRecoveryError(source, abandoned);
+      }
+    });
+
+    const outcome = yield* produceRecovered(source, read, observe, (scratch) => {
+      directory = scratch;
+    });
+
+    if (directory !== undefined) {
+      // Removed here rather than in teardown, because a call that has an answer
+      // to give is the one call that can report a failed removal as its answer.
+      // Whether "an answer was computed" is not the same question as whether
+      // this operation is still live, and only this line knows both.
+      const created = directory;
+      yield* observe({ phase: "before-cleanup", directory: created });
+      const removed = yield* removeScratch(created);
+      // Cleared either way: this call has dealt with the copy, and the net
+      // above must not answer for it a second time. A cancellation that
+      // interrupts the removal above leaves this unset, so the net still does.
+      directory = undefined;
+      if (!removed) {
+        return Err(new WorkflowInspectionRecoveryError(source, created));
+      }
+    }
+
+    return outcome;
+  });
+}
+
+/**
+ * Whether the copy is gone.
+ *
+ * Forced, so a directory something else already removed is removal that
+ * succeeded: reporting residue at a path holding nothing would send an operator
+ * after a copy that is not there.
+ */
+function* removeScratch(directory: string): Operation<boolean> {
+  try {
+    yield* rm(directory, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The answer a recovered copy gives, and the copy it needed to give it.
+ *
+ * `created` is called the moment the scratch directory exists, before anything
+ * is written into it, so its removal is arranged before there is anything to
+ * remove.
+ */
+function* produceRecovered<T>(
+  source: string,
+  read: (database: DatabaseSync, record: WorkflowRunRecord) => T,
+  observe: RecoveryObserver,
+  created: (directory: string) => void,
+): Operation<Result<T>> {
+  let directory: string | undefined;
+  try {
+    const retried = yield* scoped(function* (): Operation<Result<T> | undefined> {
+      yield* holdRecoveryCoordination(source);
+
+      // Asked again under coordination: a write-capable owner may have
+      // recovered the run while this inspection waited, and reading what it
+      // recovered is a better answer than copying anything.
+      const owned = attemptDirect(source, source, read);
+      if (owned !== undefined) {
+        return owned;
+      }
+
+      // Created synchronously, and handed to its owner before anything can
+      // suspend. `until()` stops observing a promise; it does not cancel one,
+      // so an asynchronous `mkdtemp` halted mid-flight would still go on to
+      // create a directory — after this generator had stopped, with nothing
+      // holding its path and nothing left to remove it. Naming and creating at
+      // once also means this is never a directory an earlier attempt left.
+      // oxlint-disable-next-line local/no-sync-filesystem
+      const scratch = mkdtempSync(join(tmpdir(), "xmd-inspection-"));
+      directory = scratch;
+      created(scratch);
+      yield* observe({ phase: "scratch-created", directory: scratch });
+
+      // Copied under the candidate's own name, so the copy answers the location
+      // question as itself rather than needing to be told what it stands for.
+      const copy = join(scratch, basename(source));
+      yield* copyFile(source, copy);
+      if (yield* exists(journalOf(source))) {
+        yield* copyFile(journalOf(source), journalOf(copy));
+      }
+      yield* observe({ phase: "source-pair-copied", directory: scratch });
+      return undefined;
+    });
+    if (retried !== undefined) {
+      return retried;
+    }
+    if (directory === undefined) {
+      throw new WorkflowRequestError("the recovered inspection copy was not created.");
+    }
+
+    const copy = join(directory, basename(source));
+    recoverCopy(copy);
+    yield* observe({ phase: "scratch-recovered", directory });
+    return readSnapshot(copy, source, read);
+  } catch {
+    // Coordination, copying and the recovery read itself. What the copy then
+    // turned out to describe — a damaged image, another run's identity, an
+    // unparseable row — keeps its own type and never arrives here.
+    return Err(new WorkflowInspectionRecoveryError(source));
+  }
+}
+
+/**
+ * Let SQLite put the copy's journal back.
+ *
+ * Write-capable because that is the whole point, and reading one page is what
+ * makes SQLite notice the journal and roll it back. It recovers a copy nothing
+ * else can see, so it takes no coordination and changes nothing anybody keeps.
+ */
+function recoverCopy(copy: string): void {
+  const database = new DatabaseSync(copy);
+  try {
+    database.prepare("SELECT count(*) FROM sqlite_schema").get();
   } finally {
     database.close();
   }

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists, readdir } from "@effectionx/fs";
-import { type Operation, type Result, scoped, until } from "effection";
+import { type Operation, race, type Result, scoped, sleep, until } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -44,6 +44,7 @@ import type { JsonObject } from "../src/storage/members.ts";
 import { APPLICATION_ID, hashRunId, useWorkflowRunStorage } from "../deno.ts";
 import { createWorkflowRunConnections } from "../src/deno/connections.ts";
 import { WorkflowRunRecognition } from "../src/deno/provider.ts";
+import { holdRecoveryCoordination } from "../src/deno/recovery-coordination.ts";
 import { EXPECTED_SCHEMA, initializeSchema } from "../src/deno/schema.ts";
 import { readRepositories } from "../src/deno/workspace/repositories.ts";
 import {
@@ -157,6 +158,29 @@ function fabricatedRequest(value: unknown): CreateWorkflowRunRequest {
   return container.request;
 }
 
+/**
+ * The operation's answer, or `undefined` when it was still waiting.
+ *
+ * Waiting is the whole observation here: a call that has to take coordination
+ * blocks behind whoever holds it, and a call that does not answers at once.
+ */
+function promptly<T>(body: () => Operation<T>): Operation<T | undefined> {
+  return race([body(), stillWaiting()]);
+}
+
+/** Take the coordination sidecar and give it straight back. */
+function* heldCoordination(path: string): Operation<string> {
+  return yield* scoped(function* () {
+    yield* holdRecoveryCoordination(path);
+    return "held";
+  });
+}
+
+function* stillWaiting(): Operation<undefined> {
+  yield* sleep(500);
+  return undefined;
+}
+
 function fabricatedId(value: unknown): string {
   const container: { id: string } = { id: "" };
   Object.defineProperty(container, "id", { value, enumerable: true });
@@ -167,9 +191,9 @@ describe("Tier WS — authoritative connection and complete schema", () => {
   it("WS0: one provider entry owns each run connection and its DOFS wrappers", function* () {
     const root = yield* useStorageRoot();
     const connections = createWorkflowRunConnections();
-    const first = connections.at(join(root, "first.sqlite"));
-    const again = connections.at(join(root, ".", "first.sqlite"));
-    const other = connections.at(join(root, "other.sqlite"));
+    const first = yield* connections.at(join(root, "first.sqlite"));
+    const again = yield* connections.at(join(root, ".", "first.sqlite"));
+    const other = yield* connections.at(join(root, "other.sqlite"));
 
     expect(again).toBe(first);
     expect(again.database).toBe(first.database);
@@ -179,13 +203,58 @@ describe("Tier WS — authoritative connection and complete schema", () => {
 
     connections.close();
     expect(() => first.database.prepare("SELECT 1")).toThrow();
-    expect(() => connections.at(join(root, "later.sqlite"))).toThrow();
+    let refused: unknown;
+    try {
+      yield* connections.at(join(root, "later.sqlite"));
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(Error);
+  });
+
+  it("WS0a: a write-capable connection owns the pair for as long as it is open", function* () {
+    const root = yield* useStorageRoot();
+    const connections = createWorkflowRunConnections();
+    const path = join(root, "coordinated.sqlite");
+
+    const first = yield* connections.at(path);
+
+    // Cached lookups wait for nothing and pay nothing: the connection they
+    // answer with is already holding the pair.
+    expect(yield* promptly(() => connections.at(path))).toBe(first);
+    expect(yield* promptly(() => connections.at(join(root, ".", "coordinated.sqlite")))).toBe(
+      first,
+    );
+
+    // Nobody else may have the pair while that connection exists, because any
+    // read through it can be the one that recovers a hot journal.
+    expect(yield* promptly(() => heldCoordination(path))).toBeUndefined();
+
+    // Not even after work has been done through it. A transaction and a DOFS
+    // effect neither reacquire coordination nor give it up.
+    const transaction = first.beginTransaction();
+    first.database.exec("BEGIN IMMEDIATE");
+    first.dofs.transactionSync(() => {
+      first.dofs.run("CREATE TABLE effect_ran (value TEXT)");
+    });
+    first.database.exec("COMMIT");
+    first.finishTransaction(transaction);
+    expect(yield* promptly(() => connections.at(path))).toBe(first);
+    expect(yield* promptly(() => heldCoordination(path))).toBeUndefined();
+
+    // Closing the connection is what hands the pair back.
+    connections.close(path);
+    expect(yield* promptly(() => heldCoordination(path))).toBe("held");
+
+    const reopened = yield* connections.at(path);
+    expect(reopened).not.toBe(first);
+    connections.close();
   });
 
   it("WS0b: DOFS transactionSync uses a savepoint in the caller-owned transaction", function* () {
     const root = yield* useStorageRoot();
     const connections = createWorkflowRunConnections();
-    const connection = connections.at(join(root, "savepoint.sqlite"));
+    const connection = yield* connections.at(join(root, "savepoint.sqlite"));
 
     connection.database.exec("BEGIN IMMEDIATE");
     const transaction = connection.beginTransaction();
@@ -211,7 +280,7 @@ describe("Tier WS — authoritative connection and complete schema", () => {
   it("WS0c: rolling back fresh initialization leaves no partial schema", function* () {
     const root = yield* useStorageRoot();
     const connections = createWorkflowRunConnections();
-    const connection = connections.at(join(root, "atomic.sqlite"));
+    const connection = yield* connections.at(join(root, "atomic.sqlite"));
 
     connection.database.exec("BEGIN IMMEDIATE");
     const transaction = connection.beginTransaction();
@@ -348,7 +417,15 @@ describe("Tier WS — creating and finding a run", () => {
     expect(record.props).toEqual({ channel: "stable" });
     expect(record.status).toBe("running");
 
-    expect(yield* entries(root)).toEqual([`${hashRunId("release-1.4")}.sqlite`]);
+    // One file named for the run, and the empty sidecar its write-capable
+    // opening took to keep a reader from copying the database and journal
+    // half-recovered. The sidecar is host arrangement outside the
+    // `<hash>.sqlite` namespace discovery matches, and neither file indexes
+    // anything: there is still no registry.
+    expect(yield* entries(root)).toEqual([
+      `${hashRunId("release-1.4")}.sqlite`,
+      `${hashRunId("release-1.4")}.sqlite.recovery.lock`,
+    ]);
   });
 
   it("WS2: creating an id twice with the same request addresses one run", function* () {
@@ -362,7 +439,11 @@ describe("Tier WS — creating and finding a run", () => {
 
     expect(second.runId).toBe(first.runId);
     expect(second.createdAt).toBe(first.createdAt);
-    expect(yield* entries(root)).toHaveLength(1);
+    // Still one run: the second entry is the coordination sidecar, which the
+    // cached connection did not take a second time either.
+    const kept = yield* entries(root);
+    expect(kept.filter((name) => name.endsWith(".sqlite"))).toHaveLength(1);
+    expect(kept).toHaveLength(2);
   });
 
   it("WS3: props are compared as values, not as the text they were written in", function* () {

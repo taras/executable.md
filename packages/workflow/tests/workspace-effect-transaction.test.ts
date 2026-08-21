@@ -196,7 +196,7 @@ function withDirectWorkspaceStorage<T>(
     const path = join(root, `${name}.sqlite`);
     const connections = createWorkflowRunConnections(observe, hooks);
     yield* ensure(() => connections.close());
-    const connection = connections.at(path);
+    const connection = yield* connections.at(path);
     const wanted = request({ runId: name });
     const stamp = new Date(1_750_000_000_000).toISOString();
     connection.database.exec("BEGIN IMMEDIATE");

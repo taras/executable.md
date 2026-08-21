@@ -567,12 +567,24 @@ contact an Agent, process or external provider, reconcile an effect, or append.
 Human output is the default; `--json` returns the same data structurally.
 
 `list` discovers the run-storage root directly; no registry can disagree with
-it. Each run contributes one database candidate. Exact advisory-lock sidecars
-use a distinct provider-owned namespace and are not candidates. Every database
+it. Each run contributes one database candidate. Exact advisory-lock sidecars —
+the executor lock and the recovery coordination sidecar — use a distinct
+provider-owned namespace and are not candidates. Every database
 candidate receives strict read-only recognition. A
 foreign, incompatible, damaged or unparseable candidate fails the request and
 is reported distinctly. The command does not return the healthy subset as
 though it were complete, and it changes no candidate.
+
+A run whose host was lost mid-transaction is reported like any other. Its
+database carries a rollback journal that only a write-capable connection can put
+back, so `status`, `list` and `history` copy the database and that journal into
+a private scratch directory, let SQLite recover the copy, and read the answer
+from it. The retained pair is unchanged, still awaiting its next write-capable
+owner, and the copy is removed before the answer is observable. `list` processes
+at most one such candidate at a time. Recovery grants nothing else: these
+commands still obtain no executor lock and no lifecycle authority, and a copy
+that cannot be produced or removed is reported as its own refusal rather than as
+damage to the run.
 
 ### 4.2 History
 
@@ -1962,10 +1974,23 @@ in-process `ExecutorLock` is the private mutation capability. The lock file
 is ephemeral host arrangement: it is neither SQLite schema nor run identity,
 journal or history. No owner descriptor or cancellation-request file exists.
 
+The same adapter owns a second, separate advisory lock: a waiting exclusive
+lock on its own deterministic sidecar, which serializes the two callers that
+act on a database and its rollback journal as a pair. Every write-capable
+connection holds it for as long as it is open, because any read through it can
+be the one that recovers a journal a later crash left; read-only inspection
+holds it to copy a still-crashed pair, and therefore waits while this host has
+such a connection open. Waiting is
+cooperative rather than a blocking host call, so a cancellation and the owner
+being waited for both keep making progress. It is not the executor lock, shares
+no sidecar name with it, produces no capability and authorizes no transition.
+
 Lifecycle settlement uses one compare-and-set SQLite transaction to finish the
 document-execution record and publish the run status under the exact executor
 lock. Inspection opens immutable snapshots and receives no executor lock or
-writable database handle. History reads each existing
+writable database handle — including when it recovers a private copy of a
+crashed run, which is read on read-only connections of its own and removed
+before an answer is observable. History reads each existing
 `workspace_root_id` with its event and does not invoke the Workspace
 materializer.
 

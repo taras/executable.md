@@ -21,6 +21,11 @@ import type {
 } from "../../vendor/cloudflare-computer-dofs/generated/types.d.ts";
 import { type ConnectionLock, createConnectionLock } from "./lock.ts";
 import {
+  releaseConnectionCoordination,
+  takeConnectionCoordination,
+} from "./recovery-coordination.ts";
+import type { AdvisoryLockFile } from "./advisory-lock.ts";
+import {
   createSavepointManager,
   type SavepointManager,
   type SavepointObserver,
@@ -106,7 +111,7 @@ export interface RunConnection {
 }
 
 export interface WorkflowRunConnections {
-  at(path: string): RunConnection;
+  at(path: string): Operation<RunConnection>;
   registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease;
   registerJournal(database: WorkflowRunDatabase, journal: DurableStream): void;
   closeLease(lease: RunConnectionLease): void;
@@ -153,11 +158,21 @@ class SqliteStorage implements SQLStorageLike {
   }
 }
 
-function createConnection(path: string, observeSavepoint: SavepointObserver): RunConnection {
+function createConnection(
+  path: string,
+  observeSavepoint: SavepointObserver,
+  coordination: AdvisoryLockFile,
+): RunConnection {
   const database = new DatabaseSync(path);
   try {
     database.exec("PRAGMA foreign_keys = ON");
     database.exec("PRAGMA busy_timeout = 5000");
+    // Reads a page, and reading a page is what makes SQLite notice a rollback
+    // journal a lost host left behind and put it back. The pragmas above settle
+    // connection behavior without touching the file, so a connection that
+    // stopped at them would have proven nothing about the state it is about to
+    // write to. The caller holds recovery coordination across this line.
+    database.prepare("SELECT count(*) FROM sqlite_schema").get();
   } catch (error) {
     database.close();
     throw error;
@@ -308,6 +323,9 @@ function createConnection(path: string, observeSavepoint: SavepointObserver): Ru
           active = undefined;
         }
         database.close();
+        // Released only now: while this connection existed it could recover the
+        // pair at any read, so it owned the pair for exactly that long.
+        releaseConnectionCoordination(coordination);
       }
     },
   };
@@ -369,7 +387,7 @@ export function createWorkflowRunConnections(
   }
 
   return {
-    at(path: string): RunConnection {
+    *at(path: string): Operation<RunConnection> {
       if (!open) {
         throw new WorkflowConnectionStateError("the workflow storage provider has closed");
       }
@@ -378,9 +396,28 @@ export function createWorkflowRunConnections(
       if (existing !== undefined) {
         return existing;
       }
-      const created = createConnection(canonical, observeSavepoint);
-      entries.set(canonical, created);
-      return created;
+      // Taken for as long as the connection lives, not merely while it opens:
+      // any later read through it can be the one that recovers a hot journal.
+      const coordination = yield* takeConnectionCoordination(canonical);
+      try {
+        if (!open) {
+          throw new WorkflowConnectionStateError("the workflow storage provider has closed");
+        }
+        // Asked again after the wait: another caller on this host may have
+        // opened the same database while this one waited, and one authoritative
+        // connection per database is what this registry exists to keep.
+        const raced = entries.get(canonical);
+        if (raced !== undefined) {
+          releaseConnectionCoordination(coordination);
+          return raced;
+        }
+        const created = createConnection(canonical, observeSavepoint, coordination);
+        entries.set(canonical, created);
+        return created;
+      } catch (error) {
+        releaseConnectionCoordination(coordination);
+        throw error;
+      }
     },
 
     registerLease(database: WorkflowRunDatabase, connection: RunConnection): RunConnectionLease {

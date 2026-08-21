@@ -34,76 +34,23 @@
  */
 
 import { ensure, type Operation, resource } from "effection";
-import { ensureDir } from "@effectionx/fs";
-import { dirname } from "node:path";
 import type { ExecutorLock } from "../lifecycle/api.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import { workflowRunLock } from "./path.ts";
-
-/**
- * The open lock file this host holds, as much of it as this module uses.
- *
- * Named here rather than referred to as `Deno.FsFile` because this file
- * typechecks under the Node project like every other source, and that project
- * has no `Deno` namespace to name. Every other Deno-only capability in this
- * adapter arrives through a cross-runtime package; advisory locking is the one
- * with no such wrapper, so the shape it needs is stated and reached through the
- * global — a Deno-only adapter naming exactly the Deno it depends on.
- */
-interface LockFile {
-  tryLockSync(exclusive: boolean): boolean;
-  unlockSync(): void;
-  close(): void;
-}
-
-interface LockingRuntime {
-  openSync(path: string, options: { read: boolean; write: boolean; create: boolean }): LockFile;
-}
-
-/**
- * Whether the global this host found is one that opens files.
- *
- * Asked rather than assumed. Describing the global's type at the point of use
- * would be this module telling its own typechecker what is out there — a claim
- * the compiler accepts and nothing verifies, which is exactly backwards for a
- * value that arrives from outside every module in this project. So the one
- * property this adapter depends on is checked, and the answer is what narrows.
- *
- * It cannot check further than one call deep: what `openSync` returns is only
- * knowable by calling it. That is the honest boundary of a runtime reached
- * through a global, and it is why the interface above is kept to the three
- * methods this module actually uses.
- */
-function opensFiles(candidate: unknown): candidate is LockingRuntime {
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    typeof Reflect.get(candidate, "openSync") === "function"
-  );
-}
-
-function locking(): LockingRuntime {
-  const runtime: unknown = Reflect.get(globalThis, "Deno");
-  if (!opensFiles(runtime)) {
-    throw new WorkflowRequestError(
-      "this host takes a run's executor lock through the Deno runtime, and no Deno runtime that " +
-        "opens files is present.",
-    );
-  }
-  return runtime;
-}
+import { useAdvisoryLock } from "./advisory-lock.ts";
 
 /**
  * One executor-lock acquisition, as this host keeps it.
  *
  * The public `ExecutorLock` is one field wide and describes the
  * acquisition; this hold is what the provider checks against. It never leaves
- * the installation.
+ * the installation. The open file is not among its fields: the acquisition
+ * beneath owns the descriptor and releases it, and a second reference here
+ * would describe ownership this record does not have.
  */
 export interface ExecutorLockHold {
   readonly lock: ExecutorLock;
   readonly runId: string;
-  readonly file: LockFile;
   open: boolean;
   /**
    * The execution this acquisition began, once it has begun one.
@@ -170,22 +117,10 @@ export function createExecutorLockRegistry(): ExecutorLockRegistry {
   return {
     acquire(root: string, runId: string): Operation<ExecutorLockHold | undefined> {
       return resource<ExecutorLockHold | undefined>(function* (provide) {
-        const lock = workflowRunLock(root, runId);
-        yield* ensureDir(dirname(lock));
-
-        // Created if absent and never unlinked while a workflow executor holds it:
-        // unlinking a locked file lets the next caller create and lock a
-        // different file at the same path while this lock is still held.
-        const file = locking().openSync(lock, { read: true, write: true, create: true });
-        let locked = false;
-        try {
-          locked = file.tryLockSync(true);
-        } catch (error) {
-          file.close();
-          throw error;
-        }
-        if (!locked) {
-          file.close();
+        // Refused rather than queued: waiting here would turn "another workflow
+        // executor holds this run" into a hang.
+        const file = yield* useAdvisoryLock(workflowRunLock(root, runId));
+        if (file === undefined) {
           yield* provide(undefined);
           return;
         }
@@ -193,22 +128,18 @@ export function createExecutorLockRegistry(): ExecutorLockRegistry {
         const hold: ExecutorLockHold = {
           lock: Object.freeze({ runId }),
           runId,
-          file,
           open: true,
         };
         issued.add(hold.lock);
         holds.set(hold.lock, hold);
 
         // Registered as soon as the lock is held, so a failure between here and
-        // the caller's first transition still releases it.
+        // the caller's first transition still retires it. It runs before the
+        // acquisition beneath releases the file, so no lock is ever open to the
+        // operating system while this registry still answers for it.
         yield* ensure(() => {
           hold.open = false;
           holds.delete(hold.lock);
-          try {
-            file.unlockSync();
-          } finally {
-            file.close();
-          }
         });
 
         yield* provide(hold);

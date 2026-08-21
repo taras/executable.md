@@ -158,6 +158,42 @@ export class WorkflowIncompleteVersionOneError extends WorkflowDatabaseCorruptEr
   }
 }
 
+/**
+ * A crashed run could not be inspected from a private recovered copy.
+ *
+ * Inspection reads a database a lost host left mid-transaction by recovering a
+ * copy of it, so this says the copy could not be produced or could not be
+ * cleaned up — never that the run itself is damaged. Damage keeps its own
+ * types. The retained database and its journal are unchanged either way.
+ *
+ * `scratchPath` is absent whenever cleanup succeeded, which is every failure
+ * except one. It is populated only when the private copy could not be removed,
+ * because that is the single case where the operator has something to do.
+ */
+export class WorkflowInspectionRecoveryError extends WorkflowStorageError {
+  override name = "WorkflowInspectionRecoveryError";
+
+  /** The retained run database inspection was asked about. */
+  readonly path: string;
+
+  /** The private directory that still holds a copy, when removal failed. */
+  readonly scratchPath: string | undefined;
+
+  constructor(path: string, scratchPath?: string) {
+    super(
+      scratchPath === undefined
+        ? `The crashed workflow-run database at ${path} could not be inspected from a private ` +
+            "recovered copy. It is left unchanged, and its next write-capable owner still " +
+            "recovers it."
+        : `The crashed workflow-run database at ${path} was inspected from a private recovered ` +
+            `copy that could not be removed afterwards. It is left unchanged. Remove ${scratchPath} ` +
+            "when you no longer need it.",
+    );
+    this.path = path;
+    this.scratchPath = scratchPath;
+  }
+}
+
 /** A stored row does not describe what its column claims to hold. */
 export class WorkflowRecordMalformedError extends WorkflowStorageError {
   override name = "WorkflowRecordMalformedError";
