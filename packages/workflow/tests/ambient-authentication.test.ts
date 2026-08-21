@@ -35,7 +35,6 @@ import {
   denoGitAuthentication,
   gitTransport,
   sshCommand,
-  configuredCredentialSettings,
 } from "../src/deno/composition/authentication.ts";
 import type {
   GitAuthentication,
@@ -102,6 +101,9 @@ function carriesCredential(text: string): boolean {
 const REMOTE = {
   commits: [{ message: "first", entries: [{ path: "README.md", content: "protected\n" }] }],
 } as const;
+
+/** The path every bare remote this suite serves is reached at. */
+const REPOSITORY = "remote.git";
 
 /** The shipped authentication, standing in this invoking environment. */
 function hostFor(home: InvokingHome) {
@@ -224,7 +226,7 @@ describe("workflow ambient Git authentication", () => {
   it("clones a protected remote through the helper the invoking host configured", function* () {
     const root = yield* useStorageRoot();
     const served = yield* protectedRemote(FIRST, "first");
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -282,7 +284,7 @@ describe("workflow ambient Git authentication", () => {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -306,7 +308,7 @@ describe("workflow ambient Git authentication", () => {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -338,11 +340,20 @@ describe("workflow ambient Git authentication", () => {
 
   it("cannot use one protected locator's authentication for another", function* () {
     const root = yield* useStorageRoot();
-    const first = yield* protectedRemote(FIRST, "first");
-    const second = yield* protectedRemote(SECOND, "second");
-    // The invoking host can prove an identity to the first remote and to no
-    // other. The second is protected by a different credential entirely.
-    const home = yield* useInvokingHome([{ host: first.host, ...FIRST }]);
+    // Two repositories on one server, so what separates them is the locator
+    // rather than the host. A credential acquired for one is the credential the
+    // other's server rejects.
+    const bare = yield* useBareRemote(REMOTE);
+    const other = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({
+      remote: bare,
+      label: "first",
+      ...FIRST,
+      also: { remote: other, ...SECOND },
+    });
+    // The invoking host can prove an identity for the first repository and for
+    // no other path on that same host.
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -354,23 +365,31 @@ describe("workflow ambient Git authentication", () => {
         runDocument(
           database,
           [
-            `<Repository name="reachable" url="${first.locator}" />`,
-            `<Repository name="unreachable" url="${second.locator}" />`,
+            `<Repository name="reachable" url="${served.locator}" />`,
+            `<Repository name="unreachable" url="${served.alsoLocator}" />`,
           ].join("\n"),
           countingOptions(counting),
         ),
       );
 
-      // Each Repository opened its own session, for its own locator.
-      expect(recorded.locators).toEqual([first.locator, second.locator]);
+      // Each Repository opened its own session, for its own complete locator —
+      // two paths on one host, so the host they share separated nothing.
+      expect(recorded.locators).toEqual([served.locator, served.alsoLocator]);
 
-      // The first was authenticated and the second was refused: what the host
-      // could prove to one remote proved nothing at the other, and nothing this
-      // run held carried across.
-      expect(first.requests.some((request) => request.accepted)).toBe(true);
-      expect(second.requests.length).toBeGreaterThan(0);
-      expect(second.requests.every((request) => !request.accepted)).toBe(true);
-      expect(causedBy(failure, isRepositoryRefusal)).toBeDefined();
+      // One was authenticated and the other was refused: what this host could
+      // prove for one repository proved nothing at its neighbour, and nothing
+      // this run held carried across.
+      const forFirst = served.requests.filter((request) =>
+        request.path.startsWith(`/${REPOSITORY}`),
+      );
+      const forSecond = served.requests.filter(
+        (request) => !request.path.startsWith(`/${REPOSITORY}`),
+      );
+      expect(forFirst.some((request) => request.accepted)).toBe(true);
+      expect(forSecond.length).toBeGreaterThan(0);
+      expect(forSecond.every((request) => !request.accepted)).toBe(true);
+      // And its own word, because acquisition is what the classification reads.
+      expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("authentication-unavailable");
       expect((yield* retainedRepositories(database)).map((entry) => entry.record.name)).toEqual([
         "reachable",
       ]);
@@ -381,7 +400,7 @@ describe("workflow ambient Git authentication", () => {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -410,7 +429,7 @@ describe("workflow ambient Git authentication", () => {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -450,7 +469,9 @@ describe("workflow ambient Git authentication", () => {
     const served = yield* protectedRemote(FIRST, "first");
     // A home whose helper answers for somewhere else entirely, so the exchange
     // happens and still proves nothing at this remote.
-    const home = yield* useInvokingHome([{ host: "elsewhere.invalid", ...SECOND }]);
+    const home = yield* useInvokingHome([
+      { host: "elsewhere.invalid", path: REPOSITORY, ...SECOND },
+    ]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -499,7 +520,7 @@ describe("workflow ambient authentication containment", () => {
 
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
     const hostile = [
       "[credential]",
       `\thelper = ${planted}`,
@@ -605,7 +626,7 @@ describe("workflow ambient authentication cancellation", () => {
   it("invents nothing when cancelled while acquisition is blocked", function* () {
     const root = yield* useStorageRoot();
     const served = yield* protectedRemote(FIRST, "first");
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -662,7 +683,7 @@ describe("workflow ambient authentication cancellation", () => {
         return false;
       },
     });
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
     const source = document(
       served.locator,
       `<File path="README.md" as="readme" />`,
@@ -716,7 +737,7 @@ describe("workflow ambient authentication cancellation", () => {
     const root = yield* useStorageRoot();
     const reachable = yield* protectedRemote(FIRST, "first");
     const refused = yield* protectedRemote(SECOND, "second");
-    const home = yield* useInvokingHome([{ host: reachable.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: reachable.host, path: REPOSITORY, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
@@ -750,7 +771,7 @@ describe("workflow ambient authentication cancellation", () => {
   it("performs a fresh acquisition on the attempt after a cancelled one", function* () {
     const root = yield* useStorageRoot();
     const served = yield* protectedRemote(FIRST, "first");
-    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
     const source = document(
       served.locator,
       `<File path="README.md" as="readme" />`,
@@ -852,19 +873,15 @@ describe("workflow ambient authentication mechanisms", () => {
       "https://example.invalid/owner/project.git",
     );
 
-    // The reset is what makes the helper list this host's own: it is
+    // The reset is what makes the helper list this session's own: it is
     // multi-valued, so a helper in a configuration file would otherwise be
     // tried beside whatever the session states after it.
-    expect(session.attachment.configuration).toContain("credential.helper=");
     const settings = session.attachment.configuration;
-    for (const key of ["core.sshCommand=", "core.excludesFile=", "core.attributesFile="]) {
-      expect(settings.some((entry) => entry.startsWith(key))).toBe(true);
-    }
-    // The reset comes before anything this host chose, or it would clear it.
+    expect(settings).toContain("credential.helper=");
+    expect(settings.some((entry: string) => entry.startsWith("core.sshCommand="))).toBe(true);
+    // The reset comes before anything this session states, or it would clear it.
     const reset = settings.indexOf("credential.helper=");
-    const chosen = settings.findIndex(
-      (entry) => entry.startsWith("credential.") && entry !== "credential.helper=",
-    );
+    const chosen = settings.findIndex((entry: string) => entry.startsWith("credential.helper=!"));
     expect(reset).toBeGreaterThanOrEqual(0);
     if (chosen >= 0) {
       expect(reset).toBeLessThan(chosen);
@@ -883,32 +900,6 @@ describe("workflow ambient authentication mechanisms", () => {
   });
 });
 
-describe("workflow configured credential settings", () => {
-  it("re-states the helper the invoking user configured, and never a secret", function* () {
-    const home = yield* useInvokingHome([{ host: "example.invalid", ...FIRST }]);
-    const settings = yield* configuredCredentialSettings(home.ambient);
-
-    expect(settings.some((entry) => entry.startsWith("credential.helper="))).toBe(true);
-    // What crosses is the program's name. The credential it holds is exchanged
-    // between Git and that program, and never passes through here.
-    expect(carriesCredential(settings.join("\n"))).toBe(false);
-  });
-
-  it("finds nothing for a host that configured nothing", function* () {
-    const home = yield* useHomeWithoutAuthentication();
-    expect(yield* configuredCredentialSettings(home.ambient)).toEqual([]);
-  });
-});
-
-/**
- * The one GitHub credential source, through both adapters that share it.
- *
- * `<PullRequest>` and `<Issue>` reach different services with different
- * ceilings, routing and durable records, and after #522 they read their
- * credential the same way. What has to hold for both is the shape of the
- * session: opened per live invocation, after that invocation's own checks, and
- * never spanning two of them.
- */
 describe("workflow GitHub source sessions", () => {
   /** An access that counts what a session asks it, and from whom. */
   function counted(token: string | undefined) {

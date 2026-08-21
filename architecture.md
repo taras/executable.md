@@ -1142,12 +1142,13 @@ session is disposed with the invocation. A later attempt on an interrupted
 request opens its own.
 
 No credential value crosses that boundary and none is written anywhere. A
-session holds the host's *decision* about which authentication Git may use for
-one locator — a socket path, a known-hosts file, the names of the credential
-helpers the invoking user already configured — and Git and the helper exchange
-the secret between themselves. Approving, rejecting, erasing, copying and
-persisting a credential are therefore things the provider cannot do rather than
-things it declines to do. A Git-host API is the same shape in a different
+host-owned broker is queried once, for the complete locator, and owns whatever
+it acquires; what the invocation holds is an opaque lease, which says whether an
+identity was proved and can attach itself to a command. The value reaches native
+Git through Git's own credential protocol and materializes nowhere but the
+environment of the one subprocess it speaks for. Approving, rejecting, erasing,
+copying and persisting a credential are therefore things the provider cannot do
+rather than things it declines to do. A Git-host API is the same shape in a different
 protocol: `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own login, read
 once for the invocation that needs it.
 

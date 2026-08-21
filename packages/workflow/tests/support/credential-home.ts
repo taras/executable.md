@@ -21,6 +21,14 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 /** One host this helper can answer for, named the way a helper is asked. */
 export interface KnownHost {
   readonly host: string;
+  /**
+   * The repository path this entry is for.
+   *
+   * Present, because a broker is asked about a complete locator. An entry that
+   * matched a host alone could not tell two repositories on one server apart,
+   * and neither could a test standing on it.
+   */
+  readonly path?: string;
   readonly username: string;
   readonly password: string;
 }
@@ -36,7 +44,7 @@ export interface KnownHost {
 function helperProgram(known: readonly KnownHost[]): string {
   const branches = known.map(
     (entry) =>
-      `    ${entry.host})\n` +
+      `    "${entry.host}|${entry.path ?? ""}")\n` +
       `      echo username=${entry.username}\n` +
       `      echo password=${entry.password}\n` +
       `      ;;`,
@@ -45,12 +53,16 @@ function helperProgram(known: readonly KnownHost[]): string {
     "#!/bin/sh",
     'if [ "$1" != "get" ]; then exit 0; fi',
     "host=",
+    "path=",
     "while IFS= read -r line; do",
     "  case $line in",
     "    host=*) host=${line#host=} ;;",
+    "    path=*) path=${line#path=} ;;",
     "  esac",
     "done",
-    "case $host in",
+    // The whole locator decides, so an entry for one repository does not answer
+    // for another on the same host.
+    'case "$host|$path" in',
     ...branches,
     "esac",
     "exit 0",
@@ -75,7 +87,14 @@ export function* useInvokingHome(known: readonly KnownHost[]): Operation<Invokin
   const helper = join(home, "credential-helper.sh");
   yield* until(writeFile(helper, helperProgram(known), { mode: 0o700 }));
   yield* until(chmod(helper, 0o700));
-  yield* until(writeFile(join(home, ".gitconfig"), `[credential]\n\thelper = ${helper}\n`));
+  // `useHttpPath`, because a broker is asked about a complete locator and this
+  // is what a user sets when one credential per repository is the point.
+  yield* until(
+    writeFile(
+      join(home, ".gitconfig"),
+      `[credential]\n\thelper = ${helper}\n\tuseHttpPath = true\n`,
+    ),
+  );
   // Present and empty, so an SSH session's known-hosts file is this fixture's
   // rather than a path that happens not to exist.
   yield* until(mkdir(join(home, ".ssh"), { recursive: true }));

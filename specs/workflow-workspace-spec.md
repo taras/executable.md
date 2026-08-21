@@ -2361,12 +2361,14 @@ property of the machine the run is standing on, not of the run: authentication i
 a live host input and never retained workflow state.
 
 **Nothing is copied and nothing is persisted.** No credential value crosses the
-provider's authentication boundary, and none is written to any file. What a
-session holds is the host's decision about which authentication Git may use for
-one exact locator; Git and the selected mechanism exchange the secret between
-themselves. XMD does not approve, reject, erase, copy or persist a Git
-credential — those are things the provider cannot do rather than things it
-declines to do.
+provider's authentication boundary, and none is written to any file. The broker
+owns the value; the provider owns a lease, which has no member that answers with
+one. A credential reaches native Git through Git's own credential protocol and
+materializes nowhere but the environment of the one subprocess it speaks for —
+never in an argument, a command line, a configuration file or a stored
+credential. The helper a lease installs answers `get` and nothing else, so
+`store`, `erase`, `approve` and `reject` are paths that do not exist rather than
+paths that are declined.
 
 **What is borrowed.** The first Deno host guarantees the equivalent local
 operation only when that operation can authenticate non-interactively through one
@@ -2378,12 +2380,15 @@ of three host-owned mechanisms:
   and, with no agent, the run refuses rather than searching. Host verification is
   never disabled — the host separately selects the invoking user's known-host
   material, and an unknown host is an ordinary refusal.
-- **HTTP Git transport** uses the credential helpers the invoking user already
-  configured, re-stated on the command line so the helper this host selected is
-  the helper that runs, together with the narrow environment those helpers need
-  to reach the user's own keychain or store. Git queries them for the exact URL
-  it is transporting to, which is a more exact question than the provider could
-  ask on its behalf, and the answer never passes through XMD.
+- **HTTP Git transport** uses a host-owned credential broker, queried once for
+  the complete admitted credential-free locator — scheme, host and path. The
+  broker consults the invoking user's own configuration, because that is where a
+  standard Git credential helper and a platform keychain live, and it is the only
+  component that ever holds a credential value. What the provider holds is an
+  opaque lease: it says whether an identity was proved for that locator, and it
+  can attach itself to a command. An answer whose protocol, host or path differs
+  from the request has not authorized the request, and an acquisition for one
+  repository never authorizes another on the same host.
 - **GitHub API transport** uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the token
   `gh auth token --hostname github.com` returns. A variable that is set but empty
   is an explicit absence and stops the search. Every shipped Deno GitHub adapter
@@ -2393,7 +2398,8 @@ of three host-owned mechanisms:
 
 A helper may perform its own provider-defined refresh while answering. The
 provider never terminal-prompts and never launches an environment-selected
-askpass program.
+askpass program, and it copies no `credential.*` configuration onto a command
+line.
 
 **When it is opened.** Lazily, and per live provider invocation: after the
 Repository and locator authority checks that operation requires, shared by that
@@ -2422,7 +2428,10 @@ its fingerprint, never a credential or a credential-source identity.
 live refusal or unavailability, and stays distinct from locator invalidity and
 from remote absence: a transport that carries an identity, attempted with no
 mechanism to prove one, is refused under its own `authentication-unavailable`
-word, decided from what the host had rather than from anything Git printed. It never proves remote absence and never
+word, decided from whether the broker acquired an identity rather than from
+anything Git printed. A configured helper that answered nothing is not
+authentication, and a transport that then fails is unavailability rather than an
+invalid locator. It never proves remote absence and never
 authorizes, adopts or records completion. A completed Repository, Push, pull
 request or Issue replay reaches no authentication mechanism and no remote. An
 interrupted external effect reacquires the authentication currently available to

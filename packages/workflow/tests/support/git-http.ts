@@ -41,6 +41,8 @@ export interface ServedGitRequest {
 export interface GitHttpRemote {
   /** The credential-free locator a document writes as `url`. */
   readonly locator: string;
+  /** The locator of the second repository, when one is served. */
+  readonly alsoLocator: string;
   /** The host and port, as a credential helper is asked about them. */
   readonly host: string;
   /** What this remote is called where a credential may not be named. */
@@ -48,10 +50,25 @@ export interface GitHttpRemote {
   readonly requests: ServedGitRequest[];
 }
 
+/** A second repository on the same server, protected by its own credential. */
+export interface AlsoServed {
+  readonly remote: BareRemote;
+  readonly username: string;
+  readonly password: string;
+}
+
 export interface GitHttpOptions {
   readonly remote: BareRemote;
   readonly username: string;
   readonly password: string;
+  /**
+   * Another repository, served from this same host and port.
+   *
+   * What makes "one locator's authentication cannot authorize another"
+   * observable end to end: two paths on one server, each demanding a different
+   * credential, so what separates them is the whole locator rather than a host.
+   */
+  readonly also?: AlsoServed;
   /**
    * How this remote names itself to a credential helper.
    *
@@ -91,8 +108,13 @@ function cgiEnvironment(
   incoming: IncomingMessage,
   root: string,
   user: string,
+  segment: string,
+  directory: string,
 ): Record<string, string> {
   const url = new URL(incoming.url ?? "/", "http://127.0.0.1");
+  // The path a document writes need not be the directory name on disk: two
+  // fixtures both build `remote.git`, and telling them apart is the point.
+  const pathInfo = url.pathname.replace(`/${segment}`, `/${directory}`);
   const type = incoming.headers["content-type"];
   const encoding = incoming.headers["content-encoding"];
   return {
@@ -100,7 +122,7 @@ function cgiEnvironment(
     GIT_PROJECT_ROOT: root,
     GIT_HTTP_EXPORT_ALL: "1",
     REQUEST_METHOD: incoming.method ?? "GET",
-    PATH_INFO: url.pathname,
+    PATH_INFO: pathInfo,
     QUERY_STRING: url.search.replace(/^\?/, ""),
     ...(typeof type === "string" ? { CONTENT_TYPE: type } : {}),
     ...(typeof encoding === "string" ? { HTTP_CONTENT_ENCODING: encoding } : {}),
@@ -133,9 +155,11 @@ function serve(
   backend: string,
   root: string,
   user: string,
+  segment: string,
+  directory: string,
 ): void {
   const child = spawn(backend, [], {
-    env: cgiEnvironment(incoming, root, user),
+    env: cgiEnvironment(incoming, root, user, segment, directory),
     stdio: ["pipe", "pipe", "pipe"],
   });
   // A client that hung up mid-body closes this pipe under the backend. It is
@@ -208,15 +232,42 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
     git(["config", "http.receivepack", "true"], bare, root);
 
     const backend = backendProgram();
-    const expected = `Basic ${Buffer.from(`${options.username}:${options.password}`).toString(
-      "base64",
-    )}`;
+    const credential = (username: string, password: string) =>
+      `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+    const expected = credential(options.username, options.password);
     const requests: ServedGitRequest[] = [];
+
+    // Every repository this server holds, by the first segment of its path, so
+    // one listener can demand a different credential for each.
+    const served = new Map<
+      string,
+      { root: string; expected: string; user: string; directory: string }
+    >();
+    served.set(name, { root, expected, user: options.username, directory: name });
+    let alsoLocator = "";
+    if (options.also !== undefined) {
+      const alsoBare = options.also.remote.locator;
+      const alsoRoot = dirname(alsoBare);
+      const alsoName = alsoBare.slice(alsoRoot.length + 1);
+      git(["config", "http.receivepack", "true"], alsoBare, alsoRoot);
+      // A path of its own, whatever the directory happens to be called.
+      const segment = alsoName === name ? "other.git" : alsoName;
+      served.set(segment, {
+        root: alsoRoot,
+        expected: credential(options.also.username, options.also.password),
+        user: options.also.username,
+        directory: alsoName,
+      });
+      alsoLocator = segment;
+    }
 
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
       const url = new URL(incoming.url ?? "/", "http://127.0.0.1");
       const header = incoming.headers.authorization;
-      const accepted = header === expected;
+      // Which repository this is for decides which credential is right.
+      const segment = url.pathname.replace(/^\//, "").split("/")[0] ?? "";
+      const entry = served.get(segment);
+      const accepted = entry !== undefined && header === entry.expected;
       requests.push({
         method: incoming.method ?? "GET",
         path: url.pathname,
@@ -240,7 +291,7 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
         incoming.resume();
         return;
       }
-      serve(incoming, outgoing, backend, root, options.username);
+      serve(incoming, outgoing, backend, entry.root, entry.user, segment, entry.directory);
     });
 
     yield* until(new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve())));
@@ -259,6 +310,7 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
     const host = `127.0.0.1:${address.port}`;
     yield* provide({
       locator: `http://${host}/${name}`,
+      alsoLocator: alsoLocator === "" ? "" : `http://${host}/${alsoLocator}`,
       host,
       label: options.label ?? name,
       requests,
