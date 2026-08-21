@@ -127,6 +127,12 @@ export function useAdvisoryLock(path: string): Operation<AdvisoryLockFile | unde
  * Wait for the exclusive lock at `path` and hand it to an owner that outlives
  * this call.
  *
+ * Shared or exclusive, because the two owners of a pair are not symmetric. Any
+ * number of connections may be open at once — deciding who may *advance* a run
+ * is the executor lock's separate question — so a connection takes this shared.
+ * Inspection copying the pair needs every one of them to be still, so it takes
+ * it exclusive and waits.
+ *
  * A scope-bound hold cannot express a lock that belongs to a cached connection:
  * that connection outlives the call that opened it, and so must its lock. The
  * caller therefore releases explicitly, and the only safe place to do that is
@@ -136,7 +142,10 @@ export function useAdvisoryLock(path: string): Operation<AdvisoryLockFile | unde
  * only an open descriptor, and the `finally` closes it; once it is taken the
  * handoff has happened and the owner is responsible for it.
  */
-export function* takeAdvisoryLock(path: string): Operation<AdvisoryLockFile> {
+export function* takeAdvisoryLock(
+  path: string,
+  { exclusive }: { exclusive: boolean },
+): Operation<AdvisoryLockFile> {
   yield* ensureDir(dirname(path));
 
   let file: AdvisoryLockFile | undefined;
@@ -145,7 +154,7 @@ export function* takeAdvisoryLock(path: string): Operation<AdvisoryLockFile> {
   try {
     file = locking().openSync(path, { read: true, write: true, create: true });
     while (!locked) {
-      locked = file.tryLockSync(true);
+      locked = file.tryLockSync(exclusive);
       if (!locked) {
         yield* sleep(RETRY_INTERVAL);
       }

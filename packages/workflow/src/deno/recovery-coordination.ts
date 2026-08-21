@@ -62,10 +62,15 @@ export function holdRecoveryCoordination(databasePath: string): Operation<void> 
  *
  * So the lock lives as long as the connection: taken here, released where the
  * connection closes. That is also why a cached lookup pays nothing — the
- * connection it returns is already holding it.
+ * connection it returns is already holding it. It is shared, so connections do
+ * not exclude each other; only an inspection copying the pair excludes them.
  */
 export function takeConnectionCoordination(databasePath: string): Operation<AdvisoryLockFile> {
-  return takeAdvisoryLock(recoveryCoordinationPath(databasePath));
+  // Shared: any number of hosts may have this run open at once, and which of
+  // them may advance it is the executor lock's question, not this one. What
+  // this excludes is an inspection copying the pair while any of them could
+  // recover it.
+  return takeAdvisoryLock(recoveryCoordinationPath(databasePath), { exclusive: false });
 }
 
 /** Give it back, which is what closing the connection means for the pair. */
