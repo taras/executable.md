@@ -36,6 +36,7 @@ import {
   resolveRepositoryStart,
   type GitSession,
 } from "./git.ts";
+import { useGitAuthentication } from "./host.ts";
 import type { RepositoryHost } from "./host.ts";
 import { admitLocator, locatorFingerprint } from "./locator.ts";
 import {
@@ -105,7 +106,10 @@ function* retainRepository(
     const directory = `${root}${checkoutPath}`;
     yield* ensureDir(parentOf(directory));
 
-    yield* clone(git, locator, directory, root);
+    // One session for this Repository creation, opened after the locator was
+    // admitted and released with the scope this clone runs in.
+    const session = yield* useGitAuthentication(host, locator);
+    yield* clone(git, locator, directory, root, session);
     const start = yield* resolveRepositoryStart(git, directory, request.base);
     yield* checkoutPrimary(git, directory, start);
     const format = yield* objectFormat(git, directory);

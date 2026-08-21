@@ -47,12 +47,17 @@
  * leaves the ones that run after it.
  */
 
-import { ensure, type Operation, resource, scoped, until } from "effection";
+import { ensure, type Operation, resource, until } from "effection";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { denoGitAuthentication, type GitAuthentication } from "./authentication.ts";
+import { denoGitAuthentication, UNAUTHENTICATED } from "./authentication.ts";
+import type {
+  GitAttachment,
+  GitAuthentication,
+  GitAuthenticationSession,
+} from "./authentication.ts";
 import { runProcess, type ProcessOutcome } from "./subprocess.ts";
 
 /** What one Git invocation reported. A nonzero exit is an answer, not a throw. */
@@ -80,21 +85,40 @@ export interface GitInvocation {
    */
   readonly committedAt?: number;
   /**
-   * The exact locator this command transports to, when it transports at all.
+   * What this command's provider invocation borrowed from the host.
    *
-   * Named by the operation rather than read out of the arguments: what a
-   * credential is acquired for has to be the locator the effect already
-   * admitted and retained, not a string parsed back out of a command line.
-   * Absent for every command that stays inside the materialization, and those
-   * reach no authentication mechanism at all.
+   * Handed down rather than acquired here. One invocation opens one session,
+   * after the authority checks that operation requires, and every native
+   * command it runs attaches that same one — so an observation and the mutation
+   * that follows it go out under one identity rather than two. Absent for every
+   * command that stays inside the materialization.
    */
-  readonly remote?: string;
+  readonly attachment?: GitAttachment;
 }
 
 export interface RepositoryHost {
   git(invocation: GitInvocation): Operation<GitOutcome>;
   /** A host directory owned by the acquiring scope, removed when it ends. */
   useDirectory(): Operation<string>;
+  /**
+   * One authentication session for this exact locator, owned by the acquiring
+   * scope and disposed with it.
+   *
+   * Optional, because a suite that substitutes the whole host has already
+   * replaced the thing a session would be attached to. Such a host lends none,
+   * and every operation reads that as an absent mechanism rather than an error.
+   */
+  useAuthentication?(locator: string): Operation<GitAuthenticationSession>;
+}
+
+/** This host's session for one locator, or that of a host which lends none. */
+export function* useGitAuthentication(
+  host: RepositoryHost,
+  locator: string,
+): Operation<GitAuthenticationSession> {
+  return host.useAuthentication === undefined
+    ? UNAUTHENTICATED
+    : yield* host.useAuthentication(locator);
 }
 
 /**
@@ -170,25 +194,21 @@ export interface RepositoryHostOptions {
 export function denoRepositoryHost(options: RepositoryHostOptions = {}): RepositoryHost {
   const authentication = options.authentication ?? denoGitAuthentication();
   return {
-    *git({ args, cwd, home, input, committedAt, remote }: GitInvocation): Operation<GitOutcome> {
-      // The attachment is acquired inside this scope and released with it, so
-      // whatever the host had to write down to lend a credential is gone by the
-      // time this operation returns — before the directory the command worked
-      // in is, and long before anything is retained.
-      //
-      // A command with no remote acquires nothing. That is what makes a
-      // completed replay reach no authentication mechanism: replay performs no
-      // remote operation, so there is no invocation to attach one to.
-      return yield* scoped(function* () {
-        const attached = remote === undefined ? undefined : yield* authentication.acquire(remote);
-        return yield* runProcess({
-          command: "git",
-          args: [...CONFIGURATION, ...(attached?.configuration ?? []), ...args],
-          cwd,
-          env: { ...environment(home, committedAt), ...(attached?.environment ?? {}) },
-          ...(input === undefined ? {} : { input }),
-        });
+    git({ args, cwd, home, input, committedAt, attachment }: GitInvocation): Operation<GitOutcome> {
+      // A command with no attachment reaches no authentication mechanism. That
+      // is what makes a completed replay reach none: replay performs no remote
+      // operation, so no invocation ever opens a session to attach.
+      return runProcess({
+        command: "git",
+        args: [...CONFIGURATION, ...(attachment?.configuration ?? []), ...args],
+        cwd,
+        env: { ...environment(home, committedAt), ...(attachment?.environment ?? {}) },
+        ...(input === undefined ? {} : { input }),
       });
+    },
+
+    useAuthentication(locator: string): Operation<GitAuthenticationSession> {
+      return authentication.open(locator);
     },
 
     useDirectory(): Operation<string> {

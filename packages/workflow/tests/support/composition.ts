@@ -31,7 +31,8 @@ import {
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
 } from "../../src/deno/composition/provider.ts";
-import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
+import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
+import type { GitAuthenticationSession } from "../../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../src/deno/workspace/private.ts";
 import {
@@ -84,6 +85,12 @@ export function countingHost(inner: RepositoryHost = denoRepositoryHost()): Coun
         const directory = yield* inner.useDirectory();
         counters.roots.push(directory);
         return directory;
+      },
+      // Delegated rather than dropped: a decorator that answered for the host
+      // here would be substituting the very thing a suite counting commands is
+      // trying to observe through.
+      useAuthentication(locator: string): Operation<GitAuthenticationSession> {
+        return useGitAuthentication(inner, locator);
       },
     },
   };

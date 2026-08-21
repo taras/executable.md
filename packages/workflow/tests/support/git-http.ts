@@ -43,6 +43,8 @@ export interface GitHttpRemote {
   readonly locator: string;
   /** The host and port, as a credential helper is asked about them. */
   readonly host: string;
+  /** What this remote is called where a credential may not be named. */
+  readonly label: string;
   readonly requests: ServedGitRequest[];
 }
 
@@ -50,6 +52,15 @@ export interface GitHttpOptions {
   readonly remote: BareRemote;
   readonly username: string;
   readonly password: string;
+  /**
+   * How this remote names itself to a credential helper.
+   *
+   * Two remotes in one suite have to be distinguishable without either one's
+   * credential appearing in an assertion, and a helper is asked about a host.
+   * The label is what a fixture helper matches on and what a failure message
+   * says instead of a secret.
+   */
+  readonly label?: string;
 }
 
 /** Where Git keeps `git-http-backend`, asked of Git rather than guessed. */
@@ -232,6 +243,11 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
       throw new Error("the remote did not listen on a TCP port");
     }
     const host = `127.0.0.1:${address.port}`;
-    yield* provide({ locator: `http://${host}/${name}`, host, requests });
+    yield* provide({
+      locator: `http://${host}/${name}`,
+      host,
+      label: options.label ?? name,
+      requests,
+    });
   });
 }

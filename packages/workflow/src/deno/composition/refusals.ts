@@ -21,6 +21,7 @@ import { JournaledEffectFailure } from "../workspace/errors.ts";
 
 const REPOSITORY_REASONS: ReadonlyMap<string, RepositoryFailureReason> = new Map([
   ["invalid-locator", "invalid-locator"],
+  ["authentication-unavailable", "authentication-unavailable"],
   ["unresolved-base", "unresolved-base"],
   ["missing-remote-default", "missing-remote-default"],
   ["incompatible-reuse", "incompatible-reuse"],
@@ -98,6 +99,10 @@ const REPOSITORY_SENTENCES: ReadonlyMap<RepositoryFailureReason, string> = new M
   [
     "invalid-locator",
     "its url could not be used as a Git locator, or the repository it names could not be read.",
+  ],
+  [
+    "authentication-unavailable",
+    "its url needs a credential, and this host has no authentication to offer for it.",
   ],
   ["unresolved-base", "its base does not name a commit in that repository."],
   ["missing-remote-default", "the repository has no default branch to start from."],

@@ -84,7 +84,9 @@ import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
 import { currentBranch, gitSession, observeRemoteRef, pushRefspec, resolveCommit } from "./git.ts";
 import { objectSource, type PushObjectSource } from "./object-source.ts";
+import { useGitAuthentication } from "./host.ts";
 import type { RepositoryHost } from "./host.ts";
+import type { GitAuthenticationSession } from "./authentication.ts";
 import {
   exportCheckoutFamily,
   prepareCheckout,
@@ -111,6 +113,7 @@ function pushProvider(
   source: PushObjectSource,
   locator: string,
   admitted: GitPushInputs,
+  session: GitAuthenticationSession,
 ): GitHostProvider {
   function admit(request: CompleteGitHostEffectRequest): GitPushInputs {
     const inputs = parseGitPushInputs(request.inputs);
@@ -146,6 +149,7 @@ function pushProvider(
         locator,
         inputs.destinationRef,
         inputs.repository.objectFormat,
+        session,
       );
 
       if (observed.state === "unreachable") {
@@ -182,7 +186,7 @@ function pushProvider(
       const directory = yield* source.ready();
       const refspec = refspecFor(inputs.sourceCommit, inputs.destinationRef);
 
-      if (yield* pushRefspec(source.git, directory, locator, refspec)) {
+      if (yield* pushRefspec(source.git, directory, locator, refspec, session)) {
         return Ok(completion(inputs.sourceCommit));
       }
 
@@ -196,6 +200,7 @@ function pushProvider(
         locator,
         inputs.destinationRef,
         inputs.repository.objectFormat,
+        session,
       );
       if (observed.state === "present" && observed.commit === inputs.sourceCommit) {
         return Ok(completion(observed.commit));
@@ -299,8 +304,15 @@ export function* createGitPush(
       PUSH,
     );
 
+    // One session for this whole reconciliation, opened after the inputs were
+    // admitted and shared by its observations and its mutation, so a push and
+    // the observation that decided it go out under one identity. It is released
+    // with the scope below; a later attempt on an interrupted request opens its
+    // own.
+    const session = yield* useGitAuthentication(host, locator);
+
     const record = yield* withGitHostProvider(
-      pushProvider(source, locator, inputs),
+      pushProvider(source, locator, inputs, session),
       reconcileGitHostEffect({
         kind: GIT_PUSH,
         inputs: gitPushInputsJson(inputs),

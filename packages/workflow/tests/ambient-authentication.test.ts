@@ -4,53 +4,52 @@
  * The claim is about two things that must stay apart: a run reaches a protected
  * remote as whoever is standing at the host right now, and nothing about that
  * identity survives into what the run retains. Rendered text proves neither, so
- * every test here reads one of the four places an answer actually lives — what
- * the remote received, which locator the host was asked about, what the journal
- * and Workspace hold afterwards, and which Git commands ran.
+ * every test here reads one of the places an answer actually lives — what the
+ * remote received, which locator a session was opened for, how many sessions one
+ * document opened, and what the journal and Workspace hold afterwards.
  *
- * Nothing here reads a developer's real credential or contacts a network host.
- * The protected remote is `git http-backend` behind a loopback listener that
- * demands a credential this suite invented; the broker that answers for it is
- * either one the suite supplies or the shipped one pointed at a fixture home.
+ * Nothing here reads a developer's real credential or contacts a network host,
+ * and nothing here injects one either. The provider is never handed a credential
+ * to inject: it re-states the helpers an invoking user configured, and Git asks
+ * them. So the fixture is an invoking home with a helper program in it, and the
+ * protected remote is `git http-backend` behind a loopback listener that answers
+ * `401` until the credential that home's helper holds arrives.
+ *
+ * No assertion in this file names a credential. A remote reports whether what
+ * arrived was the one it requires; a leakage check reduces to a boolean before
+ * it is asserted, so a failure prints a verdict rather than a secret.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import type { Operation } from "effection";
 import { lstat } from "@effectionx/fs";
 import { chmod, writeFile } from "node:fs/promises";
-import { scoped, until } from "effection";
-import { join } from "node:path";
-import process from "node:process";
+import { scoped, until, type Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
+import type { ComponentRegistration } from "@executablemd/core";
 import { RepositoryCompositionError } from "../src/composition/errors.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
-import type { RepositoryHost } from "../src/deno/composition/host.ts";
 import {
-  credentialRequest,
-  denoCredentialBroker,
   denoGitAuthentication,
   gitTransport,
   sshCommand,
+  configuredCredentialSettings,
 } from "../src/deno/composition/authentication.ts";
 import type {
-  CredentialBroker,
-  CredentialRequest,
-  GitAttachment,
   GitAuthentication,
-  GitCredential,
+  GitAuthenticationSession,
 } from "../src/deno/composition/authentication.ts";
 import { denoGitHubAccess } from "../src/deno/composition/github.ts";
 import type { GitHubLogin } from "../src/deno/composition/github.ts";
-import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
-import type { ComponentRegistration } from "@executablemd/core";
-import type { Json } from "@executablemd/durable-streams";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
+import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.ts";
 import { useGitHttpRemote } from "./support/git-http.ts";
 import type { GitHttpRemote } from "./support/git-http.ts";
+import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
+import type { InvokingHome } from "./support/credential-home.ts";
 import {
   causedBy,
   compositionEvents,
@@ -65,68 +64,39 @@ import {
   subcommands,
   workspaceText,
 } from "./support/composition.ts";
-import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 
 /**
- * The credential this suite's remote requires.
+ * The credential this suite's remotes require.
  *
- * Two ordinary words with a distinctive marker in the password, because half of
- * what is under test is that this exact string reaches no durable or observable
- * surface. It is never written into a document and never rendered, so the
- * repository's own secret gate has nothing to detect and this suite is not
- * arranging for it to.
+ * Held here so a fixture can arrange both ends of an exchange it is not allowed
+ * to observe. Neither string ever reaches an assertion: what a test compares is
+ * a boolean this module computed, so a failure prints a verdict.
  */
-const USERNAME = "ambient-user";
-const PASSWORD = "ambient-marker-a7f3c1";
+const FIRST = { username: "ambient-user-one", password: "ambient-secret-one" } as const;
+const SECOND = { username: "ambient-user-two", password: "ambient-secret-two" } as const;
+
+/** Whether any credential this suite arranged appears in `text`. */
+function carriesCredential(text: string): boolean {
+  for (const entry of [FIRST, SECOND]) {
+    if (text.includes(entry.password) || text.includes(entry.username)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const REMOTE = {
   commits: [{ message: "first", entries: [{ path: "README.md", content: "protected\n" }] }],
 } as const;
 
-/** A broker that answers for one host and refuses every other. */
-function brokerFor(host: string, asked: CredentialRequest[]): CredentialBroker {
-  return {
-    // deno-lint-ignore require-yield
-    *fill(request: CredentialRequest): Operation<GitCredential | undefined> {
-      asked.push(request);
-      return request.host === host
-        ? Object.freeze({ username: USERNAME, password: PASSWORD })
-        : undefined;
-    },
-  };
-}
-
-/** A broker that holds nothing at all, however it is asked. */
-function emptyBroker(asked: CredentialRequest[]): CredentialBroker {
-  return {
-    // deno-lint-ignore require-yield
-    *fill(request: CredentialRequest): Operation<GitCredential | undefined> {
-      asked.push(request);
-      return undefined;
-    },
-  };
-}
-
-/**
- * The invoking environment this suite pretends to be standing in.
- *
- * `HOME` is deliberately a path that does not exist: the shipped attachment
- * reads a `known_hosts` out of it, and a suite that let the real one through
- * would be describing the machine it ran on.
- */
-const AMBIENT = {
-  ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
-  HOME: "/nonexistent-invoking-home",
-};
-
-/** The shipped authentication, over a broker the suite supplies. */
-function hostFor(broker: CredentialBroker): RepositoryHost {
+/** The shipped authentication, standing in this invoking environment. */
+function hostFor(home: InvokingHome) {
   return denoRepositoryHost({
-    authentication: denoGitAuthentication({ ambient: AMBIENT, broker }),
+    authentication: denoGitAuthentication({ ambient: home.ambient }),
   });
 }
 
-/** Every locator the host was asked to authenticate, in order. */
+/** Every locator a session was opened for, in order. */
 interface RecordedAuthentication {
   readonly authentication: GitAuthentication;
   readonly locators: string[];
@@ -135,17 +105,18 @@ interface RecordedAuthentication {
 /**
  * The shipped authentication, counted.
  *
- * A decorator rather than a stand-in, so a suite asserting which locator was
- * asked about is asserting about the acquisition that actually happened.
+ * A decorator rather than a stand-in, so a suite asserting how many sessions a
+ * document opened, and for what, is asserting about the sessions that were
+ * actually opened.
  */
 function recording(inner: GitAuthentication): RecordedAuthentication {
   const locators: string[] = [];
   return {
     locators,
     authentication: {
-      acquire(locator: string): Operation<GitAttachment> {
+      open(locator: string): Operation<GitAuthenticationSession> {
         locators.push(locator);
-        return inner.acquire(locator);
+        return inner.open(locator);
       },
     },
   };
@@ -155,25 +126,15 @@ function recording(inner: GitAuthentication): RecordedAuthentication {
 function forbidden(reached: string[]): GitAuthentication {
   return {
     // deno-lint-ignore require-yield
-    *acquire(locator: string): Operation<GitAttachment> {
+    *open(locator: string): Operation<GitAuthenticationSession> {
       reached.push(locator);
-      throw new Error(`authentication was acquired for ${locator}`);
+      throw new Error("a session was opened where none may be");
     },
   };
 }
 
 function isRepositoryRefusal(value: unknown): value is RepositoryCompositionError {
   return value instanceof RepositoryCompositionError;
-}
-
-/** A protected remote, plus the local bare repository behind it. */
-function* protectedRemote(): Operation<GitHttpRemote> {
-  const bare = yield* useBareRemote(REMOTE);
-  return yield* useGitHttpRemote({ remote: bare, username: USERNAME, password: PASSWORD });
-}
-
-function document(locator: string, ...lines: string[]): string {
-  return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
 }
 
 function* present(path: string): Operation<boolean> {
@@ -193,13 +154,25 @@ function* checkoutPath(database: WorkflowRunDatabase): Operation<string> {
   return repository.record.checkoutPath;
 }
 
-/**
- * Append configuration to the retained checkout mid-document.
- *
- * A component rather than a second execution: a workflow definition is
- * immutable, so state a scenario needs planted between two elements has to be
- * planted by an element.
- */
+function document(locator: string, ...lines: string[]): string {
+  return [`<Repository name="project" url="${locator}">`, ...lines, "</Repository>"].join("\n");
+}
+
+/** Switch to a branch, record one commit on it and publish it. */
+function published(locator: string, ...extra: string[]): string {
+  return document(
+    locator,
+    `<Git.Switch branch="publish/1.4" />`,
+    `<File path="notes.md">`,
+    "prepared",
+    "</File>",
+    `<Git.Add paths="notes.md" />`,
+    `<Git.Commit message="prepare the release" as="commit" />`,
+    ...extra,
+  );
+}
+
+/** Append configuration to the retained checkout mid-document. */
 function plant(database: WorkflowRunDatabase, configuration: string): ComponentRegistration {
   return {
     name: "Plant",
@@ -224,15 +197,24 @@ function plant(database: WorkflowRunDatabase, configuration: string): ComponentR
   };
 }
 
+/** One protected remote, and the bare repository behind it. */
+function* protectedRemote(
+  credential: { username: string; password: string },
+  label: string,
+): Operation<GitHttpRemote> {
+  const bare = yield* useBareRemote(REMOTE);
+  return yield* useGitHttpRemote({ remote: bare, label, ...credential });
+}
+
 describe("workflow ambient Git authentication", () => {
-  it("clones a remote that demands a credential the invoking host holds", function* () {
+  it("clones a protected remote through the helper the invoking host configured", function* () {
     const root = yield* useStorageRoot();
-    const served = yield* protectedRemote();
-    const asked: CredentialRequest[] = [];
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(brokerFor(served.host, asked)));
+      const counting = countingHost(hostFor(home));
       const output = yield* runDocument(
         database,
         document(served.locator, `<File path="README.md" as="readme" />`, "", "read: {readme}"),
@@ -241,16 +223,8 @@ describe("workflow ambient Git authentication", () => {
 
       expect(String(output)).toContain("read: protected");
 
-      // The broker was asked about the locator itself — its scheme, its host and
-      // its path — rather than about a host in general.
-      expect(asked).toHaveLength(1);
-      expect(asked[0]?.protocol).toBe("http");
-      expect(asked[0]?.host).toBe(served.host);
-      expect(asked[0]?.path).toBe("remote.git");
-
       // The exchange the remote saw: a first request with no credential, which
-      // is what produces the challenge, and then the accepted one.
-      expect(served.requests.length).toBeGreaterThan(1);
+      // is what produces the challenge, and then one it accepted.
       expect(served.requests[0]?.credentialed).toBe(false);
       expect(served.requests.some((request) => request.accepted)).toBe(true);
 
@@ -261,27 +235,27 @@ describe("workflow ambient Git authentication", () => {
     });
   });
 
-  it("refuses a clone the host holds no credential for, and retains nothing", function* () {
+  it("refuses a protected clone this host has no mechanism for, distinctly", function* () {
     const root = yield* useStorageRoot();
-    const served = yield* protectedRemote();
-    const asked: CredentialRequest[] = [];
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useHomeWithoutAuthentication();
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(emptyBroker(asked)));
+      const counting = countingHost(hostFor(home));
       const failure = yield* raised(
         runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
       );
 
-      // An ordinary live refusal. The remote's answer is a challenge nobody
-      // could meet, which is a locator this run could not use.
-      expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("invalid-locator");
-      expect(asked).toHaveLength(1);
-      // Nothing was adopted and nothing was published: every request the remote
-      // saw was refused, and the run retains no repository. The one event the
-      // journal holds is the failed establishment itself, recorded as an error
-      // — which is what makes a later attempt a new attempt rather than a
-      // replay of a completion nobody reached.
+      // Its own word. A locator this provider could have used, reached with no
+      // way to prove who this run is, is a live host condition rather than a
+      // fault in what the document wrote — and neither is it remote absence.
+      expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("authentication-unavailable");
+
+      // Nothing was adopted and nothing was published: no request the remote saw
+      // was accepted, and the run retains no repository. The one journaled event
+      // is the failed establishment, which is what makes a later attempt a new
+      // attempt rather than a replay of a completion nobody reached.
       expect(served.requests.every((request) => !request.accepted)).toBe(true);
       expect(yield* retainedRepositories(database)).toHaveLength(0);
       const events = yield* compositionEvents(database);
@@ -293,218 +267,144 @@ describe("workflow ambient Git authentication", () => {
   it("publishes to a protected remote through the same ambient authentication", function* () {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
-    const served = yield* useGitHttpRemote({
-      remote: bare,
-      username: USERNAME,
-      password: PASSWORD,
-    });
-    const asked: CredentialRequest[] = [];
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(brokerFor(served.host, asked)));
+      const counting = countingHost(hostFor(home));
       yield* runWorkflowDocument(
         database,
-        document(
-          served.locator,
-          `<Git.Switch branch="publish/1.4" />`,
-          `<File path="notes.md">`,
-          "prepared",
-          "</File>",
-          `<Git.Add paths="notes.md" />`,
-          `<Git.Commit message="prepare the release" as="commit" />`,
-          `<Git.Push />`,
-        ),
+        published(served.locator, `<Git.Push />`),
         countingOptions(counting),
       );
 
-      // The other end of the transport is what proves a push happened. The
-      // bare repository the server serves is the same one the fixture built.
+      // The other end of the transport is what proves a push happened.
       expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
+      expect((yield* gitHostOutcomes(database))[0]?.status).toBe("ok");
       const ran = subcommands(counting.counters);
       expect(ran).toContain("push");
       expect(ran).toContain("ls-remote");
-      // Clone, the reconciliation's observation and the push itself. Each one
-      // is its own acquisition, so a credential is never held across commands.
-      expect(asked.length).toBeGreaterThanOrEqual(3);
-      expect(asked.every((request) => request.host === served.host)).toBe(true);
     });
   });
 
-  /**
-   * The reacquisition an interrupted external effect performs.
-   *
-   * Two `<Git.Push>` elements are the shape of an attempt that reached the
-   * remote and then had to be made again: the second observes the exact
-   * destination, finds the commit already there and adopts it. What this adds to
-   * the reconciliation the push suite already proves is that the second attempt
-   * borrowed authentication of its own — a run that carried the first one's
-   * forward would show fewer acquisitions than commands.
-   */
-  it("reacquires for an interrupted push and adopts without publishing twice", function* () {
+  it("opens one session per provider invocation, not per command", function* () {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
-    const served = yield* useGitHttpRemote({
-      remote: bare,
-      username: USERNAME,
-      password: PASSWORD,
-    });
-    const asked: CredentialRequest[] = [];
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const recorded = recording(
-        denoGitAuthentication({ ambient: AMBIENT, broker: brokerFor(served.host, asked) }),
-      );
+      const recorded = recording(denoGitAuthentication({ ambient: home.ambient }));
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
       );
       yield* runWorkflowDocument(
         database,
-        document(
-          served.locator,
-          `<Git.Switch branch="publish/1.4" />`,
-          `<File path="notes.md">`,
-          "prepared",
-          "</File>",
-          `<Git.Add paths="notes.md" />`,
-          `<Git.Commit message="prepare the release" as="commit" />`,
-          `<Git.Push />`,
-          `<Git.Push />`,
-        ),
+        published(served.locator, `<Git.Push />`),
         countingOptions(counting),
       );
 
-      const outcomes = yield* gitHostOutcomes(database);
-      expect(outcomes).toHaveLength(2);
-      expect(parseGitHostReconciliationRecord(outcomes[0]?.record)?.decision).toBe("performed");
-      expect(parseGitHostReconciliationRecord(outcomes[1]?.record)?.decision).toBe("adopted");
+      // Two live provider invocations — the Repository's creation and the
+      // Push's reconciliation — and therefore two sessions, each for this
+      // Repository's own retained locator.
+      expect(recorded.locators).toEqual([served.locator, served.locator]);
 
-      // Two observations, one mutation — and one acquisition per command that
-      // left the materialization: the clone, both observations and the push.
+      // Three commands left the materialization: the clone, the push and the
+      // observation that decided it. The observation and the mutation share one
+      // session, so they go out under one identity rather than two.
       const ran = subcommands(counting.counters);
-      expect(ran.filter((name) => name === "ls-remote")).toHaveLength(2);
-      expect(ran.filter((name) => name === "push")).toHaveLength(1);
-      expect(recorded.locators).toEqual([
-        served.locator,
-        served.locator,
-        served.locator,
-        served.locator,
+      const transporting = ran.filter(
+        (name) => name === "clone" || name === "push" || name === "ls-remote",
+      );
+      expect(transporting.length).toBeGreaterThan(recorded.locators.length);
+    });
+  });
+
+  it("cannot use one protected locator's authentication for another", function* () {
+    const root = yield* useStorageRoot();
+    const first = yield* protectedRemote(FIRST, "first");
+    const second = yield* protectedRemote(SECOND, "second");
+    // The invoking host can prove an identity to the first remote and to no
+    // other. The second is protected by a different credential entirely.
+    const home = yield* useInvokingHome([{ host: first.host, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const recorded = recording(denoGitAuthentication({ ambient: home.ambient }));
+      const counting = countingHost(
+        denoRepositoryHost({ authentication: recorded.authentication }),
+      );
+      const failure = yield* raised(
+        runDocument(
+          database,
+          [
+            `<Repository name="reachable" url="${first.locator}" />`,
+            `<Repository name="unreachable" url="${second.locator}" />`,
+          ].join("\n"),
+          countingOptions(counting),
+        ),
+      );
+
+      // Each Repository opened its own session, for its own locator.
+      expect(recorded.locators).toEqual([first.locator, second.locator]);
+
+      // The first was authenticated and the second was refused: what the host
+      // could prove to one remote proved nothing at the other, and nothing this
+      // run held carried across.
+      expect(first.requests.some((request) => request.accepted)).toBe(true);
+      expect(second.requests.length).toBeGreaterThan(0);
+      expect(second.requests.every((request) => !request.accepted)).toBe(true);
+      expect(causedBy(failure, isRepositoryRefusal)).toBeDefined();
+      expect((yield* retainedRepositories(database)).map((entry) => entry.record.name)).toEqual([
+        "reachable",
       ]);
     });
   });
 
-  it("acquires for each exact locator, and carries none of them forward", function* () {
+  it("opens no session when a completed run replays", function* () {
     const root = yield* useStorageRoot();
-    const first = yield* useBareRemote(REMOTE);
-    const second = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const recorded = recording(
-        denoGitAuthentication({ ambient: AMBIENT, broker: emptyBroker([]) }),
-      );
-      const counting = countingHost(
-        denoRepositoryHost({ authentication: recorded.authentication }),
-      );
-      yield* runDocument(
-        database,
-        [
-          `<Repository name="first" url="${first.locator}" />`,
-          `<Repository name="second" url="${second.locator}" />`,
-        ].join("\n"),
-        countingOptions(counting),
-      );
-
-      // Two clones, two acquisitions, each naming its own locator. A run that
-      // reused one repository's authentication for another would show one.
-      expect(recorded.locators).toEqual([first.locator, second.locator]);
-    });
-  });
-
-  it("asks for nothing on a command that stays inside the materialization", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
-
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const recorded = recording(
-        denoGitAuthentication({ ambient: AMBIENT, broker: emptyBroker([]) }),
-      );
-      const counting = countingHost(
-        denoRepositoryHost({ authentication: recorded.authentication }),
-      );
-      yield* runWorkflowDocument(
-        database,
-        document(
-          remote.locator,
-          `<Git.Switch branch="work" />`,
-          `<File path="notes.md">`,
-          "prepared",
-          "</File>",
-          `<Git.Add paths="notes.md" />`,
-          `<Git.Commit message="record it" as="commit" />`,
-        ),
-        countingOptions(counting),
-      );
-
-      // Many commands ran; exactly one of them left the materialization.
-      expect(counting.counters.commands.length).toBeGreaterThan(5);
-      expect(recorded.locators).toEqual([remote.locator]);
-    });
-  });
-
-  it("reaches no authentication mechanism when a completed run replays", function* () {
-    const root = yield* useStorageRoot();
-    const remote = yield* useBareRemote(REMOTE);
+    const bare = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       const source = document(
-        remote.locator,
+        served.locator,
         `<File path="README.md" as="readme" />`,
         "",
         "read: {readme}",
       );
-      yield* runDocument(database, source);
-
-      // The remote is gone, so anything that reached for it would fail rather
-      // than quietly succeed.
-      yield* remote.remove();
+      yield* runDocument(database, source, countingOptions(countingHost(hostFor(home))));
 
       const reached: string[] = [];
       const counting = countingHost(denoRepositoryHost({ authentication: forbidden(reached) }));
+      const before = served.requests.length;
       const output = yield* runDocument(database, source, countingOptions(counting));
 
       expect(String(output)).toContain("read: protected");
       expect(reached).toEqual([]);
       expect(subcommands(counting.counters)).not.toContain("clone");
+      // And no remote was contacted, authenticated or otherwise.
+      expect(served.requests).toHaveLength(before);
     });
   });
 
   it("keeps the credential out of every durable and observable surface", function* () {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
-    const served = yield* useGitHttpRemote({
-      remote: bare,
-      username: USERNAME,
-      password: PASSWORD,
-    });
-    const asked: CredentialRequest[] = [];
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(brokerFor(served.host, asked)));
+      const counting = countingHost(hostFor(home));
       const output = yield* runWorkflowDocument(
         database,
-        document(
+        published(
           served.locator,
-          `<Git.Switch branch="publish/1.4" />`,
-          `<File path="notes.md">`,
-          "prepared",
-          "</File>",
-          `<Git.Add paths="notes.md" />`,
-          `<Git.Commit message="prepare the release" as="commit" />`,
           `<Git.Push />`,
           `<File path="README.md" as="readme" />`,
           "",
@@ -513,26 +413,48 @@ describe("workflow ambient Git authentication", () => {
         countingOptions(counting),
       );
 
-      expect(asked.length).toBeGreaterThanOrEqual(1);
-
-      // Rendered output, every journaled event, the retained records and the
-      // Workspace's own checkout configuration.
-      expect(String(output)).not.toContain(PASSWORD);
-      const events = yield* compositionEvents(database);
-      expect(JSON.stringify(events)).not.toContain(PASSWORD);
-      expect(JSON.stringify(yield* retainedRepositories(database))).not.toContain(PASSWORD);
-
-      // Not an argument either: the whole command list this run issued.
-      expect(JSON.stringify(counting.counters.commands)).not.toContain(PASSWORD);
-      expect(JSON.stringify(counting.counters.commands)).not.toContain(USERNAME);
+      // Rendered output, every journaled event, the retained records, the whole
+      // command list this run issued, and the Workspace's own configuration.
+      // Each is reduced to a verdict before it is asserted.
+      expect(carriesCredential(String(output))).toBe(false);
+      expect(carriesCredential(JSON.stringify(yield* compositionEvents(database)))).toBe(false);
+      expect(carriesCredential(JSON.stringify(yield* gitHostOutcomes(database)))).toBe(false);
+      expect(carriesCredential(JSON.stringify(yield* retainedRepositories(database)))).toBe(false);
+      expect(carriesCredential(JSON.stringify(counting.counters.commands))).toBe(false);
 
       const [retained] = yield* retainedRepositories(database);
       const config = yield* workspaceText(
         database,
         `${retained?.record.checkoutPath ?? ""}/.git/config`,
       );
-      expect(config).not.toContain(PASSWORD);
-      expect(config).not.toContain(USERNAME);
+      expect(carriesCredential(config)).toBe(false);
+    });
+  });
+
+  it("keeps it out of a refusal, its diagnostics and its causes too", function* () {
+    const root = yield* useStorageRoot();
+    const served = yield* protectedRemote(FIRST, "first");
+    // A home whose helper answers for somewhere else entirely, so the exchange
+    // happens and still proves nothing at this remote.
+    const home = yield* useInvokingHome([{ host: "elsewhere.invalid", ...SECOND }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost(hostFor(home));
+      const failure = yield* raised(
+        runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+      );
+
+      const refusal = causedBy(failure, isRepositoryRefusal);
+      expect(refusal).toBeDefined();
+      // The failure itself, everything under it, and what the journal kept of
+      // it. A refusal is where a provider is most tempted to explain itself.
+      expect(carriesCredential(String(refusal?.message ?? ""))).toBe(false);
+      expect(carriesCredential(String(failure))).toBe(false);
+      expect(carriesCredential((failure as Error)?.stack ?? "")).toBe(false);
+      expect(carriesCredential(JSON.stringify(yield* compositionEvents(database)))).toBe(false);
+      expect(carriesCredential(JSON.stringify(counting.counters.commands))).toBe(false);
+      expect(served.requests.every((request) => !request.accepted)).toBe(true);
     });
   });
 });
@@ -562,11 +484,8 @@ describe("workflow ambient authentication containment", () => {
     yield* until(chmod(planted, 0o700));
 
     const bare = yield* useBareRemote(REMOTE);
-    const served = yield* useGitHttpRemote({
-      remote: bare,
-      username: USERNAME,
-      password: PASSWORD,
-    });
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
     const hostile = [
       "[credential]",
       `\thelper = ${planted}`,
@@ -574,24 +493,13 @@ describe("workflow ambient authentication containment", () => {
       `\tsshCommand = ${planted}`,
       "",
     ].join("\n");
-    const asked: CredentialRequest[] = [];
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(brokerFor(served.host, asked)));
+      const counting = countingHost(hostFor(home));
       yield* runWorkflowDocument(
         database,
-        document(
-          served.locator,
-          `<Git.Switch branch="publish/1.4" />`,
-          `<Plant />`,
-          `<File path="notes.md">`,
-          "prepared",
-          "</File>",
-          `<Git.Add paths="notes.md" />`,
-          `<Git.Commit message="prepare the release" as="commit" />`,
-          `<Git.Push />`,
-        ),
+        published(served.locator, `<Plant />`, `<Git.Push />`),
         countingOptions(counting),
         (run) =>
           scoped(function* () {
@@ -600,16 +508,15 @@ describe("workflow ambient authentication containment", () => {
           }),
       );
 
-      // The push went through the host's own broker, and the program the
+      // The push happened, through the host's own helper, and the program the
       // document named never ran.
       expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
-      expect(asked.length).toBeGreaterThanOrEqual(1);
       expect(yield* present(sentinel)).toBe(false);
       expect((yield* gitHostOutcomes(database))[0]?.status).toBe("ok");
 
       // The trap really was armed. The same checkout, pushed the ordinary way —
-      // with its own configuration in force rather than an attachment that
-      // resets it — does reach the planted helper, and publishes nothing.
+      // with its own configuration in force rather than a session that resets
+      // it — does reach the planted helper, and publishes nothing.
       //
       // Asynchronously, because the remote is a listener in this process: a
       // synchronous child would hold the event loop the server answers on and
@@ -637,20 +544,6 @@ describe("workflow ambient authentication mechanisms", () => {
     expect(gitTransport("git://example.invalid/project.git")).toBe("none");
   });
 
-  it("asks about the whole locator rather than about its host", function* () {
-    expect(credentialRequest("https://example.invalid/owner/project.git")).toEqual({
-      protocol: "https",
-      host: "example.invalid",
-      path: "owner/project.git",
-    });
-    expect(credentialRequest("http://127.0.0.1:9000/project.git")).toEqual({
-      protocol: "http",
-      host: "127.0.0.1:9000",
-      path: "project.git",
-    });
-    expect(credentialRequest("ssh://git@example.invalid/owner/project.git")).toBeUndefined();
-  });
-
   it("pins SSH so no configuration redirects it and no prompt can appear", function* () {
     const pinned = sshCommand("/home/person", "/tmp/agent.sock");
     expect(pinned).toContain("'-F' '/dev/null'");
@@ -668,107 +561,79 @@ describe("workflow ambient authentication mechanisms", () => {
     expect(sshCommand("/home/person", "")).toContain("'IdentityAgent=none'");
   });
 
-  it("fixes the settings a retained repository could otherwise name", function* () {
-    const attached = yield* denoGitAuthentication({
-      ambient: AMBIENT,
-      broker: emptyBroker([]),
-    }).acquire("https://example.invalid/owner/project.git");
+  it("lends the invoking agent to an SSH locator, and says it has one", function* () {
+    const home = yield* useHomeWithoutAuthentication();
+    const session = yield* denoGitAuthentication({
+      ambient: { ...home.ambient, SSH_AUTH_SOCK: "/tmp/ambient-agent.sock" },
+    }).open("ssh://git@example.invalid/owner/project.git");
 
-    // The reset is what makes the list one entry long: `credential.helper` is
-    // multi-valued, so a helper in a configuration file would otherwise be
-    // tried beside whatever the host attached.
-    expect(attached.configuration).toContain("credential.helper=");
-    expect(attached.configuration.some((entry) => entry.startsWith("core.sshCommand="))).toBe(true);
+    expect(session.attachment.environment).toEqual({
+      SSH_AUTH_SOCK: "/tmp/ambient-agent.sock",
+    });
+    expect(session.mechanism).toBe("ssh-agent");
   });
 
-  it("lends the invoking agent to an SSH locator and nothing else", function* () {
-    const attached = yield* denoGitAuthentication({
-      ambient: { ...AMBIENT, SSH_AUTH_SOCK: "/tmp/ambient-agent.sock" },
-      broker: emptyBroker([]),
-    }).acquire("ssh://git@example.invalid/owner/project.git");
+  it("stands on nothing for SSH with no agent, and says so", function* () {
+    const home = yield* useHomeWithoutAuthentication();
+    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
+      "ssh://git@example.invalid/owner/project.git",
+    );
 
-    expect(attached.environment).toEqual({ SSH_AUTH_SOCK: "/tmp/ambient-agent.sock" });
+    expect(session.attachment.environment).toEqual({});
+    expect(session.mechanism).toBe("none");
+  });
+
+  it("fixes the settings a retained repository could otherwise name", function* () {
+    const home = yield* useInvokingHome([]);
+    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
+      "https://example.invalid/owner/project.git",
+    );
+
+    // The reset is what makes the helper list this host's own: it is
+    // multi-valued, so a helper in a configuration file would otherwise be
+    // tried beside whatever the session states after it.
+    expect(session.attachment.configuration).toContain("credential.helper=");
+    const settings = session.attachment.configuration;
+    for (const key of ["core.sshCommand=", "core.excludesFile=", "core.attributesFile="]) {
+      expect(settings.some((entry) => entry.startsWith(key))).toBe(true);
+    }
+    // The reset comes before anything this host chose, or it would clear it.
+    const reset = settings.indexOf("credential.helper=");
+    const chosen = settings.findIndex(
+      (entry) => entry.startsWith("credential.") && entry !== "credential.helper=",
+    );
+    expect(reset).toBeGreaterThanOrEqual(0);
+    if (chosen >= 0) {
+      expect(reset).toBeLessThan(chosen);
+    }
   });
 
   it("lends nothing at all to a locator no mechanism applies to", function* () {
-    const attached = yield* denoGitAuthentication({
-      ambient: AMBIENT,
-      broker: emptyBroker([]),
-    }).acquire("/tmp/xmd-remote/remote.git");
+    const home = yield* useInvokingHome([]);
+    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
+      "/tmp/xmd-remote/remote.git",
+    );
 
-    expect(attached.environment).toEqual({});
-    expect(attached.configuration).toEqual([]);
+    expect(session.attachment.environment).toEqual({});
+    expect(session.attachment.configuration).toEqual([]);
+    expect(session.mechanism).toBe("none");
   });
 });
 
-describe("workflow credential broker", () => {
-  /** A fixture home whose Git configuration names one helper program. */
-  function* fixtureHome(script: string): Operation<string> {
-    const home = yield* useTempDirectory("xmd-ambient-home-");
-    const helper = join(home, "helper.sh");
-    yield* until(writeFile(helper, script, { mode: 0o700 }));
-    yield* until(chmod(helper, 0o700));
-    yield* until(
-      writeFile(join(home, ".gitconfig"), `[credential]\n\thelper = ${helper}\n`, {
-        mode: 0o600,
-      }),
-    );
-    return home;
-  }
+describe("workflow configured credential settings", () => {
+  it("re-states the helper the invoking user configured, and never a secret", function* () {
+    const home = yield* useInvokingHome([{ host: "example.invalid", ...FIRST }]);
+    const settings = yield* configuredCredentialSettings(home.ambient);
 
-  it("reads what the invoking user's own helper answers for one locator", function* () {
-    const home = yield* fixtureHome(
-      [
-        "#!/bin/sh",
-        'if [ "$1" != "get" ]; then exit 0; fi',
-        `echo username=${USERNAME}`,
-        `echo password=${PASSWORD}`,
-        "",
-      ].join("\n"),
-    );
-
-    const found = yield* denoCredentialBroker({
-      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
-      HOME: home,
-    }).fill({ protocol: "https", host: "example.invalid", path: "owner/project.git" });
-
-    expect(found?.username).toBe(USERNAME);
-    expect(found?.password).toBe(PASSWORD);
+    expect(settings.some((entry) => entry.startsWith("credential.helper="))).toBe(true);
+    // What crosses is the program's name. The credential it holds is exchanged
+    // between Git and that program, and never passes through here.
+    expect(carriesCredential(settings.join("\n"))).toBe(false);
   });
 
-  it("refuses an answer that is about somewhere else", function* () {
-    const home = yield* fixtureHome(
-      [
-        "#!/bin/sh",
-        'if [ "$1" != "get" ]; then exit 0; fi',
-        // A helper is free to rewrite the request's own fields, and an answer
-        // about another host has not authorized this one.
-        "echo host=elsewhere.invalid",
-        `echo username=${USERNAME}`,
-        `echo password=${PASSWORD}`,
-        "",
-      ].join("\n"),
-    );
-
-    const found = yield* denoCredentialBroker({
-      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
-      HOME: home,
-    }).fill({ protocol: "https", host: "example.invalid", path: "owner/project.git" });
-
-    expect(found).toBeUndefined();
-  });
-
-  it("answers none when the invoking host holds nothing", function* () {
-    const home = yield* useTempDirectory("xmd-ambient-home-");
-    const found = yield* denoCredentialBroker({
-      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
-      HOME: home,
-      // Without this, a machine whose Git is configured to prompt would stop
-      // here rather than answer.
-      GIT_TERMINAL_PROMPT: "0",
-    }).fill({ protocol: "https", host: "example.invalid", path: "owner/project.git" });
-
-    expect(found).toBeUndefined();
+  it("finds nothing for a host that configured nothing", function* () {
+    const home = yield* useHomeWithoutAuthentication();
+    expect(yield* configuredCredentialSettings(home.ambient)).toEqual([]);
   });
 });
 
@@ -812,7 +677,7 @@ describe("workflow GitHub ambient credentials", () => {
     const supplied = login("from-login", consulted);
 
     // An empty variable names no credential. Sending `Bearer ` would ask GitHub
-    // to decide what an empty token means, and looking elsewhere would ignore a
+    // to decide what an empty token means, and looking further would ignore a
     // caller who said outright which credential to use.
     expect(
       yield* denoGitHubAccess(undefined, {

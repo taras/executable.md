@@ -28,6 +28,10 @@ import { WorkflowStorageError } from "../storage/errors.ts";
 /** A word from the fixed vocabulary a Repository refusal is reported under. */
 export type RepositoryFailureReason =
   | "invalid-locator"
+  // Distinct from `invalid-locator` on purpose: a locator this provider could
+  // have used, reached with no way to prove who this run is, is a live host
+  // condition rather than a fault in what the document wrote.
+  | "authentication-unavailable"
   | "unresolved-base"
   | "missing-remote-default"
   | "incompatible-reuse"

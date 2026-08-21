@@ -1132,16 +1132,31 @@ Authentication itself is the one live host input such an invocation borrows, and
 it is not the same question as inherited configuration. Retained state says
 which repository an effect belongs to; it must never say who the run is, because
 an identity belongs to the machine a run is standing on and a run resumed
-elsewhere authenticates as whoever is there then. So a remote-touching
-invocation acquires authentication lazily, for its own exact retained locator,
-after the authority checks that operation requires — the ambient SSH agent for
-SSH, a host-owned credential broker for HTTP, and `GH_TOKEN` then `GITHUB_TOKEN`
-then the machine's Git-host login for a Git-host API. It is attached to one
-command and disposed with it. A credential acquired for one locator never
-authorizes another, nothing about it is retained, and a completed replay reaches
-no authentication mechanism at all because it performs no remote operation to
-attach one to. A missing or rejected credential is ordinary live refusal: it
-proves no absence and adopts no completion.
+elsewhere authenticates as whoever is there then. So one live provider
+invocation — a Repository creation, a Push reconciliation, a pull-request or
+Issue call — opens one authentication session lazily, for its own exact retained
+locator, after the authority checks that operation requires. Every native
+command that invocation runs attaches that same session, so an observation and
+the mutation it decided go out under one identity rather than two, and the
+session is disposed with the invocation. A later attempt on an interrupted
+request opens its own.
+
+No credential value crosses that boundary and none is written anywhere. A
+session holds the host's *decision* about which authentication Git may use for
+one locator — a socket path, a known-hosts file, the names of the credential
+helpers the invoking user already configured — and Git and the helper exchange
+the secret between themselves. Approving, rejecting, erasing, copying and
+persisting a credential are therefore things the provider cannot do rather than
+things it declines to do. A Git-host API is the same shape in a different
+protocol: `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own login, read
+once for the invocation that needs it.
+
+A session opened for one locator never authorizes another, nothing about one is
+retained, and a completed replay opens none at all because it performs no remote
+operation to attach one to. A missing or rejected credential is ordinary live
+refusal: it proves no absence and adopts no completion, and a transport that
+carries an identity attempted with no mechanism to prove one is refused under
+its own word rather than as a locator that names nothing.
 
 Only an answer the terminal accepted decides the effect. A conflict, a permanent
 ambiguity and a temporary unavailability so accepted publish the effect's failed
