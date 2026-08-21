@@ -39,7 +39,17 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { ACQUIRED, CAPABILITY_VARIABLE, ENDPOINT_VARIABLE, READY, REFUSED } from "./protocol.ts";
+import { connect } from "node:net";
+import {
+  CAPABILITY_VARIABLE,
+  decodeRejection,
+  decodeStatus,
+  encodeLine,
+  ENDPOINT_VARIABLE,
+  LISTENING,
+  STATUS,
+  SUBJECT_VARIABLES,
+} from "./protocol.ts";
 
 /** What a lease hands the command it speaks for. */
 export interface GitAttachment {
@@ -71,7 +81,7 @@ export interface CredentialLease {
    * had it refused is in the same position as one that could prove none —
    * authentication unavailability, never an invalid locator.
    */
-  readonly rejected: boolean;
+  rejected(): Operation<boolean>;
   /** What one command attaches to speak for this lease. */
   attachment(): GitAttachment;
 }
@@ -127,9 +137,34 @@ const NOTHING: GitAttachment = Object.freeze({
 
 const NO_LEASE: CredentialLease = Object.freeze({
   acquired: false,
-  rejected: false,
+  // deno-lint-ignore require-yield
+  *rejected(): Operation<boolean> {
+    return false;
+  },
   attachment: () => NOTHING,
 });
+
+/**
+ * Ask one broker a question and read its one-line answer.
+ *
+ * The parent's own client. It speaks the protocol the shim speaks and is held to
+ * the same capability, because an endpoint that answered its parent more readily
+ * than anyone else would be an endpoint with a second way in.
+ */
+function inquire(endpoint: string, question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const socket = connect(endpoint);
+    let buffered = "";
+    const finish = () => resolve(buffered);
+    socket.on("error", () => resolve(""));
+    socket.on("data", (chunk) => {
+      buffered += String(chunk);
+    });
+    socket.on("end", finish);
+    socket.on("close", finish);
+    socket.on("connect", () => socket.write(question));
+  });
+}
 
 /**
  * Where this lease's endpoint lives, by what the platform can protect.
@@ -225,6 +260,11 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
 
         const endpoint = endpointFor(directory);
         const capability = randomBytes(32).toString("hex");
+        const asked = {
+          protocol: request.protocol,
+          host: request.host,
+          path: request.path ?? "",
+        };
         const environment: Record<string, string> = {};
         for (const [name, value] of Object.entries(ambient)) {
           if (value !== undefined) {
@@ -232,50 +272,47 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
           }
         }
 
+        // The subject travels in the child's environment, never in its argument
+        // vector: a capability on a command line is a secret every process
+        // listing shows, and an endpoint there is an address nobody had to be
+        // told.
+        environment[SUBJECT_VARIABLES.endpoint] = endpoint;
+        environment[SUBJECT_VARIABLES.capability] = capability;
+        environment[SUBJECT_VARIABLES.protocol] = asked.protocol;
+        environment[SUBJECT_VARIABLES.host] = asked.host;
+        environment[SUBJECT_VARIABLES.path] = asked.path;
+
         const broker = options.internal.broker();
-        child = spawnChild(
-          broker.command,
-          [
-            ...broker.args,
-            endpoint,
-            capability,
-            request.protocol,
-            request.host,
-            request.path ?? "",
-          ],
-          { env: environment, stdio: ["pipe", "pipe", "pipe"], detached: true },
-        );
+        child = spawnChild(broker.command, [...broker.args], {
+          env: environment,
+          stdio: ["pipe", "pipe", "pipe"],
+          detached: true,
+        });
         child.on("close", () => finished.resolve());
         child.on("error", () => finished.resolve());
 
-        const started = withResolvers<boolean>();
+        // One record, once. There is nothing further to wait for, and no pause
+        // to decide how long to wait for it.
+        const started = withResolvers<string>();
         let announced = "";
-        let acquired = false;
-        let rejected = false;
         child.stdout?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: string) => {
           announced += chunk;
-          if (announced.includes(ACQUIRED)) {
-            acquired = true;
-          }
-          if (announced.includes(REFUSED)) {
-            rejected = true;
-          }
-          if (announced.includes(READY)) {
-            started.resolve(true);
+          const line = announced.indexOf("\n");
+          if (line >= 0) {
+            started.resolve(announced.slice(0, line));
           }
         });
-        child.on("close", () => started.resolve(false));
+        child.on("close", () => started.resolve(""));
 
-        if (!(yield* started.operation)) {
-          // A broker that never listened is a host that can prove nothing. It is
-          // not an error to raise: the caller already has a word for it.
+        const status = decodeStatus(yield* started.operation);
+        if (status === undefined || status.status !== LISTENING) {
+          // A broker that could not start or could not listen is a host that
+          // can prove nothing.
           yield* provide(NO_LEASE);
           return;
         }
-        // The acquisition line arrives with or just after readiness, and both
-        // are written before the socket is answered on.
-        yield* until(new Promise<void>((resolve) => setTimeout(resolve, 0)));
+        const acquired = status.acquired;
 
         const shim = join(directory, "credential-helper");
         yield* until(writeFile(shim, shimProgram(options.internal.shim()), { mode: 0o700 }));
@@ -285,8 +322,14 @@ export function denoCredentialBroker(options: BrokerOptions): CredentialBroker {
           get acquired() {
             return acquired && !closed;
           },
-          get rejected() {
-            return rejected;
+          *rejected(): Operation<boolean> {
+            if (closed) {
+              return false;
+            }
+            const answered = yield* until(
+              inquire(endpoint, encodeLine({ capability, operation: STATUS, ...asked })),
+            );
+            return decodeRejection(answered.split("\n")[0] ?? "");
           },
           attachment: () =>
             closed

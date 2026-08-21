@@ -2389,13 +2389,26 @@ random invocation-local named pipe created with no all-user access. Neither is
 trusted alone — the capability is validated before any credential byte is
 emitted.
 
+The endpoint and the capability reach the broker and the shim through
+invocation-local environment, never through an argument vector: a capability on
+a command line is a secret every process listing shows, and an endpoint there is
+an address nobody had to be told. The broker says one deterministic thing about
+itself — whether it is listening, and whether it acquired — once, after its
+socket can be connected to, so nothing waits on a timer. Whether a transport
+rejected the identity is *asked* after the command being classified has
+finished, not watched for while it runs.
+
 Teardown is ordered: the lease is invalidated, the Git and helper process group
 is terminated, the broker's IPC is closed, every child is awaited, and only then
 are the endpoint and the launcher removed. A shim that connects during teardown
 is refused rather than racing a broker that is going away, and no endpoint is
-left addressable after its owner is gone. Broker setup, protocol and teardown
-failures are host conditions: they produce no completion and no credential, and
-the run reports ordinary unavailability.
+left addressable after its owner is gone.
+
+Broker spawn, listen, protocol, teardown and concurrency failures are
+infrastructure rather than authentication: they are the host failing to provide a
+mechanism at all, and they fail the run stop rather than being reported as a
+credential the host did not have. Missing or incomplete credentials remain
+authentication unavailability.
 
 **What is borrowed.** The first Deno host guarantees the equivalent local
 operation only when that operation can authenticate non-interactively through one

@@ -31,14 +31,15 @@ import { createServer, type Socket } from "node:net";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import {
-  ACQUIRED,
   decodeQuestion,
   encodeLine,
+  FAILED,
   GET,
-  READY,
-  REFUSED,
+  LISTENING,
   REJECTED,
   sameSecret,
+  STATUS,
+  SUBJECT_VARIABLES,
 } from "./protocol.ts";
 
 /** What one broker was started to be about. */
@@ -50,9 +51,21 @@ export interface BrokerSubject {
   readonly path: string;
 }
 
-/** The subject these arguments name, or `undefined` when they name none. */
-export function brokerSubject(argv: readonly string[]): BrokerSubject | undefined {
-  const [endpoint, capability, protocol, host, path] = argv;
+/**
+ * The subject this environment names, or `undefined` when it names none.
+ *
+ * The environment rather than the command line. A capability on an argument
+ * vector is a secret a process listing shows to anything running as this user,
+ * and an endpoint there is an address somebody can find without being told.
+ */
+export function brokerSubject(
+  environment: Readonly<Record<string, string | undefined>>,
+): BrokerSubject | undefined {
+  const endpoint = environment[SUBJECT_VARIABLES.endpoint];
+  const capability = environment[SUBJECT_VARIABLES.capability];
+  const protocol = environment[SUBJECT_VARIABLES.protocol];
+  const host = environment[SUBJECT_VARIABLES.host];
+  const path = environment[SUBJECT_VARIABLES.path];
   if (
     endpoint === undefined ||
     capability === undefined ||
@@ -155,12 +168,14 @@ function about(
  * second caller arriving while one is being answered is not that invocation and
  * is refused rather than queued.
  */
-export function serveCredentialBroker(argv: readonly string[]): void {
-  const subject = brokerSubject(argv);
+export function serveCredentialBroker(): void {
+  const subject = brokerSubject(process.env);
   if (subject === undefined) {
+    process.stdout.write(encodeLine({ status: FAILED, acquired: false }));
     process.exit(2);
   }
   const held = acquire(subject);
+  let rejected = false;
 
   let busy = false;
   const server = createServer((socket: Socket) => {
@@ -174,7 +189,13 @@ export function serveCredentialBroker(argv: readonly string[]): void {
     const answer = (value: unknown) => {
       if (!answered) {
         answered = true;
-        socket.end(encodeLine(value));
+        // The slot is released once the answer has been written, not once the
+        // socket happens to finish closing. A caller whose question has been
+        // answered is done with this broker, and the next command of the same
+        // sequential reconciliation must not be refused for arriving promptly.
+        socket.end(encodeLine(value), () => {
+          busy = false;
+        });
       }
     };
     socket.on("error", () => answer({}));
@@ -194,11 +215,18 @@ export function serveCredentialBroker(argv: readonly string[]): void {
       }
       if (question.operation === REJECTED) {
         // Told, not obeyed. Nothing is forgotten, nothing is forwarded and
-        // nothing is answered — the parent learns that this lease's identity
-        // was refused by the remote, which is a live authentication condition
-        // rather than a locator that names nothing.
-        process.stdout.write(`${REFUSED}\n`);
+        // nothing is answered — this broker simply now knows that its lease's
+        // identity was refused by the remote, which is a live authentication
+        // condition rather than a locator that names nothing.
+        rejected = true;
         answer({});
+        return;
+      }
+      if (question.operation === STATUS) {
+        // Asked by the parent after a transport failed, so what it learns is
+        // about a command that has already finished rather than about one that
+        // may still be running.
+        answer({ rejected });
         return;
       }
       if (question.operation !== GET || held === undefined) {
@@ -209,13 +237,18 @@ export function serveCredentialBroker(argv: readonly string[]): void {
     });
   });
 
+  server.on("error", () => {
+    // Listening is the one thing this process must be able to do. Saying so is
+    // what lets the parent report a host that could not start a broker rather
+    // than wait for a socket that will never exist.
+    process.stdout.write(encodeLine({ status: FAILED, acquired: false }));
+    process.exit(3);
+  });
   server.listen(subject.endpoint, () => {
-    // Order matters: a parent that reads `ready` may attach the lease, so it
-    // must not do so before the socket can be connected to.
-    process.stdout.write(`${READY}\n`);
-    if (held !== undefined) {
-      process.stdout.write(`${ACQUIRED}\n`);
-    }
+    // One record, once, and only after the socket can be connected to. There is
+    // nothing further to wait for, so a parent that has read this line knows
+    // everything this broker will tell it about itself.
+    process.stdout.write(encodeLine({ status: LISTENING, acquired: held !== undefined }));
   });
 
   // End-of-file on standard input is the invocation ending, however it ended.

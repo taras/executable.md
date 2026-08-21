@@ -58,14 +58,71 @@ export interface CredentialAnswer {
   readonly password?: string;
 }
 
-/** The line a broker prints once it is listening, and nothing else it prints. */
-export const READY = "xmd-credential-broker-ready";
+/** The variables a broker is told what it is about. Never an argument. */
+export const SUBJECT_VARIABLES = Object.freeze({
+  endpoint: "XMD_BROKER_ENDPOINT",
+  capability: "XMD_BROKER_CAPABILITY",
+  protocol: "XMD_BROKER_PROTOCOL",
+  host: "XMD_BROKER_HOST",
+  path: "XMD_BROKER_PATH",
+});
 
-/** The line a broker prints when it acquired an identity for its lease. */
-export const ACQUIRED = "xmd-credential-broker-acquired";
+/**
+ * The one thing a broker says about itself, said once.
+ *
+ * A single record rather than a line for each fact and a pause to see whether
+ * another arrives. A parent that had to wait to find out whether an
+ * announcement was still coming would be deciding by timer, and a timer is a
+ * guess about a process it is already connected to.
+ */
+export interface BrokerStatus {
+  /** `listening` or `failed`. Nothing else is a state this parent acts on. */
+  readonly status: string;
+  /** Whether an identity was proved for the locator this broker was given. */
+  readonly acquired: boolean;
+}
 
-/** The line a broker prints when its lease's transport rejected what it gave. */
-export const REFUSED = "xmd-credential-broker-refused";
+export const LISTENING = "listening";
+export const FAILED = "failed";
+
+/** The status this line is, or `undefined` when it is not one. */
+export function decodeStatus(line: string): BrokerStatus | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+  const status = Reflect.get(parsed, "status");
+  const acquired = Reflect.get(parsed, "acquired");
+  return typeof status === "string" && typeof acquired === "boolean"
+    ? { status, acquired }
+    : undefined;
+}
+
+/**
+ * The operation a parent asks after a transport failed.
+ *
+ * Asked rather than announced. A broker that reported a rejection whenever one
+ * happened would leave the parent reading a stream and guessing when to stop; a
+ * parent that asks gets an answer at the moment it needs one, which is after the
+ * command it is classifying has finished.
+ */
+export const STATUS = "status";
+
+/** The answer to a status question. */
+export function decodeRejection(line: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  return typeof parsed === "object" && parsed !== null && Reflect.get(parsed, "rejected") === true;
+}
 
 /** One record, as a line. A value can hold no newline, so a line holds one. */
 export function encodeLine(value: unknown): string {

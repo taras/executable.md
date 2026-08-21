@@ -109,7 +109,7 @@ export interface GitAuthenticationSession {
    * identity the remote refused is in the same position as one that could prove
    * none, and the refusal vocabulary says so.
    */
-  readonly rejected: boolean;
+  rejected(): Operation<boolean>;
 }
 
 /**
@@ -142,7 +142,10 @@ const NOTHING: GitAttachment = Object.freeze({
 export const UNAUTHENTICATED: GitAuthenticationSession = Object.freeze({
   attachment: NOTHING,
   mechanism: "none",
-  rejected: false,
+  // deno-lint-ignore require-yield
+  *rejected(): Operation<boolean> {
+    return false;
+  },
 });
 
 /**
@@ -319,7 +322,10 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
               configuration: pinned(ssh, []),
             },
             mechanism: present ? "ssh-agent" : "none",
-            rejected: false,
+            // deno-lint-ignore require-yield
+            *rejected(): Operation<boolean> {
+              return false;
+            },
           });
           return;
         }
@@ -334,8 +340,8 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
             environment: attached.environment,
             configuration: pinned(ssh, attached.configuration),
           },
-          get rejected() {
-            return lease?.rejected === true;
+          *rejected(): Operation<boolean> {
+            return lease === undefined ? false : yield* lease.rejected();
           },
           // Acquisition, not configuration. A helper that answered nothing
           // leaves this `none`, and a transport that then fails failed for want
@@ -367,7 +373,10 @@ export function noGitAuthentication(): GitAuthentication {
  * authenticated — which is a different thing from a locator that names nothing
  * and from a remote that holds nothing.
  */
-export function unauthenticable(locator: string, session: GitAuthenticationSession): boolean {
+export function* unauthenticable(
+  locator: string,
+  session: GitAuthenticationSession,
+): Operation<boolean> {
   if (gitTransport(locator) === "none") {
     return false;
   }
@@ -375,5 +384,5 @@ export function unauthenticable(locator: string, session: GitAuthenticationSessi
   // the remote refused it. Git tells a helper the second by asking it to erase,
   // which this provider turns into a signal rather than an erasure. Neither is
   // a locator that names nothing.
-  return session.mechanism === "none" || session.rejected;
+  return session.mechanism === "none" || (yield* session.rejected());
 }

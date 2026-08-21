@@ -158,7 +158,9 @@ export function* clone(
     // of a sentence would let it decide what this run reports. A transport that
     // carries an identity, attempted with no mechanism to prove one, could not
     // have authenticated whatever else may also be wrong with it.
-    throw new GitRefusal(unauthenticable(locator, session) ? AUTHENTICATION : "invalid-locator");
+    throw new GitRefusal(
+      (yield* unauthenticable(locator, session)) ? AUTHENTICATION : "invalid-locator",
+    );
   }
 }
 

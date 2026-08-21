@@ -37,18 +37,6 @@ import {
 import { CAPABILITY_VARIABLE, ENDPOINT_VARIABLE } from "../src/deno/composition/broker/protocol.ts";
 import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
 
-/**
- * Let the broker's announcement reach this process.
- *
- * A rejection travels from the shim to the broker and from the broker to its
- * parent on standard output. `ask()` is synchronous — it is Git's shape — so a
- * test that read the flag on the next line would be reading before the line
- * arrived rather than proving it never does.
- */
-function* settled(): Operation<void> {
-  yield* until(new Promise<void>((resolve) => setTimeout(resolve, 100)));
-}
-
 /** The credentials this suite arranges. Never compared, only detected. */
 const FIRST = { username: "broker-user-one", password: "broker-secret-one" } as const;
 const SECOND = { username: "broker-user-two", password: "broker-secret-two" } as const;
@@ -263,6 +251,7 @@ describe("workflow credential lease opacity", () => {
       // Two members, and neither is a value. The credential is in another
       // process entirely — there is nothing here for one to answer with.
       expect(Object.keys(lease).sort()).toEqual(["acquired", "attachment", "rejected"]);
+      expect(typeof lease.rejected).toBe("function");
       expect(carriesCredential(JSON.stringify(lease))).toBe(false);
       expect(carriesCredential(`${lease}`)).toBe(false);
     });
@@ -421,15 +410,16 @@ describe("workflow credential broker rejection", () => {
 
     yield* scoped(function* () {
       const lease = yield* brokerFor(home.ambient).lease(ONE);
-      expect(lease.rejected).toBe(false);
+      expect(yield* lease.rejected()).toBe(false);
 
       // Git sends `erase` when the transport refused what the helper gave.
       expect(ask(lease, "erase", ONE)).toBe("none");
       // Nothing was printed, and nothing was forgotten — the credential still
       // answers. What changed is what this invocation now knows.
       expect(ask(lease, "get", ONE)).toBe("first");
-      yield* settled();
-      expect(lease.rejected).toBe(true);
+      // Asked, not waited for: the answer is about the command that has already
+      // finished, so there is nothing to time.
+      expect(yield* lease.rejected()).toBe(true);
     });
   });
 
@@ -440,13 +430,12 @@ describe("workflow credential broker rejection", () => {
       const broker = brokerFor(home.ambient);
       const rejected = yield* broker.lease(ONE);
       ask(rejected, "erase", ONE);
-      yield* settled();
-      expect(rejected.rejected).toBe(true);
+      expect(yield* rejected.rejected()).toBe(true);
 
       // Another invocation's lease knows nothing about it. A rejection is a
       // live fact about one attempt, not a state anything retains.
       const fresh = yield* broker.lease(ONE);
-      expect(fresh.rejected).toBe(false);
+      expect(yield* fresh.rejected()).toBe(false);
       expect(fresh.acquired).toBe(true);
     });
   });
@@ -457,8 +446,7 @@ describe("workflow credential broker rejection", () => {
     yield* scoped(function* () {
       const lease = yield* brokerFor(home.ambient).lease(ONE);
       ask(lease, "erase", { ...ONE, host: "elsewhere.invalid" });
-      yield* settled();
-      expect(lease.rejected).toBe(false);
+      expect(yield* lease.rejected()).toBe(false);
     });
   });
 });
@@ -506,7 +494,7 @@ describe("workflow credential broker teardown", () => {
       }).lease(ONE);
 
       expect(lease.acquired).toBe(false);
-      expect(lease.rejected).toBe(false);
+      expect(yield* lease.rejected()).toBe(false);
       expect(lease.attachment().configuration).toEqual([]);
     });
     expect(steps).toContain(TEARDOWN.removed);
@@ -536,6 +524,52 @@ describe("workflow credential broker teardown", () => {
       );
       expect(carriesCredential(answered)).toBe(false);
     });
+  });
+});
+
+describe("workflow credential broker addressing", () => {
+  it("puts no endpoint and no capability on any command line", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const lease = yield* brokerFor(home.ambient).lease(ONE);
+      const attached = lease.attachment();
+      const endpoint = String(attached.environment[ENDPOINT_VARIABLE]);
+      const capability = String(attached.environment[CAPABILITY_VARIABLE]);
+
+      // The broker is started with the arguments its mode needs and nothing
+      // else. A capability on an argument vector is a secret every process
+      // listing shows to anything running as this user, and an endpoint there
+      // is an address nobody had to be told.
+      const started = internalModes("/usr/local/bin/xmd").broker();
+      expect(started.args.join(" ")).not.toContain(capability);
+      expect(started.args.join(" ")).not.toContain(endpoint);
+
+      // Nor on the command line Git is given, which names one program.
+      expect(attached.configuration.join(" ")).not.toContain(capability);
+      expect(attached.configuration.join(" ")).not.toContain(endpoint);
+    });
+  });
+
+  it("says one deterministic thing about itself, and says it once", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: ONE.path, ...FIRST }]);
+    const announced: string[] = [];
+
+    yield* scoped(function* () {
+      // The broker's own record, read the way the parent reads it. It is one
+      // line: a parent that had to wait to see whether another was still coming
+      // would be deciding by timer about a process it is already connected to.
+      const lease = yield* denoCredentialBroker({
+        ambient: home.ambient,
+        internal: {
+          broker: () => internalModes().broker(),
+          shim: () => internalModes().shim(),
+        },
+        observe: { step: (name: string) => announced.push(name) },
+      }).lease(ONE);
+      expect(lease.acquired).toBe(true);
+    });
+    expect(announced[0]).toBe(TEARDOWN.invalidated);
   });
 });
 

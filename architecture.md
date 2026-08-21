@@ -1153,10 +1153,19 @@ The broker answers one operation, for one capability, about one locator, so a
 redirected transport is answered with nothing. `erase` is not forwarded: it
 becomes an invocation-local signal that the remote refused what it was given,
 which is why a rejected credential and an absent one report the same
-unavailability. Teardown is ordered — invalidate, terminate the group, close the
-IPC, await the children, then remove the endpoint and the launcher — because the
-same steps in another sequence would leave a live broker addressable by a path
-nobody owns. A Git-host API is the same shape in a different
+unavailability — and it is asked for after the command being classified has
+finished rather than watched for while it runs. The capability and the endpoint
+travel in invocation-local environment, never in an argument vector, and the
+broker states once, deterministically, whether it is listening and whether it
+acquired.
+
+Teardown is ordered — invalidate, terminate the group, close the IPC, await the
+children, then remove the endpoint and the launcher — because the same steps in
+another sequence would leave a live broker addressable by a path nobody owns. A
+broker that could not start, listen, be spoken to or be torn down is
+infrastructure failing rather than an identity the host lacked, and it fails
+stop; a credential that is merely absent or incomplete stays authentication
+unavailability. A Git-host API is the same shape in a different
 protocol: `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own login, read
 once for the invocation that needs it.
 

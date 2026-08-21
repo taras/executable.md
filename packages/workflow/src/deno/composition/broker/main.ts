@@ -34,7 +34,7 @@ export function runInternalMode(argv: readonly string[]): boolean {
   const mode = argv[1];
   const rest = argv.slice(2);
   if (mode === BROKER_MODE) {
-    serveCredentialBroker(rest);
+    serveCredentialBroker();
     return true;
   }
   if (mode === SHIM_MODE) {
