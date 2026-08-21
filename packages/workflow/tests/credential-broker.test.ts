@@ -104,6 +104,49 @@ describe("workflow credential broker", () => {
     });
   });
 
+  /**
+   * The invoking user configured no `useHttpPath`, and the helper is asked about
+   * the repository anyway.
+   *
+   * Git withholds the path from every helper unless that setting is on, so a
+   * host whose user never set it would answer about the server — one identity
+   * for every repository on it. The broker forces the setting for its own
+   * acquisition, which is why this fixture deliberately does not.
+   */
+  it("forces the path into the question the helper is asked", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: "octo/one.git", ...FIRST }]);
+    const broker = denoCredentialBroker(home.ambient);
+
+    yield* scoped(function* () {
+      // The fixture's helper answers only for an exact `host|path` pair, so it
+      // could not have answered at all if it had been asked about the host.
+      const lease = yield* broker.lease({
+        protocol: "https",
+        host: HOST,
+        path: "octo/one.git",
+      });
+      expect(lease.acquired).toBe(true);
+      expect(speaksFor(lease)).toBe("first");
+    });
+  });
+
+  it("refuses an answer that omits the repository it was asked about", function* () {
+    // A helper that answers for the host alone. Adopting that would make one
+    // acquisition the identity for every repository on the server.
+    const home = yield* useInvokingHome([{ host: HOST, path: "", ...FIRST }]);
+    const broker = denoCredentialBroker(home.ambient);
+
+    yield* scoped(function* () {
+      const lease = yield* broker.lease({
+        protocol: "https",
+        host: HOST,
+        path: "octo/one.git",
+      });
+      expect(lease.acquired).toBe(false);
+      expect(speaksFor(lease)).toBe("none");
+    });
+  });
+
   it("refuses an answer that is about somewhere else", function* () {
     // A helper is free to rewrite the request's own fields, and an answer about
     // another host has not authorized this one.

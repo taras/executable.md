@@ -398,7 +398,12 @@ export function denoCredentialBroker(
         try {
           outcome = yield* runProcess({
             command: "git",
-            args: ["credential", "fill"],
+            // `useHttpPath` is forced rather than hoped for. Without it Git
+            // withholds the path from every helper, so a host's answer is about
+            // the server and one repository's acquisition would silently be the
+            // identity for every repository on it. The question this broker asks
+            // is the whole locator, and this is what makes the helper hear it.
+            args: ["-c", "credential.useHttpPath=true", "credential", "fill"],
             cwd: directory,
             env,
             input: credentialRecord({
@@ -468,12 +473,12 @@ function readCredential(
   if (fields["protocol"] !== request.protocol || fields["host"] !== request.host) {
     return undefined;
   }
-  // A helper that answered about another path on the same host has not
-  // authorized this one. An answer that omits the path is answering about the
-  // host, which is what a helper configured without `useHttpPath` does and is
-  // the same identity for every repository there.
-  const answered = fields["path"];
-  if (answered !== undefined && request.path !== undefined && answered !== request.path) {
+  // The path is required, not merely checked when present. An answer that omits
+  // it is an answer about the server, and adopting one would make a single
+  // acquisition the identity for every repository there — which is exactly the
+  // separation the request was phrased to keep. A helper that answered about
+  // another path has not authorized this one either.
+  if (request.path !== undefined && fields["path"] !== request.path) {
     return undefined;
   }
   return Object.freeze({ username, password });

@@ -87,14 +87,11 @@ export function* useInvokingHome(known: readonly KnownHost[]): Operation<Invokin
   const helper = join(home, "credential-helper.sh");
   yield* until(writeFile(helper, helperProgram(known), { mode: 0o700 }));
   yield* until(chmod(helper, 0o700));
-  // `useHttpPath`, because a broker is asked about a complete locator and this
-  // is what a user sets when one credential per repository is the point.
-  yield* until(
-    writeFile(
-      join(home, ".gitconfig"),
-      `[credential]\n\thelper = ${helper}\n\tuseHttpPath = true\n`,
-    ),
-  );
+  // Deliberately no `useHttpPath`. Whether a helper is told which repository it
+  // is being asked about must not depend on the invoking user having configured
+  // it — the broker forces it, and a fixture that set it here would be proving
+  // the fixture rather than the broker.
+  yield* until(writeFile(join(home, ".gitconfig"), `[credential]\n\thelper = ${helper}\n`));
   // Present and empty, so an SSH session's known-hosts file is this fixture's
   // rather than a path that happens not to exist.
   yield* until(mkdir(join(home, ".ssh"), { recursive: true }));
