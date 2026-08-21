@@ -305,15 +305,15 @@ describe("display and collection", () => {
     expect(run.chunks.join("")).toContain("shown anyway");
   });
 
-  it("leaves <Capture> lexical: it never sees the child's stream", function* () {
+  it("leaves <Let> lexical: it never sees the child's stream", function* () {
     const run = yield* runHarness(
       {
         "README.md": doc(
           '<Test name="capture">',
-          '<Capture as="lexical">',
+          '<Let as="lexical">',
           '<Execution host="run" source={"unused"} as="child" />',
           "lexical text",
-          "</Capture>",
+          "</Let>",
           '<AssertStringIncludes actual={lexical} expected="lexical text" />',
           '<AssertEquals actual={lexical.includes("child stream")} expected={false} />',
           "</Test>",

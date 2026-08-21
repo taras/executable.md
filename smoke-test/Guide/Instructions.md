@@ -11,9 +11,9 @@ what the provider was told.
 
 <Test name="Instruction sets the provider system prompt">
 <StubProvider model="instruction-stub">
-<Capture as="instructionResponse"><Instruction system="You are a helpful pirate.">
+<Let as="instructionResponse"><Instruction system="You are a helpful pirate.">
 <Sample prompt="ahoy" model="instruction-stub" />
-</Instruction></Capture>
+</Instruction></Let>
 <AssertEquals actual={instructionResponse} expected={"\n\n\n\n[response-from-instruction-stub|system:You are a helpful pirate.|content:ahoy]"} />
 </StubProvider>
 </Test>

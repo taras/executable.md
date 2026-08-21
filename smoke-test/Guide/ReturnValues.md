@@ -15,8 +15,8 @@ caller decides how to present it.
 </Test>
 
 <Test name="A value component binds its validated value and renders nothing">
-<Capture as="verdictSite">Verdict site:
-<Verdict as="verdict" findings={[]} /></Capture>
+<Let as="verdictSite">Verdict site:
+<Verdict as="verdict" findings={[]} /></Let>
 <AssertEquals actual={verdict.passed} expected={true} />
 <AssertEquals actual={verdict.summary} expected={"no findings"} />
 <AssertEquals actual={verdictSite} expected={"Verdict site:"} />
@@ -25,7 +25,7 @@ caller decides how to present it.
 
 <Test name="The caller renders whatever presentation it wants from the value">
 <Verdict as="failing" findings={["missing test", "stale doc"]} />
-<Capture as="report"><If condition={!failing.passed}>Needs revision: {failing.summary}</If></Capture>
+<Let as="report"><If condition={!failing.passed}>Needs revision: {failing.summary}</If></Let>
 <AssertEquals actual={report} expected={"Needs revision: 2 findings"} />
 </Test>
 

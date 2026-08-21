@@ -2,9 +2,9 @@
 
 <Test name="Two attached services complete a nonce-bearing ping-pong exchange">
 <AttachedPingPongProvider>
-<Capture as="pingPongResponse">
+<Let as="pingPongResponse">
 <Sample prompt="complete ping-pong" />
-</Capture>
+</Let>
 <AssertEquals actual={pingPongResponse} expected={"\n\nping→pong→ping"} />
 </AttachedPingPongProvider>
 </Test>

@@ -33,13 +33,13 @@ provider component pattern — see §3.3 and §6.6–6.7), and the
 Document Output Api (an Effection Api with composable middleware for
 streaming, whitespace-normalized, ANSI-formatted output — see §9).
 
-Expansion also supports binding capture: component invocations may
-declare `as="name"` to route rendered output into `env.values` instead
-of the document, and the built-in `<Capture as="name">...</Capture>`
-directive captures inline rendered content into `env.values`,
-optionally applying a CSS selector (via remark + `unist-util-select`)
-to extract specific markdown nodes from the rendered content, without
-creating a new component boundary (see §6.5).
+Expansion also supports binding: component invocations may declare
+`as="name"` to route rendered output into `env.values` instead of the
+document, and the built-in `<Let as="name">` directive binds either the
+content it renders — optionally applying a CSS selector (via remark +
+`unist-util-select`) to extract specific markdown nodes from it — or the
+exact value a `value` prop names, without creating a new component
+boundary (see §6.5).
 
 ### 1.1 Example
 
@@ -404,7 +404,7 @@ This is middleware composition, not a bag of flags. Order matters:
 
 One word after the language is not middleware. A trailing `as="name"` is a
 **binding annotation**: it names where the block's result is bound, exactly as
-`as` does on a component invocation and on `<Capture>`. It is removed before the
+`as` does on a component invocation and on `<Let>`. It is removed before the
 chain is composed, so it wraps nothing and nothing wraps it (§3.6).
 
 ### 3.2 Detection rule
@@ -925,7 +925,7 @@ function parseInfoString(infoString: string): ParsedInfoString {
 A word whose name is `as` is read as a binding annotation and never as a
 modifier. Exactly one is accepted, it is the last word in the info string, and
 its name is double-quoted and is a binding name on the same terms as component
-invocation `as`, `<Capture as>` and `<Each as>` (§4.3). A missing, duplicated,
+invocation `as`, `<Let as>` and `<Each as>` (§4.3). A missing, duplicated,
 unquoted, malformed, or non-trailing annotation is the refusal it describes,
 and every one of them is decided before the chain is composed — so a refused
 block starts no process.
@@ -966,7 +966,7 @@ the document at completion.
 | Context | stdout | stderr |
 | --- | --- | --- |
 | ordinary `exec` | forwarded live | forwarded live |
-| inside `<Capture as>` | collected into the captured value | forwarded live |
+| inside `<Let as>` | collected into the captured value | forwarded live |
 | `silent exec` | neither | neither |
 | `exec as="name"` | collected into the binding | collected into the binding |
 
@@ -976,17 +976,17 @@ downstream: under `xmd run` a value root's stdout carries the JSON result, so
 the command line shows a command's stdout on the stream the result leaves free
 while still retaining it as stdout, and stdout stays JSON-only.
 
-Capture is structural, not a modifier: a `<Capture as>` region may hold prose,
+Capturing stdout is structural, not a modifier: a `<Let as>` region may hold prose,
 components and several blocks, and every foreground block inside it writes its
 stdout into the binding rather than to the reader. Streaming and capturing at
 once is not implied.
 
 ```md
-<Capture as="buildOutput">
+<Let as="buildOutput">
 ```bash exec
 deno task build
 ```
-</Capture>
+</Let>
 ```
 
 **Retention.** What a run keeps is the host's explicit choice, carried by
@@ -2580,7 +2580,7 @@ deterministic from the content, so it needs no separate journal entry.
 
 A component name is resolved in tiers, and the first tier that answers wins:
 
-1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Capture>`,
+1. **structural syntax** — `<Content>`, `<Output>`, `<Return>`, `<Let>`,
    `<Each>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<PrintErrors>`,
    `<Answers>`/`<Answer>`. These are the language's own
    constructs. They are reserved: a registration cannot claim one, and a
@@ -3841,10 +3841,11 @@ document order:
 
 - **Text** is healed at segment boundaries (§2.3), then interpolated for
   `{meta.key}` / `{props.key}` (§6.4) and for eval bindings (§6.6).
-- **`<Capture>`** expands its children in the current scope and stores the
-  rendered result in the named binding — optionally narrowed by a `select`
-  prop (§6.5) — and itself renders nothing. `<Content />` is replaced by the
-  caller's projected children (§6.3).
+- **`<Let>`** stores the named binding in the current scope and itself renders
+  nothing: it expands its children there and stores the rendered result —
+  optionally narrowed by a `select` prop — or, written with `value`, stores
+  that value by reference without expanding anything (§6.5). `<Content />` is
+  replaced by the caller's projected children (§6.3).
 - **Any other component** is expanded (§6.2) and replaced by its result.
 - **Executable code blocks** run their modifier chain (§3.3); a block
   contributes its emitted output, or an `ErrorSegment` when it fails with no
@@ -4238,16 +4239,17 @@ segment whose `cause` is `{ componentName, errors }`, where `errors` is a
 JSON-safe array of normalized Ajv issues, each
 `{ instancePath, schemaPath, keyword, params, message }`.
 
-#### Binding capture: `as` and `<Capture>`
+#### Binding: `as` and `<Let>`
 
-Two expansion-level mechanisms capture rendered output into
-`env.values` instead of the document:
+Two expansion-level mechanisms write into `env.values` instead of the
+document:
 
 - Component invocation capture: `<Comp as="binding" />`
-- Inline capture directive: `<Capture as="binding">...</Capture>`
+- Inline binding directive: `<Let as="binding">...</Let>`
 
-Both write a string to `env.values[binding]` and produce no output at
-the capture site.
+Neither produces output at its site. Component `as` always writes a string.
+`<Let>` writes a string when it binds rendered content, and the exact value
+it was given when it binds a `value`.
 
 ##### Component `as`
 
@@ -4271,48 +4273,92 @@ form an ES-module binding, which is where these names end up (eval blocks
 destructure `const { name } = env;`). Binding-name validation therefore also
 parses the destructuring shape and rejects any name that is not a legal
 ES-module binding. This rule governs every binding name — component `as`,
-`<Capture as>`, and `<Each let>`/`<Each as>`.
+`<Let as>`, and `<Each let>`/`<Each as>`.
 
 Invalid values produce `PropValidationError`.
 
-##### `<Capture as="name">...</Capture>`
+##### `<Let as="name">`
 
-`<Capture>` is a built-in directive handled by the expansion engine.
-It is not imported from the filesystem.
+`<Let>` is a built-in directive handled by the expansion engine. It is not
+imported from the filesystem. `Capture`, the name this directive used before,
+is not reserved and has no alias: `<Capture>` resolves an ordinary component.
+
+A `<Let>` has exactly one **source**, and which one it has is read from what
+the author wrote rather than from what the source produces:
+
+| Authored form | Source |
+| --- | --- |
+| children, no `value` | rendered content |
+| `value`, no children | direct value |
+| `value` and any child, including whitespace | invalid |
+| `select` and `value` | invalid |
+| neither `value` nor children | invalid |
+
+`<Let as="x" />` and `<Let as="x"></Let>` are therefore invalid, while
+`<Let as="x" value={…} />` and `<Let as="x" value={…}></Let>` are the same
+direct-value form. Presence is own-key presence, so `value={undefined}` names
+the direct source and binds `undefined`.
 
 Rules:
 
-- `as` is required and must be a valid identifier.
-- `<Capture />` (self-closing) is invalid.
-- `<Capture>` must have content.
-- `<Capture>` accepts `as` (required) and `select` (optional) props.
-  No other props are allowed.
-- `as={expr}` is invalid (must be string literal).
+- `as` is required, must be a string literal, and must be a valid binding name.
+  `as={expr}` is invalid.
+- `<Let>` accepts `as` (required), `value` and `select`. No other props are
+  allowed, and `select` belongs to the rendered source alone.
 
-`<Capture>` is **not an observation boundary**. Under the one-observation rule
+The binding name, the allowed prop names, and the source are all decided
+before either source runs. A `<Let>` that names both sources therefore expands
+no child and evaluates no `value`, so a malformed construct performs no import,
+component invocation, eval, exec or durable effect.
+
+`<Let>` is **not an observation boundary**. Under the one-observation rule
 (§6.9) it reports only the errors it creates itself — a missing or invalid `as`,
-an unknown prop, an empty body — and hands the body's segments back untouched,
-because they were already reported where they were produced.
+an unknown prop, a construct with no source or two — and hands the body's
+segments back untouched, because they were already reported where they were
+produced.
 
-Behavior:
+Rendered-content behavior:
 
 1. Expand children in the **current env/scope** (no new `EvalEnv`, no
    new `EvalScope`).
 2. If the expanded children contain any `ErrorSegment`, store no binding and
    return those error segments as they are — already reported (§6.9). Steps 3–7
    do not run, so rendering and `select` never fold an error comment into the
-   captured value.
+   bound value.
 3. Render children to string.
 4. Trim trailing whitespace (`/\s+$/`).
 5. If `select` prop is present, apply CSS selector extraction (see below).
 6. Store the resulting string in `env.values[as]`.
 7. Produce no output segment.
 
-Overwrites are allowed for both mechanisms: last writer wins.
+Direct-value behavior:
+
+1. A `value` the scanner already resolved is used as it stands. An expression
+   is evaluated at this position in the body, against the same layered binding
+   environment and the same positioned failure wrapper an expression prop uses
+   (§4.3).
+2. Store that exact result in `env.values[as]`, **by reference**.
+3. Produce no output segment, expand nothing, and leave foreground routing
+   alone: there is no body to route.
+
+The direct source deliberately does not cross the JSON boundary ordinary
+component props cross. The value is not stringified, parsed, cloned, frozen,
+normalized or schema-validated, and it need not be JSON-serializable, so
+`<Let>` binds a function, a class instance, `undefined` or a cyclic object as
+readily as a number. An expression that fails binds nothing and does not fall
+through to child or component resolution.
+
+Reference identity is a property of one execution. Replay reconstructs current
+values through ordinary expansion, so when a replayed `source` binding is bound
+again as `alias`, `alias === source` holds within that execution — neither is
+the earlier process's object.
+
+Overwrites are allowed for every mechanism here: last writer wins.
 
 ##### `select` prop — CSS selector extraction
 
-When the `select` prop is present, `<Capture>` parses the rendered
+`select` belongs to the rendered source alone; written beside `value` it is
+refused. When the `select` prop is present, `<Let>` parses the rendered
 children as markdown via `remark` and queries the AST with
 `unist-util-select` using CSS selector syntax. The text content of the
 first matching node is stored instead of the full rendered output.
@@ -4333,7 +4379,7 @@ use their `.value` property directly. Parent nodes (e.g., `Paragraph`,
 
 **Example.** A component that returns prose narration followed by
 JSON wrapped in a `` ```json `` code fence. The caller uses
-`<Capture as="doctorJson" select="code[lang=json]">` to extract
+`<Let as="doctorJson" select="code[lang=json]">` to extract
 only the JSON value, ignoring the surrounding prose. If the
 component later adds or removes narration text, the captured
 binding is unaffected — the selector isolates the structured data
@@ -4447,7 +4493,7 @@ color: blue
 `<Each>` renders its body once per element of an array, with each element
 bound to a name that is visible to `{...}` interpolation and to eval blocks
 in the body. It is a native directive handled by the expansion engine — like
-`<Capture>`, it is not imported from the filesystem — because its `in` prop
+`<Let>`, it is not imported from the filesystem — because its `in` prop
 would otherwise be a component input named after a JavaScript reserved word,
 which cannot appear in an eval block's binding preamble.
 
@@ -4469,7 +4515,7 @@ Props (only these three are accepted; any other prop is an error):
   though they match the identifier shape (see §6.5 binding names).
 - `as` — optional. A **string-literal** identifier; when present the whole
   rendered loop is captured into `env.values[as]` and the directive emits no
-  output at the invocation site (as with component `as` / `<Capture>`).
+  output at the invocation site (as with component `as` / `<Let>`).
 
 `<Each>` is **structural**: each iteration expands the body to segments that
 are appended to the loop output, so `ErrorSegment` and `execOutput` segments
@@ -4492,7 +4538,7 @@ This holds for all four capture paths:
 
 | Path | Refuses the capture when |
 | --- | --- |
-| Native `<Capture as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
+| Native `<Let as>` | its expanded children carry an `ErrorSegment` — checked before rendering and before `select` is applied |
 | `<Each as>` | the expanded loop output carries an `ErrorSegment` |
 | Markdown component `as=` | its expanded body carries an `ErrorSegment`, or a string projection in its body (`renderChildren()`, `render()`, `useContent()`) rendered one away |
 | Function component `as=` | the content it requested carried an `ErrorSegment`, so `content()` never returned (§5.1.2) |
@@ -4541,7 +4587,7 @@ there is no static/lexical analysis. An unknown reference in the body (e.g.
 #### `<If>` conditional directive
 
 `<If>` selects one branch of a document and expands only that branch. Like
-`<Capture>` and `<Each>` it is a native directive handled by the expansion
+`<Let>` and `<Each>` it is a native directive handled by the expansion
 engine, never resolved from the filesystem.
 
 ```markdown
@@ -4609,7 +4655,7 @@ writes a journal entry. Placing a deliberately failing assertion in the
 unselected branch is therefore the direct way to test non-execution.
 
 **`<If>` opens no binding scope.** The selected branch expands in the enclosing
-environment, so a `<Capture>` or component `as=` inside it behaves like inline
+environment, so a `<Let>` or component `as=` inside it behaves like inline
 content and stays available after `</If>`. Nested `<If>` blocks select
 independently, and `<If>` is otherwise transparent: it neither adds nor removes
 an environment for the content it expands.
@@ -4634,7 +4680,7 @@ that caused them, as `path:line:column` when the element came from a file and
 #### `<Loop>` bounded repetition directive
 
 `<Loop>` expands a region of a document more than once, under a bound the
-document states. Like `<Capture>`, `<Each>` and `<If>` it is a native directive
+document states. Like `<Let>`, `<Each>` and `<If>` it is a native directive
 handled by the expansion engine, never resolved from the filesystem.
 
 ```markdown
@@ -5218,7 +5264,7 @@ so that one passes outward instead.
 A component (or root document) declares which region of its body renders using
 an `<Output>…</Output>` boundary tag. Everything outside the declared regions
 is **documentation**: it executes for its side effects — eval and exec blocks
-run, `<Capture>` populates bindings, nested components run — but its rendered
+run, `<Let>` populates bindings, nested components run — but its rendered
 result never reaches the consumer. Without `<Output>`, the whole body renders,
 so existing components are unaffected.
 
@@ -5228,9 +5274,9 @@ so existing components are unaffected.
 The following files participate in the release process. (Documentation — it
 does not render into the consumer.)
 
-<Capture as="releaseConfigFiles">
+<Let as="releaseConfigFiles">
 - .github/workflows/release.yml
-</Capture>
+</Let>
 
 ```ts eval
 const releaseChanged = files.filter((p) => releaseConfigFiles.includes(`- ${p}`));
@@ -5284,7 +5330,7 @@ can use bindings a preceding documentation block computed, and documentation
 after a region still runs. The required sequencing:
 
 - Structural placement is validated before any body content executes; a
-  structurally invalid component or root runs no eval, exec, `<Capture>`, or
+  structurally invalid component or root runs no eval, exec, `<Let>`, or
   nested components. The aggregate is raised where every undecided error is
   raised, so the region's own mode decides it: printed inside a printing
   boundary, and the run's outcome at a root.
@@ -5352,7 +5398,7 @@ without that call never passes the observation chain — middleware that counts,
 logs, or forwards failures never sees it.
 
 **Every path reports once, and decides once.** The rule is the same wherever
-segments cross a construct: `<If>`, `<Else>`, `<Each>`, `<Capture>`, `<Loop>`,
+segments cross a construct: `<If>`, `<Else>`, `<Each>`, `<Let>`, `<Loop>`,
 `<Break>` and a component invocation report the errors they create and hand a
 body's segments on untouched. So a failing element is reported exactly once
 wherever it is written: inline, in a selected branch, in an iteration, inside a
@@ -5380,7 +5426,7 @@ sees the prefix before it sees the failure.
 
 Only work the document was going to render can reach the output. Expansion
 writes into the accumulator its caller gave it, and a call site producing
-something other than document text passes none: a binding (`as=`, `<Capture as>`,
+something other than document text passes none: a binding (`as=`, `<Let as>`,
 `<Each as>`), a value component's return, a string projection
 (`renderChildren`, `render`, `useContent`), and documentation each keep a
 private buffer. A failure part-way through one of those adds nothing to the
@@ -5529,7 +5575,7 @@ carries its normalized issues.
 Placement is validated against the component's own source, before `<Content />`
 substitution, so projected content can neither introduce nor satisfy a
 declaration. All violations are reported together, and a structurally invalid
-component runs no eval, exec, `<Capture>`, or nested component:
+component runs no eval, exec, `<Let>`, or nested component:
 
 - `<Return>` in a text component;
 - a missing, duplicated, nested, or otherwise misplaced `<Return>`;
@@ -7949,18 +7995,18 @@ visible warning blocks, gather into a separate error report).
 | C21 | **No declared props, some passed** | Component with no `props`, invoked with props → PropValidationError |
 | C22 | **Optional with no default, not passed** | Prop not in validated props, `{props.key}` → empty string |
 | C23 | Component `as` capture | `<Comp as="x" />` stores rendered output in `env.values.x`, invocation emits no segments |
-| C24 | `<Capture>` inline capture | `<Capture as="x">text</Capture>` stores `"text"` in `env.values.x`, emits no segments |
-| C24b | Capture over a failing block | A block that exits non-zero after printing leaves the binding unset in `<Capture as>` and in component `as=`; the errors are returned and what the block printed is not captured |
-| C25 | `<Capture>` trailing-whitespace trim | Captured output `"hello\n"` stored as `"hello"` |
+| C24 | `<Let>` binds rendered content | `<Let as="x">text</Let>` stores `"text"` in `env.values.x`, emits no segments |
+| C24b | `<Let>` over a failing block | A block that exits non-zero after printing leaves the binding unset in `<Let as>` and in component `as=`; the errors are returned and what the block printed is not captured |
+| C25 | `<Let>` trailing-whitespace trim | Rendered output `"hello\n"` stored as `"hello"` |
 | C26 | Reserved prop `as` in props | Declaring `as` in component `props` fails frontmatter validation |
-| C27 | Invalid capture names | `as=""`, `as="123bad"`, or `as={expr}` produce validation errors |
-| C28 | `<Capture />` invalid | Self-closing Capture produces ErrorSegment |
-| C29 | `<Capture select>` CSS extraction | `<Capture as="x" select="code[lang=json]">` with code fence child stores code block value only |
-| C30 | `<Capture select>` fallback | `select="code[lang=json]"` with no matching node stores full rendered content |
-| C31 | `<Capture select>` paragraph | `select="paragraph"` extracts paragraph text content |
+| C27 | Invalid binding names | `as=""`, `as="123bad"`, or `as={expr}` produce validation errors |
+| C28 | `<Let />` invalid | Self-closing `<Let>` with no `value` produces ErrorSegment |
+| C29 | `<Let select>` CSS extraction | `<Let as="x" select="code[lang=json]">` with code fence child stores code block value only |
+| C30 | `<Let select>` fallback | `select="code[lang=json]"` with no matching node stores full rendered content |
+| C31 | `<Let select>` paragraph | `select="paragraph"` extracts paragraph text content |
 | C32 | `<Output>` selects region | Only the `<Output>` region renders; documentation outside is suppressed |
 | C33 | No `<Output>` | Whole body renders (backward compatible) |
-| C34 | Documentation executes | eval/exec/`<Capture>` outside `<Output>` run; a later `<Output>` reads their bindings; documentation after a region still runs |
+| C34 | Documentation executes | eval/exec/`<Let>` outside `<Output>` run; a later `<Output>` reads their bindings; documentation after a region still runs |
 | C35 | Multiple `<Output>` regions | Concatenate in document order |
 | C36 | Markdown preserved in `<Output>` | A `> [!WARNING]` admonition survives intact |
 | C37 | Empty-tag parity | `<Output />` and `<Output></Output>` both contribute no content |
@@ -7969,7 +8015,7 @@ visible warning blocks, gather into a separate error report).
 | C40 | `as=` captures selected output | A component invoked with `as=` captures only its `<Output>` regions; documentation is neither rendered nor captured |
 | C41 | Structural placement | Nested/misplaced `<Output>` (including inside `<If condition={false}>` or a content-discarding component) produces one aggregate printed error and runs no body side effects |
 | C42 | Caller-projected `<Output>` inert | Projecting `<Output>` through `<Content />` neither activates nor alters the callee's error mode |
-| C43 | Documentation and region failures | A failure in documentation (direct, inside `<Capture>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; an error inside `<Output>` fails the run, and one under `<PrintErrors>` or in a body with no `<Output>` stays a comment |
+| C43 | Documentation and region failures | A failure in documentation (direct, inside `<Let>`, inside a nested component, or a transported error) throws; a modifier-handled failure continues; an error inside `<Output>` fails the run, and one under `<PrintErrors>` or in a body with no `<Output>` stays a comment |
 | C44 | **Array element-type mismatch** | `files` is `{ type: array, items: { type: string } }`; passing `["a", 3]` → PropValidationError |
 | C45 | **Object-shape rejected** | A nested object with `required: [symbol]` / `additionalProperties: false` rejects a missing `symbol` or an unknown key → PropValidationError |
 | C46 | **Nested default filled** | A row omitting `line` (declared `{ type: number, default: 0 }`) resolves with `line` set to `0` |
@@ -7977,6 +8023,23 @@ visible warning blocks, gather into a separate error report).
 | C48 | **No bare prop binding** | Declaring `name` makes `{props.name}` available but leaves `{name}` verbatim until authored code creates that binding |
 | C49 | **Validated object identity** | The environment and function-component argument observe the exact defaulted object returned by validation |
 | C50 | Nested `<Content />` | Caller content projects from a position inside another invocation, inside a structural construct, several levels deep, and inside an `<Output>` region; a nested named slot resolves and consumes its `slot` prop; wrapping a projection in `<Section slot="header">` reaches a nested invocation's named slot; two projections at different depths receive the same content; slot errors are still emitted once; an unclaimed `<Content />` passed through nested bodies stays the reserved-name failure |
+
+### Tier LET — `<Let>` sources (§6.5)
+
+| # | Test | Verify |
+|---|------|--------|
+| LET1 | Direct literal | `<Let as="answer" value={42} />` binds the number `42`, and both the self-closing and paired-empty direct forms emit nothing |
+| LET2 | Bound by reference | An object and an array taken from preceding bindings bind identically (`alias === source`), and a cyclic object binds intact — no JSON projection stands between the expression and the binding |
+| LET3 | `value={undefined}` | The binding exists and holds `undefined`, distinguishable from a name that was never bound |
+| LET4 | `value` with a child | Refused with the value expression unevaluated and the child's component never imported; a whitespace-only child is a child |
+| LET5 | `select` with `value` | Refused before the value expression runs |
+| LET6 | No source | Self-closing and paired-empty `<Let>` without `value` are refused; whitespace-only children are a rendered source binding `""` |
+| LET7 | Preflight refusals bind nothing | An unknown prop, a missing/expression/invalid `as`, and `select` on the direct source each refuse, bind nothing, and leave a counting value expression unevaluated |
+| LET8 | Direct expression failure | The error carries the element's source position and the ordinary expression-prop wrapper, and no binding is made |
+| LET9 | Last writer wins | A rendered `<Let>` and a direct `<Let>` overwrite each other in either order |
+| LET10 | Reaches the environment | A direct binding is read by later prose interpolation, by a component's expression prop, and by a later eval block |
+| LET11 | Partial replay | A `<Let value={source}>` between a replayed producer eval and a live consumer eval rebinds by reference; the journal holds the root import, the two eval effects and Close, and no record of its own |
+| LET12 | `Let` is reserved, `Capture` is not | `Let` cannot be registered or bundled, while a repository component named `Capture` resolves and renders |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -8015,7 +8078,7 @@ visible warning blocks, gather into a separate error report).
 | FG2 | stdout and stderr | Each keeps its own channel and appears exactly once |
 | FG3 | No journal | The record holds exit status alone; nothing is accumulated |
 | FG4 | `--journal` | Streams live and records exactly what the boundary received |
-| FG5 | `<Capture as>` | stdout fills the binding without being displayed; stderr stays diagnostic |
+| FG5 | `<Let as>` | stdout fills the binding without being displayed; stderr stays diagnostic |
 | FG6 | `silent` with a journal | Displays neither channel; the record keeps both |
 | FG7 | Non-zero exit | Earlier output survives, the next block never starts, no `<Output>` |
 | FG8 | Cancellation | Child and forwarding stop; nothing arrives afterwards |
@@ -8236,7 +8299,7 @@ visible warning blocks, gather into a separate error report).
 | K4 | `serializeExports` preserves JSON values | Numbers, strings, objects, arrays round-trip correctly |
 | K5 | Eval merges serializable bindings | After the block, `env.values` contains current exports alongside `props`, without spreading prop fields |
 | K6 | Component `as` writes to invocation env | Binding is visible to downstream siblings at call site |
-| K7 | `<Capture>` is not a component boundary | Eval/exec inside `<Capture>` use parent env/scope and journal normally |
+| K7 | `<Let>` is not a component boundary | Eval/exec inside `<Let>` use parent env/scope and journal normally |
 
 ### Tier L — Persist modifier
 
@@ -8512,7 +8575,7 @@ platform's.
 | OM7b | Replay of a recovered outcome | An explicitly recovered run replays as recovered, with no command run again |
 | OM8 | The close | The root closes `ok` around a recorded `err` outcome |
 | OM9/OM10 a–e | Every visible producer | `<If>`, `<Loop>`, `<Each>`, projected `<Content />` and an answered `<Answers>` body each keep their prefix on failure and render exactly once on success |
-| OM11a–OM11e | Private buffers | A `<Capture as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |
+| OM11a–OM11e | Private buffers | A `<Let as>`, an `<Each as>`, a string projection, documentation, and a failing `as=` invocation each add nothing to the output |
 | OM12a–OM12j | A malformed record | Seven corrupted fields are each refused, the refusal names the situation, a pre-contract journal is named as such, and an intact record replays |
 | OM13a–OM13e | What crosses the journal | Absent fields stay absent, a `"undefined"` cause is a cause, and a replay reconstructs an `Error` or an `AggregateError` from the recorded fields |
 | OM14–OM16 | Transitivity | `<PrintErrors>`, `<File>`, and a printing component that does not recover each stop a callee's own region; the failure that left it reaches the root, and OM15c shows it printed where the caller's region prints |
@@ -9319,8 +9382,8 @@ Identifiers match `packages/core/tests/if.test.ts` one to one.
 | IF5 | Condition from a binding | `condition={ok}` resolves from the evaluation environment, both ways |
 | IF6 | Computed boolean | `condition={findings.length === 0}` and `condition={!passed}` resolve |
 | IF7 | Ordering | Content before and after the directive keeps its position |
-| IF8 | Capture survives the block | A `<Capture>` in the selected branch is readable after `</If>` |
-| IF9 | Unselected branch binds nothing | Its `<Capture>` leaves the name unset and the reference verbatim |
+| IF8 | Capture survives the block | A `<Let>` in the selected branch is readable after `</If>` |
+| IF9 | Unselected branch binds nothing | Its `<Let>` leaves the name unset and the reference verbatim |
 | IF10 | Independent nesting | An inner `<If>` selects without affecting the outer one |
 | IF11 | Nested `<If>` in the unselected branch | It never runs |
 | IF12 | Self-closing `<If>` | Renders nothing, with no error |
@@ -9379,12 +9442,12 @@ at OBS7: OBS1–OBS6 measured the retired extension boundary and went with it.
 | OBS7 | Inline baseline | An `ErrorSegment` outside any construct is observed once |
 | OBS8 | Selected `<If>` branch | Observed once |
 | OBS9 | `<Each>` body | Observed once per iteration that produced one, and no more |
-| OBS10 | `<Capture>` body | Observed once |
+| OBS10 | `<Let>` body | Observed once |
 | OBS11 | Component body | Observed once |
 | OBS12 | Projected `<Content />` | Observed once, through both the segment and the string-projection path |
 | OBS13 | `<Loop>` body | Observed once |
-| OBS14 | Construct-owned printed errors | `<Each>` and `<Capture>` prop and structure errors each report once |
-| OBS15 | Refused captures | `<Capture as>`, `<Each as>` and a component `as` each report the body error once and set no binding |
+| OBS14 | Construct-owned printed errors | `<Each>` and `<Let>` prop and structure errors each report once |
+| OBS15 | Refused captures | `<Let as>`, `<Each as>` and a component `as` each report the body error once and set no binding |
 | OBS16 | Throwing error mode | An ambient `throw` error mode aborts at the first error on every path above |
 | OBS17 | Printing error mode | A printed error renders exactly one comment on every path above |
 | OBS18 | Uncaught function content | The invocation comes back as the same segment objects `Component.raise` returned |
@@ -9442,7 +9505,7 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | BREAK9 | Text after the break | Does not render |
 | BREAK10 | Component after the break | Never imported |
 | BREAK11 | Code block after the break | Never runs |
-| BREAK12 | `<Capture>` after the break | Creates no binding |
+| BREAK12 | `<Let>` after the break | Creates no binding |
 | BREAK13 | After the loop | Content following `</Loop>` still runs |
 | BREAK14 | Break outside a loop | Diagnosed |
 | BREAK15 | Stray break resolves nothing | No component named `Break` is imported |
@@ -9636,7 +9699,7 @@ timed.
 | NEX4 | Inline source | `source` runs under the `<eval>` identity and writes no authored file |
 | NEX5 | Grammar | `host="run"` refuses zero or both of `target` and `source`, before any child exists |
 | NEX6–NEX8 | Failure | With `as`, a settled `Err` is assertable; without `as`, it fails the owning test; the output rendered before the failure survives |
-| NEX9–NEX11 | Display and collection | The second chunk is produced only after the first reached this document's consumer; a child nothing collects is still displayed; `<Capture>` around `<Execution>` holds lexical content and never the child's stream |
+| NEX9–NEX11 | Display and collection | The second chunk is produced only after the first reached this document's consumer; a child nothing collects is still displayed; `<Let>` around `<Execution>` holds lexical content and never the child's stream |
 | NEX12–NEX15 | Journal | A transient run retains nothing; `<CollectJournal>` without a selected journal fails before the root import; `<DiagnosticJournal>` retains and is collectable; every declaration is settled before the host is first asked for a child |
 | NEX16–NEX22 | Host-profile authority | `<Execution>` outside a canonical `<Test>`, under a repository `Test`, and with no trusted host profile each refuse; middleware that returns without delegating, that delegates twice, or that delegates another invocation's request publishes nothing; a declaration outside `<Execution>` refuses; a repository component of a declaration's name is an ordinary component |
 | NEX23–NEX31 | Authority transport | A canonical `<Test>` whose host attached no installer refuses; installers planted under the delivery context's name are handed nothing and displace no real delivery; providers planted under the former public context are ignored; public `Component` middleware cannot change bound/unbound classification, rescue an unbound child failure, or suppress early publication; host middleware sees no replacement operation and cannot mutate the frozen profile or props; the `<Test>` behavior hook is called with the test's props alone, so middleware and a second loaded copy composing there acquire nothing |
@@ -9751,11 +9814,11 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 77 | Function component imported on every run | The current module must execute because functions are not serialized into a trace |
 | 78 | Internal durable-streams package | Provides journaling for the core runtime |
 | 79 | `as` is a reserved expansion prop | `as` is consumed by the expansion engine (not component props), stripped before validation, and used to bind rendered output into `env.values` |
-| 80 | `<Capture>` is the inline binding directive | Captures arbitrary inline rendered content while preserving JSX ergonomics and a single binding-target syntax (`as`) |
+| 80 | `<Let>` is the inline binding directive | Binds arbitrary inline rendered content, or the exact value `value` names, while preserving JSX ergonomics and a single binding-target syntax (`as`) |
 | 81 | Component `as` writes to invocation-site env | Captured bindings must be visible to subsequent siblings/eval blocks where the invocation appears |
-| 82 | `<Capture>` does not create a new env/scope | Capture is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
-| 83 | Capture trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
-| 84 | Capture assignment is not independently journaled | Captured value is derived during current expansion; no extra journal entry is needed |
+| 82 | `<Let>` does not create a new env/scope | Binding is structural (like `<Content />`), not a component boundary; middleware/scope behavior remains deterministic |
+| 83 | Rendered content trims trailing whitespace | Exec stdout commonly ends with newline; trimming avoids downstream interpolation/comparison bugs while preserving leading/interior whitespace |
+| 84 | A `<Let>` assignment is not independently journaled | The bound value is derived during current expansion; no extra journal entry is needed |
 | 88 | Eval binding interpolation extends to text segments | Documents should be readable prose with embedded data references, not JavaScript template literals inside eval blocks |
 | 89 | Lexical props namespace and authored binding precedence | `{props.*}` uses the validated component/root namespace, projected caller content keeps the caller's props object, authored component content uses the callee's frame, and a local binding named `props` follows normal shadow/restoration rules |
 | 90 | `\{` escaping applies to both passes | Consistent escaping behavior regardless of which pass would match; pre-existing gap in §6.6 fixed for both code blocks and text segments |
@@ -9765,6 +9828,9 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 91 | Projected children preserve caller props without changing ordinary lookup | Children substituted via `<Content />` preserve the caller's metadata, validated props object, hide set, and counter. Structural projection keeps the existing ordinary-binding layering of the authored/current frame; `renderChildren()` and `useContent()` retain the caller's ordinary environment. Authored content keeps the component frame. |
 | 92 | Multi-level projection preserves caller props | When `expandComponent` receives `projectedEnv`, it layers ordinary bindings while retaining the lexical caller's `props` object. Nested projections never replace caller props with the callee's initial namespace. |
 | 93 | AST-based user import extraction in eval blocks | `ImportDeclaration` nodes in eval blocks are extracted via acorn's `allowImportExportEverywhere` and hoisted to module top level by `compileBlock`. TypeScript `import type` normalized to spaces before parse, extracted from original source. |
-| 94 | `<Capture select>` uses CSS selectors via remark + `unist-util-select` | Standard CSS selector syntax on markdown AST (mdast); reuses existing remark dependency; supports attribute selectors, combinators, pseudo-classes; matches Web platform conventions for querying tree structures |
-| 95 | `select` falls back to full content on no match | Non-destructive — authors can add `select` to existing Captures without breaking behavior if the selector doesn't match; avoids silent data loss |
+| 94 | `<Let select>` uses CSS selectors via remark + `unist-util-select` | Standard CSS selector syntax on markdown AST (mdast); reuses existing remark dependency; supports attribute selectors, combinators, pseudo-classes; matches Web platform conventions for querying tree structures |
+| 95 | `select` falls back to full content on no match | Non-destructive — authors can add `select` to an existing `<Let>` without breaking behavior if the selector doesn't match; avoids silent data loss |
 | 96 | Literal nodes use `.value`, parent nodes use `mdast-util-to-string` | Code blocks store text in `.value` (no child nodes); paragraphs/headings have child Text nodes requiring recursive extraction; two extraction strategies cover all mdast node types |
+| 97 | `<Let>` replaces `<Capture>` with no alias | One public primitive rather than two spellings for the same syntax. `Capture` leaves the reserved set entirely, so `<Capture>` resolves an ordinary component; the project is pre-release and states no requirement to keep the old spelling |
+| 98 | `<Let value>` binds by reference, not through the prop JSON boundary | Expression evaluation and environment lookup are reused; component-prop serialization is not. A document can therefore bind `undefined`, a function, a class instance or a cyclic object — values ordinary props omit, reject or rewrite — and identity holds within the execution that produced it |
+| 99 | The source is chosen before it runs | Presence of `value` and of children is read from what the author wrote, so a construct naming both sources expands no child and evaluates no expression; `value={undefined}` is the direct source, because presence is own-key presence rather than a value test |

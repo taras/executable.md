@@ -11,10 +11,10 @@ replay outcomes are identical with zero appended journal events.
 </Section>
 
 <Test name="Exec output is journaled with the run timestamp">
-<Capture as="runStamp">
+<Let as="runStamp">
 ```bash exec
 echo "Run at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
-</Capture>
+</Let>
 <AssertMatch actual={runStamp} expected={/^\nRun at: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/} />
 </Test>

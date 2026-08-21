@@ -8,12 +8,12 @@ import and nothing to install before using it.
 order at most that many times.
 
 <Test name="The body expands exactly max times">
-<Capture as="thrice"><Loop max={3}>x</Loop></Capture>
+<Let as="thrice"><Loop max={3}>x</Loop></Let>
 <AssertEquals actual={thrice} expected={"xxx"} />
 </Test>
 
 <Test name="A bound of one expands the body once">
-<Capture as="once"><Loop max={1}>x</Loop></Capture>
+<Let as="once"><Loop max={1}>x</Loop></Let>
 <AssertEquals actual={once} expected={"x"} />
 </Test>
 
@@ -22,7 +22,7 @@ document around the loop decides what an exhausted bound means, and content
 after `</Loop>` renders as it would anywhere else.
 
 <Test name="Reaching max completes normally and the document continues">
-<Capture as="ordered">before|<Loop max={2}>x</Loop>|after</Capture>
+<Let as="ordered">before|<Loop max={2}>x</Loop>|after</Let>
 <AssertEquals actual={ordered} expected={"before|xx|after"} />
 </Test>
 
@@ -33,7 +33,7 @@ already bound.
 <Parse schema={{ type: "object", properties: { attempts: { type: "number" } }, required: ["attempts"] }} as="policy">
 { "attempts": 4 }
 </Parse>
-<Capture as="bounded"><Loop max={policy.attempts}>x</Loop></Capture>
+<Let as="bounded"><Loop max={policy.attempts}>x</Loop></Let>
 <AssertEquals actual={bounded} expected={"xxxx"} />
 </Test>
 
@@ -41,8 +41,8 @@ already bound.
 environment, so an iteration reads what earlier ones bound.
 
 <Test name="An iteration reads what an earlier one bound">
-<Capture as="tally">.</Capture>
-<Loop max={3}><Capture as="tally">{tally}.</Capture></Loop>
+<Let as="tally">.</Let>
+<Loop max={3}><Let as="tally">{tally}.</Let></Loop>
 <AssertEquals actual={tally} expected={"...."} />
 </Test>
 
@@ -50,14 +50,14 @@ For the same reason the final values stay readable after the loop, which is how
 a document acts on what the repetition produced.
 
 <Test name="The final binding is readable after the loop">
-<Loop max={2}><Capture as="attempt">last attempt</Capture></Loop>
+<Loop max={2}><Let as="attempt">last attempt</Let></Loop>
 <AssertEquals actual={attempt} expected={"last attempt"} />
 </Test>
 
 Loops nest, and the inner loop runs again for every iteration of the outer one.
 
 <Test name="Nested loops multiply">
-<Capture as="nested"><Loop max={2}>(<Loop max={3}>i</Loop>)</Loop></Capture>
+<Let as="nested"><Loop max={2}>(<Loop max={3}>i</Loop>)</Loop></Let>
 <AssertEquals actual={nested} expected={"(iii)(iii)"} />
 </Test>
 
@@ -65,11 +65,11 @@ Loops nest, and the inner loop runs again for every iteration of the outer one.
 loop reports and changes nothing about what the loop renders or binds.
 
 <Test name="A name does not change what the loop renders">
-<Capture as="named"><Loop name="planning" max={2}>y</Loop></Capture>
+<Let as="named"><Loop name="planning" max={2}>y</Loop></Let>
 <AssertEquals actual={named} expected={"yy"} />
 </Test>
 
 <Test name="A name is not published as a binding">
-<Capture as="probe"><Loop name="planning" max={1}>({name})({planning})</Loop></Capture>
+<Let as="probe"><Loop name="planning" max={1}>({name})({planning})</Loop></Let>
 <AssertEquals actual={probe} expected={"({name})({planning})"} />
 </Test>

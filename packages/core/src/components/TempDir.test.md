@@ -8,11 +8,11 @@ Outside any `<TempDir>`, a command runs where the document was invoked from,
 so it sees no temporary directory at all.
 
 <Test name="Execution starts in the ordinary working directory">
-<Capture as="before">
+<Let as="before">
 ```sh exec
 pwd
 ```
-</Capture>
+</Let>
 <AssertNotMatch actual={before} expected={/xmd-tempdir-/} />
 </Test>
 
@@ -20,14 +20,14 @@ Inside, the same command reports a directory belonging to that invocation,
 and that directory is there while the command runs.
 
 <Test name="Inside TempDir a command runs in a live temporary directory">
-<Capture as="inside">
+<Let as="inside">
 <TempDir>
 ```sh exec
 pwd
 test -d "$PWD" && echo LIVE
 ```
 </TempDir>
-</Capture>
+</Let>
 <AssertMatch actual={inside} expected={/xmd-tempdir-/} />
 <AssertStringIncludes actual={inside} expected={"LIVE"} />
 </Test>
@@ -37,19 +37,19 @@ directory is back. The path is carried out of the block by capturing it, then
 tested from outside.
 
 <Test name="After TempDir the directory is gone and the old cwd is restored">
-<Capture as="path">
+<Let as="path">
 <TempDir>
 ```sh exec
 pwd
 ```
 </TempDir>
-</Capture>
-<Capture as="after">
+</Let>
+<Let as="after">
 ```sh exec
 test -d {path} || echo REMOVED
 pwd
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={after} expected={"REMOVED"} />
 <AssertNotMatch actual={after} expected={/xmd-tempdir-/} />
 </Test>
@@ -59,11 +59,11 @@ keeps the directory, so a later sibling can still use it.
 
 <Test name="A captured TempDir stays live for a following sibling">
 <TempDir as="workspace" />
-<Capture as="present">
+<Let as="present">
 ```sh exec
 test -d {workspace} && echo PRESENT
 ```
-</Capture>
+</Let>
 <AssertMatch actual={workspace} expected={/xmd-tempdir-/} />
 <AssertStringIncludes actual={present} expected={"PRESENT"} />
 </Test>
@@ -71,7 +71,7 @@ test -d {workspace} && echo PRESENT
 Without `as` the same form simply renders the path.
 
 <Test name="A bare TempDir renders its path">
-<Capture as="rendered"><TempDir /></Capture>
+<Let as="rendered"><TempDir /></Let>
 <AssertMatch actual={rendered} expected={/xmd-tempdir-/} />
 </Test>
 
@@ -96,12 +96,12 @@ while [ ! -s {report}/directory ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); do
 echo watching
 ```
 </TempDir>
-<Capture as="afterwards">
+<Let as="afterwards">
 ```sh exec
 cat {report}/observed
 test -d "$(cat {report}/directory)" || echo REMOVED
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={afterwards} expected={"ALIVE"} />
 <AssertStringIncludes actual={afterwards} expected={"REMOVED"} />
 </Test>

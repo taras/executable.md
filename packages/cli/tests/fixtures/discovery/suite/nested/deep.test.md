@@ -1,6 +1,6 @@
 # Nested
 
 <Test name="nested document passes">
-<Capture as="depth">deep</Capture>
+<Let as="depth">deep</Let>
 <AssertEquals actual={depth} expected={"deep"} />
 </Test>

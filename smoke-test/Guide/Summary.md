@@ -23,8 +23,9 @@ cat <<'TABLE'
 | Props passthrough         | <PropDemo greeting="Hey" subject="w">  |
 | Expression props          | <PropDemo greeting={dynamic} subject={dynamic}> |
 | component as capture      | <Fragment as="capturedFromComponent">...       |
-| Capture directive         | <Capture as="capturedInline">...               |
-| Capture select            | <Capture select="code[lang=json]">...          |
+| Let directive             | <Let as="capturedInline">...               |
+| Let select                | <Let select="code[lang=json]">...          |
+| Let direct value          | <Let as="releaseSchema" value={{...}} />    |
 | Durability                | Timestamp stable across reruns          |
 | eval modifier             | js eval blocks with shared bindings     |
 | persist modifier          | js persist eval block, resource lifetime|

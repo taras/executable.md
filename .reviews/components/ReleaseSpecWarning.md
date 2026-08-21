@@ -15,7 +15,7 @@ props:
 The following is the list of files used in the release process. Update this
 list when a file is added or removed.
 
-<Capture as="releaseConfigFiles">
+<Let as="releaseConfigFiles">
 
 - .github/workflows/draft-release.yml
 - .github/workflows/release.yml
@@ -26,7 +26,7 @@ list when a file is added or removed.
 - scripts/build-npm.ts
 - scripts/bump-version.ts
 
-</Capture>
+</Let>
 
 ```ts eval
 const releaseChanged = props.files.filter((path) => releaseConfigFiles.includes(`- ${path}`));

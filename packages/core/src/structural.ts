@@ -12,7 +12,7 @@ export const RESERVED_STRUCTURAL: ReadonlySet<string> = new Set([
   "Content",
   "Output",
   "Return",
-  "Capture",
+  "Let",
   "Each",
   "If",
   "Else",

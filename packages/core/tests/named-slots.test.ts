@@ -1037,7 +1037,7 @@ describe("Tier NS-H — Nested projection points", () => {
         "---",
         "props: { type: object, properties: {}, additionalProperties: false }",
         "---",
-        '<Capture as="c">captured: <Content /></Capture>',
+        '<Let as="c">captured: <Content /></Let>',
         "<Output>host got: {c}</Output>",
       ].join("\n"),
       "doc.md": "<HostCap>MATERIAL</HostCap>",

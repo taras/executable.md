@@ -10,7 +10,7 @@ props:
 
 <CommentReviewData pr={props.pr} as="reviewData" />
 
-<Capture as="classificationResult">
+<Let as="classificationResult">
 <If condition={reviewData.hasRepliesToClassify}>
 
 <Sample>
@@ -29,9 +29,9 @@ Format: [index] DISMISS or [index] ACCEPT
 </Sample>
 
 </If>
-</Capture>
+</Let>
 
-<Capture as="sampleResult">
+<Let as="sampleResult">
 <If condition={reviewData.hasPairs}>
 
 <Sample>
@@ -48,7 +48,7 @@ If none are obvious: "No obvious comments found."
 </Sample>
 
 </If>
-</Capture>
+</Let>
 
 <CommentReviewState
   pr={props.pr}

@@ -17,31 +17,31 @@ are passed through as regular markdown.
 </Section>
 
 <Test name="exec renders command stdout">
-<Capture as="visibleExec">
+<Let as="visibleExec">
 ```bash exec
 echo "Hello from a durable workflow"
 ```
-</Capture>
+</Let>
 <AssertEquals actual={visibleExec} expected={"\nHello from a durable workflow"} />
 </Test>
 
 <Test name="silent exec suppresses rendered output">
-<Capture as="silentExec">
+<Let as="silentExec">
 ```bash silent exec
 echo "This output is journaled but not shown in the document"
 ```
-</Capture>
+</Let>
 <AssertEquals actual={silentExec} expected={""} />
 </Test>
 
 <Test name="Non-executable code blocks pass through verbatim">
-<Capture as="yamlBlock">
+<Let as="yamlBlock">
 ```yaml
 # This is just a code block — not executed
 props:
   name:
     type: string
 ```
-</Capture>
+</Let>
 <AssertEquals actual={yamlBlock} expected={"\n```yaml\n# This is just a code block — not executed\nprops:\n  name:\n    type: string\n```"} />
 </Test>

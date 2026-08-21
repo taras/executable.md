@@ -208,9 +208,9 @@ Atomic tests use `<Test>`:
 
 ```md
 <Test name="Renders hello world">
-  <Capture as="result">
+  <Let as="result">
     Hello World
-  </Capture>
+  </Let>
   <AssertEquals actual={result}>
     Hello World
   </AssertEquals>
@@ -335,7 +335,7 @@ imported; malformed or conflicting declarations fail before it too.
 `<CollectOutput as="…">` accumulates the child's rendered output for assertions.
 It is passive: the child's output is displayed progressively either way, and
 collection changes neither routing nor completion. When the child fails or is
-cancelled, the binding holds the partial prefix. Ordinary `<Capture>` stays
+cancelled, the binding holds the partial prefix. Ordinary `<Let>` stays
 lexical — it captures the rendered content it wraps and never the child's stream.
 
 `<DiagnosticJournal>` selects an isolated diagnostic journal for a `run` child,
@@ -470,7 +470,7 @@ diagnostic text.
 Equality assertions and `<AssertStringIncludes>` accept either an `expected`
 prop or rendered children as the expected string. The two forms are mutually
 exclusive. Expected children expand in the current scope and environment, use
-the same trailing-whitespace trimming as `<Capture>`, and do not render
+the same trailing-whitespace trimming as `<Let>`, and do not render
 separately.
 
 Numeric comparisons require an `expected` prop. Match assertions require a

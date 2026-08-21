@@ -28,16 +28,16 @@ around this text renders its children inside a headed section.
 </Section>
 
 <Test name="Note renders its default level">
-<Capture as="noteDefault"><Note message="This note uses the default level (info)." /></Capture>
+<Let as="noteDefault"><Note message="This note uses the default level (info)." /></Let>
 <AssertEquals actual={noteDefault} expected={"\n> 📝 **info:** This note uses the default level (info)."} />
 </Test>
 
 <Test name="Note renders an overridden level">
-<Capture as="noteOverride"><Note level="warning" message="This note overrides the level to warning." /></Capture>
+<Let as="noteOverride"><Note level="warning" message="This note overrides the level to warning." /></Let>
 <AssertEquals actual={noteOverride} expected={"\n> 📝 **warning:** This note overrides the level to warning."} />
 </Test>
 
 <Test name="Section renders children through its Content slot">
-<Capture as="slotSentinel"><Section title="Slot Sentinel">SENTINEL-CONTENT</Section></Capture>
+<Let as="slotSentinel"><Section title="Slot Sentinel">SENTINEL-CONTENT</Section></Let>
 <AssertEquals actual={slotSentinel} expected={"\n## § Slot Sentinel\n\nSENTINEL-CONTENT\n\n---"} />
 </Test>

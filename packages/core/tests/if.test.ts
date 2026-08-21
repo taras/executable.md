@@ -131,17 +131,15 @@ describe("Tier IF — structural conditional directive", () => {
     expect(run.output).toBe("before|mid|after");
   });
 
-  it("IF8: a capture from the selected branch stays available afterward", function* () {
-    const run = yield* runIf(
-      '<If condition={true}><Capture as="picked">chosen</Capture></If>[{picked}]',
-    );
+  it("IF8: a <Let> binding from the selected branch stays available afterward", function* () {
+    const run = yield* runIf('<If condition={true}><Let as="picked">chosen</Let></If>[{picked}]');
     expect(run.output).toBe("[chosen]");
     expect(run.env?.picked).toBe("chosen");
   });
 
   it("IF9: the unselected branch creates no binding", function* () {
     const run = yield* runIf(
-      '<If condition={false}><Capture as="skipped">never</Capture><Else>alt</Else></If>[{skipped}]',
+      '<If condition={false}><Let as="skipped">never</Let><Else>alt</Else></If>[{skipped}]',
     );
     expect(run.output).toBe("alt[{skipped}]");
     expect(run.env?.skipped).toBeUndefined();

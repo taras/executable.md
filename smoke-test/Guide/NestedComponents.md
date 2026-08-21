@@ -9,14 +9,14 @@ Dotted names map to directory paths: `<Tips.Formatting />` lives at
 </Section>
 
 <Test name="Feature expands its nested Note">
-<Capture as="featureOutput"><Feature
+<Let as="featureOutput"><Feature
   title="Recursive Expansion"
   description="Components expand bottom-up: children first, then the parent body."
-/></Capture>
+/></Let>
 <AssertEquals actual={featureOutput} expected={"\n**Recursive Expansion** — Components expand bottom-up: children first, then the parent body.\n\n\n> 📝 **info:** This note was generated inside the Feature component."} />
 </Test>
 
 <Test name="Dotted component names resolve to directory paths">
-<Capture as="formattingTip"><Tips.Formatting /></Capture>
+<Let as="formattingTip"><Tips.Formatting /></Let>
 <AssertEquals actual={formattingTip} expected={"\n💡 **Formatting tip:** Use `<Content />` inside your component\nbody to mark where the caller's children appear. If your component doesn't\ninclude `<Content />`, children are silently discarded."} />
 </Test>

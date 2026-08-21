@@ -79,7 +79,7 @@ describe("<Test> as a function component", () => {
       "",
       "<Testing>",
       '<Test name="t">',
-      '<Capture as="heading"># {meta.title}</Capture>',
+      '<Let as="heading"># {meta.title}</Let>',
       '<AssertEquals actual={heading} expected={"# Executable MDX"} />',
       "</Test>",
       "</Testing>",

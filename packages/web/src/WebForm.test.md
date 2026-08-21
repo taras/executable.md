@@ -21,13 +21,13 @@ The component renders nothing. What it produces is the validated response, bound
 by `as` and read afterwards like any other value.
 
 <Test name="A submitted answer becomes the captured value">
-<Capture as="rendered">
+<Let as="rendered">
 <WebForm schema={reviewSchema} as="response">
 # Review required
 
 Read the plan and decide.
 </WebForm>
-</Capture>
+</Let>
 <AssertEquals actual={rendered} expected={""} />
 <AssertEquals actual={response.decision} expected={"approve"} />
 <AssertEquals actual={response.note} expected={"looks right"} />

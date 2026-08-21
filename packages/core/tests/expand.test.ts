@@ -427,20 +427,20 @@ describe("expansion", () => {
     expect(env["saved"]).toBe("Hello world!");
   });
 
-  it("Capture stores children output into env and stays silent", function* () {
+  it("<Let> stores children output into env and stays silent", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="x">hello\n</Capture>');
+    const segments = scanSegments('<Let as="x">hello\n</Let>');
     const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["x"]).toBe("hello");
   });
 
-  // A capture never swallows an error, and a block that printed before it
+  // A binding never swallows an error, and a block that printed before it
   // failed is still a failure (#307) — so what it printed must not reach the
   // binding as though it were a value. This pins the existing contract against
   // the new segment shape; #309 owns failed-capture output visibility.
-  it("Capture leaves the binding unset when a block failed after printing", function* () {
-    const segments = scanSegments('<Capture as="x">\n```bash exec\nfoo\n```\n</Capture>');
+  it("<Let> leaves the binding unset when a block failed after printing", function* () {
+    const segments = scanSegments('<Let as="x">\n```bash exec\nfoo\n```\n</Let>');
     const { output, env, failure } = yield* expandWithEnv(
       segments,
       {},
@@ -472,61 +472,59 @@ describe("expansion", () => {
     expect(output).toBe("");
   });
 
-  it("Capture rejects expression as prop", function* () {
+  it("<Let> rejects expression as prop", function* () {
     const ctx = {};
-    const segments = scanSegments("<Capture as={name}>text</Capture>");
+    const segments = scanSegments("<Let as={name}>text</Let>");
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
     expect(output).toContain("must be a string literal");
   });
 
-  it("Capture rejects self-closing usage", function* () {
+  it("<Let> rejects a self-closing form with no value", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="x" />');
+    const segments = scanSegments('<Let as="x" />');
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
     expect(output).toContain("must have content");
   });
 
-  it("Capture rejects extra props", function* () {
+  it("<Let> rejects extra props", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="x" slot="y">text</Capture>');
+    const segments = scanSegments('<Let as="x" slot="y">text</Let>');
     const output = yield* expand(segments, ctx);
     expect(output).toContain("ERROR");
-    expect(output).toContain('only accepts "as" and "select" props');
+    expect(output).toContain('only accepts "as", "value" and "select" props');
   });
 
-  it("Capture with select extracts code block by CSS selector", function* () {
+  it("<Let> with select extracts code block by CSS selector", function* () {
     const ctx = {};
     const segments = scanSegments(
-      '<Capture as="data" select="code[lang=json]">prose text\n\n```json\n{"key":"val"}\n```\n\nmore prose\n</Capture>',
+      '<Let as="data" select="code[lang=json]">prose text\n\n```json\n{"key":"val"}\n```\n\nmore prose\n</Let>',
     );
     const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe('{"key":"val"}');
   });
 
-  it("Capture with select falls back to full content when no match", function* () {
+  it("<Let> with select falls back to full content when no match", function* () {
     const ctx = {};
-    const segments = scanSegments(
-      '<Capture as="data" select="code[lang=json]">no code here\n</Capture>',
-    );
+    const segments = scanSegments('<Let as="data" select="code[lang=json]">no code here\n</Let>');
     const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe("no code here");
   });
 
-  it("Capture with select extracts paragraph text", function* () {
+  it("<Let> with select extracts paragraph text", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="data" select="paragraph">Hello world\n</Capture>');
+    const segments = scanSegments('<Let as="data" select="paragraph">Hello world\n</Let>');
     const { output, env, failure } = yield* expandWithEnv(segments, ctx);
     expect(output).toBe("");
     expect(env["data"]).toBe("Hello world");
   });
 
-  it("Capture accepts select alongside as without error", function* () {
+  it("<Let> accepts select alongside as without error", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="x" select="paragraph">text\n</Capture>');
+    const segments = scanSegments('<Let as="x" select="paragraph">text\n</Let>');
     const output = yield* expand(segments, ctx);
     expect(output).not.toContain("ERROR");
   });
@@ -654,10 +652,7 @@ describe("component-declared output", () => {
   });
 
   it("lets an <Output> region read a binding recorded by preceding documentation", function* () {
-    const comp = makeComponent(
-      "Dep",
-      '<Capture as="msg">HELLO</Capture>\n\n<Output>msg={msg}</Output>',
-    );
+    const comp = makeComponent("Dep", '<Let as="msg">HELLO</Let>\n\n<Output>msg={msg}</Output>');
     const ctx = { Dep: comp };
     const output = yield* expand(scanSegments("<Dep />"), ctx);
     expect(output).toContain("msg=HELLO");
@@ -798,11 +793,8 @@ describe("component-declared output", () => {
     expect(threw).toBe(true);
   });
 
-  it("throws on a failure inside <Capture> documentation", function* () {
-    const comp = makeComponent(
-      "CapFail",
-      '<Capture as="x">\n<Bogus />\n</Capture>\n\n<Output>ok</Output>',
-    );
+  it("throws on a failure inside <Let> documentation", function* () {
+    const comp = makeComponent("CapFail", '<Let as="x">\n<Bogus />\n</Let>\n\n<Output>ok</Output>');
     const ctx = { CapFail: comp };
     let threw = false;
     try {

@@ -19,7 +19,7 @@ next regeneration.
 
 The static top of the workflow, through the `version` job's tag resolution:
 
-<Capture as="headerTemplate" select="code[lang=yaml]">
+<Let as="headerTemplate" select="code[lang=yaml]">
 
 ```yaml
 name: Publish packages
@@ -51,7 +51,7 @@ jobs:
           echo "value=${TAG#v}" >> "$GITHUB_OUTPUT"
 ```
 
-</Capture>
+</Let>
 
 ## Version guards
 
@@ -59,7 +59,7 @@ Two more steps in the `version` job: refuse a tag the manifests do not
 declare, and hold packages until the binary release succeeds. `__MANIFESTS__`
 becomes the space-separated list of every publishable member's deno.json:
 
-<Capture as="guardsTemplate" select="code[lang=yaml]">
+<Let as="guardsTemplate" select="code[lang=yaml]">
 
 ```yaml
       # Refuse a tag the manifests do not declare (spec §2).
@@ -98,14 +98,14 @@ becomes the space-separated list of every publishable member's deno.json:
           exit 1
 ```
 
-</Capture>
+</Let>
 
 ## Package job
 
 One job per publishable package, dependencies before dependents. `__JOB__`,
 `__NEEDS__`, and `__PACKAGE__` come from the member's manifests:
 
-<Capture as="jobTemplate" select="code[lang=yaml]">
+<Let as="jobTemplate" select="code[lang=yaml]">
 
 ```yaml
   __JOB__:
@@ -116,7 +116,7 @@ One job per publishable package, dependencies before dependents. `__JOB__`,
       version: ${{ needs.version.outputs.value }}
 ```
 
-</Capture>
+</Let>
 
 ## JSR job
 
@@ -131,7 +131,7 @@ still missing. Previously published packages do not cause the command to fail.
 npm stays per-package in `publish-one.yml`, and this job runs in the same
 `npm-publish` environment so both registries admit the same publishers:
 
-<Capture as="jsrTemplate" select="code[lang=yaml]">
+<Let as="jsrTemplate" select="code[lang=yaml]">
 
 ```yaml
   jsr:
@@ -165,7 +165,7 @@ npm stays per-package in `publish-one.yml`, and this job runs in the same
         run: deno publish
 ```
 
-</Capture>
+</Let>
 
 ## Generate
 

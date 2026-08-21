@@ -1687,7 +1687,7 @@ creates an `ErrorSegment` raises it.
 
 ### 6. An error is never a value
 
-A binding (`as=`, `<Capture as>`, `<Each as>`) refuses a body holding
+A binding (`as=`, `<Let as>`, `<Each as>`) refuses a body holding
 a printed error. Holding a failure as data is asked for explicitly:
 `<Result as>` binds the Effection `Result` shape — `{ok: true, value}` with
 the value by reference, or `{ok: false, error}` — converting the failure
@@ -1938,7 +1938,7 @@ child wrote to its pipe, which no execution observes, and never a claim of
 pump-complete tail delivery.
 
 **A run's own display policies are downstream and change nothing.** `silent`, a
-`<Capture as>` region's suppression of terminal stdout, quiet runtime output for
+`<Let as>` region's suppression of terminal stdout, quiet runtime output for
 a caller whose subprocess output is an answer, the command line's choice of
 which stream a value root's diagnostics land on, and the terminal writers all
 sit below the boundary. They decide what a reader sees; they never decide what
@@ -1948,7 +1948,7 @@ Three questions about a command are separate, and answering one never answers
 another:
 
 - **Routing** is what a reader sees. An ordinary block forwards both channels;
-  a `<Capture as>` region takes stdout into the captured value and leaves
+  a `<Let as>` region takes stdout into the captured value and leaves
   stderr diagnostic; `silent` displays neither. Routing answers "does this
   channel reach the terminal, and does anything else want it" — never "which of
   the host's streams does it land on". It is visible in document structure,
@@ -2587,6 +2587,7 @@ Status is measured against main.
 | Construct | Does | Status |
 | --- | --- | --- |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
+| `<Let as="name">` | binds one name in the current environment from exactly one source: the content it renders, or the exact value `value` names, bound by reference and never through the JSON boundary component props cross. Which source it has is read from what the author wrote, before either one runs, so a construct naming both expands no child and evaluates no expression. It opens no scope, owns no resource, adds no middleware boundary and writes no journal record — replay reconstructs both sources through ordinary expansion | built on the #527 stack |
 | root failure settlement | a text root installs the fail-capable `output` mode for its whole body, so an uncaught, undecided failure is the document execution's own outcome, whether or not the root declares `<Output>` | built on the #453 stack |
 | `<Output>` region `output` mode | an undecided error fails the document execution | built on main |
 | `<Output>` rendering selection | chooses which regions of a body render, and buffers a root that declares one; it decides nothing about failure | built on main |
@@ -2606,7 +2607,7 @@ Status is measured against main.
 | shared Git-host reconciliation | reconciles Git push and pull-request upsert through one provider-neutral state machine journaled as `git_host_effect` — Prompt is not a consumer and keeps its own Agent-provider contract: run and expansion identity derived by the engine, observation before mutation, adoption of a proven compatible completion, one performance of a proven absence, refusal of conflict and permanent ambiguity, temporary unavailability as its own ordinary failure, and a provider free to support only some kinds; routing is one request-only contextual operation carrying no completion authority, and only an answer the invocation's own terminal accepted can author a journaled outcome | built on the #297 stack; `Git.Push` is its first consumer, built on the #370 stack, and `<PullRequest>` its second — a create-or-update upsert — built on the #295 stack. `<Issue>` reuses these mechanics inside a boundary of its own rather than joining this one (#296): no shared state machine, no routing surface, no phases and no terminal, and its providers are ordinary `IssueApi` middleware |
 | explicit WorkflowRun journal route | binds one already-filtered publication to one exact active transaction and otherwise uses ordinary serialized journal storage | built on the #365 stack |
 | `API.Service` / `startService()` | creates an authenticated, supervised loopback service attachment through a provider-neutral operation | built on main |
-| foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Capture as>` region, and retains output only when the host asked for a record | built on the #441 stack |
+| foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Let as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |

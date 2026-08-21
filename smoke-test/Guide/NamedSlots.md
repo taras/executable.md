@@ -9,17 +9,17 @@ slot.
 </Section>
 
 <Test name="Named slots place content in their regions">
-<Capture as="slotTable"><TwoColumn>
+<Let as="slotTable"><TwoColumn>
   <Fragment slot="left">**Left column** content via named slot.</Fragment>
   <Fragment slot="right">**Right column** content via named slot.</Fragment>
-</TwoColumn></Capture>
+</TwoColumn></Let>
 <AssertEquals actual={slotTable} expected={"\n| Left | Right |\n|------|-------|\n| \n**Left column** content via named slot.\n | \n**Right column** content via named slot.\n |"} />
 </Test>
 
 <Test name="Named slots compose with the default slot">
-<Capture as="slotTableNotes"><TwoColumn>
+<Let as="slotTableNotes"><TwoColumn>
   <Note slot="left" message="This note is in the left column." />
   <Note slot="right" message="This note is in the right column." />
-</TwoColumn></Capture>
+</TwoColumn></Let>
 <AssertEquals actual={slotTableNotes} expected={"\n| Left | Right |\n|------|-------|\n| \n> 📝 **info:** This note is in the left column.\n | \n> 📝 **info:** This note is in the right column.\n |"} />
 </Test>

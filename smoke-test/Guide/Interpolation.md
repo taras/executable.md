@@ -17,12 +17,12 @@ coerce via `String()` when interpolated in text.
 const dynamicGreeting = "Howdy";
 const dynamicSubject = "expression props";
 ```
-<Capture as="expressionPropDemo"><PropDemo greeting={dynamicGreeting} subject={dynamicSubject} /></Capture>
+<Let as="expressionPropDemo"><PropDemo greeting={dynamicGreeting} subject={dynamicSubject} /></Let>
 <AssertEquals actual={expressionPropDemo} expected={"\nThe caller said: \"Howdy, expression props!\"\n\n\n> 📝 **info:** Props were successfully passed through to this component."} />
 </Test>
 
 <Test name="JSON literal props resolve at scan time">
-<Capture as="jsonPropNote"><Note message="JSON props: count={42}, verbose={true}" /></Capture>
+<Let as="jsonPropNote"><Note message="JSON props: count={42}, verbose={true}" /></Let>
 <AssertEquals actual={jsonPropNote} expected={"\n> 📝 **info:** JSON props: count={42}, verbose={true}"} />
 </Test>
 
@@ -30,7 +30,7 @@ const dynamicSubject = "expression props";
 ```js eval
 const itemCount = 3;
 ```
-<Capture as="coercionLine">The count computed above is {itemCount}.</Capture>
+<Let as="coercionLine">The count computed above is {itemCount}.</Let>
 <AssertEquals actual={coercionLine} expected={"The count computed above is 3."} />
 </Test>
 
@@ -51,7 +51,7 @@ verbatim.
 const textPort = 49821;
 const textHost = "127.0.0.1";
 ```
-<Capture as="hostLine">The server is running at {textHost}:{textPort}.</Capture>
+<Let as="hostLine">The server is running at {textHost}:{textPort}.</Let>
 <AssertEquals actual={hostLine} expected={"The server is running at 127.0.0.1:49821."} />
 </Test>
 
@@ -59,7 +59,7 @@ const textHost = "127.0.0.1";
 ```js eval
 const textPort = 49821;
 ```
-<Capture as="metaLine">The document title is {meta.title} and the text port is {textPort}.</Capture>
+<Let as="metaLine">The document title is {meta.title} and the text port is {textPort}.</Let>
 <AssertEquals actual={metaLine} expected={"The document title is Executable MDX and the text port is 49821."} />
 </Test>
 
@@ -67,11 +67,11 @@ const textPort = 49821;
 ```js eval
 const textPort = 49821;
 ```
-<Capture as="escapedLine">Escaped braces produce literal output: \{textPort} stays as-is.</Capture>
+<Let as="escapedLine">Escaped braces produce literal output: \{textPort} stays as-is.</Let>
 <AssertEquals actual={escapedLine} expected={"Escaped braces produce literal output: {textPort} stays as-is."} />
 </Test>
 
 <Test name="Unresolved references pass through verbatim">
-<Capture as="unresolvedLine">If a bare reference has no matching binding, it passes through verbatim: {undefinedBinding} is not resolved.</Capture>
+<Let as="unresolvedLine">If a bare reference has no matching binding, it passes through verbatim: {undefinedBinding} is not resolved.</Let>
 <AssertEquals actual={unresolvedLine} expected={"If a bare reference has no matching binding, it passes through verbatim: {undefinedBinding} is not resolved."} />
 </Test>

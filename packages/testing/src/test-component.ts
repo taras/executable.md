@@ -287,7 +287,7 @@ export function testBehavior(timeoutMs: number) {
     const scope = yield* evalScope;
 
     // ONE stable binding environment: the accessor returns the same object on
-    // every read, so <Capture> writes persist for the assertion that follows.
+    // every read, so <Let> writes persist for the assertion that follows.
     // Caller-projected bindings merge UNDER the current environment, so a
     // <Test> projected through <Content /> still sees the caller's bindings.
     const testEnv: EvalEnv = { values: { ...(parentEnv?.values ?? {}) } };

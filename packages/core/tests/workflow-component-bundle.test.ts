@@ -189,6 +189,9 @@ describe("Tier WB — a bundled name resolves to its pinned source", () => {
     const structural = yield* refusal(run("ok\n", [component("If", "no\n", 1)]));
     expect(structural).toContain("structural syntax");
 
+    const binding = yield* refusal(run("ok\n", [component("Let", "no\n", 1)]));
+    expect(binding).toContain("structural syntax");
+
     const core = yield* refusal(run("ok\n", [component("Parse", "no\n", 1)]));
     expect(core).toContain("a component the engine supplies");
 

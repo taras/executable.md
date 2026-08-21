@@ -10,14 +10,14 @@ mode, that the child content was consumed rather than rendered directly.
 
 <Test name="Sample sends its prompt to the provider">
 <StubProvider model="sample-stub">
-<Capture as="promptResponse"><Sample prompt="summarize this" model="sample-stub" /></Capture>
+<Let as="promptResponse"><Sample prompt="summarize this" model="sample-stub" /></Let>
 <AssertEquals actual={promptResponse} expected={"\n[response-from-sample-stub|content:summarize this]"} />
 </StubProvider>
 </Test>
 
 <Test name="Sample consumes children as content">
 <StubProvider model="sample-stub">
-<Capture as="childrenResponse"><Sample model="sample-stub">This is child content to be processed.</Sample></Capture>
+<Let as="childrenResponse"><Sample model="sample-stub">This is child content to be processed.</Sample></Let>
 <AssertEquals actual={childrenResponse} expected={"\n[response-from-sample-stub|content:This is child content to be processed.]"} />
 </StubProvider>
 </Test>

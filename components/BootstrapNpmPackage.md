@@ -52,23 +52,23 @@ Publishing by hand needs you logged in, so that's checked too. An old npm can
 reserve the name and then fail to configure the trust, leaving the package half
 done — better to find out now.
 
-<Capture as="npmWhoami">
+<Let as="npmWhoami">
 
 ```bash exec
 npm whoami --registry=https://registry.npmjs.org
 ```
 
-</Capture>
+</Let>
 
-<Capture as="npmVersionOutput">
+<Let as="npmVersionOutput">
 
 ```bash exec
 npm --version
 ```
 
-</Capture>
+</Let>
 
-<Capture as="manifestSchema" select="code[lang=json]">
+<Let as="manifestSchema" select="code[lang=json]">
 
 ```json
 {
@@ -84,7 +84,7 @@ npm --version
 }
 ```
 
-</Capture>
+</Let>
 
 ```ts eval
 const registry = "https://registry.npmjs.org";
@@ -404,13 +404,13 @@ This is a placeholder reserving the package name. It contains no implementation.
 Install a stable release from the `latest` dist-tag once one exists.
 </File>
 
-<Capture as="packOutput">
+<Let as="packOutput">
 
 ```bash exec
 npm pack --dry-run --json
 ```
 
-</Capture>
+</Let>
 
 ```ts eval
 const packDisplay = (() => {
@@ -451,7 +451,7 @@ minute ago may not survive the steps below. A code that expires partway leaves
 whatever landed before it in place, and running the document again finishes the
 rest.
 
-<Capture as="otpSchema" select="code[lang=json]">
+<Let as="otpSchema" select="code[lang=json]">
 
 ```json
 {
@@ -467,7 +467,7 @@ rest.
 }
 ```
 
-</Capture>
+</Let>
 
 <Elicit schema={otpSchema} as="otp">
 Enter a fresh six-digit npm one-time password. It authorizes reading what the

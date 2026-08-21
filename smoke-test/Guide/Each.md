@@ -19,8 +19,8 @@ moves presentation out of JavaScript, not data shaping.
 ```js eval
 const rows = [{ label: "alpha", score: 1 }, { label: "beta", score: 2 }];
 ```
-<Capture as="eachRows"><Each in={rows} let="row">- {row.label}: {row.score}
-</Each></Capture>
+<Let as="eachRows"><Each in={rows} let="row">- {row.label}: {row.score}
+</Each></Let>
 <AssertEquals actual={eachRows} expected={"- alpha: 1\n- beta: 2"} />
 </Test>
 
@@ -28,8 +28,8 @@ const rows = [{ label: "alpha", score: 1 }, { label: "beta", score: 2 }];
 ```js eval
 const empty = [];
 ```
-<Capture as="eachEmpty"><Each in={empty} let="row">- {row.label}
-</Each></Capture>
+<Let as="eachEmpty"><Each in={empty} let="row">- {row.label}
+</Each></Let>
 <AssertEquals actual={eachEmpty} expected={""} />
 </Test>
 
@@ -45,10 +45,10 @@ const cells = [{ v: "x" }, { v: "y" }, { v: "z" }];
 ```js eval
 const points = [{ n: 2 }, { n: 3 }];
 ```
-<Capture as="eachEval"><Each in={points} let="point">
+<Let as="eachEval"><Each in={points} let="point">
 ```js eval
 output("squared:" + (point.n * point.n));
 ```
-</Each></Capture>
+</Each></Let>
 <AssertEquals actual={eachEval} expected={"\nsquared:4\nsquared:9"} />
 </Test>

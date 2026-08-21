@@ -12,7 +12,7 @@ self-closing, it reads and renders the text it read.
 <Test name="A file written inside TempDir reads back">
 <TempDir>
 <File path="request.md">Request content</File>
-<Capture as="rendered"><File path="request.md" /></Capture>
+<Let as="rendered"><File path="request.md" /></Let>
 <AssertEquals actual={rendered} expected={"Request content"} />
 </TempDir>
 </Test>
@@ -113,12 +113,12 @@ the process's own. A shell running in the same block finds the file where
 <Test name="File and the shell share the contextual directory">
 <TempDir>
 <File path="note.txt">written by File</File>
-<Capture as="seen">
+<Let as="seen">
 ```sh exec
 cat note.txt
 echo "written by the shell" > from-shell.txt
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={seen} expected={"written by File"} />
 <File path="from-shell.txt" as="fromShell" />
 <AssertEquals actual={fromShell} expected={"written by the shell\n"} />
@@ -136,11 +136,11 @@ path the first wrote, and finds nothing there.
 </TempDir>
 
 <TempDir>
-<Capture as="listing">
+<Let as="listing">
 ```sh exec
 test -f note.txt && echo PRESENT || echo ABSENT
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={listing} expected={"ABSENT"} />
 </TempDir>
 </Test>

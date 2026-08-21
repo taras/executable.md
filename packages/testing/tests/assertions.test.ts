@@ -82,12 +82,12 @@ describe("assertion components", () => {
     expect(run.output).toContain("before");
   });
 
-  it("expected children behave like <Capture> trimming", function* () {
+  it("expected children behave like <Let> trimming", function* () {
     const doc = [
       "<Testing><Test>",
-      '<Capture as="result">',
+      '<Let as="result">',
       "Hello World",
-      "</Capture>",
+      "</Let>",
       "<AssertEquals actual={result}>",
       "Hello World",
       "</AssertEquals>",

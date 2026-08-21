@@ -94,27 +94,27 @@ the next stage.
 <AgentHarness scenario="smoke-test/agent/scenario.md">
 
 <Test name="an ordinary document reaches the agent through xmd run">
-<Capture as="firstRun">
+<Let as="firstRun">
 ```bash exec
 HOME="{harness.home}" "{harness.binary}" run smoke-test/agent/first-turn.md \
   --default-agent "{harness.agent}" --raw
 status=$?
 echo "status=[$status]"
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={firstRun} expected="The review of **packages/core** at `abc123` passed." />
 <AssertStringIncludes actual={firstRun} expected="status=[0]" />
 </Test>
 
 <Test name="a second run attaches again and advances the scenario">
-<Capture as="secondRun">
+<Let as="secondRun">
 ```bash exec
 HOME="{harness.home}" "{harness.binary}" run smoke-test/agent/second-turn.md \
   --default-agent "{harness.agent}" --raw
 status=$?
 echo "status=[$status]"
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={secondRun} expected="The review of **packages/core** passed." />
 <AssertStringIncludes actual={secondRun} expected="status=[0]" />
 </Test>
@@ -131,26 +131,26 @@ worker on the way out.
 <AgentHarness scenario="smoke-test/agent/scenario.md">
 
 <Test name="an unmatched prompt fails the run">
-<Capture as="mismatchRun">
+<Let as="mismatchRun">
 ```bash exec
 HOME="{harness.home}" "{harness.binary}" run smoke-test/agent/mismatch.md \
   --default-agent "{harness.agent}" --raw
 status=$?
 echo "status=[$status]"
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={mismatchRun} expected="status=[1]" />
 </Test>
 
 <Test name="a matching run after a failure attaches and finds its stage intact">
-<Capture as="recoveredRun">
+<Let as="recoveredRun">
 ```bash exec
 HOME="{harness.home}" "{harness.binary}" run smoke-test/agent/first-turn.md \
   --default-agent "{harness.agent}" --raw
 status=$?
 echo "status=[$status]"
 ```
-</Capture>
+</Let>
 <AssertStringIncludes actual={recoveredRun} expected="The review of **packages/core** at `abc123` passed." />
 <AssertStringIncludes actual={recoveredRun} expected="status=[0]" />
 </Test>

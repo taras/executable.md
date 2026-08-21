@@ -9,8 +9,8 @@ cannot bleed into component output.
 </Section>
 
 <Test name="Unclosed bold heals at a component boundary">
-<Capture as="healed">The text below opens **bold before the component
+<Let as="healed">The text below opens **bold before the component
 <Badge />
-and continues after.</Capture>
+and continues after.</Let>
 <AssertEquals actual={healed} expected={"The text below opens **bold before the component\n**\n*✓ verified*\n\nand continues after."} />
 </Test>

@@ -8,12 +8,12 @@ and `<AssertThrows>` turns that rejection into a passing test.
 </Section>
 
 <Test name="A scalar array of strings renders">
-<Capture as="list"><TypedList files={["a.ts", "b.ts"]} /></Capture>
+<Let as="list"><TypedList files={["a.ts", "b.ts"]} /></Let>
 <AssertEquals actual={list} expected={"\na.ts, b.ts"} />
 </Test>
 
 <Test name="An object array fills a nested default">
-<Capture as="rows"><TypedRows rows={[{ symbol: "x" }, { symbol: "y", line: 5 }]} /></Capture>
+<Let as="rows"><TypedRows rows={[{ symbol: "x" }, { symbol: "y", line: 5 }]} /></Let>
 <AssertEquals actual={rows} expected={"\nx@0:info, y@5:info"} />
 </Test>
 

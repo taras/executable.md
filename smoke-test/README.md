@@ -14,12 +14,12 @@ every scenario. This is version **{meta.version}** of {meta.title},
 built from the source at [{meta.repo}]({meta.repo}).
 
 <Test name="Root frontmatter interpolates into the heading">
-<Capture as="heading"># {meta.title}</Capture>
+<Let as="heading"># {meta.title}</Let>
 <AssertEquals actual={heading} expected={"# Executable MDX"} />
 </Test>
 
 <Test name="Root frontmatter interpolates into prose">
-<Capture as="versionLine">This is version **{meta.version}** of {meta.title}, built from the source at [{meta.repo}]({meta.repo}).</Capture>
+<Let as="versionLine">This is version **{meta.version}** of {meta.title}, built from the source at [{meta.repo}]({meta.repo}).</Let>
 <AssertEquals actual={versionLine} expected={"This is version **0.1.0** of Executable MDX, built from the source at [https://github.com/thefrontside/effectionx](https://github.com/thefrontside/effectionx)."} />
 </Test>
 

@@ -197,7 +197,7 @@ const GLOB_PIPELINE = `<TempDir>
 </Each>
 </TempDir>`;
 
-const PARSE = `<Capture as="schema" select="code[lang=json]">
+const PARSE = `<Let as="schema" select="code[lang=json]">
 \`\`\`json
 {
   "type": "object",
@@ -205,7 +205,7 @@ const PARSE = `<Capture as="schema" select="code[lang=json]">
   "required": ["passed"]
 }
 \`\`\`
-</Capture>
+</Let>
 
 <Parse schema={schema} as="verdict">
   <Prompt>Answer with JSON only: did the change pass review?</Prompt>
