@@ -4333,10 +4333,12 @@ Rendered-content behavior:
 
 Direct-value behavior:
 
-1. A `value` the scanner already resolved is used as it stands. An expression
-   is evaluated at this position in the body, against the same layered binding
-   environment and the same positioned failure wrapper an expression prop uses
-   (§4.3).
+1. An expression is evaluated at this position in the body, against the same
+   layered binding environment and the same positioned failure wrapper an
+   expression prop uses (§4.3). The scanner resolves nothing for this prop, so
+   what is evaluated is what the author wrote — see “Expression props”. A
+   quoted `value="text"` is an ordinary string attribute and is used as it
+   stands.
 2. Store that exact result in `env.values[as]`, **by reference**.
 3. Produce no output segment, expand nothing, and leave foreground routing
    alone: there is no body to route.
@@ -4421,6 +4423,17 @@ component. Nothing is evaluated for a capture the component never asks for, and
 an expression that throws throws into that component rather than becoming an
 engine prop error. A capture is not durable: it is journaled neither as a prop
 nor as a value, and a replay recomputes it from the restored bindings.
+
+`<Let value>` is the other exception, and it is taken earlier — while scanning.
+Resolving a JSON literal at scan time is itself a projection: `undefined` has no
+JSON reading, so it would arrive as `null`, and JSON has no shape at all for a
+function, a class instance or a cycle. Because `<Let>` binds what its expression
+produced rather than a reading of it (§6.5), the scanner keeps the authored
+expression text for that one prop and resolves nothing. `value={undefined}`
+therefore reaches expansion as an expression and binds `undefined`. A quoted
+`value="text"` is an ordinary string attribute and is not affected, and every
+other prop — including `<Let>`'s own `select`, and a `value` prop on an ordinary
+component — resolves at scan time exactly as before.
 
 The `expressions` field is always present on `ComponentElement`
 (empty `{}` when no eval expressions exist). A prop name appears in
@@ -7938,6 +7951,9 @@ visible warning blocks, gather into a separate error report).
 | A14 | Component inside fenced code block | `` ```jsx\n<Component />\n``` `` → TextSegment |
 | A15 | Boolean prop | `<Comp verbose />` → props.verbose: true |
 | A16 | Numeric expression prop | `<Comp count={42} />` → props.count: 42 |
+| A-REF1 | A prop bound by reference | `<Let value={…}>` keeps the authored text in `expressions.value` and resolves no JSON, whatever the text is |
+| A-REF2 | Every other prop is unchanged | `foo={undefined}` on an ordinary component, a `value` prop on an ordinary component, and `<Let select={undefined}>` all still resolve to `null` at scan time |
+| A-REF3 | A quoted `<Let value>` | `value="plain"` is an ordinary string prop, not an expression |
 | A17 | Modifier with params | `` ```bash timeout=30s exec `` → modifiers: [{name: "timeout", params: "30s"}, {name: "exec"}] |
 | A14b | Component inside inline code span | `` Use `<Content />` for slot `` → single TextSegment |
 | A14c | Component inside double-backtick span | `` Use ``<Content />`` for slot `` → single TextSegment |
@@ -8030,7 +8046,7 @@ visible warning blocks, gather into a separate error report).
 |---|------|--------|
 | LET1 | Direct literal | `<Let as="answer" value={42} />` binds the number `42`, and both the self-closing and paired-empty direct forms emit nothing |
 | LET2 | Bound by reference | An object and an array taken from preceding bindings bind identically (`alias === source`), and a cyclic object binds intact — no JSON projection stands between the expression and the binding |
-| LET3 | `value={undefined}` | The binding exists and holds `undefined`, distinguishable from a name that was never bound |
+| LET3 | `value={undefined}` | The binding exists and holds `undefined` — distinguishable both from `value={null}` and from a name that was never bound — because the scanner kept the authored expression instead of reading it as JSON |
 | LET4 | `value` with a child | Refused with the value expression unevaluated and the child's component never imported; a whitespace-only child is a child |
 | LET5 | `select` with `value` | Refused before the value expression runs |
 | LET6 | No source | Self-closing and paired-empty `<Let>` without `value` are refused; whitespace-only children are a rendered source binding `""` |
@@ -9832,5 +9848,5 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 95 | `select` falls back to full content on no match | Non-destructive — authors can add `select` to an existing `<Let>` without breaking behavior if the selector doesn't match; avoids silent data loss |
 | 96 | Literal nodes use `.value`, parent nodes use `mdast-util-to-string` | Code blocks store text in `.value` (no child nodes); paragraphs/headings have child Text nodes requiring recursive extraction; two extraction strategies cover all mdast node types |
 | 97 | `<Let>` replaces `<Capture>` with no alias | One public primitive rather than two spellings for the same syntax. `Capture` leaves the reserved set entirely, so `<Capture>` resolves an ordinary component; the project is pre-release and states no requirement to keep the old spelling |
-| 98 | `<Let value>` binds by reference, not through the prop JSON boundary | Expression evaluation and environment lookup are reused; component-prop serialization is not. A document can therefore bind `undefined`, a function, a class instance or a cyclic object — values ordinary props omit, reject or rewrite — and identity holds within the execution that produced it |
+| 98 | `<Let value>` binds by reference, not through the prop JSON boundary | Expression evaluation and environment lookup are reused; component-prop serialization is not, at either end. The scanner resolves no JSON for this one prop, and expansion projects none, so a document can bind `undefined`, a function, a class instance or a cyclic object — values ordinary props omit, reject or rewrite — and identity holds within the execution that produced it |
 | 99 | The source is chosen before it runs | Presence of `value` and of children is read from what the author wrote, so a construct naming both sources expands no child and evaluates no expression; `value={undefined}` is the direct source, because presence is own-key presence rather than a value test |

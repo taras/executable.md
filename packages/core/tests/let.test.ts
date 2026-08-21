@@ -142,24 +142,35 @@ describe("Tier LET — the direct-value source", () => {
     expect(result.values.aliasInstance instanceof Release).toBeTruthy();
   });
 
-  it("LET3: a present value binds an own name, and undefined is one of them", function* () {
-    // `void 0` is the authored form that reaches expansion as `undefined`: the
-    // scanner resolves a bare `{undefined}` to JSON null before any component
-    // sees it, so the expression is what carries the value through.
+  it("LET3: value={undefined} binds an own name holding exactly undefined", function* () {
     const result = yield* run(
-      ['<Let as="absent" value={void 0} />', '<Let as="empty">text</Let>'].join("\n\n"),
+      ['<Let as="absent" value={undefined} />', '<Let as="nulled" value={null} />'].join("\n\n"),
     );
 
+    // Only the blank line between the two elements survives; neither bound.
+    expect(result.output.trim()).toBe("");
+
+    // Three states a reader can tell apart: bound to `undefined`, bound to
+    // `null`, and never bound at all. Presence alone conflates the first two.
     expect("absent" in result.values).toBeTruthy();
     expect(result.values.absent).toBe(undefined);
+    expect(result.values.nulled).toBe(null);
     expect("neverBound" in result.values).toBeFalsy();
   });
 
-  it("LET3b: a scanner-resolved value={undefined} is still the direct source", function* () {
-    const result = yield* run('<Let as="present" value={undefined} />');
+  it("LET3b: the authored expression, not a scan-time JSON reading of it, is bound", function* () {
+    // The scanner resolves an ordinary component's `{undefined}` to JSON null.
+    // A `<Let value>` keeps the authored text, so what reaches the binding is
+    // what the expression evaluates to.
+    const segment = scanSegments('<Let as="x" value={undefined} />')[0];
+    if (segment?.type !== "component") {
+      throw new Error("expected a component segment");
+    }
+    expect(segment.expressions.value).toBe("undefined");
+    expect("value" in segment.props).toBeFalsy();
 
-    expect("present" in result.values).toBeTruthy();
-    expect(result.output).toBe("");
+    const result = yield* run('<Let as="x" value={undefined} />');
+    expect(result.values.x).toBe(undefined);
   });
 
   it("LET3c: a falsy value is a source, not an absent one", function* () {

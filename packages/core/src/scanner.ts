@@ -12,6 +12,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "./live-env.ts";
+import { bindsByReference } from "./structural.ts";
 import type {
   Segment,
   TextSegment,
@@ -447,7 +448,7 @@ function parseComponentTag(
   }
 
   // Parse attributes
-  const { props, expressions, end: attrEnd } = parseAttributes(text, pos);
+  const { props, expressions, end: attrEnd } = parseAttributes(text, pos, name);
   if (attrEnd === -1) {
     return null;
   }
@@ -510,7 +511,12 @@ interface ParsedAttributes {
   end: number; // position after last attribute, before /> or >
 }
 
-function parseAttributes(text: string, pos: number): ParsedAttributes {
+function parseAttributes(
+  text: string,
+  pos: number,
+  /** Whose attributes these are: a construct may bind one of them by reference. */
+  componentName: string,
+): ParsedAttributes {
   const props: Record<string, Json> = {};
   const expressions: Record<string, string> = {};
 
@@ -605,11 +611,15 @@ function parseAttributes(text: string, pos: number): ParsedAttributes {
         return { props, expressions, end: -1 };
       }
       const exprText = text.slice(pos + 1, exprEnd).trim();
-      const result = parseExpressionValue(exprText);
-      if (result.kind === "resolved") {
-        props[attrName] = result.value;
+      if (bindsByReference(componentName, attrName)) {
+        expressions[attrName] = exprText;
       } else {
-        expressions[attrName] = result.expression;
+        const result = parseExpressionValue(exprText);
+        if (result.kind === "resolved") {
+          props[attrName] = result.value;
+        } else {
+          expressions[attrName] = result.expression;
+        }
       }
       pos = exprEnd + 1;
     } else {

@@ -26,3 +26,19 @@ export const RESERVED_STRUCTURAL: ReadonlySet<string> = new Set([
 export function isStructural(name: string): boolean {
   return RESERVED_STRUCTURAL.has(name);
 }
+
+/**
+ * The prop each construct binds by reference rather than as data.
+ *
+ * `<Let value>` binds the exact value its expression produced (spec §6.5).
+ * Resolving that prop to JSON while scanning would be a projection like any
+ * other: it turns `undefined` into `null`, and JSON has no shape for a
+ * function, a class instance or a cycle. The authored expression is kept
+ * instead, and evaluated where the by-reference contract holds.
+ */
+const REFERENCE_PROPS: ReadonlyMap<string, string> = new Map([["Let", "value"]]);
+
+/** Whether this prop is authored text a construct evaluates for itself. */
+export function bindsByReference(componentName: string, propName: string): boolean {
+  return REFERENCE_PROPS.get(componentName) === propName;
+}
