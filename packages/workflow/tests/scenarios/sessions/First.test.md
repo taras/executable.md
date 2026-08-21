@@ -9,6 +9,6 @@ It files an issue on the fixture's tracker, and sees only that one.
 <RemoteIssue number={1} title="Filed by the first document" />
 
 <Test name="the first document sees the tracker it filed on">
-<ServerRequests as="sent" />
-<AssertEquals actual={sent.titles} expected={["Filed by the first document"]} />
+<TrackerIssues as="tracker" />
+<AssertEquals actual={tracker.titles} expected={["Filed by the first document"]} />
 </Test>

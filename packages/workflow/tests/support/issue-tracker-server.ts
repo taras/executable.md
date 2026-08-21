@@ -13,7 +13,6 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { ensure, type Operation, resource, until } from "effection";
 
 /**
@@ -25,6 +24,28 @@ import { ensure, type Operation, resource, until } from "effection";
  */
 export function credential(): string {
   return "loopback-credential";
+}
+
+/**
+ * What a scenario says about the credential it carries, without saying what it
+ * is.
+ *
+ * A document names a condition; the host turns that name into a token and keeps
+ * it. Two of these are the interesting ones — a request that carries the right
+ * credential, and one that carries the wrong credential — and neither needs the
+ * value to appear in a document, in its rendered output, or in a journal.
+ */
+export type CredentialCondition = "valid" | "invalid" | "absent";
+
+/** The token a named condition carries. Host-side only. */
+export function credentialFor(condition: CredentialCondition): string | undefined {
+  if (condition === "valid") {
+    return credential();
+  }
+  if (condition === "invalid") {
+    return "a-credential-this-tracker-does-not-accept";
+  }
+  return undefined;
 }
 
 /** One issue this tracker holds. */
@@ -120,7 +141,13 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
       yield* until(new Promise<void>((resolve) => server.close(() => resolve())));
     });
 
-    const address = server.address() as AddressInfo;
+    // Narrowed rather than asserted: `address()` answers `null` before the
+    // listen completes and a string for a unix socket, and a scenario that
+    // built its endpoint out of either would fail somewhere far from here.
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("the tracker did not listen on a TCP port");
+    }
     origin = `http://127.0.0.1:${address.port}`;
     yield* provide({ url: origin, owner, repository, issues, requests });
   });

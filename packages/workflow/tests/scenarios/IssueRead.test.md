@@ -5,14 +5,21 @@ the identity, so nothing else is needed and nothing else is consulted — a
 tracker written around a read has nothing to add to it.
 
 Every scenario declares the tracker it runs against, the provider that handles
-it, that provider's authorized ceiling, and the credential the transport
+it, that provider's authorized ceiling, and which credential the transport
 carries. None of those is defaulted out of sight, because each of them is a
 consequential fact about what the scenario proves.
+
+The credential is declared by name — `credential="valid"` — and never by value.
+The token itself stays with the host: a document holding one would be refused by
+this repository's secret gate before it could run, and a document that rendered
+one would not settle at all. So a scenario states the condition it runs under
+and asserts what the tracker made of it.
 
 ## What a read binds
 
 <Test name="A read binds the fields every provider has">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue
   number={1}
@@ -21,7 +28,7 @@ consequential fact about what the scenario proves.
   tags={["reliability", "publish"]}
   assignee="octocat"
 />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/1"} as="issue" />
 </GitHubIssues>
 <AssertEquals
@@ -41,10 +48,11 @@ refusing to report a closed issue would invent a state the document did not ask
 about.
 
 <Test name="A closed issue reads as itself">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={1} title="Already done" body="It was fixed elsewhere." state="closed" />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/1"} as="issue" />
 </GitHubIssues>
 <AssertEquals actual={issue.title} expected="Already done" />
@@ -55,11 +63,12 @@ about.
 ## It renders nothing and needs no tracker
 
 <Test name="A read renders exactly nothing">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={1} title="Quiet" body="…" />
 <Capture as="rendered">
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/1"} as="issue" />
 </GitHubIssues>
 </Capture>
@@ -67,10 +76,11 @@ about.
 </Test>
 
 <Test name="A read outside any tracker still reads">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={1} title="No tracker needed" body="…" />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/1"} as="issue" />
 </GitHubIssues>
 <AssertEquals actual={issue.title} expected="No tracker needed" />
@@ -79,16 +89,17 @@ about.
 ## The exact request it makes
 
 <Test name="A read is one authenticated GET of that issue">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={7} title="Seven" body="…" />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/7"} as="issue" />
 </GitHubIssues>
 <ServerRequests as="sent" />
 <AssertEquals actual={sent.methods} expected={["GET"]} />
 <AssertEquals actual={sent.paths} expected={["/repos/octo/project/issues/7"]} />
-<AssertEquals actual={sent.authorizations} expected={["Bearer"]} />
+<AssertEquals actual={sent.schemes} expected={["Bearer"]} />
 <AssertEquals actual={sent.credentialed} expected={true} />
 </Test>
 
@@ -97,10 +108,11 @@ one as an issue would let a document read a pull request's body as an issue
 description, so it is refused.
 
 <Test name="A pull request returned by the Issues endpoint is refused">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={3} title="A pull request" body="…" pullRequest={true} />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <AssertThrows message="conflicts with">
 <PrintErrors>
 <Issue url={server.repository + "/issues/3"} as="issue" />
@@ -112,9 +124,10 @@ description, so it is refused.
 ## The ceiling is asked before the transport
 
 <Test name="A read outside the ceiling sends nothing">
-<FreshTracker />
+<EmptyTracker />
+<EmptyRequestLog />
 <GitHubServer as="server" />
-<GitHubIssues ceiling={["https://github.com/octo/authorized"]} endpoint={server.url}>
+<GitHubIssues ceiling={["https://github.com/octo/authorized"]} endpoint={server.url} credential="valid">
 <AssertThrows message="temporarily unavailable">
 <PrintErrors>
 <Issue url="https://github.com/octo/secrets/issues/1" as="issue" />

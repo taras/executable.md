@@ -5,6 +5,6 @@ left, which is what makes the tracker shared rather than rebuilt — and this
 document's results are its own, which is what makes the session separate.
 
 <Test name="the second document meets the first document's tracker">
-<ServerRequests as="sent" />
-<AssertEquals actual={sent.titles} expected={["Filed by the first document"]} />
+<TrackerIssues as="tracker" />
+<AssertEquals actual={tracker.titles} expected={["Filed by the first document"]} />
 </Test>

@@ -18,7 +18,8 @@ import { withinIssueCeiling } from "../../src/issue/tracker.ts";
 import { useGitHubIssues } from "../../src/deno/issue/github.ts";
 import { denoGitHubAccess } from "../../src/deno/composition/github.ts";
 import type { GitHubAccess, GitHubHttpResponse } from "../../src/deno/composition/github.ts";
-import { credential } from "./issue-tracker-server.ts";
+import { credentialFor } from "./issue-tracker-server.ts";
+import type { CredentialCondition } from "./issue-tracker-server.ts";
 
 /** What a scenario can watch a provider do. */
 export interface ProviderLog {
@@ -54,26 +55,32 @@ export function providerLog(): ProviderLog {
  */
 export function gitHubAccessFor(
   endpoint: string,
-  faults: { failsTransport?: boolean; interruptsAfterCreate?: boolean } = {},
+  conditions: {
+    credential: CredentialCondition;
+    failsTransport?: boolean;
+    interruptsAfterCreate?: boolean;
+  },
 ): GitHubAccess {
   const shipped = denoGitHubAccess(endpoint);
+  const carried = credentialFor(conditions.credential);
   return {
     endpoint,
     // deno-lint-ignore require-yield
     *token(): Operation<string | undefined> {
-      // The server's own credential, handed over here rather than through the
-      // document: a document holding one would be refused by this repository's
-      // secret gate before it could run, which is the gate working. A scenario
-      // proves one was *carried* by asserting on the header shape instead.
-      return credential();
+      // The token the document's named condition stands for. The name travels
+      // through the document; the value never does. A document holding one
+      // would be refused by this repository's secret gate before it ran, and a
+      // rendered one does not settle at all (taras/executable.md#524), so a
+      // scenario states the condition and asserts the outcome.
+      return carried;
     },
     *send(request): Operation<GitHubHttpResponse> {
-      if (faults.failsTransport === true) {
+      if (conditions.failsTransport === true) {
         throw new Error("the declared transport fault refused the connection");
       }
       const answer = yield* shipped.send(request);
       if (
-        faults.interruptsAfterCreate === true &&
+        conditions.interruptsAfterCreate === true &&
         request.method === "POST" &&
         answer.status === 201
       ) {
@@ -83,6 +90,14 @@ export function gitHubAccessFor(
       return answer;
     },
   };
+}
+
+/** The condition a document named, narrowed rather than asserted. */
+function namedCondition(value: unknown): CredentialCondition {
+  if (value === "valid" || value === "invalid" || value === "absent") {
+    return value;
+  }
+  throw new Error(`"credential" must name a condition, got ${JSON.stringify(value)}`);
 }
 
 const URL_PROP: PropsSchema = {
@@ -118,6 +133,15 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
           ceiling: { type: "array", items: { type: "string", minLength: 1 } },
           /** Where the shipped adapter sends its requests. */
           endpoint: { type: "string", minLength: 1 },
+          /**
+           * Which credential the transport carries, by name.
+           *
+           * Stated, never defaulted: whether a request was authorized is a
+           * consequential fact of every scenario here, and a reader who cannot
+           * see it in the document cannot check what the scenario proves. The
+           * value behind the name stays host-side.
+           */
+          credential: { enum: ["valid", "invalid", "absent"] },
           /** Fail every request, so nothing about the tracker is provable. */
           failsTransport: { type: "boolean" },
           /**
@@ -128,7 +152,7 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
            */
           interruptsAfterCreate: { type: "boolean" },
         },
-        required: ["ceiling", "endpoint"],
+        required: ["ceiling", "endpoint", "credential"],
         additionalProperties: false,
       },
       *fn(props: Record<string, Json>): Operation<string> {
@@ -137,6 +161,7 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
         }
         const ceiling = Array.isArray(props.ceiling) ? props.ceiling.map(String) : [];
         const access = gitHubAccessFor(String(props.endpoint), {
+          credential: namedCondition(props.credential),
           failsTransport: props.failsTransport === true,
           interruptsAfterCreate: props.interruptsAfterCreate === true,
         });
@@ -163,6 +188,30 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
         const ceiling = Array.isArray(props.ceiling) ? props.ceiling.map(String) : [];
         const refuses = props.refuses === true;
         yield* useAtlassianIssues(log, ceiling, refuses);
+        return yield* content();
+      },
+    },
+    {
+      name: "NoIssueProvider",
+      origin: "@executablemd/workflow/test",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        if (!(yield* hasContent())) {
+          return "";
+        }
+        // A boundary that refuses everything, for content that must reach no
+        // provider at all. A replay standing on a retained result proves it by
+        // succeeding here: had it asked, this would have answered by failing.
+        yield* IssueApi.around({
+          // deno-lint-ignore require-yield
+          *read(): Operation<IssueDetails> {
+            throw new Error("this content reached an issue provider");
+          },
+          // deno-lint-ignore require-yield
+          *upsert(): Operation<IssueReference> {
+            throw new Error("this content reached an issue provider");
+          },
+        });
         return yield* content();
       },
     },

@@ -55,6 +55,24 @@ describe("workflow Issue scenarios", () => {
       yield* stated(yield* runScenario(pathOf(name)));
     });
   }
+
+  it("IssueDurability.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // Staged from the one checked-in attempt document, twice. The second is a
+    // replay: same run, same document, same request — which is the only way to
+    // put a run in the state this scenario is about.
+    yield* fixture.stage("IssueDurability.attempt.stage.md");
+    yield* fixture.stage("IssueDurability.attempt.stage.md");
+    yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
+  });
+
+  it("IssueRecovery.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // The interrupted attempt first, then one that inherits what it left.
+    yield* fixture.stage("IssueRecovery.attempt.stage.md");
+    yield* fixture.stage("IssueRecovery.attempt.stage.md");
+    yield* stated(yield* fixture.observe(pathOf("IssueRecovery.test.md")));
+  });
 });
 
 /**
@@ -72,8 +90,8 @@ describe("scenario sessions", () => {
   it("shares one tracker between documents that each get their own session", function* () {
     const fixture = yield* useScenarioFixture();
 
-    const first = yield* fixture.observe(sessions("First.test.md"), { run: "sessions-first" });
-    const second = yield* fixture.observe(sessions("Second.test.md"), { run: "sessions-second" });
+    const first = yield* fixture.observe(sessions("First.test.md"));
+    const second = yield* fixture.observe(sessions("Second.test.md"));
 
     // Non-empty and disjoint: each document reports its own test and only
     // its own, which is what a session per execution buys. A cumulative
@@ -100,18 +118,14 @@ describe("scenario sessions", () => {
   it("fails the document whose assertion fails, and no other", function* () {
     const fixture = yield* useScenarioFixture();
 
-    const failing = yield* fixture.observe(sessions("Failing.test.md"), {
-      run: "sessions-failing",
-    });
+    const failing = yield* fixture.observe(sessions("Failing.test.md"));
     expect(failing.results.map((result) => result.status)).toEqual(["fail"]);
     expect(failing.outcome.ok).toBe(false);
 
     // The next document is unharmed, which is the claim that matters: a
     // failure belongs to the session that recorded it, so a passing document
     // observed after a failing one still settles Ok with its own result.
-    const after = yield* fixture.observe(sessions("Passing.test.md"), {
-      run: "sessions-after",
-    });
+    const after = yield* fixture.observe(sessions("Passing.test.md"));
     expect(after.results.map((result) => result.status)).toEqual(["pass"]);
     expect(after.outcome.ok).toBe(true);
   });
@@ -123,9 +137,7 @@ describe("scenario sessions", () => {
     // nothing. The session's completion policy is what makes that an `Err`
     // rather than a silent success. Tracked separately as
     // taras/executable.md#523 for the testing API itself.
-    const empty = yield* fixture.observe(sessions("Untested.md"), {
-      run: "sessions-untested",
-    });
+    const empty = yield* fixture.observe(sessions("Untested.md"));
     expect(empty.results).toEqual([]);
     expect(empty.outcome.ok).toBe(false);
   });

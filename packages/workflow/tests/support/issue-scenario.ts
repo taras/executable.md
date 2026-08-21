@@ -15,9 +15,10 @@
  * `<StagedAttempt>`.
  */
 
-import { scoped, type Operation } from "effection";
+import { ensure, scoped, type Operation } from "effection";
 import type { Result } from "effection";
 import { fileURLToPath } from "node:url";
+import { basename } from "node:path";
 import { registerComponents } from "@executablemd/core";
 import type { DocumentExecution, Json, PropsSchema } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
@@ -29,6 +30,7 @@ import { retainedWorkflowInstallation } from "../../src/run.ts";
 import type { WorkflowRun } from "../../src/run.ts";
 import { useCompositionComponents } from "../../src/composition/installation.ts";
 import { ISSUE_EFFECT } from "../../src/issue/effect-type.ts";
+import { byCodePoint } from "../../src/issue/records.ts";
 import { IssueApi } from "../../src/issue/api.ts";
 import {
   gitHubAccessFor,
@@ -100,29 +102,16 @@ export interface ScenarioObservation {
   readonly rendered: string;
 }
 
-/** One attempt staged before the document that asserts about it. */
-export interface StagedAttempt {
-  /** A fixture document under `tests/scenarios/fixtures`. */
-  readonly document: string;
-  /** Which run's journal it continues. Defaults to the scenario's run. */
-  readonly run?: string;
-  /** Install no provider at all, which is what a replay must not need. */
-  readonly forbidProviders?: boolean;
-  /** Fail every request, so nothing about the tracker is provable. */
-  readonly failsTransport?: boolean;
-  /** Answer a create with a failure after the tracker accepted it. */
-  readonly interruptsAfterCreate?: boolean;
-  /**
-   * The process ended before it could journal anything about the effect.
-   *
-   * A different state from journaling a failure, and the one a recovery exists
-   * for: the tracker holds an issue this run has no record of.
-   */
-  readonly died?: boolean;
-  /** The containers the staged host authorized. */
-  readonly ceiling?: readonly string[];
-}
-
+/**
+ * What one staged attempt reports about itself.
+ *
+ * Everything that shaped it — the provider, its ceiling, the credential
+ * condition, any transport fault, the run it journals into, and whether the
+ * process survived to record what it did — is declared in the `.stage.md`
+ * document, not passed in here. A reader who wants to know what a scenario
+ * stands on reads the attempt, rather than reconstructing it from a call in a
+ * TypeScript file.
+ */
 /** What a staged attempt left behind. */
 export interface AttemptOutcome {
   readonly ok: boolean;
@@ -142,18 +131,23 @@ export interface AttemptOutcome {
 export interface ScenarioFixture {
   readonly server: IssueTrackerServer;
   readonly log: ProviderLog;
-  /** Run a fixture document as a prior attempt. No testing session. */
-  stage(attempt: StagedAttempt): Operation<AttemptOutcome>;
+  /**
+   * Run a checked-in `.stage.md` document as a prior attempt.
+   *
+   * No testing session: a staged attempt is a previous *run*, not a test.
+   */
+  stage(document: string): Operation<AttemptOutcome>;
   /**
    * Run a scenario document under its own complete testing session.
    *
-   * `run` names the journal it executes against, and defaults to the
-   * scenario's. Two documents observed against one fixture need journals of
-   * their own: a retained history belongs to the document that wrote it, and a
-   * second document replaying the first's would diverge on the first name that
-   * did not match.
+   * Each asserting document executes against a journal of its own, named for
+   * the document. A retained history belongs to the document that wrote it, so
+   * a second document replaying the first's would diverge on the first name
+   * that did not match — and an asserting document is never a continuation of a
+   * staged attempt anyway. What it asks about the scenario's journal it asks
+   * through `<IssueJournal>`.
    */
-  observe(path: string, options?: { run?: string }): Operation<ScenarioObservation>;
+  observe(path: string): Operation<ScenarioObservation>;
 }
 
 export function* useScenarioFixture(): Operation<ScenarioFixture> {
@@ -161,22 +155,23 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
   const log = providerLog();
   const server = yield* useIssueTrackerServer();
   const staged: AttemptOutcome[] = [];
+  const attempting: Attempting = { current: undefined };
 
   yield* useCompositionComponents();
   yield* useProviderComponents(log);
   yield* useKeyRecorder(log);
-  yield* useScenarioComponents(server, held, log, staged);
+  yield* useScenarioComponents(server, held, log, staged, attempting);
 
   return {
     server,
     log,
-    *stage(attempt: StagedAttempt): Operation<AttemptOutcome> {
-      const outcome = yield* stageAttempt(server, held, attempt);
+    *stage(document: string): Operation<AttemptOutcome> {
+      const outcome = yield* stageAttempt(server, held, attempting, document, staged.length + 1);
       staged.push(outcome);
       return outcome;
     },
-    observe(path: string, options?: { run?: string }): Operation<ScenarioObservation> {
-      return observeDocument(path, held, options?.run ?? RUN.runId);
+    observe(path: string): Operation<ScenarioObservation> {
+      return observeDocument(path, held, `observing:${basename(path)}`);
     },
   };
 }
@@ -223,15 +218,19 @@ function* drain(output: DocumentExecution["output"]): Operation<string> {
 /**
  * The components a scenario declares its own state with.
  *
- * Each provides one thing and says which: the tracker it runs against, an issue
- * present before execution, the requests that tracker received, the retained
- * journal, and what an attempt staged ahead of this document left behind.
+ * There is deliberately no component that arranges "the usual setup" and none
+ * that reports "everything". Each one owns a single piece of state, and the
+ * four pieces are genuinely independent: what the GitHub tracker holds, what it
+ * was sent, what the provider boundary was handed, and what the Atlassian-shaped
+ * tracker did. A scenario declares the ones it depends on, so a reader can see
+ * from the document which state it stands on and which it never touches.
  */
 function useScenarioComponents(
   server: IssueTrackerServer,
   held: Journals,
   log: ProviderLog,
   staged: readonly AttemptOutcome[],
+  attempting: Attempting,
 ): Operation<void> {
   return registerComponents([
     {
@@ -249,34 +248,25 @@ function useScenarioComponents(
       },
       // deno-lint-ignore require-yield
       *fn(): Operation<Json> {
-        // Reports the scenario's tracker; it does not reset it. An attempt
-        // staged before this document is exactly the state some scenarios are
-        // about, and a component that cleared it would erase what it came to
-        // prove. Isolation between scenarios comes from the fixture's scope.
+        // Reports where the tracker is. It changes nothing: an attempt staged
+        // before this document is exactly the state some scenarios are about,
+        // and a reporting component that cleared as a side effect would erase
+        // what the scenario came to prove.
         return {
           url: server.url,
           repository: `https://github.com/${server.owner}/${server.repository}`,
         };
       },
     },
+
+    // ---- what the GitHub tracker holds ------------------------------------
     {
-      name: "FreshTracker",
+      name: "EmptyTracker",
       origin: "@executablemd/workflow/test",
       props: NO_PROPS,
       // deno-lint-ignore require-yield
       *fn(): Operation<string> {
-        // Declared, never implied. Tests inside one document share a tracker,
-        // so a test that stands on an empty one says so — and a scenario that
-        // stands on what an attempt staged before it simply does not say this.
-        // A reporting component that cleared as a side effect would erase the
-        // very state some scenarios came to prove.
         server.issues.length = 0;
-        server.requests.length = 0;
-        log.keys.length = 0;
-        log.overrides = 0;
-        log.atlassian.reads = 0;
-        log.atlassian.upserts = 0;
-        log.atlassianIssues.clear();
         return "";
       },
     },
@@ -313,6 +303,43 @@ function useScenarioComponents(
       },
     },
     {
+      name: "TrackerIssues",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      returns: {
+        type: "object",
+        properties: {
+          count: { type: "integer" },
+          titles: { type: "array", items: { type: "string" } },
+          labels: { type: "array" },
+          assignees: { type: "array" },
+        },
+        required: ["count", "titles", "labels", "assignees"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return {
+          count: server.issues.length,
+          titles: server.issues.map((issue) => issue.title),
+          labels: server.issues.map((issue) => [...issue.labels]),
+          assignees: server.issues.map((issue) => issue.assignee),
+        };
+      },
+    },
+
+    // ---- what that tracker was sent ---------------------------------------
+    {
+      name: "EmptyRequestLog",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        server.requests.length = 0;
+        return "";
+      },
+    },
+    {
       name: "ServerRequests",
       origin: "@executablemd/workflow/test",
       props: NO_PROPS,
@@ -321,64 +348,128 @@ function useScenarioComponents(
         properties: {
           methods: { type: "array", items: { type: "string" } },
           paths: { type: "array", items: { type: "string" } },
-          authorizations: { type: "array", items: { type: "string" } },
+          schemes: { type: "array", items: { type: "string" } },
           credentialed: { type: "boolean" },
-          bodies: { type: "array" },
-          issues: { type: "integer" },
+          bodyKeys: { type: "array" },
           titles: { type: "array", items: { type: "string" } },
+          descriptions: { type: "array", items: { type: "string" } },
           labels: { type: "array" },
           assignees: { type: "array" },
-          keys: { type: "array", items: { type: "string" } },
-          overrides: { type: "integer" },
-          atlassianReads: { type: "integer" },
-          atlassianUpserts: { type: "integer" },
+          markers: { type: "integer" },
         },
         required: [
           "methods",
           "paths",
-          "authorizations",
+          "schemes",
           "credentialed",
-          "bodies",
-          "issues",
+          "bodyKeys",
           "titles",
+          "descriptions",
           "labels",
           "assignees",
-          "keys",
-          "overrides",
-          "atlassianReads",
-          "atlassianUpserts",
+          "markers",
         ],
         additionalProperties: false,
       },
       // deno-lint-ignore require-yield
       *fn(): Operation<Json> {
+        const sent = server.requests.map((request) => authoredIn(request.body));
         return {
           methods: server.requests.map((request) => request.method),
           paths: server.requests.map((request) => request.path),
           // The scheme, never the credential. A document that received the
           // header itself would carry a credential in its own text and in the
-          // run's retained history, which is the one thing the Issue contract
-          // says a history never holds — and the fixture must not be the
-          // exception that proves it. Whether the right credential arrived is
-          // decided here, where it is already known, and reported as an answer.
-          authorizations: server.requests.map(
-            (request) => (request.authorization ?? "").split(" ")[0],
-          ),
+          // run's retained history — the one thing this contract says a history
+          // never holds — and would not settle at all
+          // (taras/executable.md#524). Whether the credential the tracker wants
+          // actually arrived is decided here, where it is already known, and
+          // reported as an answer.
+          schemes: server.requests.map((request) => schemeOf(request.authorization)),
           credentialed:
             server.requests.length > 0 &&
             server.requests.every((request) => request.authorization === `Bearer ${credential()}`),
-          bodies: server.requests.map((request) => (request.body ?? null) as Json),
-          issues: server.issues.length,
-          titles: server.issues.map((issue) => issue.title),
-          labels: server.issues.map((issue) => [...issue.labels]),
-          assignees: server.issues.map((issue) => issue.assignee),
-          keys: [...log.keys],
-          overrides: log.overrides,
-          atlassianReads: log.atlassian.reads,
-          atlassianUpserts: log.atlassian.upserts,
+          // The member names each body carried, so a scenario can assert the
+          // exact JSON shape the adapter sends without the body's contents —
+          // and the origin marker in particular — reaching the document.
+          bodyKeys: sent.map((body) => body.keys),
+          titles: sent.map((body) => body.title),
+          descriptions: sent.map((body) => body.description),
+          labels: sent.map((body) => body.labels),
+          assignees: sent.map((body) => body.assignee),
+          markers: sent.filter((body) => body.marker).length,
         };
       },
     },
+
+    // ---- what the provider boundary was handed ----------------------------
+    {
+      name: "EmptyProviderLog",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        log.keys.length = 0;
+        log.overrides = 0;
+        return "";
+      },
+    },
+    {
+      name: "ProviderLog",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      returns: {
+        type: "object",
+        properties: {
+          keys: { type: "array", items: { type: "string" } },
+          overrides: { type: "integer" },
+        },
+        required: ["keys", "overrides"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return { keys: [...log.keys], overrides: log.overrides };
+      },
+    },
+
+    // ---- what the Atlassian-shaped tracker did ----------------------------
+    {
+      name: "EmptyAtlassianTracker",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        log.atlassian.reads = 0;
+        log.atlassian.upserts = 0;
+        log.atlassianIssues.clear();
+        return "";
+      },
+    },
+    {
+      name: "AtlassianTracker",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      returns: {
+        type: "object",
+        properties: {
+          reads: { type: "integer" },
+          upserts: { type: "integer" },
+          issues: { type: "integer" },
+        },
+        required: ["reads", "upserts", "issues"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        return {
+          reads: log.atlassian.reads,
+          upserts: log.atlassian.upserts,
+          issues: log.atlassianIssues.size,
+        };
+      },
+    },
+
+    // ---- the retained history, and the attempts staged before this document -
     {
       name: "IssueJournal",
       origin: "@executablemd/workflow/test",
@@ -396,6 +487,87 @@ function useScenarioComponents(
         // the members somebody remembered to look at.
         const events = held.snapshot(RUN.runId);
         return { text: JSON.stringify(events), effects: issueYields(events).length };
+      },
+    },
+    {
+      name: "StagedRun",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: { id: { type: "string", minLength: 1 } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        // Declared *and* checked. The runner has to choose a journal before the
+        // document can say anything, so the document states which one it is
+        // journaling into and this refuses if the two disagree. That keeps the
+        // run a visible fact of the attempt rather than an argument in a call a
+        // reader of the Markdown never sees.
+        const attempt = attempting.current;
+        if (attempt === undefined) {
+          throw new Error("<StagedRun> describes a staged attempt, and none is running");
+        }
+        if (attempt.runId !== String(props.id)) {
+          throw new Error(
+            `this attempt journals into "${attempt.runId}", and declares "${String(props.id)}"`,
+          );
+        }
+        return "";
+      },
+    },
+    {
+      name: "Attempt",
+      origin: "@executablemd/workflow/test",
+      props: NO_PROPS,
+      returns: {
+        type: "object",
+        properties: { number: { type: "integer" } },
+        required: ["number"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        // Which attempt of this run is expanding, counting from one.
+        //
+        // Recovery needs two attempts of the *same* request, and a request's
+        // identity includes the expansion it was made at — so the two attempts
+        // have to be one document, executed twice. What differs between them is
+        // therefore stated inside that document, in terms of this number,
+        // rather than by writing two documents that could never share a key.
+        const attempt = attempting.current;
+        if (attempt === undefined) {
+          throw new Error("<Attempt> describes a staged attempt, and none is running");
+        }
+        return { number: attempt.number };
+      },
+    },
+    {
+      name: "Interrupted",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: { when: { type: "boolean" } },
+        required: ["when"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        const attempt = attempting.current;
+        if (attempt === undefined) {
+          throw new Error("<Interrupted> describes a staged attempt, and none is running");
+        }
+        // The process ended before it could journal anything about its effect.
+        // A different state from journaling a failure, and the one a recovery
+        // exists for: the tracker holds an issue this run has no record of.
+        //
+        // Declared at the top of an attempt, because an attempt that fails
+        // never reaches the bottom of its own document.
+        if (props.when === true) {
+          attempt.interrupted = true;
+        }
+        return "";
       },
     },
     {
@@ -434,84 +606,132 @@ function useScenarioComponents(
   ]);
 }
 
+/** The authorization scheme a request carried, without its credential. */
+function schemeOf(authorization: string | undefined): string {
+  return authorization === undefined ? "" : authorization.split(" ")[0];
+}
+
+/** A JSON object, narrowed rather than asserted. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The strings in a value that should be a list of them. */
+function stringsIn(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+/** An origin marker, whoever wrote it. Matched, never reported. */
+const ANY_ORIGIN_MARKER = /\n\n<!-- executablemd-issue: [0-9a-f]+ -->\n?$/;
+
+interface AuthoredBody {
+  readonly keys: string[];
+  readonly title: string;
+  readonly description: string;
+  readonly labels: string[];
+  readonly assignee: string;
+  readonly marker: boolean;
+}
+
 /**
- * Run one checked-in fixture document as a prior attempt.
+ * What a request body authored, separated from what the adapter added to it.
  *
- * Its own child scope, its own provider installation, and no testing session:
- * a staged attempt is a previous *run*, not a test, and it is a plain document
- * whose only job is to leave a journal and a tracker in a particular state.
+ * The marker is reported as a boolean and never as text. It is a digest of the
+ * idempotency key, so handing it to a document would put a run's internal
+ * identity into that document's rendered output and into its retained history,
+ * and a scenario proves the marker was written by saying that it was.
+ */
+function authoredIn(body: unknown): AuthoredBody {
+  if (!isRecord(body)) {
+    return { keys: [], title: "", description: "", labels: [], assignee: "", marker: false };
+  }
+  const described = typeof body.body === "string" ? body.body : "";
+  const marker = ANY_ORIGIN_MARKER.test(described);
+  const [first] = stringsIn(body.assignees);
+  return {
+    keys: Object.keys(body).sort(byCodePoint),
+    title: typeof body.title === "string" ? body.title : "",
+    description: marker ? described.replace(ANY_ORIGIN_MARKER, "") : described,
+    labels: stringsIn(body.labels),
+    assignee: first ?? "",
+    marker,
+  };
+}
+
+/**
+ * The attempt currently being staged, for the components that describe it.
+ *
+ * A stage document declares the run it journals into and whether its process
+ * survived; both are read back here after it has expanded. Outside a staged
+ * attempt there is nothing to describe, and the components say so rather than
+ * inventing an answer.
+ */
+interface Attempting {
+  current?: { readonly runId: string; readonly number: number; interrupted: boolean };
+}
+
+/**
+ * Run one checked-in `.stage.md` document as a prior attempt.
+ *
+ * Its own child scope and no testing session. It installs **no provider**: the
+ * document declares its own, with its ceiling, its credential condition and any
+ * transport fault written where a reader meets them. An attempt that reaches
+ * for a provider it did not declare fails, which is the same rule the asserting
+ * documents run under.
  *
  * The journal is kept per run id, so a second attempt continues the first
- * rather than starting over — which is the only way to arrange the state a
- * recovery scenario stands on. The root Close is dropped afterwards because
- * every attempt here is a continuation; `died` additionally drops the effect,
- * because a process that died after the tracker accepted its issue published
- * nothing at all, and that is a different state from one that journaled a
- * failure.
+ * rather than starting over — the only way to arrange the state a recovery
+ * scenario stands on. The root Close is dropped afterwards because every
+ * attempt here is a continuation. A document that declared `<Interrupted />`
+ * additionally loses its Issue effect, because a process that died after the
+ * tracker accepted its issue published nothing at all, and that is a different
+ * state from one that journaled a failure.
  */
 function stageAttempt(
   server: IssueTrackerServer,
   held: Journals,
-  attempt: StagedAttempt,
+  attempting: Attempting,
+  document: string,
+  number: number,
 ): Operation<AttemptOutcome> {
   return scoped(function* () {
     const before = server.requests.length;
-    const id = attempt.run ?? RUN.runId;
+    const id = RUN.runId;
     const stream = held.for(id);
-    const path = fileURLToPath(
-      new URL(`../scenarios/fixtures/${attempt.document}`, import.meta.url),
-    );
+    const path = fileURLToPath(new URL(`../scenarios/${document}`, import.meta.url));
 
-    if (attempt.forbidProviders === true) {
-      yield* forbidEveryProvider();
-    } else {
-      yield* useGitHubIssues({
-        ceiling: [
-          ...(attempt.ceiling ?? [`https://github.com/${server.owner}/${server.repository}`]),
-        ],
-        access: gitHubAccessFor(server.url, {
-          failsTransport: attempt.failsTransport === true,
-          interruptsAfterCreate: attempt.interruptsAfterCreate === true,
-        }),
-      });
-    }
+    attempting.current = { runId: id, number, interrupted: false };
+    // deno-lint-ignore require-yield
+    yield* ensure(function* () {
+      attempting.current = undefined;
+    });
 
     const execution = yield* executeInstalled({ path, stream }, [
       retainedWorkflowInstallation({ ...RUN, runId: id }),
     ]);
     const output = yield* drain(execution.output);
     const outcome = yield* execution;
+    const interrupted = attempting.current?.interrupted === true;
 
     const events = yield* stream.readAll();
-    const died = attempt.died === true;
-    held.truncate(
-      id,
-      events.filter(
-        (event) =>
-          !(event.type === "close" && event.coroutineId === "root") &&
-          !(died && event.type === "yield" && event.description.type === ISSUE_EFFECT),
-      ),
+    const retained = events.filter(
+      (event) =>
+        !(event.type === "close" && event.coroutineId === "root") &&
+        !(interrupted && event.type === "yield" && event.description.type === ISSUE_EFFECT),
     );
+    held.truncate(id, retained);
     return {
       ok: outcome.ok,
       output,
       error: outcome.ok ? "" : outcome.error.message,
-      effects: issueYields(events).length,
+      // What the attempt *left behind*, not what it managed to write before it
+      // stopped existing. An interrupted process journaled nothing, and the
+      // count a scenario asks about is the one the next attempt inherits.
+      effects: issueYields(retained).length,
       calls: server.requests.length - before,
     };
-  });
-}
-
-function* forbidEveryProvider(): Operation<void> {
-  yield* IssueApi.around({
-    // deno-lint-ignore require-yield
-    *read() {
-      throw new Error("a replay reached an issue provider");
-    },
-    // deno-lint-ignore require-yield
-    *upsert() {
-      throw new Error("a replay reached an issue provider");
-    },
   });
 }
 
