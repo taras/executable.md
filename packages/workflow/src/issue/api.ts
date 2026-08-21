@@ -1,11 +1,18 @@
 /**
- * The one Issue surface: upsert an issue in the tracker a document named.
+ * The one Issue surface: read an issue by URL, or upsert one in a tracker.
+ *
+ * Two operations rather than one, because they are different questions about
+ * different objects. A read names the issue it wants and needs no tracker — the
+ * URL *is* the identity. An upsert names a container and asks for one issue in
+ * it to exist saying something, which is a reconciliation and needs a key.
  *
  * There is no registry here, no resolver, no routing protocol, no phase API and
- * no private terminal. A provider is ordinary middleware around this operation,
- * which is the whole mechanism: an adapter composes `IssueApi.around(...)`,
- * looks at the destination it was handed, and either handles the request or
- * delegates it untouched.
+ * no private terminal. A provider is ordinary middleware around these
+ * operations, which is the whole mechanism: an adapter composes
+ * `IssueApi.around(...)`, looks at what it was handed, and either handles the
+ * request or delegates it untouched. The rule is applied to each method
+ * independently, so a provider may own reads for a host and delegate its
+ * upserts, or the reverse.
  *
  * ## Matching, and what matching commits a provider to
  *
@@ -62,9 +69,31 @@ export interface IssueUpsertOptions {
   readonly idempotencyKey: string;
 }
 
-/** What a document binds: the issue's URL, and nothing else. */
-export interface IssueResult {
+/** What an upsert binds: the issue's URL, and nothing else. */
+export interface IssueReference {
   readonly url: string;
+}
+
+/**
+ * What a read binds: the fields every provider has, and no more.
+ *
+ * Deliberately the fields an upsert also names, and nothing beyond them. A
+ * provider-native id, a number, a workflow state and a payload are things one
+ * tracker has and another does not, so a document that read one would stop
+ * being portable the moment it branched on it.
+ */
+export interface IssueDetails {
+  readonly url: string;
+  readonly title: string;
+  readonly description: string;
+  readonly tags: readonly string[];
+  readonly assignee: string | null;
+}
+
+/** Where a read may be sent, when the URL alone does not say. */
+export interface IssueReadOptions {
+  /** The explicit discriminator, for a self-hosted or non-standard URL. */
+  readonly provider?: string;
 }
 
 /**
@@ -77,25 +106,33 @@ export interface IssueResult {
 export class NoIssueProvider extends Error {
   override name = "NoIssueProvider";
 
+  readonly operation: IssueOperation;
   readonly url: string;
   readonly provider: string | undefined;
 
-  constructor(url: string, provider: string | undefined) {
+  constructor(operation: IssueOperation, url: string, provider: string | undefined) {
+    const what = operation === "read" ? "read an issue at" : "create an issue in";
     super(
       provider === undefined
-        ? `no issue provider handles ${url}. Install one, or name the provider on the ` +
-            `<IssueTracker> so a provider that does not recognize the URL can still be asked.`
-        : `no issue provider is installed under ${provider}, so nothing can create an issue ` +
-            `in ${url}.`,
+        ? `no issue provider handles ${url}. Install one, or name the provider so a provider ` +
+            `that does not recognize the URL can still be asked to ${what} it.`
+        : `no issue provider is installed under ${provider}, so nothing can ${what} ${url}.`,
     );
+    this.operation = operation;
     this.url = url;
     this.provider = provider;
   }
 }
 
+/** Which of the two questions is being asked. */
+export type IssueOperation = "read" | "upsert";
+
 export interface IssueApi {
+  /** Read the issue this URL names, as the fields every provider has. */
+  read(url: string, options: IssueReadOptions): Operation<IssueDetails>;
+
   /** Create or bring up to date one issue in the tracker these options name. */
-  upsert(issue: IssueInput, options: IssueUpsertOptions): Operation<IssueResult>;
+  upsert(issue: IssueInput, options: IssueUpsertOptions): Operation<IssueReference>;
 }
 
 /**
@@ -107,7 +144,11 @@ export interface IssueApi {
  */
 export const IssueApi: Api<IssueApi> = createApi<IssueApi>(ISSUE_API, {
   // deno-lint-ignore require-yield
-  *upsert(_issue: IssueInput, options: IssueUpsertOptions): Operation<IssueResult> {
-    throw new NoIssueProvider(options.url, options.provider);
+  *read(url: string, options: IssueReadOptions): Operation<IssueDetails> {
+    throw new NoIssueProvider("read", url, options.provider);
+  },
+  // deno-lint-ignore require-yield
+  *upsert(_issue: IssueInput, options: IssueUpsertOptions): Operation<IssueReference> {
+    throw new NoIssueProvider("upsert", options.url, options.provider);
   },
 });

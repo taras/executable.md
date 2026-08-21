@@ -37,6 +37,7 @@ import {
   parseIssueRequest,
   sameIssueRequest,
   type IssueRequest,
+  type IssueUpsertRequest,
 } from "../src/issue/records.ts";
 import type { IssueInput } from "../src/issue/api.ts";
 
@@ -51,15 +52,25 @@ const ISSUE: IssueInput = Object.freeze({
   assignee: null,
 });
 
-const REQUEST: IssueRequest = Object.freeze({
+const URL = `${TARGET}/issues/7`;
+
+const REQUEST: IssueUpsertRequest = Object.freeze({
+  operation: "upsert",
   identity: IDENTITY,
   target: TARGET,
   provider: null,
   issue: ISSUE,
 });
 
+const READ: IssueRequest = Object.freeze({
+  operation: "read",
+  identity: IDENTITY,
+  url: URL,
+  provider: null,
+});
+
 /** The same request with one tag set, whatever order it was authored in. */
-function withTags(tags: readonly string[] | undefined): IssueRequest {
+function withTags(tags: readonly string[] | undefined): IssueUpsertRequest {
   if (tags === undefined) {
     throw new Error("the fixture authored a tag list that is not a tag set");
   }
@@ -68,18 +79,28 @@ function withTags(tags: readonly string[] | undefined): IssueRequest {
 
 describe("workflow Issue durable identity", () => {
   it("keys an attempt by its destination and its position, not by its text", function* () {
-    const key = issueIdempotencyKey(IDENTITY, TARGET);
-    expect(issueIdempotencyKey(IDENTITY, TARGET)).toBe(key);
+    const key = issueIdempotencyKey(IDENTITY, "upsert", TARGET);
+    expect(issueIdempotencyKey(IDENTITY, "upsert", TARGET)).toBe(key);
     // Title is never identity: a document that edits its own title between
     // attempts is still asking about the issue its position already created.
-    expect(issueIdempotencyKey({ ...IDENTITY, expansionId: "expansion-2" }, TARGET)).not.toBe(key);
-    expect(issueIdempotencyKey({ ...IDENTITY, runId: "other" }, TARGET)).not.toBe(key);
-    expect(issueIdempotencyKey(IDENTITY, "https://github.com/octo/other")).not.toBe(key);
+    expect(
+      issueIdempotencyKey({ ...IDENTITY, expansionId: "expansion-2" }, "upsert", TARGET),
+    ).not.toBe(key);
+    expect(issueIdempotencyKey({ ...IDENTITY, runId: "other" }, "upsert", TARGET)).not.toBe(key);
+    expect(issueIdempotencyKey(IDENTITY, "upsert", "https://github.com/octo/other")).not.toBe(key);
+    // The operation is a member of the key, so a read taken at the position an
+    // upsert also occupies cannot be answered with the upsert's mark.
+    expect(issueIdempotencyKey(IDENTITY, "read", TARGET)).not.toBe(key);
   });
 
   it("names a different durable operation for every member of the request", function* () {
     const variants: IssueRequest[] = [
       REQUEST,
+      READ,
+      { ...READ, provider: "github" },
+      { ...READ, url: `${TARGET}/issues/8` },
+      { ...READ, identity: { ...IDENTITY, runId: "other" } },
+      { ...READ, identity: { ...IDENTITY, expansionId: "expansion-2" } },
       { ...REQUEST, provider: "github" },
       { ...REQUEST, target: "https://github.com/octo/other" },
       { ...REQUEST, identity: { ...IDENTITY, runId: "other" } },
@@ -118,9 +139,23 @@ describe("workflow Issue durable identity", () => {
   });
 
   it("reads a retained request back as the request it was", function* () {
-    const round = parseIssueRequest(issueRequestJson(REQUEST));
-    expect(round).toEqual(REQUEST);
-    expect(round === undefined ? false : sameIssueRequest(round, REQUEST)).toBe(true);
+    for (const request of [REQUEST, READ]) {
+      const round = parseIssueRequest(issueRequestJson(request));
+      expect(round).toEqual(request);
+      expect(round === undefined ? false : sameIssueRequest(round, request)).toBe(true);
+    }
+
+    // A read and an upsert are different questions, so one never reads back as
+    // the other however much of the rest they share.
+    expect(sameIssueRequest(REQUEST, { ...READ, url: TARGET })).toBe(false);
+
+    // A retained request carrying the other operation's members is not one this
+    // boundary wrote: an upsert's `issue` under a read's discriminator would
+    // otherwise parse as a read that quietly dropped what it was asked to file.
+    expect(parseIssueRequest({ ...Object(issueRequestJson(READ)), issue: ISSUE })).toBeUndefined();
+    expect(
+      parseIssueRequest({ ...Object(issueRequestJson(REQUEST)), operation: "read" }),
+    ).toBeUndefined();
 
     // A retained request whose tags are out of order is not one this boundary
     // wrote, and reading it as though it were would let two spellings of one

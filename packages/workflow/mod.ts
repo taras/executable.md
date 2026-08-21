@@ -203,7 +203,14 @@ export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
 export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
-export type { IssueInput, IssueResult, IssueUpsertOptions } from "./src/issue/api.ts";
+export type {
+  IssueDetails,
+  IssueInput,
+  IssueOperation,
+  IssueReadOptions,
+  IssueReference,
+  IssueUpsertOptions,
+} from "./src/issue/api.ts";
 export {
   ISSUE_TRACKER_CONTEXT,
   IssueTrackerContext,

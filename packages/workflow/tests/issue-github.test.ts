@@ -39,7 +39,7 @@ const ISSUE: IssueInput = Object.freeze({
   assignee: null,
 });
 
-const MARKER = issueOriginMarker(issueIdempotencyKey(IDENTITY, TARGET));
+const MARKER = issueOriginMarker(issueIdempotencyKey(IDENTITY, "upsert", TARGET));
 
 const PAYLOAD = {
   node_id: "I_node_1",

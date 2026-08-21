@@ -64,7 +64,12 @@ import {
   type GitHubHttpResponse,
 } from "../composition/github.ts";
 import { IssueApi } from "../../issue/api.ts";
-import type { IssueInput, IssueResult, IssueUpsertOptions } from "../../issue/api.ts";
+import type {
+  IssueDetails,
+  IssueInput,
+  IssueReference,
+  IssueUpsertOptions,
+} from "../../issue/api.ts";
 import {
   IssueAmbiguousError,
   IssueConflictError,
@@ -145,6 +150,9 @@ function descriptionIn(body: string, marker: string): string {
   const suffix = `\n\n${marker}\n`;
   return body.endsWith(suffix) ? body.slice(0, -suffix.length) : body;
 }
+
+/** The marker's shape, for a read that has no key to rebuild it from. */
+const ANY_MARKER = /\n\n<!-- executablemd-issue: [0-9a-f]+ -->\n?$/;
 
 /** One issue, read whole, before anything is decided about it. */
 export interface GitHubIssueReading {
@@ -312,7 +320,27 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
 
   yield* IssueApi.around(
     {
-      *upsert([issue, upsert], next): Operation<IssueResult> {
+      *read([url, read], next): Operation<IssueDetails> {
+        const issue = parseGitHubIssueUrl(url);
+        // Matched by discriminator, or — with no discriminator — by URL.
+        const mine =
+          read.provider === undefined ? recognizesGitHubUrl(url) : read.provider === GITHUB;
+        if (!mine) {
+          return yield* next(url, read);
+        }
+        // From here this middleware owns the answer, and the ceiling is asked
+        // before anything is built: a URL a document wrote is not a place this
+        // host authorized until the ceiling says so.
+        if (!withinIssueCeiling(options.ceiling, url)) {
+          throw new IssueUnavailableError();
+        }
+        if (issue === undefined) {
+          throw new IssueUnavailableError();
+        }
+        return yield* observed(access, issue);
+      },
+
+      *upsert([issue, upsert], next): Operation<IssueReference> {
         // Matched by discriminator, or — with no discriminator — by URL.
         const mine =
           upsert.provider === undefined
@@ -598,4 +626,97 @@ function* lookup(
 
 function sameTags(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((tag, index) => tag === right[index]);
+}
+
+/** One issue on GitHub, as a URL addresses it. */
+export interface GitHubIssueLocation {
+  readonly owner: string;
+  readonly repository: string;
+  readonly number: number;
+}
+
+/**
+ * The issue this canonical URL names, or `undefined` for none.
+ *
+ * `…/{owner}/{repository}/issues/{number}`, and the host is deliberately not
+ * part of it for the same reason it is not part of a target: which URLs this
+ * adapter recognizes unasked is {@link recognizesGitHubUrl}, and a self-hosted
+ * deployment has the same path shape under another host name.
+ */
+export function parseGitHubIssueUrl(url: string): GitHubIssueLocation | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:") {
+    return undefined;
+  }
+  const segments = parsed.pathname.replace(/^\//, "").split("/");
+  if (segments.length !== 4 || segments[2] !== "issues") {
+    return undefined;
+  }
+  const owner = segments[0] ?? "";
+  const repository = segments[1] ?? "";
+  const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  if (!NAME.test(owner) || !NAME.test(repository)) {
+    return undefined;
+  }
+  const digits = segments[3] ?? "";
+  if (!/^[1-9][0-9]*$/.test(digits)) {
+    return undefined;
+  }
+  const number = Number(digits);
+  return Number.isSafeInteger(number) ? Object.freeze({ owner, repository, number }) : undefined;
+}
+
+/**
+ * One authenticated read, and the fields every provider has.
+ *
+ * A closed issue reads exactly like an open one: reading is not reconciling,
+ * and refusing to report a closed issue would be inventing a state the document
+ * did not ask about. A pull request is refused, though — GitHub answers for one
+ * through the same Issues endpoint, and reporting it as an issue would let a
+ * document read a pull request's body as an issue description.
+ */
+function* observed(access: GitHubAccess, issue: GitHubIssueLocation): Operation<IssueDetails> {
+  const sent = yield* authorizedHeaders(access, false);
+  if (sent === undefined) {
+    throw new IssueUnavailableError();
+  }
+  const url = `${access.endpoint}/repos/${issue.owner}/${issue.repository}/issues/${issue.number}`;
+  let response: GitHubHttpResponse;
+  try {
+    response = yield* access.send({ method: "GET", url, headers: sent });
+  } catch {
+    // Whatever the transport raised stays here. A 404 is the same answer: it is
+    // what GitHub says for an issue that is not there and for one this
+    // credential may not see, and neither authorizes reading anything.
+    throw new IssueUnavailableError();
+  }
+  if (response.status !== 200) {
+    throw new IssueUnavailableError();
+  }
+  const reading = readGitHubIssue(readJson(response.body));
+  if (reading === undefined) {
+    throw new IssueUnavailableError();
+  }
+  if (reading.pullRequest) {
+    throw new IssueConflictError();
+  }
+  return Object.freeze({
+    url: reading.url,
+    title: reading.title,
+    // Any marker this adapter wrote is its own bookkeeping and not something a
+    // document asked to read, so it comes off whichever attempt put it there.
+    description: withoutMarker(reading.body),
+    tags: reading.tags,
+    assignee: reading.assignee,
+  });
+}
+
+/** The body with any origin marker this adapter wrote removed. */
+function withoutMarker(body: string): string {
+  return body.replace(ANY_MARKER, "");
 }

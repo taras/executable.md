@@ -40,7 +40,7 @@
 import { until, type Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { canonicalJson } from "../storage/record.ts";
-import type { IssueInput, IssueResult } from "./api.ts";
+import type { IssueDetails, IssueInput, IssueOperation, IssueReference } from "./api.ts";
 
 /** Where one Issue effect sits: the run it belongs to, and its expansion. */
 export interface IssueEffectIdentity {
@@ -48,8 +48,25 @@ export interface IssueEffectIdentity {
   readonly expansionId: string;
 }
 
-/** The complete durable request one `<Issue>` makes. */
-export interface IssueRequest {
+/**
+ * What one read asks for.
+ *
+ * The URL is the identity, so there is no tracker here and no key: reading the
+ * same issue twice at two positions is two observations of one object, and each
+ * retains what it saw.
+ */
+export interface IssueReadRequest {
+  readonly operation: "read";
+  readonly identity: IssueEffectIdentity;
+  /** The canonical issue URL. */
+  readonly url: string;
+  /** The explicit discriminator, or `null` when the document named none. */
+  readonly provider: string | null;
+}
+
+/** What one upsert asks for. */
+export interface IssueUpsertRequest {
+  readonly operation: "upsert";
   readonly identity: IssueEffectIdentity;
   /** The canonical container URL. */
   readonly target: string;
@@ -58,10 +75,23 @@ export interface IssueRequest {
   readonly issue: IssueInput;
 }
 
-/** What one settled `<Issue>` retains, and what a document binds. */
-export type IssueRecord = IssueResult;
+/**
+ * The complete durable request one `<Issue>` makes.
+ *
+ * Discriminated, because the two are different questions and a name that could
+ * be either would let a read consume an upsert's retained result.
+ */
+export type IssueRequest = IssueReadRequest | IssueUpsertRequest;
 
-const REQUEST_MEMBERS = ["identity", "target", "provider", "issue"] as const;
+/** What one settled read retains, and what a document binds. */
+export type IssueReadRecord = IssueDetails;
+
+/** What one settled upsert retains, and what a document binds. */
+export type IssueRecord = IssueReference;
+
+const READ_MEMBERS = ["operation", "identity", "url", "provider"] as const;
+const UPSERT_MEMBERS = ["operation", "identity", "target", "provider", "issue"] as const;
+const DETAILS_MEMBERS = ["url", "title", "description", "tags", "assignee"] as const;
 const IDENTITY_MEMBERS = ["runId", "expansionId"] as const;
 const ISSUE_MEMBERS = ["title", "description", "tags", "assignee"] as const;
 const RESULT_MEMBERS = ["url"] as const;
@@ -155,15 +185,61 @@ export function issueInputJson(issue: IssueInput): Json {
 }
 
 export function issueRequestJson(request: IssueRequest): Json {
-  return {
-    identity: {
-      runId: request.identity.runId,
-      expansionId: request.identity.expansionId,
-    },
-    target: request.target,
-    provider: request.provider,
-    issue: issueInputJson(request.issue),
+  const identity = {
+    runId: request.identity.runId,
+    expansionId: request.identity.expansionId,
   };
+  return request.operation === "read"
+    ? { operation: request.operation, identity, url: request.url, provider: request.provider }
+    : {
+        operation: request.operation,
+        identity,
+        target: request.target,
+        provider: request.provider,
+        issue: issueInputJson(request.issue),
+      };
+}
+
+export function issueDetailsJson(details: IssueDetails): Json {
+  return {
+    url: details.url,
+    title: details.title,
+    description: details.description,
+    tags: [...details.tags],
+    assignee: details.assignee,
+  };
+}
+
+/** The issue details this value describes, or `undefined`. */
+export function parseIssueDetails(value: unknown): IssueDetails | undefined {
+  const read = members(value, DETAILS_MEMBERS);
+  if (read === undefined) {
+    return undefined;
+  }
+  const url = text(read["url"]);
+  const title = text(read["title"]);
+  const description = text(read["description"]);
+  const assignee = read["assignee"] === null ? null : text(read["assignee"]);
+  const tags = Array.isArray(read["tags"]) ? normalizedTags(read["tags"]) : undefined;
+  if (
+    url === undefined ||
+    title === undefined ||
+    description === undefined ||
+    assignee === undefined ||
+    tags === undefined
+  ) {
+    return undefined;
+  }
+  const written = read["tags"];
+  if (!Array.isArray(written) || written.length !== tags.length) {
+    return undefined;
+  }
+  for (const [index, tag] of tags.entries()) {
+    if (written[index] !== tag) {
+      return undefined;
+    }
+  }
+  return Object.freeze({ url, title, description, tags, assignee });
 }
 
 /** The issue this value describes, or `undefined`. */
@@ -214,7 +290,24 @@ export function parseIssueEffectIdentity(value: unknown): IssueEffectIdentity | 
 
 /** The durable request this value describes, or `undefined`. */
 export function parseIssueRequest(value: unknown): IssueRequest | undefined {
-  const read = members(value, REQUEST_MEMBERS);
+  const operation = readOperation(value);
+  if (operation === "read") {
+    const read = members(value, READ_MEMBERS);
+    if (read === undefined) {
+      return undefined;
+    }
+    const identity = parseIssueEffectIdentity(read["identity"]);
+    const url = text(read["url"]);
+    const provider = read["provider"] === null ? null : text(read["provider"]);
+    if (identity === undefined || url === undefined || provider === undefined) {
+      return undefined;
+    }
+    return Object.freeze({ operation, identity, url, provider });
+  }
+  if (operation !== "upsert") {
+    return undefined;
+  }
+  const read = members(value, UPSERT_MEMBERS);
   if (read === undefined) {
     return undefined;
   }
@@ -230,7 +323,24 @@ export function parseIssueRequest(value: unknown): IssueRequest | undefined {
   ) {
     return undefined;
   }
-  return Object.freeze({ identity, target, provider, issue });
+  return Object.freeze({ operation, identity, target, provider, issue });
+}
+
+/**
+ * The word this value uses for its operation, read on its own.
+ *
+ * It selects which members the value must carry exactly, so it has to be read
+ * before that membership is decided — and reading it is as much the value's to
+ * refuse as anything else about it.
+ */
+function readOperation(value: unknown): unknown {
+  try {
+    return typeof value === "object" && value !== null
+      ? Reflect.get(value, "operation")
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -256,13 +366,18 @@ export function issueRecordJson(record: IssueRecord): Json {
 /**
  * What makes a second attempt the same attempt.
  *
- * The canonical target and this run's own effect identity, and nothing a
- * document wrote. A provider carries it wherever its service can hold a mark,
+ * The operation, the canonical target and this run's own effect identity, and
+ * nothing a document wrote. A provider carries it wherever its service can hold a mark,
  * so an attempt interrupted after the service accepted it is recognized by the
  * next one rather than repeated.
  */
-export function issueIdempotencyKey(identity: IssueEffectIdentity, target: string): string {
+export function issueIdempotencyKey(
+  identity: IssueEffectIdentity,
+  operation: IssueOperation,
+  target: string,
+): string {
   return canonicalJson({
+    operation,
     canonicalTargetUrl: target,
     runId: identity.runId,
     expansionId: identity.expansionId,

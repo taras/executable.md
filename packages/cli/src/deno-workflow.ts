@@ -27,6 +27,7 @@ import {
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { WorkflowHost } from "./workflow.ts";
+import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
 
 /** Where a run lives when nothing says otherwise. */
 export const DEFAULT_RUN_STORAGE_ROOT: string = join(homedir(), ".xmd", "runs");
@@ -38,6 +39,10 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
+  // Read once, at host construction, so an operator who wrote something this
+  // host cannot use learns it before a document runs rather than in the middle
+  // of one. Absent installs no issue provider at all.
+  const gitHubIssues = yield* gitHubIssuesConfiguration();
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
@@ -49,7 +54,9 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
       return useWorkflowInputDelivery({ root });
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
-      return withWorkflowWorkspace(database, operation);
+      return withWorkflowWorkspace(database, operation, {
+        ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
+      });
     },
   };
 }

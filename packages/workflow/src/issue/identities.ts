@@ -2,11 +2,13 @@
  * Which run each Issue record in a history was written under, established where
  * nothing replaceable can reach it and claimed one position at a time.
  *
- * An Issue effect is named by a digest that includes the run id, and its
- * idempotency key is derived from the run id outright, so a record a fork
- * inherited would compute a different name under the fork and replay would
- * diverge before any provider question arose — and the fork would then file a
- * second issue for one already filed. Deciding the name therefore needs to know
+ * An upsert is named by a digest that includes the run id, and its idempotency
+ * key is derived from the run id outright, so a record a fork inherited would
+ * compute a different name under the fork and replay would diverge before any
+ * provider question arose — and the fork would then file a second issue for one
+ * already filed. A read borrows nothing: it reconciles nothing, so there is no
+ * key to keep and lending it an identity would only disturb the order the
+ * inherited prefix is consumed in. Deciding the name therefore needs to know
  * what this run already retains at this position.
  *
  * This is a parallel module rather than a parameterization of the Git-host one,
@@ -115,17 +117,26 @@ function exhaust(held: RetainedIssueIdentity[]): void {
  * and the target, so including it would put the undecided run id back in.
  */
 function asked(request: IssueRequest): string {
-  return canonicalJson({
-    expansionId: request.identity.expansionId,
-    provider: request.provider,
-    target: request.target,
-    issue: {
-      title: request.issue.title,
-      description: request.issue.description,
-      tags: [...request.issue.tags],
-      assignee: request.issue.assignee,
-    },
-  });
+  const expansionId = request.identity.expansionId;
+  return request.operation === "read"
+    ? canonicalJson({
+        operation: request.operation,
+        expansionId,
+        provider: request.provider,
+        url: request.url,
+      })
+    : canonicalJson({
+        operation: request.operation,
+        expansionId,
+        provider: request.provider,
+        target: request.target,
+        issue: {
+          title: request.issue.title,
+          description: request.issue.description,
+          tags: [...request.issue.tags],
+          assignee: request.issue.assignee,
+        },
+      });
 }
 
 /**
