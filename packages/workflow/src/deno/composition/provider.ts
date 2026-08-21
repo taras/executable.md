@@ -46,6 +46,7 @@ import { transactWorkspaceRoots } from "../workspace/private.ts";
 import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
+import type { GitAuthentication } from "./authentication.ts";
 import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 import { stale, type Attached, type StaleReason } from "./identity.ts";
 import {
@@ -92,6 +93,15 @@ export interface CompositionProviderOptions {
    * which reaches `api.github.com` and the process environment.
    */
   readonly gitHub?: GitHubAccess;
+  /**
+   * What the host lends a Git command that transports to a remote.
+   *
+   * Only reaches the default host: a suite that supplies its own `host` has
+   * already replaced the thing an attachment would be attached to. Absent, the
+   * default host uses the shipped ambient authentication, which is the invoking
+   * user's SSH agent and standard Git credential helpers.
+   */
+  readonly authentication?: GitAuthentication;
 }
 
 /**
@@ -132,7 +142,11 @@ export function useRepositoryComposition(
   database: WorkflowRunDatabase,
   options: CompositionProviderOptions = {},
 ): Operation<void> {
-  const host = options.host ?? denoRepositoryHost();
+  const host =
+    options.host ??
+    denoRepositoryHost(
+      options.authentication === undefined ? {} : { authentication: options.authentication },
+    );
   const observe = options.observe ?? {};
 
   return RepositoryComposition.around(
@@ -199,7 +213,11 @@ export function useGitComposition(
   database: WorkflowRunDatabase,
   options: CompositionProviderOptions = {},
 ): Operation<void> {
-  const host = options.host ?? denoRepositoryHost();
+  const host =
+    options.host ??
+    denoRepositoryHost(
+      options.authentication === undefined ? {} : { authentication: options.authentication },
+    );
   const observe = options.observe ?? {};
 
   return GitComposition.around(

@@ -20,6 +20,7 @@ import {
   sameRepository,
   parseGitHubRepository,
   type GitHubAccess,
+  type GitHubLogin,
   type GitHubHttpRequest,
   type GitHubHttpResponse,
 } from "../src/deno/composition/github.ts";
@@ -182,27 +183,64 @@ describe("workflow GitHub locator admission", () => {
 });
 
 describe("workflow GitHub credentials", () => {
-  it("prefers GH_TOKEN, falls back to GITHUB_TOKEN, and answers none for neither", function* () {
+  function holding(token: string | undefined): GitHubLogin {
+    return {
+      // deno-lint-ignore require-yield
+      *token(): Operation<string | undefined> {
+        return token;
+      },
+    };
+  }
+
+  /**
+   * Three sources now, in one order, shared by every shipped GitHub adapter.
+   *
+   * Only the first case is made against the default access. That one is
+   * answered by a variable before anything else is consulted, so it can prove
+   * the default reads this process's environment without reaching further. A
+   * default access with neither variable set would ask the machine's own
+   * `gh auth login` — a developer's real credential, which no suite may read.
+   */
+  it("prefers GH_TOKEN, then GITHUB_TOKEN, then the host's own login", function* () {
     const before = { gh: process.env.GH_TOKEN, github: process.env.GITHUB_TOKEN };
     try {
       process.env.GH_TOKEN = "from-gh";
       process.env.GITHUB_TOKEN = "from-github";
       expect(yield* denoGitHubAccess().token()).toBe("from-gh");
-
-      delete process.env.GH_TOKEN;
-      expect(yield* denoGitHubAccess().token()).toBe("from-github");
-
-      // An empty variable names no credential. Sending `Bearer ` would ask
-      // GitHub to decide what an empty token means.
-      process.env.GITHUB_TOKEN = "";
-      expect(yield* denoGitHubAccess().token()).toBeUndefined();
-
-      delete process.env.GITHUB_TOKEN;
-      expect(yield* denoGitHubAccess().token()).toBeUndefined();
     } finally {
       restore("GH_TOKEN", before.gh);
       restore("GITHUB_TOKEN", before.github);
     }
+
+    const login = holding("from-login");
+    expect(
+      yield* denoGitHubAccess(undefined, {
+        environment: { GH_TOKEN: "from-gh", GITHUB_TOKEN: "from-github" },
+        login,
+      }).token(),
+    ).toBe("from-gh");
+    expect(
+      yield* denoGitHubAccess(undefined, {
+        environment: { GITHUB_TOKEN: "from-github" },
+        login,
+      }).token(),
+    ).toBe("from-github");
+    expect(yield* denoGitHubAccess(undefined, { environment: {}, login }).token()).toBe(
+      "from-login",
+    );
+
+    // An empty variable names no credential. Sending `Bearer ` would ask GitHub
+    // to decide what an empty token means, and looking further would ignore a
+    // caller who said outright which credential to use.
+    expect(
+      yield* denoGitHubAccess(undefined, { environment: { GITHUB_TOKEN: "" }, login }).token(),
+    ).toBeUndefined();
+    expect(
+      yield* denoGitHubAccess(undefined, {
+        environment: {},
+        login: holding(undefined),
+      }).token(),
+    ).toBeUndefined();
   });
 
   it("cannot observe without a credential, and creates nothing", function* () {

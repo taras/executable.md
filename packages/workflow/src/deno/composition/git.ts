@@ -54,12 +54,21 @@ export class GitRefusal extends Error {
  * The root is also `HOME`, so Git reads no configuration belonging to whoever
  * happens to be running the host.
  */
-/** The two things one command may need beyond its arguments and its directory. */
+/** The three things one command may need beyond its arguments and its directory. */
 export interface GitCommand {
   /** Bytes handed to the command on standard input. */
   readonly input?: string;
   /** The whole Unix second an object-writing command records. */
   readonly committedAt?: number;
+  /**
+   * The exact locator this command transports to.
+   *
+   * Present on the three commands in this module that leave the
+   * materialization, and absent on every other one. It is what the host
+   * acquires ambient authentication for, so it is the retained locator itself
+   * rather than anything derived from the arguments beside it.
+   */
+  readonly remote?: string;
 }
 
 export interface GitSession {
@@ -136,6 +145,7 @@ export function* clone(
   const outcome = yield* git.run(
     ["clone", "--no-checkout", "--no-hardlinks", "--", locator, directory],
     parent,
+    { remote: locator },
   );
   if (outcome.code !== 0) {
     throw new GitRefusal("invalid-locator");
@@ -788,7 +798,9 @@ export function* observeRemoteRef(
   ref: string,
   format: GitObjectFormat,
 ): Operation<RemoteRefObservation> {
-  const outcome = yield* git.run(["ls-remote", "--", locator, ref], directory);
+  const outcome = yield* git.run(["ls-remote", "--", locator, ref], directory, {
+    remote: locator,
+  });
   if (outcome.code !== 0) {
     return { state: "unreachable" };
   }
@@ -850,6 +862,7 @@ export function* pushRefspec(
   const outcome = yield* git.run(
     ["push", "--porcelain", "--no-verify", "--", locator, refspec],
     directory,
+    { remote: locator },
   );
   return outcome.code === 0;
 }
