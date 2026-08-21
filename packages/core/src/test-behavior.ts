@@ -15,6 +15,12 @@
  * The Api name is stable, which is what lets a testing package loaded beside a
  * second copy of core reach the copy that is expanding the document without
  * either copy handing the other a function to compare.
+ *
+ * This is ordinary public middleware, and answering without delegating is a
+ * legitimate thing to do with it — supplying a test's behavior is exactly that.
+ * So it is not where *whether a test may run* is decided: canonical `<Test>`
+ * takes that decision through `TestActivation` before this chain is dispatched,
+ * and a handler here composes around behavior it cannot use to revisit it.
  */
 
 import { type Api, createApi } from "@effectionx/context-api";

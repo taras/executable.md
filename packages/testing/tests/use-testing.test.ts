@@ -7,7 +7,8 @@ import type { Operation, Subscription } from "effection";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { API } from "@executablemd/runtime";
-import { execute, Execution } from "@executablemd/core";
+import { execute, Execution, registerComponents } from "@executablemd/core";
+import type { Json } from "@executablemd/core";
 import { Test, TestFailureError, testing } from "../src/test-api.ts";
 import { useTesting } from "../src/use-testing.ts";
 import { failureOf, runDoc } from "./helpers.ts";
@@ -127,6 +128,54 @@ describe("useTesting composition", () => {
     expect(second.completion.ok).toBe(true);
     expect(second.output).not.toContain("Assert");
     expect(second.results).toEqual([]);
+  });
+
+  // The supported multi-document shape: fixtures and providers live in an
+  // enclosing scope, and each document gets a child scope with one session and
+  // one execution. Wrapping a loop in a single session would instead make the
+  // second document inherit the first document's outcomes.
+  it("runs sibling documents with shared fixtures and separate sessions", function* () {
+    const visited: string[] = [];
+    const outcome = yield* scoped(function* () {
+      yield* useStubFs({
+        "first.md": '<Test name="first"><Visit doc="first" /><Assert expr={false} /></Test>\n',
+        "second.md": '<Test name="second"><Visit doc="second" /><Assert expr={true} /></Test>\n',
+      });
+      yield* registerComponents([
+        {
+          name: "Visit",
+          origin: "use-testing-fixture",
+          props: {
+            type: "object",
+            properties: { doc: { type: "string" } },
+            additionalProperties: false,
+          },
+          // deno-lint-ignore require-yield
+          *fn(props: Record<string, Json>): Operation<Json> {
+            visited.push(String(props.doc));
+            return "";
+          },
+        },
+      ]);
+
+      const first = yield* scoped(function* () {
+        const tests = yield* useTesting();
+        const result = yield* yield* execute({ path: "first.md", stream: new InMemoryStream() });
+        return { result, results: yield* tests.results };
+      });
+      const second = yield* scoped(function* () {
+        const tests = yield* useTesting();
+        const result = yield* yield* execute({ path: "second.md", stream: new InMemoryStream() });
+        return { result, results: yield* tests.results };
+      });
+      return { first, second };
+    });
+
+    expect(visited).toEqual(["first", "second"]);
+    expect(outcome.first.result.ok).toBe(false);
+    expect(outcome.first.results.map((r) => [r.name, r.status])).toEqual([["first", "fail"]]);
+    expect(outcome.second.result.ok).toBe(true);
+    expect(outcome.second.results.map((r) => [r.name, r.status])).toEqual([["second", "pass"]]);
   });
 
   it("completion returns Err instead of throwing for document failures", function* () {

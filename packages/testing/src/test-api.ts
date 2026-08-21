@@ -1,11 +1,15 @@
 /**
  * Test Api — contextual operations for testing mode (specs/testing-spec.md).
  *
- * `testing` is the activation switch: false by default, true beneath
- * `<Testing>` (or root activation via a `useTesting()` session).
- * Both perform the identical `Test.around({ testing: () => true })` install,
- * which is what makes `xmd test` equivalent to wrapping the entrypoint in
- * `<Testing>`.
+ * `testing` is the public mode switch: false by default, true beneath
+ * `<Testing>` and beneath a `useTesting()` session, which is what makes
+ * `xmd test` equivalent to wrapping the entrypoint in `<Testing>`.
+ *
+ * It is policy, not authority. Middleware may narrow it to false, observe it,
+ * refuse, and compose recording behavior around `record`; what an answer of
+ * `true` cannot say is that a collector, a final flush and a completion policy
+ * exist. That is complete activation, it is package-private, and a `<Test>`
+ * proves it separately before it expands anything (`activation.ts`).
  *
  * `record` delegates outward through nested collectors, so every enclosing
  * `<Testing>` boundary and the run-level collector observe each completed
@@ -37,7 +41,7 @@ export interface BoundaryOutcome {
 }
 
 export interface TestApi {
-  /** Whether testing mode is active in the current scope. */
+  /** Whether testing mode is active in the current scope. Replaceable policy. */
   testing: boolean;
   /** Whether expansion is currently inside a `<Test>` body. */
   inTest: boolean;

@@ -2026,6 +2026,68 @@ name one could otherwise turn a failed run into a successful one from outside
 the document — which is precisely the authority a document's own text is
 supposed to hold.
 
+Testing is owned whole. Activating it means owning where results are collected,
+when the last staged one is flushed, and what the run settles to — so the two
+things that establish it are the two that own all three: a `useTesting()`
+session for one root execution, and a `<Testing>` element for a lexical subtree.
+Registering the components is not one of them.
+
+The public `testing` boolean and the recording middleware around it remain
+composable policy, and stay useful as policy: a handler may narrow testing to
+false, observe a result, refuse, and wrap recording. They are not activation
+authority, and neither is a stable contextual or Api name — a name is the
+routing every loaded copy shares, and treating it as the claim would let
+anything able to spell it declare a complete boundary. What a `<Test>` requires
+instead is a conjunction of a private one-use request, a private live boundary
+credential, and the acceptance record of a terminal created for that one call:
+the same request-and-terminal division *Authoritative behavior* describes,
+scoped to the smaller boundary. It is scope-owned and expires with the session
+or the element that established it, so a retained credential from a finished
+boundary activates nothing.
+
+Canonical core enforces it, and the placement is the point. What a test *does*
+arrives through public middleware a handler may legitimately answer without
+delegating — that is how a second loaded copy supplies behavior — so a
+requirement asked inside that chain is a requirement a handler can skip by never
+letting it be asked. The decision is therefore taken by the invocation itself,
+before the harness is minted and before the behavior chain is dispatched,
+through a seam the testing package installs its guard on. Core supplies no
+policy there: it dispatches through a private per-invocation terminal and
+refuses an invocation whose decision was never taken, so blocking that chain
+refuses the test rather than admitting it. With nothing installed the terminal
+is reached immediately, which is what keeps core-only use of the behavior
+surface working.
+
+Every refusal raised while that decision is being taken is a configuration
+failure of the composition rather than a test outcome — activation unproved, a
+handler on the seam refusing with an error of its own, or a chain answered
+rather than delegated. No result is staged, journaled, recorded or reported, the
+body causes no effect, and the ordinary component-failure path fails the
+document.
+
+The identity cannot be the error's type, because refusing by throwing is
+supported and what a handler throws is its own. It is applied by position
+instead: core marks whatever escapes the decision dispatch, keeping the message
+it arrived with — the refuser's own sentence is usually the actionable one — and
+carrying the original as `cause`, so the search that walks causes still finds a
+fatal infrastructure failure underneath.
+
+Containment is what makes the distinction load-bearing rather than tidy. A
+contained test failure becomes a document failure only through a session's
+completion policy, and a composition that never established one has no such
+policy — so a refusal absorbed as a test outcome would leave a run that ran no
+test reporting success.
+
+Canonical expansion keeps a refused decision away from every failure handler
+itself, rather than asking one to decline it. That is a loaded-copy consequence,
+not a preference: the mark is private, so only the copy that applied it can see
+it — and that copy is the one whose own `<Test>` was expanding. A package
+composed against a second copy of core would answer "not a refusal" about a
+wrapper it did not apply and hand it to a handler, which is exactly the
+containment being prevented. So nothing outside that copy is asked, no predicate
+crosses a package boundary, and the refusal travels on unchanged, after the
+fatal search and before any handler is dispatched.
+
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
 enclosing middleware, not before. Two consequences follow, and both are

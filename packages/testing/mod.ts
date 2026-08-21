@@ -18,9 +18,44 @@
  * const results = yield* tests.results;
  * ```
  *
- * Component registration (`installTestingComponents`) is distinct from
- * testing-mode activation (`useTesting()` at the root, or a `<Testing>`
- * element for a subtree).
+ * Several documents share fixtures, never sessions. Provider and fixture state
+ * that spans a suite belongs in an enclosing scope; each document then gets one
+ * child scope holding one `useTesting()` session and one `execute()` or
+ * `executeInstalled()` call:
+ *
+ * ```ts
+ * yield* useStubFs(files);                 // fixtures the whole suite shares
+ * for (const path of documents) {
+ *   yield* scoped(function* () {
+ *     const tests = yield* useTesting();    // one session per document
+ *     const outcome = yield* yield* execute({ path, stream: new InMemoryStream() });
+ *     report(path, outcome, yield* tests.results);
+ *   });
+ * }
+ * ```
+ *
+ * A session's results are cumulative and its completion policy is the whole
+ * run's, so one session around the loop would let a zero-test document pass on
+ * the strength of an earlier document's tests.
+ *
+ * Three things are distinct, and only the third makes tests run:
+ *
+ * 1. `installTestingComponents()` registers `<Testing>`, the assertions and
+ *    what core's `<Test>` does. It activates nothing.
+ * 2. `TestApi.testing` is the public mode switch, and replaceable policy.
+ * 3. `useTesting()` for one root execution, and `<Testing>` for a lexical
+ *    subtree, are the complete activations: each owns the collector, the final
+ *    flush and the settlement that make a test result mean something.
+ *
+ * Registration plus `Test.around({ testing: () => true })` is not a substitute
+ * for the third. A `<Test>` under that composition refuses before its body
+ * expands, and the document fails.
+ *
+ * Canonical core enforces that refusal. Registration installs the guard, and
+ * core's own `<Test>` consults it before minting a harness and before
+ * dispatching `TestBehavior` — so middleware composed around what a test does
+ * cannot answer for whether it may run. Activation policy, the proof,
+ * collection, flushing and settlement all remain this package's.
  */
 
 export { Test, testing, record, results, TestFailureError } from "./src/test-api.ts";

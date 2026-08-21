@@ -11,11 +11,19 @@
  * installs is what a test *does* (#441).
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
- * boundaries affect the execution outcome even when root testing is inactive.
+ * boundaries affect the execution outcome even when root testing is inactive,
+ * and adds the activation guard canonical core consults before every `<Test>`
+ * invocation — so what a test may do and whether it may run at all are both
+ * this package's answers, given at core's boundary rather than behind the
+ * behavior chain. A refusal from that guard never reaches the failure handler
+ * below: core withholds it, because a test that never ran has no outcome to
+ * contain.
  *
- * Registration is distinct from activation: installing the components
- * leaves `testing` false, so `<Test>` skips and assertions stay usable.
- * Root activation is `useTesting()`'s job.
+ * Registration is distinct from activation, and this is registration alone:
+ * installing the components leaves `testing` false, so `<Test>` skips and
+ * assertions stay usable. Complete activation is `useTesting()`'s at the root
+ * and `<Testing>`'s for a subtree, and answering the public boolean `true`
+ * without one is a configuration failure rather than a way in (`activation.ts`).
  *
  * Installs are scope-local — call this inside a bounded scope (one CLI
  * command element, one `scoped()` block).
@@ -23,13 +31,20 @@
 
 import { Err } from "effection";
 import type { Operation } from "effection";
-import { Component, registerComponents, Execution, TestBehavior } from "@executablemd/core";
+import {
+  Component,
+  registerComponents,
+  Execution,
+  TestActivation,
+  TestBehavior,
+} from "@executablemd/core";
 import type {
   ComponentFailure,
   ComponentRegistration,
   DocumentExecution,
 } from "@executablemd/core";
-import { boundary, record, Test, TestFailureError } from "./test-api.ts";
+import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts";
+import { requireCompleteTestingActivation } from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
@@ -56,6 +71,10 @@ const TEST_TIMEOUT_MS = 20_000;
  * is what makes a checked command failure inside a test that test's outcome
  * rather than the run's; this session supplies its behavior and hands nobody an
  * identity (#441).
+ *
+ * Behavior, and nothing more: a caller that installs this and answers the
+ * public `testing` boolean has registered what a test does without owning
+ * anywhere for a result to go.
  */
 export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
   yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
@@ -100,6 +119,20 @@ export function* installHandlers(
         message: failureReport(result, { detail: true }).trim(),
         source: "Test",
       };
+    },
+  });
+  // Whether a canonical `<Test>` may run, answered where core asks it: before
+  // the harness exists and before the behavior chain is dispatched, so no
+  // handler composed around what a test *does* can answer it instead. The
+  // policy read here is the public boolean, which leaves an inactive test
+  // invisible; what it cannot say is that anything owns the result, so an
+  // active one proves its complete activation before core goes any further.
+  yield* TestActivation.around({
+    *require([request], next) {
+      if (yield* testing) {
+        yield* requireCompleteTestingActivation();
+      }
+      yield* next(request);
     },
   });
   // What core's `<Test>` does. The operation names no component and carries no

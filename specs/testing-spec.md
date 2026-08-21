@@ -81,6 +81,73 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+### Registration, mode, and activation
+
+Three things are distinct, and only the last one makes a test run.
+
+**Registration** is `installTestingComponents()`. It registers the components
+above and supplies what core's `<Test>` does. It activates nothing: after it,
+`testing` is still false, `<Test>` is still skipped, and the assertion
+components are usable in ordinary content.
+
+**Mode** is the public `TestApi.testing` operation. It answers whether testing
+mode is on, and it is replaceable policy: middleware may narrow it to false,
+observe it, refuse, and compose behavior around recording. An answer of `true`
+says a test *should* run. It cannot say that anything exists to collect the
+result, flush the last one, or decide the run's outcome.
+
+**Complete activation** is what does own those. There are two, and no third:
+
+- `useTesting()`, for one root document execution; and
+- a `<Testing>` element, for its lexical subtree.
+
+Each owns a result collector, the final flush of the last staged result, and
+the completion policy that settles the run — and each is package-owned, private
+to `@executablemd/testing`, and expires with the scope or boundary that
+established it. Registration plus a `testing` override is not a substitute:
+neither the boolean nor a contextual name is accepted as activation authority,
+so a separately loaded copy composing policy around the public surface
+composes policy and nothing else.
+
+Canonical core enforces the requirement, at the invocation boundary. Installing
+the testing package adds an activation guard, and core's own `<Test>` consults
+it before it mints a test harness and before it dispatches the public
+`TestBehavior` chain that supplies what a test does. The guard reads the public
+mode: inactive leaves `<Test>` invisible exactly as before, and active requires
+a complete activation before any harness or body work.
+
+The behavior surface keeps its stable name, its argument, its result, its
+loaded-copy composition and its ordinary delegating behavior, and a handler
+composed around it may observe, wrap, delegate or refuse what a test does. What
+it may not do is answer for the decision that preceded it. Answering without
+delegating is a legitimate use of that surface, and it reaches a decision core
+has already taken.
+
+Any refusal raised while that decision is being taken is a configuration failure
+of the composition, and never a test outcome — whether the activation could not
+be proved, a handler on the seam refused with an error of its own, or the chain
+was answered rather than delegated. Refusing by throwing is a supported thing
+for a handler there to do, and what it throws is its own business, so what marks
+a refusal is where it was raised rather than what type it is.
+
+A test whose activation was refused never ran. Absorbing that as a contained
+test failure would leave a composition with no session — which has no completion
+policy to convert a contained failure into a document failure — reporting a run
+that ran no test as a success. Canonical expansion therefore withholds a refused
+decision from every component failure handler, including one a package or a
+document installs, rather than relying on a handler to decline it.
+
+So under any composition, a refused activation:
+
+- records, journals and reports no test result;
+- renders no assertion diagnostic;
+- causes no side effect the body would have caused; and
+- fails the document execution, so a caller holding an execution handle observes
+  `Err`.
+
+Inactive tests are unaffected. Testing mode off still means `<Test>` renders
+nothing, binds nothing, and runs nothing, with no result of any kind.
+
 ## Directory Targets
 
 `xmd test` accepts a directory as well as a document, and defaults to the
@@ -359,6 +426,18 @@ Registering the testing components without `useTesting` leaves testing mode
 inactive: `<Test>` is skipped, assertion components stay usable, and an
 explicit `<Testing>` boundary still activates its subtree and turns its
 failures — or an empty boundary — into an `Err` outcome for the execution.
+
+`TestApi` middleware is policy rather than activation authority. Overriding
+`testing` to `true` over that registration activates nothing, and a `<Test>`
+reached under it refuses before its body expands, as *Registration, mode, and
+activation* describes.
+
+Several documents share fixtures, never sessions. Fixture and provider state
+that spans a suite is installed in an enclosing scope, and each document runs
+in a child scope holding one `useTesting()` session and one execution. A
+session's results are cumulative and its completion policy is the whole
+session's, so one session around several documents would let a zero-test
+document pass on the strength of an earlier one's tests.
 
 ## Assertions
 

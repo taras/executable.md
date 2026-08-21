@@ -2,10 +2,16 @@
  * useTesting — scope-local testing composition (specs/testing-spec.md).
  *
  * One `useTesting()` session per execution scope: it installs the testing
- * components, the collection and completion-policy middleware, and root
- * activation, then returns a session handle whose `results` operation
+ * components, the collection and completion-policy middleware, and complete
+ * root activation, then returns a session handle whose `results` operation
  * snapshots completed tests in discovery order. Every install is removed
  * with the session's Effection scope.
+ *
+ * The session is the complete activation for a root run — it owns the
+ * collector, the final flush and the completion policy together, which is what
+ * a `<Test>` proves before it expands. Several documents share fixtures in an
+ * enclosing scope and take one child scope, one session and one `execute()`
+ * each.
  *
  * ```ts
  * const tests = yield* useTesting();
@@ -18,6 +24,7 @@
 import type { Operation } from "effection";
 import { Execution } from "@executablemd/core";
 import { sessionActive, Test, TestFailureError } from "./test-api.ts";
+import { activateTesting } from "./activation.ts";
 import type { TestResult } from "./test-api.ts";
 import { installTestingComponents } from "./components.ts";
 import { flushStaged } from "./test-component.ts";
@@ -48,12 +55,6 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
       yield* next(result);
     },
   });
-
-  // Root activation — the activation half of what <Testing> performs for its
-  // subtree, applied to the whole execution. `xmd test` ≡ root <Testing>) for
-  // activation and for flushing staged results; a root run reports no boundary
-  // outcome of its own, which an explicit <Testing> does.
-  yield* Test.around({ testing: () => true });
 
   // The flushing half. A root run has no <Testing> element to flush the last
   // test's staged result, so the region that settles after the document has
@@ -109,6 +110,16 @@ export function* useTesting(options?: { verbose?: boolean }): Operation<Testing>
       yield* next(request);
     },
   });
+
+  // Root activation — the activation half of what <Testing> performs for its
+  // subtree, applied to the whole execution. `xmd test` ≡ root <Testing> for
+  // activation and for flushing staged results; a root run reports no boundary
+  // outcome of its own, which an explicit <Testing> does.
+  //
+  // Last, because it is the claim that everything above it exists: a <Test>
+  // proves its activation against this install, and nothing can execute a
+  // document until this operation returns.
+  yield* activateTesting();
 
   return {
     results: {
