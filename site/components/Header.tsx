@@ -8,6 +8,16 @@ const LINK =
 const LINK_ACTIVE =
   "font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--green);border-bottom:var(--rule) solid var(--green);padding-bottom:1px;";
 
+/** The home page's sections, in the order they appear on it. */
+const SECTIONS = [
+  { href: "/#readme", label: "README" },
+  { href: "/#agent", label: "Agents" },
+  { href: "/#runtime", label: "Runtime" },
+  { href: "/#compose", label: "Compose" },
+  { href: "/#durability", label: "Durability" },
+  { href: "/#install", label: "Install" },
+];
+
 /** `active` marks the top-level section the current page belongs to. */
 export function Header({ active }: { active?: "docs" } = {}) {
   return (
@@ -20,9 +30,11 @@ export function Header({ active }: { active?: "docs" } = {}) {
           <Wordmark size="1rem" fold />
         </a>
         <nav style="display:flex;align-items:center;gap:1.125rem;font-size:0.8125rem;">
-          <a href="/#how" class="nav-hide" style={LINK}>How it works</a>
-          <a href="/#example" class="nav-hide" style={LINK}>Example</a>
-          <a href="/#economics" class="nav-hide" style={LINK}>Economics</a>
+          {SECTIONS.map((s) => (
+            <a key={s.href} href={s.href} class="nav-hide" style={LINK}>
+              {s.label}
+            </a>
+          ))}
           <a href="/docs" style={active === "docs" ? LINK_ACTIVE : LINK}>
             Docs
           </a>
