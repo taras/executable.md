@@ -63,6 +63,22 @@ about.
 <AssertEquals actual={issue.assignee} expected={null} />
 </Test>
 
+An issue with no body at all is an ordinary issue, and reading one reports an
+empty description rather than failing. Refusing it would make a read fail on a
+state the tracker considers perfectly normal.
+
+<Test name="An issue with no body reads as an empty description">
+<EmptyTracker />
+<EmptyRequestLog />
+<GitHubServer as="server" />
+<RemoteIssue number={1} title="Nothing written here" />
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<Issue url={server.repository + "/issues/1"} as="issue" />
+</GitHubIssues>
+<AssertEquals actual={issue.title} expected="Nothing written here" />
+<AssertEquals actual={issue.description} expected="" />
+</Test>
+
 ## It renders nothing and needs no tracker
 
 <Test name="A read renders exactly nothing">

@@ -130,6 +130,63 @@ took it and refused, and a refusal is an answer.
 <AssertEquals actual={sent.methods} expected={[]} />
 </Test>
 
+An upsert names its provider in the tracker, which is the place that owns the
+deployment choice. Named there, the same self-hosted URL is filed by the same
+provider that would not have recognized it.
+
+<Test name="A tracker's discriminator routes an upsert no provider recognizes">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<EmptyAtlassianTracker />
+<GitHubServer as="server" />
+<AtlassianIssues ceiling={["https://acme.atlassian.net/browse"]}>
+<GitHubIssues
+  ceiling={["https://git.acme.test/octo/project"]}
+  endpoint={server.url}
+  credential="valid"
+>
+<IssueTracker url="https://git.acme.test/octo/project" provider="github">
+<Issue title="Filed self-hosted" as="issue">Into a tracker no host name gives away.</Issue>
+</IssueTracker>
+</GitHubIssues>
+</AtlassianIssues>
+<ServerRequests as="sent" />
+<AtlassianTracker as="atlassian" />
+<AssertEquals actual={sent.methods} expected={["GET", "POST"]} />
+<AssertEquals actual={sent.titles} expected={["", "Filed self-hosted"]} />
+<AssertEquals actual={atlassian.upserts} expected={0} />
+</Test>
+
+Filing is the same about finality. The tracker below is one the GitHub provider
+recognizes, and it is never asked: the named provider took the request and
+refused.
+
+<Test name="A named provider's refusal is final for an upsert too">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<EmptyAtlassianTracker />
+<GitHubServer as="server" />
+<AtlassianIssues ceiling={["https://acme.atlassian.net/browse"]}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<IssueTracker url={server.repository} provider="atlassian">
+<AssertThrows message="temporarily unavailable">
+<PrintErrors>
+<Issue title="Refused" as="issue">Sent to a provider that will not have it.</Issue>
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+</GitHubIssues>
+</AtlassianIssues>
+<ServerRequests as="sent" />
+<AtlassianTracker as="atlassian" />
+<AssertEquals actual={atlassian.upserts} expected={1} />
+<AssertEquals actual={sent.methods} expected={[]} />
+<TrackerIssues as="tracker" />
+<AssertEquals actual={tracker.count} expected={0} />
+</Test>
+
 ## When nobody claims it
 
 With no provider recognizing the URL, the request reaches the base of the chain
@@ -182,6 +239,55 @@ did name somebody.
 <AssertEquals actual={atlassian.reads} expected={0} />
 </Test>
 
+An upsert reaches the same two base refusals, worded for what it was trying to
+do rather than for a read.
+
+<Test name="A tracker no provider recognizes reaches the base refusal">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<EmptyAtlassianTracker />
+<GitHubServer as="server" />
+<AtlassianIssues ceiling={["https://acme.atlassian.net/browse"]}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<IssueTracker url="https://bugs.example.test/project">
+<AssertThrows message="no issue provider handles">
+<PrintErrors>
+<Issue title="Nowhere to file this" as="issue">Nobody claims this tracker.</Issue>
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+</GitHubIssues>
+</AtlassianIssues>
+<ServerRequests as="sent" />
+<AtlassianTracker as="atlassian" />
+<AssertEquals actual={sent.methods} expected={[]} />
+<AssertEquals actual={atlassian.upserts} expected={0} />
+</Test>
+
+<Test name="A tracker discriminator no provider answers to reaches the base refusal">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<EmptyAtlassianTracker />
+<GitHubServer as="server" />
+<AtlassianIssues ceiling={["https://acme.atlassian.net/browse"]}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<IssueTracker url={server.repository} provider="gitlab">
+<AssertThrows message="no issue provider is installed under gitlab">
+<PrintErrors>
+<Issue title="Nobody by that name" as="issue">Named a provider nobody answers to.</Issue>
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
+</GitHubIssues>
+</AtlassianIssues>
+<ServerRequests as="sent" />
+<AtlassianTracker as="atlassian" />
+<AssertEquals actual={sent.methods} expected={[]} />
+<AssertEquals actual={atlassian.upserts} expected={0} />
+</Test>
+
 ## A nearer surface answers for its own subtree, and nothing else
 
 <Test name="A nearer override answers inside its content, delegates other URLs, and ends at its close">
@@ -212,6 +318,44 @@ did name somebody.
   "/repos/octo/project/issues/2",
   "/repos/octo/project/issues/1"
 ]} />
+</Test>
+
+An override applies to filing the same way. It answers the tracker it claims,
+hands on the one it does not, and stops at its close.
+
+<Test name="A nearer override handles its upsert, delegates another, and ends at its close">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<EmptyAtlassianTracker />
+<GitHubServer as="server" />
+<AtlassianIssues ceiling={["https://acme.atlassian.net/browse"]}>
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<IssueApiOverride
+  handles="https://acme.atlassian.net/browse"
+  answers="https://example.test/issues/999"
+>
+<IssueTracker url="https://acme.atlassian.net/browse">
+<Issue title="Overridden" as="overridden">Answered by the nearer surface.</Issue>
+</IssueTracker>
+<IssueTracker url={server.repository}>
+<Issue title="Delegated" as="delegated">Handed on to the provider that recognizes it.</Issue>
+</IssueTracker>
+</IssueApiOverride>
+<IssueTracker url="https://acme.atlassian.net/browse">
+<Issue title="After" as="after">Filed once the override has closed.</Issue>
+</IssueTracker>
+</GitHubIssues>
+</AtlassianIssues>
+<ProviderLog as="providers" />
+<ServerRequests as="sent" />
+<AtlassianTracker as="atlassian" />
+<AssertEquals actual={overridden.url} expected="https://example.test/issues/999" />
+<AssertEquals actual={delegated.url} expected={server.repository + "/issues/1"} />
+<AssertEquals actual={after.url} expected="https://acme.atlassian.net/browse/PROJ-1" />
+<AssertEquals actual={providers.overrides} expected={1} />
+<AssertEquals actual={atlassian.upserts} expected={1} />
+<AssertEquals actual={sent.methods} expected={["GET", "POST"]} />
 </Test>
 
 ## A nested tracker replaces the outer one, and only for its content
@@ -264,6 +408,31 @@ act on it, and it decides before it opens a connection.
 <Issue url="https://github.com/octo/secrets/issues/1" as="issue" />
 </PrintErrors>
 </AssertThrows>
+</GitHubIssues>
+<ServerRequests as="sent" />
+<AssertEquals actual={sent.methods} expected={[]} />
+</Test>
+
+A provider that recognizes a tracker asks the same question before it files
+anything into it.
+
+<Test name="A matched upsert outside its ceiling sends nothing">
+<EmptyTracker />
+<EmptyRequestLog />
+<EmptyProviderLog />
+<GitHubServer as="server" />
+<GitHubIssues
+  ceiling={["https://github.com/octo/authorized"]}
+  endpoint={server.url}
+  credential="valid"
+>
+<IssueTracker url="https://github.com/octo/secrets">
+<AssertThrows message="temporarily unavailable">
+<PrintErrors>
+<Issue title="Outside the ceiling" as="issue">Nothing should leave this document.</Issue>
+</PrintErrors>
+</AssertThrows>
+</IssueTracker>
 </GitHubIssues>
 <ServerRequests as="sent" />
 <AssertEquals actual={sent.methods} expected={[]} />

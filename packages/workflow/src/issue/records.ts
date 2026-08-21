@@ -121,6 +121,17 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+/**
+ * A string that is allowed to be empty.
+ *
+ * For a value a service holds rather than one this boundary was given. An issue
+ * with no body is an ordinary issue, and refusing to report one would make a
+ * read fail on a state the tracker considers perfectly normal.
+ */
+function anyText(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 /** One string's code points, so ordering does not depend on the encoding. */
 function codePoints(value: string): number[] {
   const points: number[] = [];
@@ -218,7 +229,9 @@ export function parseIssueDetails(value: unknown): IssueDetails | undefined {
   }
   const url = text(read["url"]);
   const title = text(read["title"]);
-  const description = text(read["description"]);
+  // Empty is a description an issue can genuinely have. A URL and a title are
+  // still required: an issue without either is not one this side can report.
+  const description = anyText(read["description"]);
   const assignee = read["assignee"] === null ? null : text(read["assignee"]);
   const tags = Array.isArray(read["tags"]) ? normalizedTags(read["tags"]) : undefined;
   if (
