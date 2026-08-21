@@ -73,12 +73,22 @@ describe("workflow Issue scenarios", () => {
     yield* stated(yield* fixture.observe(pathOf("IssueReadDurability.test.md")));
   });
 
-  it("IssueRecoveryHazards.test.md states a contract that holds", function* () {
-    const fixture = yield* useScenarioFixture();
-    yield* fixture.stage("IssueRecoveryHazards.attempt.stage.md");
-    yield* fixture.stage("IssueRecoveryHazards.attempt.stage.md");
-    yield* stated(yield* fixture.observe(pathOf("IssueRecoveryHazards.test.md")));
-  });
+  // Each hazard is its own run. They cannot share one: a process that ended
+  // after its create ended, so a second request in the same execution is a
+  // request that could never have been made.
+  for (const hazard of [
+    "IssueRecoveryUnavailable",
+    "IssueRecoveryDuplicated",
+    "IssueRecoveryMoved",
+    "IssueRecoveryClosed",
+  ]) {
+    it(`${hazard}.test.md states a contract that holds`, function* () {
+      const fixture = yield* useScenarioFixture();
+      yield* fixture.stage(`${hazard}.attempt.stage.md`);
+      yield* fixture.stage(`${hazard}.attempt.stage.md`);
+      yield* stated(yield* fixture.observe(pathOf(`${hazard}.test.md`)));
+    });
+  }
 
   it("IssueRecovery.test.md states a contract that holds", function* () {
     const fixture = yield* useScenarioFixture();

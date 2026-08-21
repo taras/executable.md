@@ -379,10 +379,12 @@ function useScenarioComponents(
         properties: {
           count: { type: "integer" },
           titles: { type: "array", items: { type: "string" } },
+          states: { type: "array", items: { type: "string" } },
+          repositories: { type: "array", items: { type: "string" } },
           labels: { type: "array" },
           assignees: { type: "array" },
         },
-        required: ["count", "titles", "labels", "assignees"],
+        required: ["count", "titles", "states", "repositories", "labels", "assignees"],
         additionalProperties: false,
       },
       // deno-lint-ignore require-yield
@@ -390,6 +392,11 @@ function useScenarioComponents(
         return {
           count: server.issues.length,
           titles: server.issues.map((issue) => issue.title),
+          states: server.issues.map((issue) => issue.state),
+          // Empty for an issue this tracker never reported moving: the adapter
+          // reads the repository an issue belongs to, and a scenario about one
+          // that moved needs to say where it stayed.
+          repositories: server.issues.map((issue) => issue.repository ?? ""),
           labels: server.issues.map((issue) => [...issue.labels]),
           assignees: server.issues.map((issue) => issue.assignee),
         };
