@@ -60,6 +60,7 @@ import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
 import type { ImportAuthority } from "./components/import-authority.ts";
 import CoreTest from "./components/Test.ts";
+import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
@@ -2864,6 +2865,23 @@ function* expandFunctionComponent(
       // invocation, so what is handled here accounts for the body and its
       // teardown together.
 
+      const fatal = fatalCause(error);
+
+      // A refused activation decision is not a failure any boundary may account
+      // for. The test never ran, so a handler that printed it, contained it, or
+      // recorded it as a result would be describing a test that does not exist —
+      // and under a composition with no completion policy, absorbing it is what
+      // lets a run that ran no test finish successfully.
+      //
+      // It therefore travels on exactly as it arrived, before any handler is
+      // dispatched, and after the fatal search so that a durability or Files
+      // failure underneath still wins. Recognized here, in the copy of core
+      // whose own `<Test>` was expanding: the mark is private, so this is the
+      // only place that can see it and the only place that needs to.
+      if (fatal === undefined && carriesTestActivationDecision(error)) {
+        throw error;
+      }
+
       // A component's account of a failure that is not its own. Asked first,
       // because the decision it carries is this failure's *subject* rather than
       // a fatal error discovered beneath it — the same reason a
@@ -2893,7 +2911,6 @@ function* expandFunctionComponent(
 
       // Not the document's failure to render: a journal that no longer describes
       // this run, or an error mode that has already decided the document fails.
-      const fatal = fatalCause(error);
       if (fatal !== undefined) {
         throw fatal;
       }

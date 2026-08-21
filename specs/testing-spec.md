@@ -133,7 +133,9 @@ a refusal is where it was raised rather than what type it is.
 A test whose activation was refused never ran. Absorbing that as a contained
 test failure would leave a composition with no session — which has no completion
 policy to convert a contained failure into a document failure — reporting a run
-that ran no test as a success.
+that ran no test as a success. Canonical expansion therefore withholds a refused
+decision from every component failure handler, including one a package or a
+document installs, rather than relying on a handler to decline it.
 
 So under any composition, a refused activation:
 

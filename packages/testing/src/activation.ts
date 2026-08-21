@@ -24,8 +24,9 @@
  *
  * The refusal below is raised from inside that chain, so core marks it — along
  * with anything else raised while the decision is being taken — as a refusal of
- * the decision, and keeps its message. Recognizing one is core's predicate, and
- * that is what keeps it off the test-containment path.
+ * the decision, and keeps its message. Keeping it off the containment path is
+ * core's own doing: canonical expansion withholds a refused decision from every
+ * failure handler, so this package neither recognizes one nor has to.
  *
  * ## Why the proof is not a value
  *

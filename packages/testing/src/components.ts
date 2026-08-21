@@ -15,7 +15,9 @@
  * and adds the activation guard canonical core consults before every `<Test>`
  * invocation — so what a test may do and whether it may run at all are both
  * this package's answers, given at core's boundary rather than behind the
- * behavior chain.
+ * behavior chain. A refusal from that guard never reaches the failure handler
+ * below: core withholds it, because a test that never ran has no outcome to
+ * contain.
  *
  * Registration is distinct from activation, and this is registration alone:
  * installing the components leaves `testing` false, so `<Test>` skips and
@@ -31,7 +33,6 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import {
   Component,
-  isTestActivationDecisionError,
   registerComponents,
   Execution,
   TestActivation,
@@ -99,21 +100,6 @@ export function* installHandlers(
   yield* Component.around({
     *handleFailure([failure], next) {
       if (failure.name !== "Test") {
-        return yield* next(failure);
-      }
-      // Not a test outcome: the test never ran. Core refused the activation
-      // decision it takes before dispatching this behavior — because this
-      // package could not prove a complete activation, because another handler
-      // on that seam refused, or because the chain was answered rather than
-      // delegated. Delegated unchanged, so the ordinary component-failure path
-      // fails the document instead of this package staging, persisting,
-      // recording or reporting a TestResult for a configuration mistake.
-      //
-      // Containment is what makes absorbing one unsafe: a contained failure is
-      // converted into a document failure by a session's completion policy, and
-      // a composition with no session has none — so an absorbed refusal would
-      // leave a run that never ran a test reporting success.
-      if (isTestActivationDecisionError(failure.error)) {
         return yield* next(failure);
       }
       // A nested <Test> fails by the ENCLOSING test's interceptor throwing, so

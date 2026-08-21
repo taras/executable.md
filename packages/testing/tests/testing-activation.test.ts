@@ -17,7 +17,7 @@ import { createApi } from "@effectionx/context-api";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
-import { execute, registerComponents, useTempFileCompiler } from "@executablemd/core";
+import { Component, execute, registerComponents, useTempFileCompiler } from "@executablemd/core";
 import type { Operation as CoreOperation } from "effection";
 import type { Json } from "@executablemd/core";
 import { installTestingComponents } from "../src/components.ts";
@@ -298,6 +298,34 @@ describe("complete testing activation", () => {
       expect([label, errorOf(attempt)?.message]).toEqual([label, expect.stringContaining(REFUSAL)]);
       expect([label, testResultEvents(attempt.events).length]).toEqual([label, 0]);
     }
+  });
+
+  // A refused decision is not a failure any boundary may account for. Canonical
+  // core keeps it away from every failure handler rather than relying on one to
+  // decline it: recognizing the refusal takes core's own private mark, and a
+  // package composed against a second loaded copy of core could not see it.
+  it("keeps a refused decision away from every failure handler", function* () {
+    const handled: string[] = [];
+    const attempt = yield* runComposed(
+      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+      (function* () {
+        yield* Component.around({
+          *handleFailure([failure], next) {
+            handled.push(failure.name);
+            return yield* next(failure);
+          },
+        });
+        yield* incompleteActivation();
+      })(),
+    );
+    expect(handled).toEqual([]);
+    expect(attempt.sentinels).toEqual([]);
+    expect(attempt.completion.ok).toBe(false);
+    expect(errorOf(attempt)?.message).toContain(REFUSAL);
+    expect(attempt.results).toEqual([]);
+    expect(testResultEvents(attempt.events)).toEqual([]);
+    expect(attempt.output).not.toContain("Assert");
+    expect(attempt.output).not.toContain("❌");
   });
 
   // Refusing before delegation is an explicitly supported thing for a handler on

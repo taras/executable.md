@@ -35,17 +35,18 @@ import type { Operation } from "effection";
 /**
  * Whether a failure is, or wraps, a refusal of the activation decision.
  *
- * A predicate rather than the class, because what a testing package needs is to
- * recognize this exact refusal and nothing else. The class, the request, and
- * the decision state stay here: recognizing a failure is not being able to
- * cause one.
+ * Internal to this copy of core, and it has to be: the mark is a private class,
+ * so `instanceof` answers only about wrappers this copy applied. That is exactly
+ * right for the one caller — expansion in this copy, handling a failure of this
+ * copy's own `<Test>` — and would be wrong for anyone else. A second copy asking
+ * would answer `false` about a refusal it did not wrap and hand it to a failure
+ * handler, which is the containment this exists to prevent.
  *
- * A `<Test>` whose decision was refused never ran, so this is a configuration
- * failure of the composition and never a test outcome. A package that contains
- * test failures reports it outward unchanged instead of absorbing it — absorbing
- * it would let a run that never ran a test end successfully.
+ * So nothing outside this copy asks. Canonical expansion keeps a refused
+ * decision away from every handler itself, and no package needs to recognize
+ * one.
  */
-export function isTestActivationDecisionError(error: unknown): boolean {
+export function carriesTestActivationDecision(error: unknown): boolean {
   return carriesDecisionError(error, new Set());
 }
 

@@ -2076,10 +2076,17 @@ Containment is what makes the distinction load-bearing rather than tidy. A
 contained test failure becomes a document failure only through a session's
 completion policy, and a composition that never established one has no such
 policy — so a refusal absorbed as a test outcome would leave a run that ran no
-test reporting success. A package that contains test failures therefore
-recognizes the mark and reports the refusal outward unchanged. Core exposes
-exactly one predicate for it; the error, the request and the decision state stay
-inside core, because recognizing a refusal is not being able to cause one.
+test reporting success.
+
+Canonical expansion keeps a refused decision away from every failure handler
+itself, rather than asking one to decline it. That is a loaded-copy consequence,
+not a preference: the mark is private, so only the copy that applied it can see
+it — and that copy is the one whose own `<Test>` was expanding. A package
+composed against a second copy of core would answer "not a refusal" about a
+wrapper it did not apply and hand it to a handler, which is exactly the
+containment being prevented. So nothing outside that copy is asked, no predicate
+crosses a package boundary, and the refusal travels on unchanged, after the
+fatal search and before any handler is dispatched.
 
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
