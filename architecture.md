@@ -2045,10 +2045,34 @@ scoped to the smaller boundary. It is scope-owned and expires with the session
 or the element that established it, so a retained credential from a finished
 boundary activates nothing.
 
-A `<Test>` proves this before any body work, and a failure to prove it is a
-configuration failure rather than a test outcome: no result is staged,
+Canonical core enforces it, and the placement is the point. What a test *does*
+arrives through public middleware a handler may legitimately answer without
+delegating — that is how a second loaded copy supplies behavior — so a
+requirement asked inside that chain is a requirement a handler can skip by never
+letting it be asked. The decision is therefore taken by the invocation itself,
+before the harness is minted and before the behavior chain is dispatched,
+through a seam the testing package installs its guard on. Core supplies no
+policy there: it dispatches through a private per-invocation terminal and
+refuses an invocation whose decision was never taken, so blocking that chain
+refuses the test rather than admitting it. With nothing installed the terminal
+is reached immediately, which is what keeps core-only use of the behavior
+surface working.
+
+Both refusals that decision can produce — activation unproved, and the decision
+itself blocked by a handler that answered without delegating — are configuration
+failures of the composition rather than test outcomes. No result is staged,
 journaled, recorded or reported, the body causes no effect, and the ordinary
 component-failure path fails the document.
+
+Containment is what makes that distinction load-bearing rather than tidy. A
+contained test failure becomes a document failure only through a session's
+completion policy, and a composition that never established one has no such
+policy — so a refusal absorbed as a test outcome would leave a run that ran no
+test reporting success. A package that contains test failures therefore
+recognizes both refusals and reports them outward unchanged. Core exposes
+exactly one predicate for the second; the error, the request and the decision
+state stay inside core, because recognizing a refusal is not being able to cause
+one.
 
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after

@@ -16,7 +16,10 @@
  * is granted — which is the point of deciding by definition rather than by
  * name (specs/testing-spec.md).
  *
- * What a test *does* is not here. That arrives through `TestBehavior`.
+ * What a test *does* is not here. That arrives through `TestBehavior`. Whether
+ * it may run at all is decided before that, through `TestActivation`: the
+ * behavior surface is ordinary public middleware, so a handler there must not
+ * be able to answer for a decision that precedes it.
  *
  * What this function does own, beside the containment grant, is the authority a
  * nested execution is run under. It is minted here, in this invocation's frame,
@@ -27,6 +30,7 @@
  */
 
 import type { Operation } from "effection";
+import { requireTestActivation } from "../test-activation.ts";
 import { TestBehavior } from "../test-behavior.ts";
 import { installTestHarness } from "../test-harness.ts";
 import type { Json } from "../types.ts";
@@ -38,6 +42,11 @@ export const props = {
 };
 
 export default function* Test(props: Record<string, Json>): Operation<Json> {
+  // First, and outside the behavior chain. Whether this test may run at all is
+  // not something a handler composed around what a test *does* may answer, and
+  // a handler that answered without delegating would otherwise decide it by
+  // never letting the question be asked (`test-activation.ts`).
+  yield* requireTestActivation();
   // Delivered before the behavior runs and expired when this frame unwinds, so
   // the harness exists for exactly the body this invocation expands — and only
   // for whoever the trusted host attached to receive it.

@@ -11,7 +11,11 @@
  * installs is what a test *does* (#441).
  *
  * Installing also decorates the core Execution Api so explicit `<Testing>`
- * boundaries affect the execution outcome even when root testing is inactive.
+ * boundaries affect the execution outcome even when root testing is inactive,
+ * and adds the activation guard canonical core consults before every `<Test>`
+ * invocation — so what a test may do and whether it may run at all are both
+ * this package's answers, given at core's boundary rather than behind the
+ * behavior chain.
  *
  * Registration is distinct from activation, and this is registration alone:
  * installing the components leaves `testing` false, so `<Test>` skips and
@@ -25,14 +29,24 @@
 
 import { Err } from "effection";
 import type { Operation } from "effection";
-import { Component, registerComponents, Execution, TestBehavior } from "@executablemd/core";
+import {
+  Component,
+  isTestActivationProtocolError,
+  registerComponents,
+  Execution,
+  TestActivation,
+  TestBehavior,
+} from "@executablemd/core";
 import type {
   ComponentFailure,
   ComponentRegistration,
   DocumentExecution,
 } from "@executablemd/core";
-import { boundary, record, Test, TestFailureError } from "./test-api.ts";
-import { isIncompleteTestingActivationError } from "./activation.ts";
+import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts";
+import {
+  isIncompleteTestingActivationError,
+  requireCompleteTestingActivation,
+} from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
@@ -90,12 +104,18 @@ export function* installHandlers(
       if (failure.name !== "Test") {
         return yield* next(failure);
       }
-      // Not a test outcome: the test never ran, and there is no complete
-      // activation to record a result into. Delegated unchanged, so the
-      // ordinary component-failure path fails the document instead of this
-      // package staging, persisting, recording or reporting a TestResult for a
+      // Not a test outcome: the test never ran. Either its activation could not
+      // be proved, or the decision core takes before dispatching this behavior
+      // was refused outright. Delegated unchanged, so the ordinary
+      // component-failure path fails the document instead of this package
+      // staging, persisting, recording or reporting a TestResult for a
       // configuration mistake.
-      if (isIncompleteTestingActivationError(failure.error)) {
+      //
+      // Containment is what makes absorbing either one unsafe: a contained
+      // failure is converted into a document failure by a session's completion
+      // policy, and a composition with no session has none — so an absorbed
+      // refusal would leave a run that never ran a test reporting success.
+      if (refusesActivation(failure.error)) {
         return yield* next(failure);
       }
       // A nested <Test> fails by the ENCLOSING test's interceptor throwing, so
@@ -115,6 +135,20 @@ export function* installHandlers(
         message: failureReport(result, { detail: true }).trim(),
         source: "Test",
       };
+    },
+  });
+  // Whether a canonical `<Test>` may run, answered where core asks it: before
+  // the harness exists and before the behavior chain is dispatched, so no
+  // handler composed around what a test *does* can answer it instead. The
+  // policy read here is the public boolean, which leaves an inactive test
+  // invisible; what it cannot say is that anything owns the result, so an
+  // active one proves its complete activation before core goes any further.
+  yield* TestActivation.around({
+    *require([request], next) {
+      if (yield* testing) {
+        yield* requireCompleteTestingActivation();
+      }
+      yield* next(request);
     },
   });
   // What core's `<Test>` does. The operation names no component and carries no
@@ -197,6 +231,11 @@ export function* installHandlers(
       yield* next(request);
     },
   });
+}
+
+/** Whether a failure is an activation refusal rather than a test's own outcome. */
+function refusesActivation(error: unknown): boolean {
+  return isIncompleteTestingActivationError(error) || isTestActivationProtocolError(error);
 }
 
 /** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */

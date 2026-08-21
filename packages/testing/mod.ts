@@ -50,6 +50,12 @@
  * Registration plus `Test.around({ testing: () => true })` is not a substitute
  * for the third. A `<Test>` under that composition refuses before its body
  * expands, and the document fails.
+ *
+ * Canonical core enforces that refusal. Registration installs the guard, and
+ * core's own `<Test>` consults it before minting a harness and before
+ * dispatching `TestBehavior` — so middleware composed around what a test does
+ * cannot answer for whether it may run. Activation policy, the proof,
+ * collection, flushing and settlement all remain this package's.
  */
 
 export { Test, testing, record, results, TestFailureError } from "./src/test-api.ts";

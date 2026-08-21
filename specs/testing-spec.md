@@ -109,16 +109,35 @@ neither the boolean nor a contextual name is accepted as activation authority,
 so a separately loaded copy composing policy around the public surface
 composes policy and nothing else.
 
-A `<Test>` that reads testing mode as active proves its activation before it
-does any body work — before nesting is checked, a timeout is parsed, bindings
-are read, or content is inspected. Without a complete activation it refuses
-there, and the refusal is a configuration failure rather than a test outcome:
+Canonical core enforces the requirement, at the invocation boundary. Installing
+the testing package adds an activation guard, and core's own `<Test>` consults
+it before it mints a test harness and before it dispatches the public
+`TestBehavior` chain that supplies what a test does. The guard reads the public
+mode: inactive leaves `<Test>` invisible exactly as before, and active requires
+a complete activation before any harness or body work.
 
-- no test result is recorded, journaled, or reported;
-- no assertion diagnostic is rendered;
-- no side effect the body would have caused happens; and
-- the document execution fails, so a caller holding an execution handle
-  observes `Err`.
+The behavior surface keeps its stable name, its argument, its result, its
+loaded-copy composition and its ordinary delegating behavior, and a handler
+composed around it may observe, wrap, delegate or refuse what a test does. What
+it may not do is answer for the decision that preceded it. Answering without
+delegating is a legitimate use of that surface, and it reaches a decision core
+has already taken.
+
+Two refusals can come out of that decision — the activation could not be proved,
+or the decision itself was refused because a handler on the seam answered
+without delegating. Both are configuration failures of the composition and
+neither is ever a test outcome. A test whose activation was refused never ran,
+and absorbing that as a contained test failure would leave a composition with no
+session — which has no completion policy to convert one — reporting a run that
+ran no test as a success.
+
+So under any composition, a refused activation:
+
+- records, journals and reports no test result;
+- renders no assertion diagnostic;
+- causes no side effect the body would have caused; and
+- fails the document execution, so a caller holding an execution handle observes
+  `Err`.
 
 Inactive tests are unaffected. Testing mode off still means `<Test>` renders
 nothing, binds nothing, and runs nothing, with no result of any kind.

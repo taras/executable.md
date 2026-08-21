@@ -12,8 +12,15 @@
  * Two things establish the whole of testing, and nothing else does: a
  * `useTesting()` session for one root execution, and a `<Testing>` element for
  * a lexical subtree. Each calls `activateTesting()` once it owns the collector
- * that makes it complete, and each `<Test>` calls
- * `requireCompleteTestingActivation()` before it does any body work.
+ * that makes it complete.
+ *
+ * Where the requirement is enforced is canonical core's, and deliberately so.
+ * Installing this package puts a guard on core's `TestActivation` seam, and
+ * core's own `<Test>` takes that decision before it mints a harness and before
+ * it dispatches the public `TestBehavior` chain. Asking inside that chain would
+ * put the question behind a handler entitled to answer without delegating,
+ * which is a handler entitled to skip it. What stays here is everything the
+ * decision is *about*: the policy read, the proof, and the refusal.
  *
  * ## Why the proof is not a value
  *

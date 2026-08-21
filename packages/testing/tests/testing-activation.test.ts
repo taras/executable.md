@@ -18,6 +18,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute, registerComponents, useTempFileCompiler } from "@executablemd/core";
+import type { Operation as CoreOperation } from "effection";
 import type { Json } from "@executablemd/core";
 import { installTestingComponents } from "../src/components.ts";
 import { useTesting } from "../src/use-testing.ts";
@@ -38,6 +39,18 @@ interface LoadedCopyTestApi {
   record(result: TestResult): Operation<void>;
 }
 
+/** A separately constructed descriptor for core's activation seam. */
+interface LoadedCopyCoreActivationApi {
+  require(...args: unknown[]): CoreOperation<void>;
+}
+
+function loadedCopyCoreActivationApi() {
+  return createApi<LoadedCopyCoreActivationApi>("TestActivation", {
+    // deno-lint-ignore require-yield
+    *require(..._args: unknown[]): CoreOperation<void> {},
+  });
+}
+
 /** A separately constructed descriptor for the activation operation. */
 interface LoadedCopyActivationApi {
   prove(...args: unknown[]): Operation<void>;
@@ -48,6 +61,16 @@ function loadedCopyTestApi() {
     testing: false,
     // deno-lint-ignore require-yield
     *record(_result: TestResult): Operation<void> {},
+  });
+}
+
+/** A separately constructed descriptor for the public behavior surface. */
+function loadedCopyBehaviorApi() {
+  return createApi<{ test(props: Record<string, Json>): CoreOperation<Json> }>("TestBehavior", {
+    // deno-lint-ignore require-yield
+    *test(): CoreOperation<Json> {
+      throw new Error("unreachable: the installed handler answers");
+    },
   });
 }
 
@@ -275,6 +298,90 @@ describe("complete testing activation", () => {
       expect([label, errorOf(attempt)?.message]).toEqual([label, expect.stringContaining(REFUSAL)]);
       expect([label, testResultEvents(attempt.events).length]).toEqual([label, 0]);
     }
+  });
+
+  // The same manipulation against core's activation seam. Core dispatches
+  // through a terminal of its own and refuses an invocation whose decision was
+  // never taken, so blocking the chain refuses the test rather than waving it
+  // through — and the refusal is a configuration failure exactly as an
+  // incomplete activation is, under either composition.
+  //
+  // The incomplete one is the case that matters: with no session, nothing would
+  // convert a contained test failure into a document failure, so absorbing this
+  // as a test outcome would report a run that never ran a test as a success.
+  const blockedCompositions = [
+    { label: "an incomplete composition", compose: () => incompleteActivation() },
+    { label: "a complete session", compose: () => useTesting() },
+  ];
+  for (const composition of blockedCompositions) {
+    it(`refuses a blocked activation decision under ${composition.label}`, function* () {
+      const attempt = yield* runComposed(
+        '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+        (function* () {
+          const seam = loadedCopyCoreActivationApi();
+          // deno-lint-ignore require-yield
+          yield* seam.around({ *require() {} });
+          yield* composition.compose();
+        })(),
+      );
+      expect(attempt.sentinels).toEqual([]);
+      expect(attempt.completion.ok).toBe(false);
+      // Core's own protocol violation: this package is never reached, so the
+      // message is core's rather than the incomplete-activation refusal.
+      expect(errorOf(attempt)?.message).toContain("without delegating it");
+      expect(attempt.results).toEqual([]);
+      expect(testResultEvents(attempt.events)).toEqual([]);
+    });
+  }
+
+  // The behavior surface is public middleware, and answering without delegating
+  // is a legitimate use of it — which is why the activation decision cannot
+  // live inside that chain. Canonical core takes it before the harness exists
+  // and before this chain is dispatched, so a handler that answers for what a
+  // test does cannot answer for whether it may run.
+  it("survives a TestBehavior handler that never delegates", function* () {
+    const behavior = loadedCopyBehaviorApi();
+    const attempt = yield* runComposed(
+      '<Test name="t"><Sentinel name="body" /><Assert expr={false} /></Test>\n',
+      (function* () {
+        // Installed before the package's own handler, so it is the outer link
+        // and answers first.
+        // deno-lint-ignore require-yield
+        yield* behavior.around({
+          *test() {
+            return "";
+          },
+        });
+        yield* incompleteActivation();
+      })(),
+    );
+    expect(attempt.sentinels).toEqual([]);
+    expect(errorOf(attempt)?.message).toContain(REFUSAL);
+    expect(testResultEvents(attempt.events)).toEqual([]);
+  });
+
+  // The control, in the identical middleware order: a handler that delegates
+  // observes the behavior and changes nothing about it.
+  it("leaves an ordinary TestBehavior handler composing under a complete session", function* () {
+    const behavior = loadedCopyBehaviorApi();
+    const observed: string[] = [];
+    const attempt = yield* runComposed(
+      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+      (function* () {
+        yield* behavior.around({
+          *test([props], next) {
+            observed.push(String(props.name));
+            return yield* next(props);
+          },
+        });
+        yield* useTesting();
+      })(),
+    );
+    expect(observed).toEqual(["t"]);
+    expect(attempt.sentinels).toEqual(["body"]);
+    expect(attempt.completion.ok).toBe(true);
+    expect(attempt.results.map((result) => [result.name, result.status])).toEqual([["t", "pass"]]);
+    expect(testResultEvents(attempt.events)).toHaveLength(1);
   });
 
   // The other direction: under a real session the same public surface keeps
