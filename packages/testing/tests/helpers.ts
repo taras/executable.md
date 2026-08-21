@@ -14,6 +14,7 @@ import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "@executablemd/core";
 import { useTesting } from "../src/use-testing.ts";
 import { installHandlers, installTestingComponents } from "../src/components.ts";
+import { activateTesting } from "../src/activation.ts";
 import type { TestHandlers } from "../src/handlers.ts";
 import { Test } from "../src/test-api.ts";
 import type { BoundaryOutcome, TestResult } from "../src/test-api.ts";
@@ -63,7 +64,7 @@ export function* runDoc(
     if (options.handlers) {
       yield* installHandlers(options.handlers, { verbose: options.verbose });
       if (options.testing) {
-        yield* Test.around({ testing: () => true });
+        yield* activateTesting();
       }
     } else if (options.testing) {
       yield* useTesting({ verbose: options.verbose });

@@ -36,6 +36,7 @@ import {
   tryContent,
 } from "@executablemd/core";
 import type { SourcePosition, ErrorSegment, EvalEnv, Json } from "@executablemd/core";
+import { requireCompleteTestingActivation } from "./activation.ts";
 import { AssertionError } from "./assert.ts";
 import { AssertionReport } from "./assertions.ts";
 import { persistTestResult } from "./journal.ts";
@@ -259,6 +260,12 @@ export function testBehavior(timeoutMs: number) {
     if (!(yield* testing)) {
       return "";
     }
+    // Before anything the body could observe. Testing mode says a test should
+    // run; only a complete activation can collect what running it produces, and
+    // a test whose result nothing records is a side effect pretending to be
+    // evidence. The refusal is a configuration failure rather than a test
+    // outcome, so it is not contained here.
+    yield* requireCompleteTestingActivation();
     if (yield* inTest) {
       // Reported here, while the ENCLOSING test's raise interceptor is still
       // active, so the nesting fails the current test.

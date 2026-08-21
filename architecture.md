@@ -2026,6 +2026,30 @@ name one could otherwise turn a failed run into a successful one from outside
 the document — which is precisely the authority a document's own text is
 supposed to hold.
 
+Testing is owned whole. Activating it means owning where results are collected,
+when the last staged one is flushed, and what the run settles to — so the two
+things that establish it are the two that own all three: a `useTesting()`
+session for one root execution, and a `<Testing>` element for a lexical subtree.
+Registering the components is not one of them.
+
+The public `testing` boolean and the recording middleware around it remain
+composable policy, and stay useful as policy: a handler may narrow testing to
+false, observe a result, refuse, and wrap recording. They are not activation
+authority, and neither is a stable contextual or Api name — a name is the
+routing every loaded copy shares, and treating it as the claim would let
+anything able to spell it declare a complete boundary. What a `<Test>` requires
+instead is a conjunction of a private one-use request, a private live boundary
+credential, and the acceptance record of a terminal created for that one call:
+the same request-and-terminal division *Authoritative behavior* describes,
+scoped to the smaller boundary. It is scope-owned and expires with the session
+or the element that established it, so a retained credential from a finished
+boundary activates nothing.
+
+A `<Test>` proves this before any body work, and a failure to prove it is a
+configuration failure rather than a test outcome: no result is staged,
+journaled, recorded or reported, the body causes no effect, and the ordinary
+component-failure path fails the document.
+
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
 enclosing middleware, not before. Two consequences follow, and both are

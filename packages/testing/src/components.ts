@@ -13,9 +13,11 @@
  * Installing also decorates the core Execution Api so explicit `<Testing>`
  * boundaries affect the execution outcome even when root testing is inactive.
  *
- * Registration is distinct from activation: installing the components
- * leaves `testing` false, so `<Test>` skips and assertions stay usable.
- * Root activation is `useTesting()`'s job.
+ * Registration is distinct from activation, and this is registration alone:
+ * installing the components leaves `testing` false, so `<Test>` skips and
+ * assertions stay usable. Complete activation is `useTesting()`'s at the root
+ * and `<Testing>`'s for a subtree, and answering the public boolean `true`
+ * without one is a configuration failure rather than a way in (`activation.ts`).
  *
  * Installs are scope-local — call this inside a bounded scope (one CLI
  * command element, one `scoped()` block).
@@ -30,6 +32,7 @@ import type {
   DocumentExecution,
 } from "@executablemd/core";
 import { boundary, record, Test, TestFailureError } from "./test-api.ts";
+import { isIncompleteTestingActivationError } from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
@@ -56,6 +59,10 @@ const TEST_TIMEOUT_MS = 20_000;
  * is what makes a checked command failure inside a test that test's outcome
  * rather than the run's; this session supplies its behavior and hands nobody an
  * identity (#441).
+ *
+ * Behavior, and nothing more: a caller that installs this and answers the
+ * public `testing` boolean has registered what a test does without owning
+ * anywhere for a result to go.
  */
 export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
   yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
@@ -81,6 +88,14 @@ export function* installHandlers(
   yield* Component.around({
     *handleFailure([failure], next) {
       if (failure.name !== "Test") {
+        return yield* next(failure);
+      }
+      // Not a test outcome: the test never ran, and there is no complete
+      // activation to record a result into. Delegated unchanged, so the
+      // ordinary component-failure path fails the document instead of this
+      // package staging, persisting, recording or reporting a TestResult for a
+      // configuration mistake.
+      if (isIncompleteTestingActivationError(failure.error)) {
         return yield* next(failure);
       }
       // A nested <Test> fails by the ENCLOSING test's interceptor throwing, so

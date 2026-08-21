@@ -15,6 +15,7 @@ import { hasContent, getExpansion, tryContent } from "@executablemd/core";
 import type { Expansion, Json, PropsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import { Test, boundary } from "./test-api.ts";
+import { activateTesting } from "./activation.ts";
 import type { TestResult } from "./test-api.ts";
 import { persistBoundaryOutcome } from "./journal.ts";
 import { flushStaged } from "./test-component.ts";
@@ -39,7 +40,6 @@ export function* Testing(): Operation<Json> {
   const local: TestResult[] = [];
   yield* Test.around(
     {
-      testing: () => true,
       // deno-lint-ignore require-yield
       *results() {
         return local;
@@ -51,6 +51,11 @@ export function* Testing(): Operation<Json> {
     },
     { at: "min" },
   );
+  // After the collector and before the body: this boundary is complete once it
+  // can collect what its subtree produces, and a <Test> inside the body proves
+  // its activation against this install. Every invocation owns a fresh one,
+  // while `record` keeps delegating outward through the enclosing collectors.
+  yield* activateTesting();
 
   const projected = (yield* hasContent()) ? yield* tryContent() : { text: "" };
 

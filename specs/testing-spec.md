@@ -81,6 +81,48 @@ recorded results are preserved. On live and partial runs nothing is
 restored: re-expansion records each result exactly once, in discovery
 order, with completed records replaying in place.
 
+### Registration, mode, and activation
+
+Three things are distinct, and only the last one makes a test run.
+
+**Registration** is `installTestingComponents()`. It registers the components
+above and supplies what core's `<Test>` does. It activates nothing: after it,
+`testing` is still false, `<Test>` is still skipped, and the assertion
+components are usable in ordinary content.
+
+**Mode** is the public `TestApi.testing` operation. It answers whether testing
+mode is on, and it is replaceable policy: middleware may narrow it to false,
+observe it, refuse, and compose behavior around recording. An answer of `true`
+says a test *should* run. It cannot say that anything exists to collect the
+result, flush the last one, or decide the run's outcome.
+
+**Complete activation** is what does own those. There are two, and no third:
+
+- `useTesting()`, for one root document execution; and
+- a `<Testing>` element, for its lexical subtree.
+
+Each owns a result collector, the final flush of the last staged result, and
+the completion policy that settles the run — and each is package-owned, private
+to `@executablemd/testing`, and expires with the scope or boundary that
+established it. Registration plus a `testing` override is not a substitute:
+neither the boolean nor a contextual name is accepted as activation authority,
+so a separately loaded copy composing policy around the public surface
+composes policy and nothing else.
+
+A `<Test>` that reads testing mode as active proves its activation before it
+does any body work — before nesting is checked, a timeout is parsed, bindings
+are read, or content is inspected. Without a complete activation it refuses
+there, and the refusal is a configuration failure rather than a test outcome:
+
+- no test result is recorded, journaled, or reported;
+- no assertion diagnostic is rendered;
+- no side effect the body would have caused happens; and
+- the document execution fails, so a caller holding an execution handle
+  observes `Err`.
+
+Inactive tests are unaffected. Testing mode off still means `<Test>` renders
+nothing, binds nothing, and runs nothing, with no result of any kind.
+
 ## Directory Targets
 
 `xmd test` accepts a directory as well as a document, and defaults to the
@@ -359,6 +401,18 @@ Registering the testing components without `useTesting` leaves testing mode
 inactive: `<Test>` is skipped, assertion components stay usable, and an
 explicit `<Testing>` boundary still activates its subtree and turns its
 failures — or an empty boundary — into an `Err` outcome for the execution.
+
+`TestApi` middleware is policy rather than activation authority. Overriding
+`testing` to `true` over that registration activates nothing, and a `<Test>`
+reached under it refuses before its body expands, as *Registration, mode, and
+activation* describes.
+
+Several documents share fixtures, never sessions. Fixture and provider state
+that spans a suite is installed in an enclosing scope, and each document runs
+in a child scope holding one `useTesting()` session and one execution. A
+session's results are cumulative and its completion policy is the whole
+session's, so one session around several documents would let a zero-test
+document pass on the strength of an earlier one's tests.
 
 ## Assertions
 
