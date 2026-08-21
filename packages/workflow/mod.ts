@@ -202,6 +202,38 @@ export type {
 export { admitPushEvidence } from "./src/composition/push-evidence.ts";
 export { useCompositionComponents } from "./src/composition/installation.ts";
 
+export { ISSUE_API, IssueApi, NoIssueProvider } from "./src/issue/api.ts";
+export type {
+  IssueDetails,
+  IssueInput,
+  IssueOperation,
+  IssueReadOptions,
+  IssueReference,
+  IssueUpsertOptions,
+} from "./src/issue/api.ts";
+export {
+  ISSUE_TRACKER_CONTEXT,
+  IssueTrackerContext,
+  currentIssueTracker,
+} from "./src/issue/context.ts";
+export { ISSUE_EFFECT } from "./src/issue/effect-type.ts";
+export {
+  IssueAmbiguousError,
+  IssueConflictError,
+  IssueContentError,
+  IssueProtocolError,
+  IssueTrackerError,
+  IssueUnavailableError,
+} from "./src/issue/errors.ts";
+export type { IssueTrackerReason } from "./src/issue/errors.ts";
+export {
+  canonicalIssueTarget,
+  issueProviderName,
+  resolveIssueDestination,
+  withinIssueCeiling,
+} from "./src/issue/tracker.ts";
+export type { IssueDestination, IssueTracker } from "./src/issue/tracker.ts";
+
 export { GIT_HOST_API, GitHost } from "./src/git-host/api.ts";
 export type {
   GitHostApi,

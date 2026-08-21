@@ -20,6 +20,12 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cliRuntime, runCli } from "@executablemd/test-support/launch";
+import { API } from "@executablemd/runtime";
+import {
+  GITHUB_ISSUES_ENV,
+  GitHubIssuesConfigError,
+  gitHubIssuesConfiguration,
+} from "../src/github-issues-config.ts";
 
 /** The one sentence a host without workflow support says. */
 const UNSUPPORTED =
@@ -129,5 +135,79 @@ describe("Tier WFH — workflow host boundary", () => {
       expect(result.stderr).toContain(UNSUPPORTED);
       expect(yield* exists(fixture.runs)).toBe(false);
     });
+  });
+});
+
+describe("Tier WFH — GitHub issue handling is host configuration", () => {
+  /**
+   * H1. Which trackers a run may reach is the operator's to state, so it is
+   * read from the environment and from nowhere a document can influence.
+   *
+   * Absence installs no provider, and that is fail-closed by construction
+   * rather than by a check: with nothing installed, `<Issue>` meets
+   * `IssueApi`'s own base error. Malformed configuration fails here, where an
+   * operator can fix it, rather than at the first request in the middle of a
+   * run.
+   */
+  function configured(value: string | undefined): Operation<unknown> {
+    return scoped(function* () {
+      yield* API.Env.around({
+        // deno-lint-ignore require-yield
+        *env([name]) {
+          return name === GITHUB_ISSUES_ENV ? value : undefined;
+        },
+      });
+      return yield* gitHubIssuesConfiguration();
+    });
+  }
+
+  it("installs nothing when nothing is configured", function* () {
+    expect(yield* configured(undefined)).toBeUndefined();
+    expect(yield* configured("")).toBeUndefined();
+  });
+
+  it("reads a ceiling, and canonicalizes every entry", function* () {
+    const options = yield* configured(
+      JSON.stringify({ ceiling: ["https://github.com/octo/project/"] }),
+    );
+    expect(options).toEqual({ ceiling: ["https://github.com/octo/project"] });
+
+    const withEndpoint = yield* configured(
+      JSON.stringify({
+        ceiling: ["https://github.com/octo/project"],
+        endpoint: "https://ghe.example.invalid/api/v3",
+      }),
+    );
+    expect(withEndpoint).toEqual({
+      ceiling: ["https://github.com/octo/project"],
+      endpoint: "https://ghe.example.invalid/api/v3",
+    });
+  });
+
+  it("refuses configuration it cannot use rather than narrowing it", function* () {
+    const refused = [
+      "not json",
+      "[]",
+      '"a string"',
+      JSON.stringify({}),
+      JSON.stringify({ ceiling: [] }),
+      JSON.stringify({ ceiling: "https://github.com/octo/project" }),
+      JSON.stringify({ ceiling: ["not a url"] }),
+      JSON.stringify({ ceiling: ["https://github.com/octo/project?tab=issues"] }),
+      JSON.stringify({ ceiling: ["https://github.com/octo/project"], endpoint: 7 }),
+      // An operator who wrote a member this host does not know has not
+      // configured what they think they have.
+      JSON.stringify({ ceiling: ["https://github.com/octo/project"], token: "…" }),
+    ];
+    for (const value of refused) {
+      let raised: unknown;
+      try {
+        yield* configured(value);
+      } catch (error) {
+        raised = error;
+      }
+      expect(raised).toBeInstanceOf(GitHubIssuesConfigError);
+      expect(String(raised)).toContain(GITHUB_ISSUES_ENV);
+    }
   });
 });

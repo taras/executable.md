@@ -1,5 +1,5 @@
 /**
- * A GitHub that answers pull-request calls, without a network.
+ * A GitHub that answers pull-request and issue calls, without a network.
  *
  * One store, two ways to reach it. Most suites install {@link fakeGitHubAccess}
  * and drive the adapter directly, which keeps every claim deterministic and
@@ -11,7 +11,9 @@
  * The store is a small model of the part of GitHub this adapter uses: open and
  * closed pull requests filtered by head and base, one creation that refuses a
  * duplicate the way GitHub does, and enough pagination to prove that a partial
- * page is never read as a complete answer.
+ * page is never read as a complete answer. Its issue half answers the same way,
+ * and lists the repository's pull requests among its issues exactly as GitHub
+ * does — which is the state the adapter's `pull_request` filter exists for.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -49,10 +51,36 @@ export interface StoredPullRequest {
   payload?: Record<string, unknown>;
 }
 
+/** One issue this GitHub holds. */
+export interface StoredIssue {
+  nodeId: string;
+  number: number;
+  state: "open" | "closed";
+  title: string;
+  body: string | null;
+  /** The label names this issue carries, as GitHub reports them. */
+  labels?: string[];
+  /** The one login assigned, or nothing. */
+  assignee?: string | null;
+  /** The whole `repository_url` this issue reports, when it is not this one's. */
+  repository?: string;
+  /** Overrides the payload this issue is reported as, member by member. */
+  payload?: Record<string, unknown>;
+}
+
 /** What a suite makes this GitHub do instead of answering. */
 export interface GitHubFault {
   /** Which call fails. */
-  readonly on: "list" | "lookup" | "create" | "patch" | "graphql";
+  readonly on:
+    | "list"
+    | "lookup"
+    | "create"
+    | "patch"
+    | "graphql"
+    | "issue-list"
+    | "issue-lookup"
+    | "issue-create"
+    | "issue-patch";
   /** The status to answer with, or `undefined` to fail the transport itself. */
   readonly status?: number;
   /** Answer with a body that is not the shape the adapter reads. */
@@ -72,6 +100,7 @@ export interface GitHubStore {
   readonly owner: string;
   readonly repository: string;
   readonly pullRequests: StoredPullRequest[];
+  readonly issues: StoredIssue[];
   /** Every request this GitHub received, in order. */
   readonly requests: GitHubHttpRequest[];
   /** The commit each branch holds, so a creation can record a base SHA. */
@@ -80,11 +109,15 @@ export interface GitHubStore {
   resolveHead?: (branch: string) => string | undefined;
   /** How many candidates one page holds. Absent means one page of everything. */
   pageSize?: number;
+  /** The same, for the issue listing. */
+  issuePageSize?: number;
   fault?: GitHubFault;
   /** The token every request must carry, so a suite can prove one was sent. */
   token?: string;
   /** A `Link` header this GitHub sends with every listing instead of its own. */
   link?: string;
+  /** The same, for the issue listing. */
+  issueLink?: string;
   /** Called before each request is answered. */
   observe?: (request: GitHubHttpRequest) => void;
 }
@@ -93,6 +126,7 @@ export interface GitHubStoreOptions {
   readonly owner?: string;
   readonly repository?: string;
   readonly pullRequests?: readonly StoredPullRequest[];
+  readonly issues?: readonly StoredIssue[];
   readonly heads?: Readonly<Record<string, string>>;
   readonly token?: string;
 }
@@ -102,6 +136,7 @@ export function gitHubStore(options: GitHubStoreOptions = {}): GitHubStore {
     owner: options.owner ?? "octo",
     repository: options.repository ?? "project",
     pullRequests: [...(options.pullRequests ?? [])],
+    issues: [...(options.issues ?? [])],
     requests: [],
     heads: new Map(Object.entries(options.heads ?? {})),
     token: options.token ?? "test-token",
@@ -176,11 +211,25 @@ export function respond(store: GitHubStore, request: GitHubHttpRequest): GitHubH
   const numbered = url.pathname.startsWith(`${expected}/`)
     ? Number(url.pathname.slice(expected.length + 1))
     : undefined;
-  if (url.pathname !== expected && numbered === undefined && url.pathname !== "/graphql") {
+  const issuesPath = `/repos/${store.owner}/${store.repository}/issues`;
+  const issueNumbered = url.pathname.startsWith(`${issuesPath}/`)
+    ? Number(url.pathname.slice(issuesPath.length + 1))
+    : undefined;
+  const issueRoute = url.pathname === issuesPath || issueNumbered !== undefined;
+  if (
+    url.pathname !== expected &&
+    numbered === undefined &&
+    url.pathname !== "/graphql" &&
+    !issueRoute
+  ) {
     return { status: 404, body: JSON.stringify({ message: "Not Found" }) };
   }
   if (store.token !== undefined && request.headers["Authorization"] !== `Bearer ${store.token}`) {
     return { status: 401, body: JSON.stringify({ message: "Bad credentials" }) };
+  }
+
+  if (issueRoute) {
+    return issueResponse(store, url, request, issueNumbered);
   }
 
   if (url.pathname === "/graphql") {
@@ -347,6 +396,179 @@ function creation(store: GitHubStore, request: GitHubHttpRequest): GitHubHttpRes
   return { status: 201, body: JSON.stringify(payloadOf(store, created)) };
 }
 
+/**
+ * The issue half of this GitHub: one listing, one lookup, one creation, one
+ * patch.
+ *
+ * The listing carries this repository's pull requests among its issues, each
+ * with the `pull_request` member GitHub attaches, because that is the state the
+ * adapter has to read past to find an issue at all.
+ */
+function issueResponse(
+  store: GitHubStore,
+  url: URL,
+  request: GitHubHttpRequest,
+  numbered: number | undefined,
+): GitHubHttpResponse {
+  const origin = url.origin;
+  if (numbered !== undefined) {
+    if (request.method === "PATCH") {
+      const fault = fails(store, "issue-patch");
+      return fault === undefined ? issuePatched(store, numbered, request, origin) : refusal(fault);
+    }
+    const fault = fails(store, "issue-lookup");
+    return fault === undefined ? issueLookup(store, numbered, origin) : refusal(fault);
+  }
+  if (request.method === "GET") {
+    const fault = fails(store, "issue-list");
+    return fault === undefined ? issueListing(store, url, origin) : refusal(fault);
+  }
+  const fault = fails(store, "issue-create");
+  if (fault === undefined) {
+    return issueCreation(store, request, origin);
+  }
+  if (fault.afterEffect === true) {
+    const answer = issueCreation(store, request, origin);
+    return answer.status === 201 ? refusal(fault) : answer;
+  }
+  return refusal(fault);
+}
+
+function issuePayloadOf(
+  store: GitHubStore,
+  issue: StoredIssue,
+  origin: string,
+): Record<string, unknown> {
+  return {
+    node_id: issue.nodeId,
+    number: issue.number,
+    html_url: `https://github.com/owner/repository/issues/${issue.number}`,
+    state: issue.state,
+    title: issue.title,
+    body: issue.body,
+    repository_url: issue.repository ?? `${origin}/repos/${store.owner}/${store.repository}`,
+    labels: (issue.labels ?? []).map((name) => ({ id: 1, name })),
+    assignees:
+      issue.assignee === undefined || issue.assignee === null ? [] : [{ login: issue.assignee }],
+    // The members a real payload is full of, so a suite can prove none of them
+    // reaches the journal, the result or a routing observation.
+    user: { login: "octocat" },
+    comments: 0,
+    ...issue.payload,
+  };
+}
+
+/** One of this repository's pull requests, as its issue listing reports it. */
+function pullRequestAsIssue(
+  store: GitHubStore,
+  pullRequest: StoredPullRequest,
+  origin: string,
+): Record<string, unknown> {
+  return {
+    node_id: pullRequest.nodeId,
+    number: pullRequest.number,
+    html_url: `https://github.com/owner/repository/pull/${pullRequest.number}`,
+    state: pullRequest.state,
+    title: pullRequest.title,
+    body: pullRequest.body,
+    repository_url: `${origin}/repos/${store.owner}/${store.repository}`,
+    labels: [],
+    assignees: [],
+    pull_request: {
+      url: `${origin}/repos/${store.owner}/${store.repository}/pulls/${pullRequest.number}`,
+    },
+  };
+}
+
+function issueListing(store: GitHubStore, url: URL, origin: string): GitHubHttpResponse {
+  const state = url.searchParams.get("state") ?? "open";
+  const page = Number(url.searchParams.get("page") ?? "1");
+
+  const entries: Record<string, unknown>[] = [
+    ...store.issues
+      .filter((issue) => state === "all" || issue.state === state)
+      .map((issue) => issuePayloadOf(store, issue, origin)),
+    ...store.pullRequests
+      .filter((pullRequest) => state === "all" || pullRequest.state === state)
+      .map((pullRequest) => pullRequestAsIssue(store, pullRequest, origin)),
+  ];
+
+  const size = store.issuePageSize ?? Math.max(entries.length, 1);
+  const start = (page - 1) * size;
+  const slice = entries.slice(start, start + size);
+  const more = start + size < entries.length;
+  const next = new URL(url.href);
+  next.searchParams.set("page", String(page + 1));
+  return {
+    status: 200,
+    body: JSON.stringify(slice),
+    link: store.issueLink ?? (more ? `<${next.href}>; rel="next"` : undefined),
+  };
+}
+
+function issueLookup(store: GitHubStore, number: number, origin: string): GitHubHttpResponse {
+  const found = store.issues.find((issue) => issue.number === number);
+  return found === undefined
+    ? { status: 404, body: JSON.stringify({ message: "Not Found" }) }
+    : { status: 200, body: JSON.stringify(issuePayloadOf(store, found, origin)) };
+}
+
+function issuePatched(
+  store: GitHubStore,
+  number: number,
+  request: GitHubHttpRequest,
+  origin: string,
+): GitHubHttpResponse {
+  const found = store.issues.find((issue) => issue.number === number);
+  if (found === undefined) {
+    return { status: 404, body: JSON.stringify({ message: "Not Found" }) };
+  }
+  const asked = Object(JSON.parse(request.body ?? "{}"));
+  if (typeof asked.title === "string") {
+    found.title = asked.title;
+  }
+  if (typeof asked.body === "string") {
+    found.body = asked.body === "" ? null : asked.body;
+  }
+  if (Array.isArray(asked.labels)) {
+    found.labels = asked.labels.map((label: unknown) => String(label));
+  }
+  if (Array.isArray(asked.assignees)) {
+    const [first] = asked.assignees;
+    found.assignee = first === undefined ? null : String(first);
+  }
+  return { status: 200, body: JSON.stringify(issuePayloadOf(store, found, origin)) };
+}
+
+function issueCreation(
+  store: GitHubStore,
+  request: GitHubHttpRequest,
+  origin: string,
+): GitHubHttpResponse {
+  const asked = Object(JSON.parse(request.body ?? "{}"));
+  const title = String(asked.title ?? "");
+  if (title === "") {
+    return { status: 422, body: JSON.stringify({ message: "Validation Failed" }) };
+  }
+  // Numbered out of the same sequence pull requests come from, the way GitHub
+  // numbers both out of one series per repository.
+  const number = store.issues.length + store.pullRequests.length + 1;
+  const created: StoredIssue = {
+    nodeId: `I_node_${number}`,
+    number,
+    state: "open",
+    title,
+    body: typeof asked.body === "string" && asked.body !== "" ? asked.body : null,
+    labels: Array.isArray(asked.labels) ? asked.labels.map((l: unknown) => String(l)) : [],
+    assignee:
+      Array.isArray(asked.assignees) && asked.assignees.length > 0
+        ? String(asked.assignees[0])
+        : null,
+  };
+  store.issues.push(created);
+  return { status: 201, body: JSON.stringify(issuePayloadOf(store, created, origin)) };
+}
+
 /** An access that answers out of this store, with no HTTP anywhere. */
 export function fakeGitHubAccess(
   store: GitHubStore,
@@ -374,6 +596,27 @@ export function creations(store: GitHubStore): number {
   return store.requests.filter(
     (request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/pulls"),
   ).length;
+}
+
+/** How many issues this GitHub was asked to create. */
+export function issueCreations(store: GitHubStore): number {
+  return store.requests.filter(
+    (request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/issues"),
+  ).length;
+}
+
+/** How many issue field updates this GitHub was asked for. */
+export function issuePatches(store: GitHubStore): number {
+  return store.requests.filter(
+    (request) => request.method === "PATCH" && new URL(request.url).pathname.includes("/issues/"),
+  ).length;
+}
+
+/** Every issue call this GitHub received, in order, as method and path. */
+export function issueCalls(store: GitHubStore): string[] {
+  return store.requests
+    .filter((request) => new URL(request.url).pathname.includes("/issues"))
+    .map((request) => `${request.method} ${new URL(request.url).pathname}`);
 }
 
 /** How many REST field updates this GitHub was asked for. */

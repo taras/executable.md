@@ -55,10 +55,10 @@ const API_VERSION = "2022-11-28";
 const USER_AGENT = "executablemd-workflow";
 
 /** How many pages of candidates are followed before the answer is "unknown". */
-const PAGE_LIMIT = 32;
+export const PAGE_LIMIT = 32;
 
 /** How many candidates a page is asked for. */
-const PAGE_SIZE = 100;
+export const PAGE_SIZE = 100;
 
 /** One repository on `github.com`, as this adapter addresses it. */
 export interface GitHubRepositoryName {
@@ -189,6 +189,31 @@ export function denoGitHubAccess(endpoint: string = GITHUB_API): GitHubAccess {
   };
 }
 
+/**
+ * The headers every authenticated call carries, or nothing when there is no
+ * credential.
+ *
+ * The credential is read here and only here, no earlier than the first request
+ * that needs one. An absent one is not an error to raise: it is a call that
+ * cannot be made, which every caller already has a word for.
+ */
+export function* authorizedHeaders(
+  access: GitHubAccess,
+  json: boolean,
+): Operation<Record<string, string> | undefined> {
+  const token = yield* access.token();
+  if (token === undefined) {
+    return undefined;
+  }
+  return {
+    Accept: ACCEPT,
+    "X-GitHub-Api-Version": API_VERSION,
+    "User-Agent": USER_AGENT,
+    Authorization: `Bearer ${token}`,
+    ...(json ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
 /** What one observation of a Git host proved, from a closed set of five. */
 export type GitHubObservation =
   | { readonly state: "absent" }
@@ -215,7 +240,7 @@ const ABSENT: GitHubObservation = Object.freeze({ state: "absent" });
  * different answers, and collapsing them is how an incomplete walk becomes a
  * complete one. Only `complete` may be read as the whole candidate set.
  */
-type PageWalk =
+export type PageWalk =
   | { readonly kind: "complete" }
   | { readonly kind: "next"; readonly url: string }
   | { readonly kind: "unfollowable" };
@@ -256,18 +281,8 @@ export function gitHubPullRequests(
   const graphql = `${access.endpoint}/graphql`;
   const full = `${name.owner}/${name.repository}`;
 
-  function* headers(json: boolean): Operation<Record<string, string> | undefined> {
-    const token = yield* access.token();
-    if (token === undefined) {
-      return undefined;
-    }
-    return {
-      Accept: ACCEPT,
-      "X-GitHub-Api-Version": API_VERSION,
-      "User-Agent": USER_AGENT,
-      Authorization: `Bearer ${token}`,
-      ...(json ? { "Content-Type": "application/json" } : {}),
-    };
+  function headers(json: boolean): Operation<Record<string, string> | undefined> {
+    return authorizedHeaders(access, json);
   }
 
   /**
@@ -530,7 +545,7 @@ export function gitHubPullRequests(
   };
 }
 
-function readJson(body: string): unknown {
+export function readJson(body: string): unknown {
   try {
     return JSON.parse(body);
   } catch {
@@ -547,7 +562,7 @@ function readJson(body: string): unknown {
  * where the credential goes; treating it as the end would be reporting a
  * complete candidate set nobody read.
  */
-function nextPage(link: string | undefined, endpoint: string): PageWalk {
+export function nextPage(link: string | undefined, endpoint: string): PageWalk {
   if (link === undefined) {
     return COMPLETE;
   }
@@ -571,7 +586,7 @@ function nextPage(link: string | undefined, endpoint: string): PageWalk {
   return /rel\s*=\s*"?next"?/.test(link) ? UNFOLLOWABLE : COMPLETE;
 }
 
-function member(value: unknown, name: string): unknown {
+export function member(value: unknown, name: string): unknown {
   try {
     return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
   } catch {
@@ -579,7 +594,7 @@ function member(value: unknown, name: string): unknown {
   }
 }
 
-function nonEmpty(value: unknown): string | undefined {
+export function nonEmpty(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
