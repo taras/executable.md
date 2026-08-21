@@ -1,0 +1,175 @@
+{
+  "format": 1,
+  "package": "acpx",
+  "version": "0.12.0",
+  "repository": "https://github.com/openclaw/acpx",
+  "commit": "6a24a546d2349cbe71ed032d52d07cab611e320c",
+  "patchedFiles": [
+    "dist/runtime.js",
+    "dist/runtime.d.ts",
+    "dist/live-checkpoint-ClPCSdrW.js",
+    "dist/session-options-jkYbBxGE.d.ts"
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "kind": "license",
+      "sha256": "5c3dd08185d6d0a0045a45b9aea2fd9d85343f7ed5dbe23915e6f15e7b814f2d"
+    },
+    {
+      "path": "PROVENANCE.md",
+      "kind": "provenance",
+      "sha256": "2baf128015918406dc2b26caf19c5c5a819321bb1bb9b6e83c69aca8c366bcf6"
+    },
+    {
+      "path": "dist/cli-CxsS1XQp.js",
+      "kind": "vendored",
+      "sha256": "f40805795b25ecd8229effd093127d00ac23ebc933893bac6d2dad57ec478d90"
+    },
+    {
+      "path": "dist/cli-CxsS1XQp.js.map",
+      "kind": "vendored",
+      "sha256": "1a7391512ce3b155e6285b52d38a4f32dfd5cb22f2b6988f8b1a0a2fbb68d054"
+    },
+    {
+      "path": "dist/cli.d.ts",
+      "kind": "vendored",
+      "sha256": "80ef1559307add903fbce91a52c0e5a126e7c91ebb83b51544294293c8719cde"
+    },
+    {
+      "path": "dist/cli.d.ts.map",
+      "kind": "vendored",
+      "sha256": "b0539d467dc22a7453a3c0c86087f3268e5a5bd3e3f70496e54d27cbc1e62229"
+    },
+    {
+      "path": "dist/cli.js",
+      "kind": "vendored",
+      "sha256": "7da1d8b2fe0fc19696febddb3486729ce82b04b2a64a367e16df0691776483a4"
+    },
+    {
+      "path": "dist/cli.js.map",
+      "kind": "vendored",
+      "sha256": "2f1f97af28a1679ef4b31e0feac18c7aa89eaddf646cdb6af0eba8f2a6402c0d"
+    },
+    {
+      "path": "dist/client-DwNyFauq.d.ts",
+      "kind": "vendored",
+      "sha256": "076d9c7cf80d07fe13cd9219a5b6dc6a299c475df1a8d5466567cc417632baad"
+    },
+    {
+      "path": "dist/client-DwNyFauq.d.ts.map",
+      "kind": "vendored",
+      "sha256": "ce0bde88b99c62a1c76b88ea64753f03a3347fec683581f12bef3b4b05519b8e"
+    },
+    {
+      "path": "dist/flags-Bjq_XQ4-.js",
+      "kind": "vendored",
+      "sha256": "8941c725ea079f8986c7d9e7b9e7bc0a9671ab60d58ff1d8768a8c9ee5aeb219"
+    },
+    {
+      "path": "dist/flags-Bjq_XQ4-.js.map",
+      "kind": "vendored",
+      "sha256": "3973d86f3cfcb45159ea5b6e58fc88cc8e07e304503d1ff8fa39a41bc0484d24"
+    },
+    {
+      "path": "dist/flows-Db_LZKu9.js",
+      "kind": "vendored",
+      "sha256": "c38881b4b843e8207fc5bbd75d74962d3da2194e578712f4e69bde32b9b2e237"
+    },
+    {
+      "path": "dist/flows-Db_LZKu9.js.map",
+      "kind": "vendored",
+      "sha256": "9a625e58229f965140b97fe8e2641f14fbdc021d544e87460760bd55d96c14ed"
+    },
+    {
+      "path": "dist/flows.d.ts",
+      "kind": "vendored",
+      "sha256": "548d9556041adc833a0aefd2fb19cf548edd3458d9d255473a7c758877c1a3cc"
+    },
+    {
+      "path": "dist/flows.d.ts.map",
+      "kind": "vendored",
+      "sha256": "99ae63265d8a4f31fe3f9674b04f41d2756874e93cccae528079bc23a42b75a7"
+    },
+    {
+      "path": "dist/flows.js",
+      "kind": "vendored",
+      "sha256": "912819719380d49dd224d708c17b43e50725768a4f49320360209054664a1fd0"
+    },
+    {
+      "path": "dist/live-checkpoint-ClPCSdrW.js",
+      "kind": "vendored",
+      "sha256": "9b0f3cbd04620a74770bdaeb52267e9cf7f99fc9408c6302ace70cf231cf228b"
+    },
+    {
+      "path": "dist/live-checkpoint-ClPCSdrW.js.map",
+      "kind": "vendored",
+      "sha256": "31ef23480f7cbe17e0de4a375d7499f40fb61871e2e2746cdccc56cf825fd0d1"
+    },
+    {
+      "path": "dist/output-CjdF5rHk.js",
+      "kind": "vendored",
+      "sha256": "4035508a5a45636b1f0c392e371c9091ac7093a0e27f0699e9de83fa89131581"
+    },
+    {
+      "path": "dist/output-CjdF5rHk.js.map",
+      "kind": "vendored",
+      "sha256": "782959c5e0d132c45b9757fe58856a1f1e49c4f91f4a2c7c0740f77ddaeeca78"
+    },
+    {
+      "path": "dist/runtime.d.ts",
+      "kind": "vendored",
+      "sha256": "7e3fae370129ae49b4a01bf5e60db3b212441f8d6d166f6bae83b406440df519"
+    },
+    {
+      "path": "dist/runtime.d.ts.map",
+      "kind": "vendored",
+      "sha256": "22fe7d585770d99beef7bd7218cb5cf23d9f1ea21c21e5cbdf0db4dd23a672c2"
+    },
+    {
+      "path": "dist/runtime.js",
+      "kind": "vendored",
+      "sha256": "0010af8609abada6e39fc7e83b38accdb135a3d365ae24fc11f1fcdabc06d090"
+    },
+    {
+      "path": "dist/runtime.js.map",
+      "kind": "vendored",
+      "sha256": "fdaa8993b4faf80d7a42212a497e6ecc9f540dfe5669d73f70a4d6af2315265e"
+    },
+    {
+      "path": "dist/session-options-jkYbBxGE.d.ts",
+      "kind": "vendored",
+      "sha256": "0144afdb7cbbb9095e4eba2789d867d15fb0cbc328f52f6d0eddbd467ce99c6e"
+    },
+    {
+      "path": "dist/session-options-jkYbBxGE.d.ts.map",
+      "kind": "vendored",
+      "sha256": "becb072a05c6ec118d2836d2bab4f0fefc2e025a4df2469cf7398cd2380764cb"
+    },
+    {
+      "path": "package.json",
+      "kind": "manifest-of-record",
+      "sha256": "d917f0c83b553a441916e455df4c57327636c3a9bd813d421c5c3bbe7be332ac"
+    },
+    {
+      "path": "upstream/live-checkpoint-ClPCSdrW.js",
+      "kind": "pristine",
+      "sha256": "d92153086f058880623af7297a6867166068e27f9b2cc97a7b94c6a80e2b20da"
+    },
+    {
+      "path": "upstream/runtime.d.ts",
+      "kind": "pristine",
+      "sha256": "f91a14d8340da317e4809fb796ffce471cd621d4de86b0932ef4dc05dc91dfe4"
+    },
+    {
+      "path": "upstream/runtime.js",
+      "kind": "pristine",
+      "sha256": "9d0dd46d20e49b32fa805462b64778bbfbd58463ef9124938b831071fe24e0b2"
+    },
+    {
+      "path": "upstream/session-options-jkYbBxGE.d.ts",
+      "kind": "pristine",
+      "sha256": "1bb7459cf7f05038d43d7b4d810adc5d15462e926c2dcad038d966199b23b890"
+    }
+  ]
+}

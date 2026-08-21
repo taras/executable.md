@@ -9,7 +9,7 @@
   "dependencies": {
     "@executablemd/core": "workspace:*",
     "@executablemd/runtime": "workspace:*",
-    "acpx": "0.12.0",
+    "acpx": "workspace:*",
     "effection": "4.1.0"
   }
 }
