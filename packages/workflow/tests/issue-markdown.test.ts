@@ -19,7 +19,12 @@ import { runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
 
 /** The scenarios, in the order a reader meets them. */
-const SCENARIOS = ["IssueRead.test.md", "IssueUpsert.test.md", "IssueHttp.test.md"] as const;
+const SCENARIOS = [
+  "IssueRead.test.md",
+  "IssueUpsert.test.md",
+  "IssueRouting.test.md",
+  "IssueHttp.test.md",
+] as const;
 
 function pathOf(name: string): string {
   return fileURLToPath(new URL(`./scenarios/${name}`, import.meta.url));
@@ -101,7 +106,12 @@ describe("workflow Issue scenarios", () => {
 });
 
 /**
- * Tier WI-S — what one fixture shares between documents, and what it does not.
+ * Tier WI-S — regressions for the scenario runner itself.
+ *
+ * These are not `<Issue>` acceptance scenarios and prove nothing about the
+ * contract. They cover the harness the acceptance scenarios run inside, so that
+ * a runner that silently stopped testing anything would fail here rather than
+ * reporting every scenario above as green.
  *
  * The runner puts each execution in a child scope holding one complete
  * `useTesting()` session and one document, and keeps the tracker, the journals

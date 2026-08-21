@@ -4,15 +4,18 @@
  *
  * ```md
  * <IssueTracker url={props.tracker}>
- *   <Issue title="Retry the publish step" description={finding.evidence} as="issue" />
+ *   <Issue title="Retry the publish step" as="issue">
+ *     {finding.evidence}
+ *   </Issue>
  * </IssueTracker>
  * ```
  *
  * `url` is a credential-free URL naming the container new issues are created
  * in — a GitHub repository issue collection, an Atlassian project. `provider`
- * is optional and names the only adapter allowed to act on it; without one the
- * host resolves a provider from the URL, and a URL no built-in mapping covers
- * is refused with a request to write one.
+ * is optional and names the only adapter allowed to act on it. Without one the
+ * request is offered to the installed middleware, and each provider decides for
+ * itself whether it recognizes the URL — nothing resolves one centrally, and a
+ * URL every provider delegated reaches `NoIssueProvider`.
  *
  * ## It requests a destination; it grants nothing
  *

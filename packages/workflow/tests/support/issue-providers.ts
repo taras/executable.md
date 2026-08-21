@@ -100,13 +100,6 @@ function namedCondition(value: unknown): CredentialCondition {
   throw new Error(`"credential" must name a condition, got ${JSON.stringify(value)}`);
 }
 
-const URL_PROP: PropsSchema = {
-  type: "object",
-  properties: { url: { type: "string", minLength: 1 } },
-  required: ["url"],
-  additionalProperties: false,
-};
-
 function hostOf(url: string): string | undefined {
   try {
     return new URL(url).hostname;
@@ -230,17 +223,32 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
     {
       name: "IssueApiOverride",
       origin: "@executablemd/workflow/test",
-      props: URL_PROP,
+      props: {
+        type: "object",
+        properties: {
+          /** The URL it claims. Anything else it delegates untouched. */
+          handles: { type: "string", minLength: 1 },
+          /** The URL it answers with. */
+          answers: { type: "string", minLength: 1 },
+        },
+        required: ["handles", "answers"],
+        additionalProperties: false,
+      },
       *fn(props: Record<string, Json>): Operation<string> {
         if (!(yield* hasContent())) {
           return "";
         }
-        const answered = String(props.url);
+        const handles = String(props.handles);
+        const answered = String(props.answers);
         // A nearer surface, for this content and nothing else. It answers both
-        // methods, so a scenario can show precedence applies to each.
+        // methods, so a scenario can show precedence applies to each — and it
+        // delegates every other URL, so a scenario can show that being nearer
+        // is not the same as being in the way.
         yield* IssueApi.around({
-          // deno-lint-ignore require-yield
-          *read(): Operation<IssueDetails> {
+          *read([url, read], next): Operation<IssueDetails> {
+            if (url !== handles) {
+              return yield* next(url, read);
+            }
             log.overrides += 1;
             return {
               url: answered,
@@ -250,8 +258,10 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
               assignee: null,
             };
           },
-          // deno-lint-ignore require-yield
-          *upsert(): Operation<IssueReference> {
+          *upsert([issue, upsert], next): Operation<IssueReference> {
+            if (upsert.url !== handles) {
+              return yield* next(issue, upsert);
+            }
             log.overrides += 1;
             return { url: answered };
           },

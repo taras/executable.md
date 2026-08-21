@@ -12,8 +12,11 @@ consequential fact about what the scenario proves.
 The credential is declared by name — `credential="valid"` — and never by value.
 The token itself stays with the host: a document holding one would be refused by
 this repository's secret gate before it could run, and a document that rendered
-one would not settle at all. So a scenario states the condition it runs under
-and asserts what the tracker made of it.
+one would not settle at all.
+
+This document is about what a read *is* and what it binds. What a read sends —
+method, path, authorization, body — is `IssueHttp.test.md`, and which provider
+answers it is `IssueRouting.test.md`.
 
 ## What a read binds
 
@@ -86,23 +89,6 @@ about.
 <AssertEquals actual={issue.title} expected="No tracker needed" />
 </Test>
 
-## The exact request it makes
-
-<Test name="A read is one authenticated GET of that issue">
-<EmptyTracker />
-<EmptyRequestLog />
-<GitHubServer as="server" />
-<RemoteIssue number={7} title="Seven" body="…" />
-<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
-<Issue url={server.repository + "/issues/7"} as="issue" />
-</GitHubIssues>
-<ServerRequests as="sent" />
-<AssertEquals actual={sent.methods} expected={["GET"]} />
-<AssertEquals actual={sent.paths} expected={["/repos/octo/project/issues/7"]} />
-<AssertEquals actual={sent.schemes} expected={["Bearer"]} />
-<AssertEquals actual={sent.credentialed} expected={true} />
-</Test>
-
 GitHub answers for a pull request through the same Issues endpoint. Reporting
 one as an issue would let a document read a pull request's body as an issue
 description, so it is refused.
@@ -119,21 +105,4 @@ description, so it is refused.
 </PrintErrors>
 </AssertThrows>
 </GitHubIssues>
-</Test>
-
-## The ceiling is asked before the transport
-
-<Test name="A read outside the ceiling sends nothing">
-<EmptyTracker />
-<EmptyRequestLog />
-<GitHubServer as="server" />
-<GitHubIssues ceiling={["https://github.com/octo/authorized"]} endpoint={server.url} credential="valid">
-<AssertThrows message="temporarily unavailable">
-<PrintErrors>
-<Issue url="https://github.com/octo/secrets/issues/1" as="issue" />
-</PrintErrors>
-</AssertThrows>
-</GitHubIssues>
-<ServerRequests as="sent" />
-<AssertEquals actual={sent.methods} expected={[]} />
 </Test>

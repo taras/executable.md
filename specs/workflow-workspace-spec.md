@@ -1512,7 +1512,8 @@ durable observations and mutations restore.
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
 | Git.Push/PullRequest | restore the retained reconciliation record, or observe the Git host again under the same external identity and adopt only a proven compatible completion |
-| Issue | restore the retained `issue_effect` record without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
+| Issue read | restore the retained `IssueDetails` without reaching `IssueApi` at all, and therefore without network access |
+| Issue upsert | restore the retained `IssueReference` without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
 
 Reads restore historical values even when current frontier state differs.
 Replay never uses a guard such as current file existence to infer whether an
@@ -1738,55 +1739,76 @@ This is a boundary of its own rather than a kind inside §10.2, and the reason i
 not layering taste. An Issue provider does not necessarily own a Git repository:
 Atlassian issue tracking owns none, so an Atlassian issue cannot truthfully
 execute or persist as a `git_host_effect`. `<Issue>` therefore has its own
-contextual routing operation and its own durable effect type. What it reuses
-from §10.2 is the shape of the reconciliation — observe before mutating, adopt a
-compatible completion, perform a proven absence once, refuse conflict and
-ambiguity — applied inside a provider rather than by a shared state machine. What is Issue-owned — and therefore an Issue compatibility boundary
-— is the stable API name, the normalized request, the provider identity, the
-natural key, the result and the durable effect type.
+contextual operation and its own durable effect type. What it reuses from §10.2
+is the shape of the reconciliation — observe before mutating, adopt a compatible
+completion, perform a proven absence once, refuse conflict and ambiguity —
+applied inside a provider rather than by a shared state machine. What is
+Issue-owned, and therefore an Issue compatibility boundary, is the stable API
+name, the two normalized requests, the results and the durable effect type.
 
-**The component.** `<Issue>` is the generic issue primitive. Its declared props
-are exactly:
+**The component.** `<Issue>` asks one of two questions, and which one it is
+asking is decided by its own shape. Its declared props are exactly:
 
 ```ts
 interface IssueProps {
-  readonly title: string;
-  readonly description: string;
+  /** The issue to read. Its presence selects the read form. */
+  readonly url?: string;
+  /** The issue's title. Its presence selects the upsert form. */
+  readonly title?: string;
   readonly tags?: readonly string[];
   readonly assignee?: string;
+  /** The only provider allowed to handle a read. */
+  readonly provider?: string;
 }
 ```
 
+A self-closing invocation with a `url` **reads** the issue that URL names:
+
+```md
+<Issue url={finding.issue} as="issue" />
+
+It is still called “{issue.title}”, and it is assigned to {issue.assignee}.
+```
+
+A paired invocation with a `title` **upserts**, and its rendered content is the
+description:
+
 ```md
 <IssueTracker url={props.tracker}>
-  <Issue
-    title="Retry the publish step on a 5xx"
-    description={finding.evidence}
-    tags={["reliability", "publish"]}
-    as="issue"
-  />
+  <Issue title="Retry the publish step on a 5xx" tags={["reliability", "publish"]} as="issue">
+    The publish step failed twice in a row on 503. {finding.evidence}
+  </Issue>
 </IssueTracker>
 
 Recorded at {issue.url}.
 ```
 
-`title` and `description` are required non-empty strings. `tags` defaults to an
-empty array and is normalized by removing duplicates and sorting by code point,
-because tag order is not issue identity. `assignee` defaults to no assignee and
-is an opaque provider account identifier that no provider translates through
-another directory.
+There is no `description` prop. An upsert files what the document wrote, so the
+description is the content, rendered before the request is made.
 
-It takes no rendered children and has no `repository`, `url`, `provider`,
+`tags` defaults to an empty array and is normalized by removing duplicates and
+sorting by code point, because tag order is not issue identity. `assignee`
+defaults to no assignee and is an opaque provider account identifier that no
+provider translates through another directory. There is no `repository`,
 `token`, `finding`, `disposition`, `pullRequest`, `rationale`,
 `dependencyImpact`, `intendedTiming`, `label`, `milestone`, `project`,
-`comment`, `close` or approval prop. It renders nothing and binds through `as`.
+`comment`, `close` or approval prop. Both forms render nothing and bind
+through `as`.
 
-A paired invocation is refused, and refused before the tracker is read, before
-routing and before any provider is asked anything. The refusal is about the
-shape of the invocation rather than about what the content would render, so
-`<Issue></Issue>` is refused exactly as `<Issue>…</Issue>` is. Content this
-element never renders would be discarded in silence, and an issue created beside
-text nobody ever saw is worse than one not created at all.
+**Form before anything else.** The element decides which question it is asking
+from its own shape, and it decides before the tracker is read, before any
+provider is asked anything and before an `issue_effect` record exists. Each of
+these is refused there:
+
+- `url` and `title` together — it is not both, and it is not a preference;
+- a `url` with content — a read renders nothing and changes nothing, so content
+  it would discard in silence is refused rather than dropped;
+- a `url` with `tags` or `assignee` — a read changes nothing about the issue it
+  reads;
+- a `title` with no content — an upsert files the issue its content describes;
+- a `title` with `provider` — an upsert takes its discriminator from the
+  tracker; and
+- neither `url` nor `title` — it is neither form.
 
 Deferral classification, typed approval, PullRequest provenance, rationale,
 dependency impact and intended timing are workflow policy. A workflow expresses
@@ -1794,8 +1816,10 @@ them through ordinary document structure or `IssueApi` middleware before it
 delegates the generic request. The primitive neither classifies a finding nor
 publishes an approval suspension.
 
-**The context.** Every live `<Issue>` requires one nearest lexical Issue
-context:
+**The context, and which form needs it.** An upsert requires one nearest lexical
+Issue context, because filing an issue needs a container to file it in. A read
+does not: the URL it was given is the identity, and a tracker written around a
+read has nothing to add to it.
 
 ```ts
 interface IssueTracker {
@@ -1812,78 +1836,107 @@ target.
 
 `url` is a credential-free URL naming the container new issues are created in —
 a GitHub repository issue collection, an Atlassian project. It is canonicalized
-before routing and retained in canonical form. The context, not the component,
-owns this deployment choice. A nested context replaces the whole target for its
-descendants; parent and child members are never merged.
+before the request is made and retained in canonical form. The context, not the
+component, owns this deployment choice. A nested context replaces the whole
+target for its descendants; parent and child members are never merged, and
+leaving the nested context restores the enclosing one whole.
 
 `provider` is the explicit discriminator. Provider names are stable lower-case
 strings; the initial names are `github` and `atlassian`.
 
-With no `provider`, the host resolves one deterministically from the canonical
-URL before the durable effect begins. `github.com` issue targets map to
-`github`, and Atlassian Cloud targets under `*.atlassian.net` map to
-`atlassian`. A URL with no unique built-in mapping is refused locally, with an
-actionable request to install a context carrying `provider`. Automatic mapping
-is a compatibility contract: changing which provider a canonical URL selects is
-a breaking change.
+A discriminator is stated once, in the place that owns the deployment choice. An
+upsert takes it only from the tracker. A read has no tracker, so it carries its
+own optional `provider` prop. Saying it in both places would be two statements to
+keep in agreement.
 
-With a `provider`, it wins over automatic selection and supports self-hosted or
-otherwise non-standard URLs. Only a handler registered under that exact
-discriminator may accept the request. That provider still validates the URL, and
-rejection never falls back to another provider. An absent handler, an invalid
-target, and disagreement between the selected provider and the URL each fail
-before external observation.
+**No central resolution.** The host does not map URLs to providers. There is no
+registry, no resolver, no routing protocol, no phase API and no private
+terminal, and nothing between the element and the installed middleware decides
+anything. A request is offered to the chain, and each provider answers the same
+question for itself: with no discriminator, do I recognize this URL, and with
+one, is it my name? Each provider answers that independently for `read` and for
+`upsert`; recognizing one is not recognizing the other.
+
+Recognition is deliberately narrow. GitHub middleware recognizes `github.com`
+and nothing else, because a self-hosted deployment has the same path shape under
+another host name — which is exactly the case an explicit discriminator exists
+for. Once named outright, a provider validates the URL by its shape rather than
+by its host.
+
+**A provider that matched owns the answer.** Its validation and its refusal are
+final: it does not delegate after matching, and no provider catches the base
+error to implement a fallback. A refusal ends the request rather than starting a
+search for another provider, because a search is how a document that named one
+service quietly reaches a different one.
+
+A request every provider delegated reaches the operation's own base error,
+`NoIssueProvider`, unchanged. It names the URL and the discriminator, which are
+the document's own words and the thing an author has to fix, and it distinguishes
+a URL nobody recognized from a name nobody answers to.
 
 **The ceiling.** The trusted host installs an adapter-private target ceiling
-beside provider credentials. Before external observation, the selected provider
-admits the requested canonical URL and discriminator against that ceiling.
-A tracker and any nearer middleware select and narrow within it and can never widen
-it. A target outside the ceiling fails locally and produces no durable Issue
-outcome. This is what keeps a replaceable context from being a grant.
+beside provider credentials. A provider that has matched a request admits its
+canonical URL and discriminator against that ceiling *before* it opens a
+connection. A tracker and any nearer middleware select and narrow within it and
+can never widen it. A target outside the ceiling fails locally, sends nothing,
+and produces no durable Issue outcome. This is what keeps a replaceable context
+from being a grant.
 
-The canonical target URL and the discriminator a tracker stated are part of the
-normalized durable request. Credentials, endpoints derived from credentials, transports and
-raw provider payloads are not context values and stay in the selected provider's
+The canonical URL and the discriminator are part of the normalized durable
+request. Credentials, endpoints derived from credentials, transports and raw
+provider payloads are not context values and stay in the matched provider's
 per-invocation closure.
 
-**One operation, and providers as middleware.** Issue upsert is reached through
-exactly one stable contextual operation, `executablemd.workflow.issue`, whose
-only member is `upsert(issue, options)`. There is no registry, no resolver, no
-routing protocol, no phase API and no private terminal. A provider is ordinary
-middleware around that operation: it looks at the destination it was handed and
-either handles the request or delegates it untouched.
+**One operation, two members.** Both forms are reached through exactly one
+stable contextual operation, `executablemd.workflow.issue`:
 
-Without an explicit discriminator a provider matches its own URLs. With one,
-only the provider registered under that exact name may handle the request, which
-is what makes a self-hosted deployment addressable — and which is why a provider
-validates a URL by its shape rather than by its host once it has been named.
+```ts
+interface IssueApi {
+  read(url: string, options: IssueReadOptions): Operation<IssueDetails>;
+  upsert(issue: IssueInput, options: IssueUpsertOptions): Operation<IssueReference>;
+}
 
-Once middleware matches, it owns the answer. Its validation and its refusal are
-final: it does not delegate after matching, and no provider catches the base
-error to implement a fallback. A refusal from the selected provider ends the
-request rather than starting a search for another one, because a search is how a
-document that named one service quietly reaches a different one.
+interface IssueReadOptions {
+  readonly provider?: string;
+}
 
-A destination every provider delegated reaches the operation's own base error,
-`NoIssueProvider`, unchanged. It names the URL and the discriminator, which are
-the document's own words and the thing an author has to fix.
+interface IssueUpsertOptions {
+  readonly url: string;
+  readonly provider?: string;
+  readonly idempotencyKey: string;
+}
+```
 
-**The envelope.** `issue_effect` derives the idempotency key and durably wraps
-the one `upsert()` call. It guarantees that the call happens at most once per
-position, that a replay returns the retained URL without invoking the operation
-at all, and that a changed request diverges rather than consuming another
-request's result. It does not guarantee that the *service* was touched once:
-that is the provider's, and the key is what this side hands over so the provider
-can make it true. An attempt interrupted after the service accepted its issue
-leaves no journal entry, and the next attempt presents the same key.
+A provider is ordinary middleware around that operation. It carries no
+completion authority: there is nothing it can be handed that only it may
+author, and nothing it can be asked that a plain `IssueApi.around(...)` handler
+could not be asked.
 
-The key is derived from the canonical target and the run's own effect identity —
-the run and the expansion — which the engine derives from the host-established
-run and its own expansion. Neither the document, the tracker, middleware nor a
-provider supplies either member. Title is never identity. The complete request
+**The envelope.** Both forms are durable, under one effect type, `issue_effect`,
+whose record carries an operation discriminator so that the two are never
+confused for one another. A read and an upsert at one position are different
+questions, and a name that could be either would let a read consume an upsert's
+retained result.
+
+The envelope guarantees that the call happens at most once per position, that a
+replay returns the retained result without reaching `IssueApi` at all — and
+therefore without any network access — and that a changed request diverges
+rather than consuming another request's result. The complete request
 fingerprint, which is what the durable operation is named by, covers the
-canonical target, the discriminator, the title, the description, the normalized
-tags and the assignee.
+operation, the run, the expansion, the canonical URL, the discriminator and,
+for an upsert, the title, the description, the normalized tags and the assignee.
+
+**Only an upsert has an idempotency key.** A read changes nothing, so there is
+nothing for it to perform twice and no mark for a provider to carry. An upsert
+derives its key from the operation, the canonical target and the run's own
+effect identity — the run and the expansion — which the engine derives from the
+host-established run and its own expansion. Neither the document, the tracker,
+middleware nor a provider supplies any member. Title is never identity.
+
+The envelope does not guarantee that the *service* was touched once: that is the
+provider's, and the key is what this side hands over so the provider can make it
+true. An attempt interrupted after the service accepted its issue leaves no
+journal entry, and the next attempt presents the same key.
 
 **Reconciliation belongs to the provider.** Observing before mutating, adopting
 a compatible issue, creating once, recovering an interrupted creation, and
@@ -1891,37 +1944,60 @@ refusing conflict, permanent ambiguity and temporary unavailability are all
 knowledge about what a particular service can prove. A provider carries the
 idempotency key wherever its service can hold a mark, which is how "already
 created" is answered without a local record. Nothing it could not observe ever
-becomes absence, because that is the one mistake that files a second issue.
+becomes absence, because that is the one mistake that files a second issue. A
+transport that will not answer, two issues carrying one key's mark, that mark on
+an issue in another container, and that mark on a closed issue are each their
+own refusal and none of them is absence.
 
-**The journal.** The durable effect type is `issue_effect`. Its filtered record
-retains the request a document made — the canonical target, the discriminator
-and the four authored fields — and the URL that came back. It retains no
-credential, provider payload, provider-specific endpoint, provider-owned
-identity or host-local path.
+**The journal.** The filtered `issue_effect` record retains the operation, the
+normalized request a document made, and the normalized public result. It retains
+no credential, provider payload, provider-specific endpoint, provider-owned
+identity, origin marker or host-local path. The mark a provider writes lives on
+the service, and the key it is derived from lives in the run; retaining the mark
+as well would put a run's internal identity into the document that asked the
+question.
 
 **The provider contract.** An Issue provider normalizes its service into the
-common fields: `title`, `description`, a set of `tags`, an optional `assignee`,
-a provider-owned stable string identity, and a canonical issue URL. GitHub maps
-tags to labels and the assignee to a login. Atlassian maps tags to labels and
-the assignee to its account identifier. Provider-specific features — GitHub
-milestones, Atlassian issue types, components, priorities, workflows and
-projects — are outside this primitive; an integration expresses them through its
-context or middleware without widening the portable component contract.
+common fields: `title`, `description`, a set of `tags` and an optional
+`assignee`. GitHub maps tags to labels and the assignee to a login. Atlassian
+maps tags to labels and the assignee to its account identifier.
+Provider-specific features — GitHub milestones, Atlassian issue types,
+components, priorities, workflows and projects — are outside this primitive; an
+integration expresses them through its context or middleware without widening
+the portable component contract.
 
-**The result.** The public `as` value is provider-neutral stable evidence:
+**The results.** Each form binds provider-neutral stable evidence, and they are
+deliberately not the same shape:
 
 ```ts
-interface IssueResult {
+interface IssueDetails {
+  readonly url: string;
+  readonly title: string;
+  readonly description: string;
+  readonly tags: readonly string[];
+  readonly assignee: string | null;
+}
+
+interface IssueReference {
   readonly url: string;
 }
 ```
 
-There is no issue number, Repository identity, PullRequest reference, finding
-ID, target URL, provider discriminator, provider-owned identity, reconciliation
-decision, provider payload or live snapshot in it. The target URL, the provider
-name and the stable provider-owned identity stay in the normalized
-reconciliation record, and the adopted-or-performed decision stays journal
-evidence. Provider state and later edits are separate reads.
+A read binds what the issue says, because reporting is what it was asked for. An
+upsert binds a reference, because a URL is the whole of what filing an issue
+tells the document that asked. Neither carries an issue number, a Repository
+identity, a PullRequest reference, a provider discriminator, a provider-owned
+identity, a reconciliation decision, a provider payload or a live snapshot. The
+discriminator stays in the normalized record, and the adopted-or-performed
+decision stays journal evidence. Provider state and later edits are separate
+reads.
+
+**The host.** The Deno workflow host installs GitHub Issue middleware when it is
+configured to, and installs none otherwise. Configuration names the ceiling and
+optionally an endpoint; it is refused rather than narrowed when it cannot be
+used. With no configuration there is no Issue provider, so every request reaches
+`NoIssueProvider` — absence of configuration is fail-closed, never an open
+default.
 
 ### 10.4 Worker Shell
 
@@ -2281,7 +2357,7 @@ delegated without changing the document language.
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
-| `<Issue>` and the `issue_effect` boundary (§10.3) | built by #296; GitHub adapter, Deno host |
+| `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
