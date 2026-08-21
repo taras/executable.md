@@ -11,7 +11,7 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { runCredentialHelperMode } from "@executablemd/workflow/deno";
+import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/workflow/deno";
 import type { HelperAssembly } from "@executablemd/workflow/deno";
 import { useCompiledService } from "./compiled-service.ts";
 
@@ -28,7 +28,9 @@ const HELPER: HelperAssembly = {
 };
 
 // Before anything public is parsed, and absent from every public surface.
-if (!runCredentialHelperMode(process.argv.slice(2))) {
+if (isCredentialHelperMode(process.argv.slice(2))) {
+  await main(() => runCredentialHelper(process.argv.slice(2)));
+} else {
   await main(function* (args) {
     // The base providers for this host. `at: "min"` puts them beneath ordinary
     // middleware, so middleware installed later can wrap either one.

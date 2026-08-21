@@ -34,6 +34,8 @@
  * credential is needed.
  */
 
+import { type Operation, until } from "effection";
+import { writeFile } from "node:fs/promises";
 import process from "node:process";
 
 /** The private variables a helper is given, and nothing else. */
@@ -174,46 +176,57 @@ export function answerCredentialRequest(
     : `username=${username}\npassword=${password}\n`;
 }
 
-/** Read everything on standard input, which Git closes when it has finished. */
+/**
+ * Everything on standard input, which Git closes when it has finished.
+ *
+ * A stream error is raised rather than read as an empty request. Empty is a
+ * question about nothing, which this helper answers by declining — and a helper
+ * that declined because its input broke would be reporting "no credential" for
+ * an infrastructure failure.
+ */
 function readAll(): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let buffered = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk: string) => {
       buffered += chunk;
     });
     process.stdin.on("end", () => resolve(buffered));
-    process.stdin.on("error", () => resolve(buffered));
+    process.stdin.on("error", (error: Error) => reject(error));
   });
 }
 
+/** Whether these arguments select the internal helper mode. */
+export function isCredentialHelperMode(argv: readonly string[]): boolean {
+  return argv[0] === HELPER_MODE;
+}
+
 /**
- * Run the internal helper mode when these arguments select it.
+ * Run the internal helper mode, to completion.
+ *
+ * An operation rather than a detached promise: reading the request, writing the
+ * marker and writing the answer are the whole of what this program does, and a
+ * failure in any of them is a helper that did not do its job. A marker write
+ * that failed in the background would leave a rejection unrecorded and the run
+ * reporting that nothing was refused.
  *
  * An internal execution mode, not a command: it appears in no help and in no
- * public grammar, it is dispatched before anything public is parsed, and it can
- * acquire nothing — without the private environment its invocation built, it has
- * nothing to answer with.
+ * public grammar, it is dispatched before anything public is parsed, and without
+ * the private environment its invocation built it has nothing to answer with.
  */
-export function runCredentialHelperMode(argv: readonly string[]): boolean {
-  if (argv[0] !== HELPER_MODE) {
-    return false;
-  }
+export function* runCredentialHelper(argv: readonly string[]): Operation<void> {
   const operation = argv[1] ?? "";
-  void readAll().then(async (input) => {
-    const { writeFile } = await import("node:fs/promises");
-    let marked: string | undefined;
-    const answer = answerCredentialRequest(operation, input, process.env, (path) => {
-      marked = path;
-    });
-    if (marked !== undefined) {
-      // A fixed, nonsecret byte. What it records is that a rejection happened,
-      // never what was rejected.
-      await writeFile(marked, "rejected\n", { mode: 0o600 });
-    }
-    if (answer !== "") {
-      process.stdout.write(answer);
-    }
+  const input = yield* until(readAll());
+  let marked: string | undefined;
+  const answer = answerCredentialRequest(operation, input, process.env, (path) => {
+    marked = path;
   });
-  return true;
+  if (marked !== undefined) {
+    // A fixed, nonsecret byte. What it records is that a rejection happened,
+    // never what was rejected. A failure to record it is this helper failing.
+    yield* until(writeFile(marked, "rejected\n", { mode: 0o600 }));
+  }
+  if (answer !== "") {
+    process.stdout.write(answer);
+  }
 }

@@ -9,55 +9,54 @@
  * observations and its mutation, and disposed with it — a completed replay
  * restores its retained result without reaching this module at all.
  *
- * ## XMD is not the credential carrier
+ * ## The adapter owns the credential, and owns it narrowly
  *
- * No credential value crosses this boundary, and none is written anywhere. What
- * a session holds is the host's *decision* about which authentication Git may
- * use for one exact locator: a socket path, a known-hosts file, and the names of
- * the credential helpers the invoking user already configured. Git and the
- * helper exchange the secret between themselves, over Git's own credential
- * protocol, and this module never sees it.
+ * This is the trusted host adapter, so it may hold one HTTP credential in
+ * memory — for one invocation, released when that invocation ends. What it may
+ * not do is let one out. The value reaches nothing but the private environment
+ * of this invocation's own Git children, through a helper this provider wrote,
+ * and it is not in an argument, a URL, a configuration file, a launcher, the
+ * ambient environment, a context, the Workspace, a journal, retained identity,
+ * rendered output, a diagnostic or a failure cause.
  *
- * That is why there is no `{ username, password }` here and no file for one to
- * be written into. XMD acquires nothing to hand on: it says which mechanism is
- * in force for one locator, and Git does the asking. Approving, rejecting,
- * erasing, copying and persisting a credential are therefore things this
- * provider cannot do rather than things it declines to do.
+ * Acquisition asks the invoking user's ordinary helper chain once, about one
+ * exact repository. That is where a platform keychain, a cached token or a
+ * credential manager lives, and asking it is the whole point: a workflow reaches
+ * a private clone wherever the equivalent local Git command reaches one.
+ *
+ * ## Two failures that must not be confused
+ *
+ * A host that holds no credential, an answer that is incomplete and an answer
+ * about somewhere else are all *authentication unavailability* — ordinary live
+ * conditions this run reports and continues past. A helper that could not be
+ * installed, a `git credential fill` that could not be run, a marker that could
+ * not be read: those are the machine failing to provide a mechanism, and they
+ * fail the run stop. Reporting infrastructure as "no credential" would turn a
+ * broken host into a clean refusal.
  *
  * ## Why the host decides, and the checkout cannot
  *
  * `host.ts` builds Git's environment from nothing precisely so a workflow's
  * behavior does not depend on whose machine created it. Configuration is still
- * built from nothing: `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and
- * `GIT_CONFIG_NOSYSTEM` stay as they were, so no `~/.gitconfig` URL rewrite,
- * `core.hooksPath` or `init.templateDir` is read. What a session adds is the
- * narrow set of things a standard credential helper needs in order to reach the
- * user's own keychain or store, and the helper names themselves, re-stated on
- * the command line where this provider chose them rather than inherited them.
- *
- * The retained checkout has no say at all. A `.git/config` a document wrote is
+ * built from nothing, and the transport's arguments reset ambient credential
+ * helpers and install only the provider-owned one — no ambient `credential.*`
+ * definition or value is copied there. A `.git/config` a document wrote is
  * inside the Workspace and restored by replay, so a `credential.helper` or a
- * `core.sshCommand` in one would be document-authored data naming a program.
- * Both are fixed on the command line — where they outrank every configuration
- * file — for every invocation that transports to a remote, and the
- * `credential.helper` list is reset before the host's own choice is stated.
+ * `core.sshCommand` in one would be document-authored data naming a program;
+ * both are fixed on the command line, where they outrank every configuration
+ * file, for every invocation that transports to a remote.
  *
  * ## What each transport borrows
  *
  * **SSH** borrows the agent, and only the agent. `HOME` stays the disposable
  * materialization, so no key file on the machine is reachable and no
- * `~/.ssh/config` is read; `IdentityAgent` names the ambient socket outright, so
- * the keys this run can offer are exactly the ones the invoking user has
- * unlocked. Host verification stays on and its material is the invoking user's
+ * `~/.ssh/config` is read; `IdentityAgent` names the ambient socket outright.
+ * Host verification stays on and its material is the invoking user's
  * `known_hosts`, selected here rather than found: an unknown host is a refusal,
  * never a key accepted on this run's behalf.
  *
- * **HTTP** borrows the credential helpers the invoking user configured, and the
- * environment those helpers need to answer. Git queries them for the exact URL
- * it is transporting to, which is a more exact question than this module could
- * ask on its behalf. `core.excludesFile` and `core.attributesFile` are pinned
- * alongside, because with configuration itself off they are the only remaining
- * things a passed-through `HOME` would decide.
+ * **HTTP** borrows one answer from the user's helper chain, and hands it onward
+ * only through the provider-owned helper described in `credential-helper.ts`.
  */
 
 import { ensure, type Operation, resource, until } from "effection";
@@ -373,21 +372,19 @@ export function denoCredentialBroker(
         env["SSH_ASKPASS"] = "";
         env["LC_ALL"] = "C";
 
-        let outcome: { code: number; stdout: string };
-        try {
-          outcome = yield* runProcess({
-            command: "git",
-            args: ["-c", "credential.useHttpPath=true", "credential", "fill"],
-            cwd: directory,
-            env,
-            input:
-              `protocol=${request.protocol}\nhost=${request.host}\n` +
-              `${request.path === undefined ? "" : `path=${request.path}\n`}\n`,
-          });
-        } catch {
-          yield* provide(unacquired());
-          return;
-        }
+        // No `try` around this. A `git credential fill` that could not be
+        // started, or that failed in a way this host cannot run past, is the
+        // machine failing to provide a mechanism rather than a machine that
+        // holds no credential — and the two must not report the same thing.
+        const outcome = yield* runProcess({
+          command: "git",
+          args: ["-c", "credential.useHttpPath=true", "credential", "fill"],
+          cwd: directory,
+          env,
+          input:
+            `protocol=${request.protocol}\nhost=${request.host}\n` +
+            `${request.path === undefined ? "" : `path=${request.path}\n`}\n`,
+        });
         if (outcome.code !== 0) {
           yield* provide(unacquired());
           return;

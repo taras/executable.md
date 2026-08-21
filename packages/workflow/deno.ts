@@ -89,7 +89,8 @@ export {
   helperCommand,
   launcherName,
   launcherProgram,
-  runCredentialHelperMode,
+  isCredentialHelperMode,
+  runCredentialHelper,
 } from "./src/deno/composition/credential-helper.ts";
 export type {
   HelperAssembly,
