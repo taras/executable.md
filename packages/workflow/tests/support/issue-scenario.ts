@@ -259,7 +259,6 @@ function useScenarioComponents(
       },
     },
 
-    // ---- what the GitHub tracker holds ------------------------------------
     {
       name: "EmptyTracker",
       origin: "@executablemd/workflow/test",
@@ -303,6 +302,75 @@ function useScenarioComponents(
       },
     },
     {
+      name: "DuplicateIssue",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          number: { type: "integer", minimum: 1 },
+          when: { type: "boolean" },
+        },
+        required: ["number", "when"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        // A second issue carrying the first one's body, and so the first one's
+        // marker. The copy is made here because the marker is a digest of a
+        // key: a document that could write one would be writing a run's
+        // internal identity into its own text.
+        if (props.when !== true) {
+          return "";
+        }
+        const held = numbered(server, props.number, "duplicate");
+        server.issues.push({ ...held, number: server.issues.length + 1 });
+        return "";
+      },
+    },
+    {
+      name: "MoveIssue",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          number: { type: "integer", minimum: 1 },
+          to: { type: "string", minLength: 1 },
+          when: { type: "boolean" },
+        },
+        required: ["number", "to", "when"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        if (props.when !== true) {
+          return "";
+        }
+        numbered(server, props.number, "move").repository = String(props.to);
+        return "";
+      },
+    },
+    {
+      name: "CloseIssue",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          number: { type: "integer", minimum: 1 },
+          when: { type: "boolean" },
+        },
+        required: ["number", "when"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        if (props.when !== true) {
+          return "";
+        }
+        numbered(server, props.number, "close").state = "closed";
+        return "";
+      },
+    },
+    {
       name: "TrackerIssues",
       origin: "@executablemd/workflow/test",
       props: NO_PROPS,
@@ -328,7 +396,6 @@ function useScenarioComponents(
       },
     },
 
-    // ---- what that tracker was sent ---------------------------------------
     {
       name: "EmptyRequestLog",
       origin: "@executablemd/workflow/test",
@@ -401,7 +468,6 @@ function useScenarioComponents(
       },
     },
 
-    // ---- what the provider boundary was handed ----------------------------
     {
       name: "EmptyProviderLog",
       origin: "@executablemd/workflow/test",
@@ -432,7 +498,6 @@ function useScenarioComponents(
       },
     },
 
-    // ---- what the Atlassian-shaped tracker did ----------------------------
     {
       name: "EmptyAtlassianTracker",
       origin: "@executablemd/workflow/test",
@@ -469,24 +534,57 @@ function useScenarioComponents(
       },
     },
 
-    // ---- the retained history, and the attempts staged before this document -
     {
       name: "IssueJournal",
       origin: "@executablemd/workflow/test",
       props: NO_PROPS,
       returns: {
         type: "object",
-        properties: { text: { type: "string" }, effects: { type: "integer" } },
-        required: ["text", "effects"],
+        properties: {
+          effects: { type: "integer" },
+          retains: {
+            type: "object",
+            properties: {
+              credential: { type: "boolean" },
+              endpoint: { type: "boolean" },
+              payload: { type: "boolean" },
+              marker: { type: "boolean" },
+              providerId: { type: "boolean" },
+              hostPath: { type: "boolean" },
+            },
+            required: ["credential", "endpoint", "payload", "marker", "providerId", "hostPath"],
+            additionalProperties: false,
+          },
+        },
+        required: ["effects", "retains"],
         additionalProperties: false,
       },
       // deno-lint-ignore require-yield
       *fn(): Operation<Json> {
-        // The whole retained history as text, so an assertion about what is
-        // absent from it is an assertion about every member rather than about
-        // the members somebody remembered to look at.
+        // Asked of every Issue effect the run retained rather than of the
+        // members somebody remembered to look at, and answered here rather than
+        // handed over: the credential and the marker would not survive
+        // rendering at all, and the rest would put a deployment's addresses and
+        // a provider's private identifiers into a document's own text.
+        //
+        // Scoped to those effects, because they are what this boundary wrote.
+        // The run's own records are a different question with a different
+        // answer — `import_component` retains the host path of every module the
+        // run loaded, which is the run's business and not something `<Issue>`
+        // may either cause or prevent.
         const events = held.snapshot(RUN.runId);
-        return { text: JSON.stringify(events), effects: issueYields(events).length };
+        const text = JSON.stringify(issueYields(events));
+        return {
+          effects: issueYields(events).length,
+          retains: {
+            credential: text.includes(credential()),
+            endpoint: text.includes(server.url),
+            payload: PROVIDER_PAYLOAD.test(text),
+            marker: ANY_MARKER_TEXT.test(text),
+            providerId: PROVIDER_ID.test(text),
+            hostPath: text.includes(scenarioDirectory()),
+          },
+        };
       },
     },
     {
@@ -606,6 +704,39 @@ function useScenarioComponents(
   ]);
 }
 
+/** Members only a provider's own payload has. */
+const PROVIDER_PAYLOAD = /"(node_id|html_url|repository_url|pull_request)"/;
+
+/** A provider-native identifier, as this tracker mints them. */
+const PROVIDER_ID = /I_node_\d+/;
+
+/** An origin marker anywhere in a text, not only at the end of a body. */
+const ANY_MARKER_TEXT = /executablemd-issue:/;
+
+/** Where this suite's documents live on the machine running it. */
+function scenarioDirectory(): string {
+  return fileURLToPath(new URL("../scenarios/", import.meta.url));
+}
+
+/**
+ * The issue a perturbation names, or a refusal that says which one is missing.
+ *
+ * Only consulted when the perturbation applies. A perturbation describes what
+ * happened to the tracker *between* two attempts, so the issues it names are
+ * the ones an earlier attempt filed and do not exist while that attempt is the
+ * one running.
+ */
+function numbered(server: IssueTrackerServer, value: Json, what: string): ServedIssue {
+  const number = Number(value);
+  const held = server.issues.find((issue) => issue.number === number);
+  if (held === undefined) {
+    throw new Error(
+      `this tracker holds ${server.issues.length} issues, so there is no issue ${number} to ${what}`,
+    );
+  }
+  return held;
+}
+
 /** The authorization scheme a request carried, without its credential. */
 function schemeOf(authorization: string | undefined): string {
   return authorization === undefined ? "" : authorization.split(" ")[0];
@@ -716,11 +847,19 @@ function stageAttempt(
     const interrupted = attempting.current?.interrupted === true;
 
     const events = yield* stream.readAll();
-    const retained = events.filter(
-      (event) =>
-        !(event.type === "close" && event.coroutineId === "root") &&
-        !(interrupted && event.type === "yield" && event.description.type === ISSUE_EFFECT),
+    const continuing = events.filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
     );
+    // A process that died left a *prefix*. Everything from its first Issue
+    // effect onward goes, not just the effect records: removing those from the
+    // middle would leave every later position shifted, and the next attempt
+    // would diverge against a history it should have been able to continue.
+    const died = interrupted
+      ? continuing.findIndex(
+          (event) => event.type === "yield" && event.description.type === ISSUE_EFFECT,
+        )
+      : -1;
+    const retained = died === -1 ? continuing : continuing.slice(0, died);
     held.truncate(id, retained);
     return {
       ok: outcome.ok,

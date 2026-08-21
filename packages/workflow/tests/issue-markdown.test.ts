@@ -66,6 +66,20 @@ describe("workflow Issue scenarios", () => {
     yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
   });
 
+  it("IssueReadDurability.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
+    yield* fixture.stage("IssueReadDurability.attempt.stage.md");
+    yield* stated(yield* fixture.observe(pathOf("IssueReadDurability.test.md")));
+  });
+
+  it("IssueRecoveryHazards.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    yield* fixture.stage("IssueRecoveryHazards.attempt.stage.md");
+    yield* fixture.stage("IssueRecoveryHazards.attempt.stage.md");
+    yield* stated(yield* fixture.observe(pathOf("IssueRecoveryHazards.test.md")));
+  });
+
   it("IssueRecovery.test.md states a contract that holds", function* () {
     const fixture = yield* useScenarioFixture();
     // The interrupted attempt first, then one that inherits what it left.

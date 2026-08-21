@@ -37,6 +37,18 @@ would have created, found what the first had left, and stopped there.
 <AssertEquals actual={sent.credentialed} expected={true} />
 </Test>
 
+Adoption is what the sequence shows; a *stable key* is what makes it possible.
+Both attempts asked the boundary the same question, and the marker the second
+one looked for is the digest of that key — so if the two keys differed, the
+second attempt would have looked for a marker no issue carried and created
+another one.
+
+<Test name="both attempts carried one idempotency key">
+<ProviderLog as="providers" />
+<AssertEquals actual={providers.keys.length} expected={2} />
+<AssertEquals actual={providers.keys[0]} expected={providers.keys[1]} />
+</Test>
+
 <Test name="two attempts left one issue">
 <TrackerIssues as="tracker" />
 <AssertEquals actual={tracker.count} expected={1} />

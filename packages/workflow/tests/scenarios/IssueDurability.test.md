@@ -40,3 +40,22 @@ in which nobody ever calls anything.
 <AssertEquals actual={tracker.count} expected={1} />
 <AssertEquals actual={tracker.titles} expected={["Retry the publish step"]} />
 </Test>
+
+## What the run retained
+
+An upsert retains the normalized request and a reference — a URL and nothing
+else. The marker in particular is not in it: the tracker carries the marker, so
+that an interrupted attempt can be recognized by the next one, and the run
+carries the key it is a digest of. Retaining the marker as well would put a
+run's internal identity into the document that asked the question.
+
+<Test name="the retained upsert holds nothing private to the provider or the host">
+<IssueJournal as="journal" />
+<AssertEquals actual={journal.effects} expected={1} />
+<AssertEquals actual={journal.retains.credential} expected={false} />
+<AssertEquals actual={journal.retains.endpoint} expected={false} />
+<AssertEquals actual={journal.retains.payload} expected={false} />
+<AssertEquals actual={journal.retains.marker} expected={false} />
+<AssertEquals actual={journal.retains.providerId} expected={false} />
+<AssertEquals actual={journal.retains.hostPath} expected={false} />
+</Test>

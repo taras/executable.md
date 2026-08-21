@@ -194,10 +194,22 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
     {
       name: "NoIssueProvider",
       origin: "@executablemd/workflow/test",
-      props: { type: "object", properties: {}, additionalProperties: false },
-      *fn(): Operation<string> {
+      props: {
+        type: "object",
+        properties: { when: { type: "boolean" } },
+        required: ["when"],
+        additionalProperties: false,
+      },
+      *fn(props: Record<string, Json>): Operation<string> {
         if (!(yield* hasContent())) {
           return "";
+        }
+        if (props.when !== true) {
+          // Declared but not in force. Two attempts of one run have to be one
+          // document — a request's identity includes the expansion it was made
+          // at — so whether the boundary refuses is stated as a condition
+          // rather than by wrapping only one of two documents.
+          return yield* content();
         }
         // A boundary that refuses everything, for content that must reach no
         // provider at all. A replay standing on a retained result proves it by
