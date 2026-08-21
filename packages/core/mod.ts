@@ -105,7 +105,7 @@ export type { Invocation } from "./src/invocation.ts";
 export { Sample } from "./src/sample-api.ts";
 export { TestBehavior } from "./src/test-behavior.ts";
 export type { TestBehaviorApi } from "./src/test-behavior.ts";
-export { isTestActivationProtocolError, TestActivation } from "./src/test-activation.ts";
+export { isTestActivationDecisionError, TestActivation } from "./src/test-activation.ts";
 export type { TestActivationApi, TestActivationRequest } from "./src/test-activation.ts";
 
 export { evalFactory } from "./src/eval-handler.ts";

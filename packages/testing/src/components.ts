@@ -31,7 +31,7 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import {
   Component,
-  isTestActivationProtocolError,
+  isTestActivationDecisionError,
   registerComponents,
   Execution,
   TestActivation,
@@ -43,10 +43,7 @@ import type {
   DocumentExecution,
 } from "@executablemd/core";
 import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts";
-import {
-  isIncompleteTestingActivationError,
-  requireCompleteTestingActivation,
-} from "./activation.ts";
+import { requireCompleteTestingActivation } from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
 import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
@@ -104,18 +101,19 @@ export function* installHandlers(
       if (failure.name !== "Test") {
         return yield* next(failure);
       }
-      // Not a test outcome: the test never ran. Either its activation could not
-      // be proved, or the decision core takes before dispatching this behavior
-      // was refused outright. Delegated unchanged, so the ordinary
-      // component-failure path fails the document instead of this package
-      // staging, persisting, recording or reporting a TestResult for a
-      // configuration mistake.
+      // Not a test outcome: the test never ran. Core refused the activation
+      // decision it takes before dispatching this behavior — because this
+      // package could not prove a complete activation, because another handler
+      // on that seam refused, or because the chain was answered rather than
+      // delegated. Delegated unchanged, so the ordinary component-failure path
+      // fails the document instead of this package staging, persisting,
+      // recording or reporting a TestResult for a configuration mistake.
       //
-      // Containment is what makes absorbing either one unsafe: a contained
-      // failure is converted into a document failure by a session's completion
-      // policy, and a composition with no session has none — so an absorbed
-      // refusal would leave a run that never ran a test reporting success.
-      if (refusesActivation(failure.error)) {
+      // Containment is what makes absorbing one unsafe: a contained failure is
+      // converted into a document failure by a session's completion policy, and
+      // a composition with no session has none — so an absorbed refusal would
+      // leave a run that never ran a test reporting success.
+      if (isTestActivationDecisionError(failure.error)) {
         return yield* next(failure);
       }
       // A nested <Test> fails by the ENCLOSING test's interceptor throwing, so
@@ -231,11 +229,6 @@ export function* installHandlers(
       yield* next(request);
     },
   });
-}
-
-/** Whether a failure is an activation refusal rather than a test's own outcome. */
-function refusesActivation(error: unknown): boolean {
-  return isIncompleteTestingActivationError(error) || isTestActivationProtocolError(error);
 }
 
 /** Whether a failure is, or wraps, a printed error an enclosing test intercepted. */

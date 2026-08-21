@@ -300,6 +300,35 @@ describe("complete testing activation", () => {
     }
   });
 
+  // Refusing before delegation is an explicitly supported thing for a handler on
+  // this seam to do, and what it throws is its own — an ordinary Error carrying
+  // no identity this package or core would recognize by type. The test still
+  // never ran, so the refusal is still a configuration failure: what marks it is
+  // where it was raised, not what it is.
+  it("refuses when a handler throws its own error from the decision chain", function* () {
+    const attempt = yield* runComposed(
+      '<Test name="t"><Sentinel name="body" /><Assert expr={true} /></Test>\n',
+      (function* () {
+        const seam = loadedCopyCoreActivationApi();
+        yield* seam.around({
+          // deno-lint-ignore require-yield
+          *require() {
+            throw new Error("activation policy refused");
+          },
+        });
+        yield* incompleteActivation();
+      })(),
+    );
+    expect(attempt.sentinels).toEqual([]);
+    expect(attempt.completion.ok).toBe(false);
+    // The handler's own message survives: a refusal says what the refuser said.
+    expect(errorOf(attempt)?.message).toContain("activation policy refused");
+    expect(attempt.results).toEqual([]);
+    expect(testResultEvents(attempt.events)).toEqual([]);
+    expect(attempt.output).not.toContain("Assert");
+    expect(attempt.output).not.toContain("❌");
+  });
+
   // The same manipulation against core's activation seam. Core dispatches
   // through a terminal of its own and refuses an invocation whose decision was
   // never taken, so blocking the chain refuses the test rather than waving it

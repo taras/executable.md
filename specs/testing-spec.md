@@ -123,13 +123,17 @@ it may not do is answer for the decision that preceded it. Answering without
 delegating is a legitimate use of that surface, and it reaches a decision core
 has already taken.
 
-Two refusals can come out of that decision — the activation could not be proved,
-or the decision itself was refused because a handler on the seam answered
-without delegating. Both are configuration failures of the composition and
-neither is ever a test outcome. A test whose activation was refused never ran,
-and absorbing that as a contained test failure would leave a composition with no
-session — which has no completion policy to convert one — reporting a run that
-ran no test as a success.
+Any refusal raised while that decision is being taken is a configuration failure
+of the composition, and never a test outcome — whether the activation could not
+be proved, a handler on the seam refused with an error of its own, or the chain
+was answered rather than delegated. Refusing by throwing is a supported thing
+for a handler there to do, and what it throws is its own business, so what marks
+a refusal is where it was raised rather than what type it is.
+
+A test whose activation was refused never ran. Absorbing that as a contained
+test failure would leave a composition with no session — which has no completion
+policy to convert a contained failure into a document failure — reporting a run
+that ran no test as a success.
 
 So under any composition, a refused activation:
 

@@ -22,6 +22,11 @@
  * which is a handler entitled to skip it. What stays here is everything the
  * decision is *about*: the policy read, the proof, and the refusal.
  *
+ * The refusal below is raised from inside that chain, so core marks it — along
+ * with anything else raised while the decision is being taken — as a refusal of
+ * the decision, and keeps its message. Recognizing one is core's predicate, and
+ * that is what keeps it off the test-containment path.
+ *
  * ## Why the proof is not a value
  *
  * The activation operation's name is stable, because a copy of this package
@@ -45,7 +50,13 @@ import type { Operation } from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
 import { Test } from "./test-api.ts";
 
-/** What a `<Test>` reports when nothing complete activated testing. */
+/**
+ * What a `<Test>` reports when nothing complete activated testing.
+ *
+ * Internal. The message is the whole of its public life: it travels outward as
+ * the cause of core's activation-decision refusal, which adopts it, so this is
+ * what a reader of a failed document sees.
+ */
 export class IncompleteTestingActivationError extends Error {
   override name = "IncompleteTestingActivationError";
 
@@ -57,29 +68,6 @@ export class IncompleteTestingActivationError extends Error {
         "testing.",
     );
   }
-}
-
-/** Whether a failure is, or wraps, the incomplete-activation refusal. */
-export function isIncompleteTestingActivationError(
-  error: unknown,
-  seen = new Set<unknown>(),
-): boolean {
-  if (error instanceof IncompleteTestingActivationError) {
-    return true;
-  }
-  if (typeof error !== "object" || error === null || seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
-  if (
-    error instanceof AggregateError &&
-    error.errors.some((member) => isIncompleteTestingActivationError(member, seen))
-  ) {
-    return true;
-  }
-  return error instanceof Error && error.cause !== undefined
-    ? isIncompleteTestingActivationError(error.cause, seen)
-    : false;
 }
 
 /**

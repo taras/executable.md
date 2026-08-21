@@ -33,7 +33,7 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 
 /**
- * Whether a failure is, or wraps, a refusal of the activation decision itself.
+ * Whether a failure is, or wraps, a refusal of the activation decision.
  *
  * A predicate rather than the class, because what a testing package needs is to
  * recognize this exact refusal and nothing else. The class, the request, and
@@ -45,12 +45,12 @@ import type { Operation } from "effection";
  * test failures reports it outward unchanged instead of absorbing it — absorbing
  * it would let a run that never ran a test end successfully.
  */
-export function isTestActivationProtocolError(error: unknown): boolean {
-  return carriesActivationError(error, new Set());
+export function isTestActivationDecisionError(error: unknown): boolean {
+  return carriesDecisionError(error, new Set());
 }
 
-function carriesActivationError(error: unknown, seen: Set<unknown>): boolean {
-  if (error instanceof TestActivationError) {
+function carriesDecisionError(error: unknown, seen: Set<unknown>): boolean {
+  if (error instanceof TestActivationDecisionError) {
     return true;
   }
   if (typeof error !== "object" || error === null || seen.has(error)) {
@@ -59,25 +59,52 @@ function carriesActivationError(error: unknown, seen: Set<unknown>): boolean {
   seen.add(error);
   if (
     error instanceof AggregateError &&
-    error.errors.some((member) => carriesActivationError(member, seen))
+    error.errors.some((member) => carriesDecisionError(member, seen))
   ) {
     return true;
   }
   return error instanceof Error && error.cause !== undefined
-    ? carriesActivationError(error.cause, seen)
+    ? carriesDecisionError(error.cause, seen)
     : false;
 }
 
-/** A protocol violation by whoever is composed around the activation decision. */
-class TestActivationError extends Error {
-  override name = "TestActivationError";
+/**
+ * Every refusal of the activation decision, whoever raised it and whatever they
+ * raised.
+ *
+ * Refusing by throwing is a supported thing for a handler on this seam to do,
+ * and what it throws is its own business — so the identity that says "this test
+ * never ran" cannot be the error's type. It is applied here instead, to
+ * everything that escapes the decision dispatch.
+ *
+ * The refusal keeps the message it arrived with, because the actionable one is
+ * usually the handler's: a testing package's diagnostic naming what to install
+ * says more than any sentence about a chain. The original travels on as `cause`,
+ * so a fatal infrastructure failure is still found by the search that walks
+ * causes, and a reader still reaches what actually happened.
+ */
+class TestActivationDecisionError extends Error {
+  override name = "TestActivationDecisionError";
 
-  constructor(problem: string) {
-    super(
-      `Test activation middleware ${problem}. A handler may read the request, refuse by ` +
-        "throwing, and delegate it once; only the invocation that issued one decides.",
-    );
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.cause = cause;
   }
+}
+
+/** The refusal identity, applied once — a re-thrown refusal is not re-wrapped. */
+function asDecisionError(cause: unknown): unknown {
+  return cause instanceof TestActivationDecisionError
+    ? cause
+    : new TestActivationDecisionError(cause);
+}
+
+/** What this module itself refuses for, said the same way wherever it is raised. */
+function protocolViolation(problem: string): Error {
+  return new Error(
+    `Test activation middleware ${problem}. A handler may read the request, refuse by ` +
+      "throwing, and delegate it once; only the invocation that issued one decides.",
+  );
 }
 
 /** One `<Test>` invocation's private decision state. */
@@ -108,13 +135,13 @@ export class TestActivationRequest {
    */
   static decide(request: unknown, invocation: Invocation): void {
     if (!TestActivationRequest.own(request)) {
-      throw new TestActivationError("delegated a request no <Test> issued");
+      throw protocolViolation("delegated a request no <Test> issued");
     }
     if (request.#invocation !== invocation) {
-      throw new TestActivationError("delegated a request another <Test> issued");
+      throw protocolViolation("delegated a request another <Test> issued");
     }
     if (invocation.decided) {
-      throw new TestActivationError("delegated an activation request more than once");
+      throw protocolViolation("delegated an activation request more than once");
     }
     invocation.decided = true;
   }
@@ -160,7 +187,7 @@ export const TestActivation: Api<TestActivationApi> = createApi<TestActivationAp
   {
     // deno-lint-ignore require-yield
     *require(_request: TestActivationRequest): Operation<void> {
-      throw new TestActivationError("was invoked outside a <Test> invocation");
+      throw protocolViolation("was invoked outside a <Test> invocation");
     },
   },
 );
@@ -180,9 +207,18 @@ export function* requireTestActivation(): Operation<void> {
       TestActivationRequest.decide(request, invocation);
     },
   });
-  // Whatever a handler returns is not a decision, so it is not read.
-  yield* terminal.operations.require(new TestActivationRequest(invocation));
+  try {
+    // Whatever a handler returns is not a decision, so it is not read.
+    yield* terminal.operations.require(new TestActivationRequest(invocation));
+  } catch (error) {
+    // Refusing by throwing is supported, and the error is the handler's own. It
+    // is marked as a refusal of the decision so that whoever contains test
+    // failures can tell it from one, whatever type it happens to be.
+    throw asDecisionError(error);
+  }
   if (!invocation.decided) {
-    throw new TestActivationError("answered the activation request without delegating it");
+    throw asDecisionError(
+      protocolViolation("answered the activation request without delegating it"),
+    );
   }
 }

@@ -2058,21 +2058,28 @@ refuses the test rather than admitting it. With nothing installed the terminal
 is reached immediately, which is what keeps core-only use of the behavior
 surface working.
 
-Both refusals that decision can produce — activation unproved, and the decision
-itself blocked by a handler that answered without delegating — are configuration
-failures of the composition rather than test outcomes. No result is staged,
-journaled, recorded or reported, the body causes no effect, and the ordinary
-component-failure path fails the document.
+Every refusal raised while that decision is being taken is a configuration
+failure of the composition rather than a test outcome — activation unproved, a
+handler on the seam refusing with an error of its own, or a chain answered
+rather than delegated. No result is staged, journaled, recorded or reported, the
+body causes no effect, and the ordinary component-failure path fails the
+document.
 
-Containment is what makes that distinction load-bearing rather than tidy. A
+The identity cannot be the error's type, because refusing by throwing is
+supported and what a handler throws is its own. It is applied by position
+instead: core marks whatever escapes the decision dispatch, keeping the message
+it arrived with — the refuser's own sentence is usually the actionable one — and
+carrying the original as `cause`, so the search that walks causes still finds a
+fatal infrastructure failure underneath.
+
+Containment is what makes the distinction load-bearing rather than tidy. A
 contained test failure becomes a document failure only through a session's
 completion policy, and a composition that never established one has no such
 policy — so a refusal absorbed as a test outcome would leave a run that ran no
 test reporting success. A package that contains test failures therefore
-recognizes both refusals and reports them outward unchanged. Core exposes
-exactly one predicate for the second; the error, the request and the decision
-state stay inside core, because recognizing a refusal is not being able to cause
-one.
+recognizes the mark and reports the refusal outward unchanged. Core exposes
+exactly one predicate for it; the error, the request and the decision state stay
+inside core, because recognizing a refusal is not being able to cause one.
 
 Retained output crosses the pre-persistence secret gate exactly as any other
 journaled field does, and the gate examines what the boundary received — after
