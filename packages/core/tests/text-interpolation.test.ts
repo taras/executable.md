@@ -225,10 +225,10 @@ describe("Text interpolation — eval bindings in text segments", () => {
     expect(output).toBe("text with {label}");
   });
 
-  // TI12: <Capture> text uses current env
-  it("TI12: Capture text uses current component env", function* () {
+  // TI12: <Let> text uses current env
+  it("TI12: <Let> text uses current component env", function* () {
     const ctx = {};
-    const segments = scanSegments('<Capture as="captured">value is {port}\n</Capture>');
+    const segments = scanSegments('<Let as="captured">value is {port}\n</Let>');
     const bindings: Record<string, unknown> = { port: 8080 };
     const output = yield* expandWithBindings(segments, ctx, bindings);
     expect(output).toBe("");

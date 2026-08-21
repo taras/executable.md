@@ -12,19 +12,19 @@ concurrency terminates the daemon with no manual cleanup. Attached services use
 ```bash daemon exec
 node -e "setInterval(() => {}, 1000)"
 ```
-<Capture as="daemonResponse">
+<Let as="daemonResponse">
 ```bash exec
 echo daemon-ok
 ```
-</Capture>
+</Let>
 <AssertEquals actual={daemonResponse} expected={"\ndaemon-ok"} />
 </Test>
 
 <Test name="An attached service publishes a scoped live endpoint">
 <AttachedServiceProvider>
-<Capture as="attachedServiceResponse">
+<Let as="attachedServiceResponse">
 <Sample prompt="use the service" />
-</Capture>
+</Let>
 <AssertEquals
   actual={attachedServiceResponse}
   expected={"\n\nattached:127.0.0.1:true"}

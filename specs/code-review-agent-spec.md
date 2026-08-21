@@ -675,7 +675,7 @@ const triggered = touchesPkg && !mentionsDeps;
 
 ### 5.10 `CommentReview.md`
 
-`CommentReview.md` keeps the authored `<Sample>`, `<Capture>`, and structural
+`CommentReview.md` keeps the authored `<Sample>`, `<Let>`, and structural
 `<If>` composition. `CommentReviewData.ts` performs pair extraction and bounded
 GitHub response parsing, while `CommentReviewState.ts` parses model responses
 and constructs the checklist and pending findings. Both are typed function
@@ -684,11 +684,11 @@ Markdown boundary.
 
 ```markdown
 <CommentReviewData pr={pr} as="reviewData" />
-<Capture as="sampleResult">
+<Let as="sampleResult">
   <If condition={reviewData.hasPairs}>
     <Sample>{reviewData.pairsText}</Sample>
   </If>
-</Capture>
+</Let>
 <CommentReviewState
   pr={pr}
   data={reviewData}

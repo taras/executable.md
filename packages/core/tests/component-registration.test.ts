@@ -322,6 +322,23 @@ describe("Tier CR — resolution order", () => {
     expect(selection.kind).toBe("structural");
   });
 
+  it("CR14b: Let is structural syntax and Capture is an ordinary name", function* () {
+    expect((yield* select("Let")).kind).toBe("structural");
+
+    const error = yield* thrown(() =>
+      scoped(() => registerComponents([registration("Let", "host")])),
+    );
+    expect(error?.message).toContain("structural syntax");
+
+    // The old spelling has no reservation left: a host may register it, and a
+    // repository file named Capture.md resolves like any other component.
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "Capture.md"), "from disk\n");
+    yield* scoped(function* () {
+      expect((yield* select("Capture", [dir])).kind).not.toBe("structural");
+    });
+  });
+
   it("CR15: a reserved registration outranks a repository file", function* () {
     const dir = yield* useFixture();
     yield* writeTextFile(join(dir, "Widget.md"), "from disk\n");

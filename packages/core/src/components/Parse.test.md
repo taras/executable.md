@@ -9,7 +9,7 @@ A schema can be text the document captured. That is the usual shape when the
 schema itself lives in the document, in a fence a reader can see.
 
 <Test name="A captured JSON schema validates captured content">
-<Capture as="schemaText" select="code[lang=json]">
+<Let as="schemaText" select="code[lang=json]">
 ```json
 {
   "type": "object",
@@ -18,7 +18,7 @@ schema itself lives in the document, in a fence a reader can see.
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 <Parse schema={schemaText} as="verdict">
 { "passed": true, "score": 9 }
 </Parse>
@@ -29,11 +29,11 @@ The same schema can be given as a structured value instead. Both forms compile
 through the same draft-07 compiler, so they accept and reject the same content.
 
 <Test name="A structured schema behaves identically to its text form">
-<Capture as="schemaText" select="code[lang=json]">
+<Let as="schemaText" select="code[lang=json]">
 ```json
 { "type": "object", "properties": { "passed": { "type": "boolean" } }, "required": ["passed"] }
 ```
-</Capture>
+</Let>
 <Parse schema={schemaText} as="fromText">
 { "passed": true }
 </Parse>
@@ -85,7 +85,7 @@ A schema may refer to its own definitions. References contained within the
 supplied schema resolve; external file and HTTP(S) references do not yet.
 
 <Test name="A local fragment reference resolves">
-<Capture as="refSchema" select="code[lang=json]">
+<Let as="refSchema" select="code[lang=json]">
 ```json
 {
   "definitions": {
@@ -99,7 +99,7 @@ supplied schema resolve; external file and HTTP(S) references do not yet.
   "items": { "$ref": "#/definitions/finding" }
 }
 ```
-</Capture>
+</Let>
 <Parse schema={refSchema} as="findings">
 [{ "file": "a.ts" }, { "file": "b.ts" }]
 </Parse>
@@ -140,6 +140,6 @@ Binding a value is all it does. `<Parse>` contributes nothing to the rendered
 document.
 
 <Test name="Parse renders nothing">
-<Capture as="rendered"><Parse schema={{ type: "number" }} as="ignored">1</Parse></Capture>
+<Let as="rendered"><Parse schema={{ type: "number" }} as="ignored">1</Parse></Let>
 <AssertEquals actual={rendered} expected={""} />
 </Test>

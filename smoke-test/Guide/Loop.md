@@ -21,7 +21,7 @@ component-written `<Break>` with no loop of its own is stray.
 </Section>
 
 <Test name="Loop expands its body once per iteration">
-<Capture as="loopThrice"><Loop max={3}>x</Loop></Capture>
+<Let as="loopThrice"><Loop max={3}>x</Loop></Let>
 <AssertEquals actual={loopThrice} expected={"xxx"} />
 </Test>
 
@@ -29,34 +29,34 @@ component-written `<Break>` with no loop of its own is stray.
 <Parse schema={{ type: "object", properties: { attempts: { type: "number" } }, required: ["attempts"] }} as="policy">
 { "attempts": 4 }
 </Parse>
-<Capture as="loopBound"><Loop max={policy.attempts}>x</Loop></Capture>
+<Let as="loopBound"><Loop max={policy.attempts}>x</Loop></Let>
 <AssertEquals actual={loopBound} expected={"xxxx"} />
 </Test>
 
 <Test name="A binding carries from one iteration to the next">
-<Capture as="tally">.</Capture>
-<Loop max={3}><Capture as="tally">{tally}.</Capture></Loop>
+<Let as="tally">.</Let>
+<Loop max={3}><Let as="tally">{tally}.</Let></Loop>
 <AssertEquals actual={tally} expected={"...."} />
 </Test>
 
 <Test name="The final binding stays available after the loop">
-<Loop max={2}><Capture as="lastAttempt">final</Capture></Loop>
+<Loop max={2}><Let as="lastAttempt">final</Let></Loop>
 <AssertEquals actual={lastAttempt} expected={"final"} />
 </Test>
 
 <Test name="Break ends the loop and the rest of its iteration">
-<Capture as="broken"><Loop max={5}>a<Break />b</Loop></Capture>
+<Let as="broken"><Loop max={5}>a<Break />b</Loop></Let>
 <AssertEquals actual={broken} expected={"a"} />
 </Test>
 
 <Test name="Break inside If exits only when the condition selects it">
 <Verdict as="passing" findings={[]} />
-<Capture as="reviewed"><Loop max={5}>reviewed<If condition={passing.passed}><Break /></If>|</Loop></Capture>
+<Let as="reviewed"><Loop max={5}>reviewed<If condition={passing.passed}><Break /></If>|</Loop></Let>
 <AssertEquals actual={reviewed} expected={"reviewed"} />
 </Test>
 
 <Test name="Break exits only the nearest loop">
-<Capture as="loopNested"><Loop max={2}>(<Loop max={3}>i<Break /></Loop>)</Loop></Capture>
+<Let as="loopNested"><Loop max={2}>(<Loop max={3}>i<Break /></Loop>)</Loop></Let>
 <AssertEquals actual={loopNested} expected={"(i)(i)"} />
 </Test>
 
@@ -69,13 +69,13 @@ reached
 </Test>
 
 <Test name="A Break the caller hands to a component exits the caller's loop">
-<Capture as="projectedBreak"><Loop max={3}>kept<Section title="Held"><Break /></Section>dropped</Loop></Capture>
+<Let as="projectedBreak"><Loop max={3}>kept<Section title="Held"><Break /></Section>dropped</Loop></Let>
 <AssertStringIncludes actual={projectedBreak} expected={"kept"} />
 <AssertNotMatch actual={projectedBreak} expected={/dropped/} />
 </Test>
 
 <Test name="A Break a component writes belongs to the component's own loop">
-<Capture as="ownBreak"><Loop max={2}>kept<OwnLoop />tail</Loop></Capture>
+<Let as="ownBreak"><Loop max={2}>kept<OwnLoop />tail</Loop></Let>
 <AssertStringIncludes actual={ownBreak} expected={"tail"} />
 <AssertNotMatch actual={ownBreak} expected={/xx/} />
 </Test>

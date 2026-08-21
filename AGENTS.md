@@ -372,7 +372,7 @@ Express each step at the highest level that can carry it, and say why when
 dropping a level:
 
 - **Markdown** for control flow, I/O and composition — `<If>`, `<Each>`,
-  `<File>`, `<Parse>`, `<Capture>`, `<TempDir>`, and components. It is the layer
+  `<File>`, `<Parse>`, `<Let>`, `<TempDir>`, and components. It is the layer
   a reader can audit and the engine can journal and replay.
 - **TypeScript** in `eval` blocks for comparison, classification and formatting.
   Typed, testable, and visible to the reader as a value rather than as text.

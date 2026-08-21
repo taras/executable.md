@@ -1143,10 +1143,10 @@ describe("Tier OM — work the document was not going to render never reaches th
     "\n",
   );
 
-  it("OM11a: keeps a <Capture as> prefix out of the document", function* () {
+  it("OM11a: keeps a <Let as> prefix out of the document", function* () {
     const result = yield* run({
       "doc.md":
-        '<Output>\n\n<Capture as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Capture>\n\n</Output>',
+        '<Output>\n\n<Let as="held">\n\nPREFIX\n\n```bash exec\nFAIL\n```\n\n</Let>\n\n</Output>',
     });
 
     expect(result.ok).toBe(false);

@@ -639,11 +639,11 @@ describe("Tier D — code execution and modifiers", () => {
       // A forwarded block renders nothing, so the text a modifier transforms
       // comes from the region that asked for it (#441).
       "README.md": [
-        '<Capture as="shouted">',
+        '<Let as="shouted">',
         "```bash uppercase exec",
         "echo hello",
         "```",
-        "</Capture>",
+        "</Let>",
         "",
         "{shouted}",
       ].join("\n"),

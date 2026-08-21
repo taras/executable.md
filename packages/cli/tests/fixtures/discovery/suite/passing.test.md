@@ -1,6 +1,6 @@
 # Passing
 
 <Test name="root document passes">
-<Capture as="greeting">Hello</Capture>
+<Let as="greeting">Hello</Let>
 <AssertEquals actual={greeting} expected={"Hello"} />
 </Test>

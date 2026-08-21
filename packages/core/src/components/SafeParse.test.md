@@ -8,7 +8,7 @@ what lets a repair loop live in Markdown instead of inside the component.
 Content that parses and validates binds the success shape.
 
 <Test name="Valid content binds ok with the validated value">
-<Capture as="schemaText" select="code[lang=json]">
+<Let as="schemaText" select="code[lang=json]">
 ```json
 {
   "type": "object",
@@ -17,7 +17,7 @@ Content that parses and validates binds the success shape.
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 <SafeParse schema={schemaText} as="result">
 { "passed": true }
 </SafeParse>
@@ -40,7 +40,7 @@ The text that failed is kept exactly as the content produced it, so a corrective
 prompt can quote what was actually said.
 
 <Test name="A failed result keeps the original input">
-<Capture as="raw">Sorry, I cannot do that.</Capture>
+<Let as="raw">Sorry, I cannot do that.</Let>
 <SafeParse schema={{ type: "object" }} as="result">Sorry, I cannot do that.</SafeParse>
 <AssertEquals actual={result.input} expected={raw} />
 </Test>
@@ -84,6 +84,6 @@ dropped.
 It renders nothing either. The result is the whole of its contribution.
 
 <Test name="SafeParse renders nothing">
-<Capture as="rendered"><SafeParse schema={{ type: "number" }} as="ignored">1</SafeParse></Capture>
+<Let as="rendered"><SafeParse schema={{ type: "number" }} as="ignored">1</SafeParse></Let>
 <AssertEquals actual={rendered} expected={""} />
 </Test>

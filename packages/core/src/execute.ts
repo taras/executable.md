@@ -1244,7 +1244,7 @@ function* execTerminal(
       // explicitly: an enclosing `timeout=` has already made this its own value,
       // and the Process Api itself defaults to nothing (spec §Config).
       const timeout = yield* ephemeral(timeoutExec);
-      // Where this block's output goes: a `<Capture as>` region decided that
+      // Where this block's output goes: a `<Let as>` region decided that
       // lexically, and a modifier inside the chain may have narrowed it. A bound
       // block is not a display at all — its outcome is data the document reads —
       // so it shows neither channel and takes its region's routing from nothing.

@@ -21,7 +21,7 @@ import type {
  * The one-observation contract inside the engine's own constructs (spec §6.5,
  * §6.9).
  *
- * `<Each>`, `<Capture>`, a component body and content projected into
+ * `<Each>`, `<Let>`, a component body and content projected into
  * `<Content />` all expand segments through a nested `expandSegments`, which
  * reports each error where it is produced. None of them is an observation
  * boundary, so what they hand back is appended or settled, never reported twice.
@@ -237,8 +237,8 @@ describe("Tier OBS — construct error observation", () => {
     expect(twice.observed).toEqual([broke(), broke()]);
   });
 
-  it("OBS10: an error in a <Capture> body is observed once", function* () {
-    const probe = yield* runProbe('<Capture as="c"><Broken /></Capture>');
+  it("OBS10: an error in a <Let> body is observed once", function* () {
+    const probe = yield* runProbe('<Let as="c"><Broken /></Let>');
     expect(probe.observed).toEqual([broke()]);
   });
 
@@ -274,20 +274,20 @@ describe("Tier OBS — construct error observation", () => {
     expect(eachItems.observed).toHaveLength(1);
     expect(eachItems.observed[0]).toContain("must resolve to an array");
 
-    const captureAs = yield* runProbe("<Capture>body</Capture>");
-    expect(captureAs.observed).toHaveLength(1);
-    expect(captureAs.observed[0]).toContain('requires an "as" prop');
+    const missingAs = yield* runProbe("<Let>body</Let>");
+    expect(missingAs.observed).toHaveLength(1);
+    expect(missingAs.observed[0]).toContain('requires an "as" prop');
 
-    const captureEmpty = yield* runProbe('<Capture as="c" />');
-    expect(captureEmpty.observed).toHaveLength(1);
-    expect(captureEmpty.observed[0]).toContain("must have content");
+    const noSource = yield* runProbe('<Let as="c" />');
+    expect(noSource.observed).toHaveLength(1);
+    expect(noSource.observed[0]).toContain("must have content");
   });
 
   it("OBS15: a refused capture reports its body error once and sets no binding", function* () {
-    const capture = yield* runProbe('<Capture as="c"><Broken /></Capture>');
-    expect(capture.observed).toEqual([broke()]);
-    expect("c" in capture.values).toBe(false);
-    expect(capture.output).toContain(broke());
+    const refused = yield* runProbe('<Let as="c"><Broken /></Let>');
+    expect(refused.observed).toEqual([broke()]);
+    expect("c" in refused.values).toBe(false);
+    expect(refused.output).toContain(broke());
 
     const each = yield* runProbe('<Each in={[1]} let="n" as="e"><Broken /></Each>');
     expect(each.observed).toEqual([broke()]);
@@ -310,7 +310,7 @@ describe("Tier OBS — construct error observation", () => {
       ["<Broken /><Broken />", {}],
       ["<If condition={true}><Broken /><Broken /></If>", {}],
       ['<Each in={[1, 2]} let="n"><Broken /></Each>', {}],
-      ['<Capture as="c"><Broken /><Broken /></Capture>', {}],
+      ['<Let as="c"><Broken /><Broken /></Let>', {}],
       ["<Wrap /><Wrap />", { markdown: BODY }],
       ["<Wrap><Broken /></Wrap><Wrap><Broken /></Wrap>", { markdown: PROJECT }],
       ["<Echo><Broken /></Echo><Echo><Broken /></Echo>", ECHO],
@@ -328,7 +328,7 @@ describe("Tier OBS — construct error observation", () => {
       ["<Broken />", {}],
       ["<If condition={true}><Broken /></If>", {}],
       ['<Each in={[1]} let="n"><Broken /></Each>', {}],
-      ['<Capture as="c"><Broken /></Capture>', {}],
+      ['<Let as="c"><Broken /></Let>', {}],
       ["<Wrap />", { markdown: BODY }],
       ["<Wrap><Broken /></Wrap>", { markdown: PROJECT }],
       ["<Echo><Broken /></Echo>", ECHO],

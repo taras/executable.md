@@ -13,6 +13,6 @@ the caller-provided text.
 </Section>
 
 <Test name="Props interpolate into the component body">
-<Capture as="propDemo"><PropDemo greeting="Hey" subject="world" /></Capture>
+<Let as="propDemo"><PropDemo greeting="Hey" subject="world" /></Let>
 <AssertEquals actual={propDemo} expected={"\nThe caller said: \"Hey, world!\"\n\n\n> 📝 **info:** Props were successfully passed through to this component."} />
 </Test>

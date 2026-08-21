@@ -14,11 +14,11 @@ journal events.
 </Section>
 
 <Test name="Eval blocks render no output">
-<Capture as="evalRendered">
+<Let as="evalRendered">
 ```js eval
 const quietValue = 1;
 ```
-</Capture>
+</Let>
 <AssertEquals actual={evalRendered} expected={""} />
 </Test>
 
@@ -63,19 +63,19 @@ const startedAt = Date.now();
 ```js eval
 const label = "configured";
 ```
-<Capture as="portEcho">
+<Let as="portEcho">
 ```bash exec
 echo "Service is {label}"
 ```
-</Capture>
+</Let>
 <AssertEquals actual={portEcho} expected={"\nService is configured"} />
 </Test>
 
 <Test name="Ephemeral eval reconstructs live bindings without rendering">
-<Capture as="ephemeralRendered">
+<Let as="ephemeralRendered">
 ```js ephemeral eval
 const reconstructed = "live";
 ```
-</Capture>
+</Let>
 <AssertEquals actual={ephemeralRendered} expected={""} />
 </Test>

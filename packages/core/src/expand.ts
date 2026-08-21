@@ -720,11 +720,11 @@ export function* expandSegments(
           break;
         }
 
-        if (segment.name === "Capture") {
-          // No raise() here: expandCapture reports the errors it creates, and
+        if (segment.name === "Let") {
+          // No raise() here: expandLet reports the errors it creates, and
           // its body settled its own (§6.9).
           result.push(
-            ...(yield* expandCapture(
+            ...(yield* expandLet(
               segment,
               parentMeta,
               parentProps,
@@ -739,7 +739,7 @@ export function* expandSegments(
         }
 
         if (segment.name === "Each") {
-          // Same as <Capture>: expandEach reports its own errors and hands the
+          // Same as <Let>: expandEach reports its own errors and hands the
           // body's back untouched (§6.9).
           result.push(
             ...(yield* expandEach(
@@ -1161,24 +1161,31 @@ function bindingRefusal(segment: ExecutableCodeBlock): string | undefined {
   return binding.error.message;
 }
 
-function captureError(message: string): ErrorSegment {
-  return { type: "error", message, source: "Capture" };
+function letError(message: string): ErrorSegment {
+  return { type: "error", message, source: "Let" };
 }
 
+const LET_PROPS = new Set(["as", "value", "select"]);
+
 /**
- * Capture the rendered body into an `as` binding (spec §6.5 `<Capture>`).
+ * Bind rendered content or a direct value into `as` (spec §6.5 `<Let>`).
  *
  * Like `<If>`, it is not an observation boundary. Errors it creates itself — a
- * missing or invalid `as`, an unknown prop, an empty body — are reported here,
- * exactly once. Body segments come back from `expandSegments` already reported
- * where they were produced, and are handed on untouched: a failing element
- * inside a capture settles once, exactly as it would inline.
+ * missing or invalid `as`, an unknown prop, a body that is neither source, both
+ * sources at once — are reported here, exactly once. Body segments come back
+ * from `expandSegments` already reported where they were produced, and are
+ * handed on untouched: a failing element inside a rendered body settles once,
+ * exactly as it would inline.
  *
- * A capture never swallows an error. When the body produced one, `as` creates no
- * binding and the error segments stand in place of the capture, so the reader
- * sees the failure instead of a binding holding a printed error as its text.
+ * `<Let>` never swallows an error. When the body produced one, `as` creates no
+ * binding and the error segments stand in place of it, so the reader sees the
+ * failure instead of a binding holding a printed error as its text.
+ *
+ * Which source runs is decided from what the author wrote — whether `value` and
+ * children are present — before either one runs, so a construct that names both
+ * sources evaluates neither.
  */
-function* expandCapture(
+function* expandLet(
   segment: Extract<Segment, { type: "component" }>,
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
@@ -1189,40 +1196,69 @@ function* expandCapture(
   checkedFailures: CheckedFailures | undefined,
   authority: ImportAuthority | undefined,
 ): Operation<ErrorSegment[]> {
-  if (segment.selfClosing || segment.children.length === 0) {
-    return [
-      yield* raise(captureError('<Capture> must have content. Use <Capture as="x">...</Capture>.')),
-    ];
+  const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
+  if (written.some((name) => !LET_PROPS.has(name))) {
+    return [yield* raise(letError('<Let> only accepts "as", "value" and "select" props.'))];
   }
 
-  const propNames = Object.keys(segment.props);
-  if (propNames.some((name) => name !== "as" && name !== "select")) {
-    return [yield* raise(captureError('<Capture> only accepts "as" and "select" props.'))];
-  }
-
-  const expressionNames = Object.keys(segment.expressions);
-  if (expressionNames.length > 0) {
-    if (expressionNames.includes("as")) {
-      return [
-        yield* raise(captureError('<Capture as={...}> is invalid: "as" must be a string literal.')),
-      ];
-    }
-    if (!expressionNames.every((n) => n === "select")) {
-      return [yield* raise(captureError('<Capture> only accepts "as" and "select" props.'))];
-    }
+  if ("as" in segment.expressions) {
+    return [yield* raise(letError('<Let as={...}> is invalid: "as" must be a string literal.'))];
   }
 
   if (segment.props.as === undefined) {
-    return [yield* raise(captureError('<Capture> requires an "as" prop (non-empty string).'))];
+    return [yield* raise(letError('<Let> requires an "as" prop (non-empty string).'))];
   }
 
   const asBinding = validateBindingName(segment.props.as);
   if (!asBinding.ok) {
-    return [yield* raise(captureError(asBinding.error.message))];
+    return [yield* raise(letError(asBinding.error.message))];
   }
   const bindingName = asBinding.value;
   if (bindingName === undefined) {
-    return [yield* raise(captureError('<Capture> requires an "as" prop (non-empty string).'))];
+    return [yield* raise(letError('<Let> requires an "as" prop (non-empty string).'))];
+  }
+
+  // Presence, not the resolved value: `value={undefined}` names the direct
+  // source exactly as `value={42}` does, and a whitespace child is a body.
+  const hasValue = "value" in segment.props || "value" in segment.expressions;
+  const hasSelect = "select" in segment.props || "select" in segment.expressions;
+  const hasChildren = segment.children.length > 0;
+
+  if (hasValue && hasChildren) {
+    return [
+      yield* raise(
+        letError(
+          '<Let> has one source. Remove the children or the "value" prop: ' +
+            '<Let as="x">...</Let> binds what its body renders, and ' +
+            '<Let as="x" value={...} /> binds the value itself.',
+        ),
+      ),
+    ];
+  }
+
+  if (hasValue && hasSelect) {
+    return [
+      yield* raise(
+        letError(
+          '<Let> "select" extracts from rendered content, so it cannot be written with "value".',
+        ),
+      ),
+    ];
+  }
+
+  if (!hasValue && !hasChildren) {
+    return [
+      yield* raise(
+        letError(
+          '<Let> must have content or a "value" prop. Use <Let as="x">...</Let> or ' +
+            '<Let as="x" value={...} />.',
+        ),
+      ),
+    ];
+  }
+
+  if (hasValue) {
+    return yield* letValue(segment, bindingName);
   }
 
   // The region's foreground commands write their stdout into this binding
@@ -1271,9 +1307,54 @@ function* expandCapture(
 
   const bindingEnv = yield* env;
   if (!bindingEnv) {
-    return [yield* raise(captureError("<Capture> requires an evaluation environment."))];
+    return [yield* raise(letError("<Let> requires an evaluation environment."))];
   }
   bindingEnv.values[bindingName] = captured;
+  return [];
+}
+
+/**
+ * Bind the exact value `value` names, by reference.
+ *
+ * An expression is evaluated here, at this position in the body, against the
+ * same layered environment and failure wrapper an expression prop uses — and
+ * nothing more. Component props project through JSON on their way in; this one
+ * does not, so a function, a class instance, `undefined` or a cyclic object
+ * arrives in the binding as the object the expression produced.
+ */
+function* letValue(
+  segment: Extract<Segment, { type: "component" }>,
+  bindingName: string,
+): Operation<ErrorSegment[]> {
+  let value: unknown;
+  if ("value" in segment.props) {
+    value = segment.props.value;
+  } else {
+    try {
+      value = yield* evaluateExpression(
+        segment.expressions.value,
+        "Let",
+        "value",
+        segment.projectedEnv,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return [
+        yield* raise({
+          type: "error",
+          message: positioned(message, segment),
+          source: "Let",
+        }),
+      ];
+    }
+  }
+
+  // Read after the source succeeded: a refused or failed source writes nothing.
+  const bindingEnv = yield* env;
+  if (!bindingEnv) {
+    return [yield* raise(letError("<Let> requires an evaluation environment."))];
+  }
+  bindingEnv.values[bindingName] = value;
   return [];
 }
 
@@ -1630,7 +1711,7 @@ const IF_PROPS = new Set(["condition"]);
  * block, creates a binding, or reaches a provider.
  *
  * `<If>` opens no binding scope: the selected branch expands in the enclosing
- * environment, so a `<Capture>` it creates behaves like inline content and
+ * environment, so a `<Let>` it creates behaves like inline content and
  * stays available after `</If>`.
  *
  * It is not an observation boundary either. Errors it creates itself — a
@@ -3602,7 +3683,7 @@ function valueModeStructureError(bodySegments: Segment[]): ErrorSegment | undefi
  * §6.10). Runs against the body's own source AST, before `<Content />`
  * substitution, so projected content can neither introduce nor satisfy a
  * declaration. Every violation is combined into a single ErrorSegment, and a
- * body whose structure is invalid runs no eval, exec, `<Capture>`, or nested
+ * body whose structure is invalid runs no eval, exec, `<Let>`, or nested
  * component.
  */
 export function validateBodyStructure(

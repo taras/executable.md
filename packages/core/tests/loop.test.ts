@@ -237,34 +237,31 @@ describe("Tier LOOP — bounded repetition", () => {
 
 describe("Tier LOOP — bindings", () => {
   it("LOOP10: an iteration reads what an earlier one bound", function* () {
-    const run = yield* runLoop('<Loop max={3}><Capture as="tally">{tally}.</Capture></Loop>', {
+    const run = yield* runLoop('<Loop max={3}><Let as="tally">{tally}.</Let></Loop>', {
       env: { tally: "." },
     });
     expect(run.env?.tally).toBe("....");
   });
 
   it("LOOP11: the final binding stays readable after the loop", function* () {
-    const run = yield* runLoop(
-      '<Loop max={2}><Capture as="tally">{tally}.</Capture></Loop>({tally})',
-      { env: { tally: "." } },
-    );
+    const run = yield* runLoop('<Loop max={2}><Let as="tally">{tally}.</Let></Loop>({tally})', {
+      env: { tally: "." },
+    });
     expect(run.output).toBe("(...)");
   });
 
   it("LOOP12: a binding made in the last iteration survives the loop", function* () {
-    const run = yield* runLoop(
-      '<Loop max={2}><Capture as="picked">chosen</Capture></Loop>({picked})',
-    );
+    const run = yield* runLoop('<Loop max={2}><Let as="picked">chosen</Let></Loop>({picked})');
     expect(run.output).toBe("(chosen)");
     expect(run.env?.picked).toBe("chosen");
   });
 
   it("LOOP13: <If> inside the body reads a binding an earlier iteration made", function* () {
     const run = yield* runLoop(
-      '<Loop max={2}><If condition={seen}>again<Else>first</Else></If><Capture as="seen">x</Capture></Loop>',
+      '<Loop max={2}><If condition={seen}>again<Else>first</Else></If><Let as="seen">x</Let></Loop>',
       { env: { seen: false } },
     );
-    // The capture rebinds `seen` to a non-empty string, which the second
+    // The `<Let>` rebinds `seen` to a non-empty string, which the second
     // iteration reads as truthy — bindings really do carry.
     expect(run.output).toBe("firstagain");
     expect(errorMessages(run.segments)).toHaveLength(0);
@@ -404,7 +401,7 @@ describe("Tier BREAK — exiting the loop", () => {
 
   it("BREAK5: bindings made before the <Break> remain available", function* () {
     const run = yield* runLoop(
-      '<Loop max={5}><Capture as="picked">chosen</Capture><Break /></Loop>({picked})',
+      '<Loop max={5}><Let as="picked">chosen</Let><Break /></Loop>({picked})',
     );
     expect(run.output).toBe("(chosen)");
     expect(run.env?.picked).toBe("chosen");
@@ -464,9 +461,9 @@ describe("Tier BREAK — content after the break does not run", () => {
     expect(run.blocks).toHaveLength(0);
   });
 
-  it("BREAK12: a <Capture> after <Break> creates no binding", function* () {
+  it("BREAK12: a <Let> after <Break> creates no binding", function* () {
     const run = yield* runLoop(
-      '<Loop max={2}>before<Break /><Capture as="skipped">never</Capture></Loop>({skipped})',
+      '<Loop max={2}>before<Break /><Let as="skipped">never</Let></Loop>({skipped})',
     );
     expect(run.output).toBe("before({skipped})");
     expect(run.env?.skipped).toBeUndefined();

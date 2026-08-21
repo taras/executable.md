@@ -263,6 +263,45 @@ echo hi
   });
 });
 
+/**
+ * Scanning resolves a JSON-compatible expression prop to its value, which is a
+ * projection: `undefined` has no JSON reading, so it arrives as `null`. One
+ * prop is exempt, because the value it names is bound by reference rather than
+ * read as data — see spec §6.5.
+ */
+describe("scanSegments — a prop bound by reference", () => {
+  function element(source: string): ComponentElement {
+    const [segment] = scanSegments(source);
+    if (segment?.type !== "component") {
+      throw new Error(`expected a component segment from ${source}`);
+    }
+    return segment;
+  }
+
+  it("A-REF1: <Let value> keeps the authored expression, whatever JSON would make of it", function* () {
+    for (const authored of ["undefined", "42", "null", "{ a: 1 }", "source"]) {
+      const segment = element(`<Let as="x" value={${authored}} />`);
+
+      expect(segment.expressions.value).toBe(authored);
+      expect("value" in segment.props).toBeFalsy();
+    }
+  });
+
+  it("A-REF2: every other prop still resolves at scan time, including <Let>'s own", function* () {
+    expect(element("<Widget foo={undefined} />").props.foo).toBe(null);
+    expect(element("<Widget foo={42} />").props.foo).toBe(42);
+    expect(element("<Widget value={undefined} />").props.value).toBe(null);
+    expect(element('<Let as="x" select={undefined}>text</Let>').props.select).toBe(null);
+  });
+
+  it("A-REF3: a quoted <Let value> is a string prop, not an expression", function* () {
+    const segment = element('<Let as="x" value="plain" />');
+
+    expect(segment.props.value).toBe("plain");
+    expect("value" in segment.expressions).toBeFalsy();
+  });
+});
+
 describe("parseInfoString", () => {
   it("parses language only", function* () {
     const result = parseInfoString("bash");

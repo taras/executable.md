@@ -269,11 +269,11 @@ read back in Markdown, with nothing hard-coding what is there.
 <File path="README.md">readme</File>
 <Glob include={["docs/**/*.md"]} as="docs" />
 
-<Capture as="contents">
+<Let as="contents">
 <Each in={docs} let="path">
 <File path={path} />
 </Each>
-</Capture>
+</Let>
 
 <AssertEquals actual={docs} expected={["docs/api/reference.md", "docs/guide.md"]} />
 <AssertStringIncludes actual={contents} expected={"reference"} />

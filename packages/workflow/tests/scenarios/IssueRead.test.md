@@ -121,11 +121,11 @@ lives in another repository. The request still goes where it always went.
 <EmptyRequestLog />
 <GitHubServer as="server" />
 <RemoteIssue number={1} title="Quiet" body="…" />
-<Capture as="rendered">
+<Let as="rendered">
 <GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
 <Issue url={server.repository + "/issues/1"} as="issue" />
 </GitHubIssues>
-</Capture>
+</Let>
 <AssertEquals actual={rendered} expected="" />
 </Test>
 

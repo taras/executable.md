@@ -385,12 +385,9 @@ describe("props binding", () => {
   it("allows an authored props binding to shadow the namespace locally", function* () {
     const { output, displayed, result } = yield* runDocument(
       {
-        "root.md": [
-          ROOT_PROPS,
-          "",
-          '<Capture as="props">shadowed</Capture>{props} {props.name}',
-          "",
-        ].join("\n"),
+        "root.md": [ROOT_PROPS, "", '<Let as="props">shadowed</Let>{props} {props.name}', ""].join(
+          "\n",
+        ),
       },
       { name: "caller", release: { version: "1.2.3" } },
     );

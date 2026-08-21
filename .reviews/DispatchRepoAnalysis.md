@@ -7,29 +7,29 @@ const requestedRef = process.env.ANALYZE_REF ?? "";
 const reportPrefix = process.env.ANALYZE_REPORT_NAME ?? "repo-analysis";
 ```
 
-<Capture as="currentBranch">
+<Let as="currentBranch">
 
 ```bash exec
 git rev-parse --abbrev-ref HEAD
 ```
 
-</Capture>
+</Let>
 
-<Capture as="repoName">
+<Let as="repoName">
 
 ```bash exec
 gh repo view --json nameWithOwner -q .nameWithOwner
 ```
 
-</Capture>
+</Let>
 
-<Capture as="dispatchStart">
+<Let as="dispatchStart">
 
 ```bash exec
 date -u +"%Y-%m-%dT%H:%M:%SZ"
 ```
 
-</Capture>
+</Let>
 
 ```ts eval
 const targetRef = requestedRef || currentBranch.trim();
@@ -41,7 +41,7 @@ const dispatchStartIso = dispatchStart.trim();
 gh workflow run repo-analysis.yml --repo {repo} --ref {targetRef} -f ref={targetRef} -f report_name={reportPrefix}
 ```
 
-<Capture as="runId">
+<Let as="runId">
 
 ```bash exec
 for i in $(seq 1 30); do
@@ -55,7 +55,7 @@ done
 echo ""
 ```
 
-</Capture>
+</Let>
 
 ```ts eval
 const runIdValue = runId.trim();
@@ -69,13 +69,13 @@ fi
 gh run watch {runIdValue} --repo {repo} --exit-status
 ```
 
-<Capture as="runJson">
+<Let as="runJson">
 
 ```bash exec
 gh run view {runIdValue} --repo {repo} --json databaseId,url,status,conclusion,headSha,displayTitle,createdAt,updatedAt
 ```
 
-</Capture>
+</Let>
 
 ```bash silent exec
 mkdir -p .reviews/artifacts/{runIdValue}

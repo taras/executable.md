@@ -509,9 +509,9 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE12: a native <Capture> preserves child errors under a printing error mode", function* () {
+  it("CE12: a native <Let> preserves child errors under a printing error mode", function* () {
     const values: Record<string, unknown> = {};
-    const result = yield* run(`<Capture as="cap">${BAD}</Capture>AFTER`, { values });
+    const result = yield* run(`<Let as="cap">${BAD}</Let>AFTER`, { values });
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(result.output).toContain("ERROR");
@@ -519,11 +519,11 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE13: a throwing error mode aborts a native <Capture> before storing the binding", function* () {
+  it("CE13: a throwing error mode aborts a native <Let> before storing the binding", function* () {
     const values: Record<string, unknown> = {};
     let thrown: unknown;
     try {
-      yield* run(`<Capture as="cap">${BAD}</Capture>`, { throwing: true, values });
+      yield* run(`<Let as="cap">${BAD}</Let>`, { throwing: true, values });
     } catch (error) {
       thrown = error;
     }
@@ -532,18 +532,18 @@ describe("capture error propagation", () => {
     expect("cap" in values).toBe(false);
   });
 
-  it("CE14: a successful native <Capture> is unchanged", function* () {
+  it("CE14: a successful native <Let> is unchanged", function* () {
     const values: Record<string, unknown> = {};
-    const result = yield* run('<Capture as="cap">hello</Capture>INLINE', { values });
+    const result = yield* run('<Let as="cap">hello</Let>INLINE', { values });
 
     expect(result.output).toBe("INLINE");
     expect(values.cap).toBe("hello");
     expect(errors(result.segments)).toHaveLength(0);
   });
 
-  it("CE15: a <Capture> validation printed error is still a single error", function* () {
+  it("CE15: a <Let> validation printed error is still a single error", function* () {
     const values: Record<string, unknown> = {};
-    const result = yield* run("<Capture>no binding</Capture>", { values });
+    const result = yield* run("<Let>no binding</Let>", { values });
 
     expect(errors(result.segments)).toHaveLength(1);
     expect(result.output).toContain("requires an");

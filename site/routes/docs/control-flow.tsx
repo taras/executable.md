@@ -38,13 +38,28 @@ Needs revision: {review.summary}
 </If>`;
 
 const BINDING = `<If condition={verdict.passed}>
-<Capture as="headline">All {verdict.total} checks passed.</Capture>
+<Let as="headline">All {verdict.total} checks passed.</Let>
 <Else>
-<Capture as="headline">{verdict.failed} of {verdict.total} checks failed.</Capture>
+<Let as="headline">{verdict.failed} of {verdict.total} checks failed.</Let>
 </Else>
 </If>
 
 <GitHubComment body={headline} />`;
+
+const LET_RENDERED = `<Let as="summary">
+{passed} of {total} checks passed.
+</Let>`;
+
+const LET_VALUE = `<Let
+  as="releaseSchema"
+  value={{
+    type: "object",
+    required: ["bump"],
+    properties: { bump: { enum: ["patch", "minor", "major"] } }
+  }}
+/>
+
+<Sample schema={releaseSchema} as="decision" />`;
 
 const FIXED_LOOP = `<Loop max={3}>
 <Probe as="reading" />
@@ -86,11 +101,11 @@ const PROJECTED_BREAK = `<Loop max={3}>
 </Panel>
 </Loop>`;
 
-const LOOP_BINDING = `<Capture as="log">attempts:</Capture>
+const LOOP_BINDING = `<Let as="log">attempts:</Let>
 
 <Loop max={3}>
 <Attempt as="attempt" />
-<Capture as="log">{log} {attempt.status}</Capture>
+<Let as="log">{log} {attempt.status}</Let>
 </Loop>
 
 <GitHubComment body={log} />`;
@@ -105,7 +120,7 @@ export default define.page(function ControlFlow() {
         repeats a region a bounded number of times. Both are directives the
         expansion engine handles directly, like <code>&lt;Each&gt;</code> and
         {" "}
-        <code>&lt;Capture&gt;</code> — there is no <code>If.md</code> or{" "}
+        <code>&lt;Let&gt;</code> — there is no <code>If.md</code> or{" "}
         <code>Loop.md</code> to import.
       </p>
 
@@ -171,14 +186,33 @@ export default define.page(function ControlFlow() {
 
       <h2>Bindings survive the branch</h2>
       <p>
-        <code>&lt;If&gt;</code>{" "}
-        creates no binding scope. A capture the selected branch makes behaves
-        like inline content and stays available after{" "}
+        <code>&lt;If&gt;</code> creates no binding scope. A{" "}
+        <code>&lt;Let&gt;</code>{" "}
+        the selected branch makes behaves like inline content and stays
+        available after{" "}
         <code>&lt;/If&gt;</code>, so both branches can bind the same name and
         later content reads it without knowing which one ran. The unselected
         branch binds nothing at all.
       </p>
       <CodeBlock>{BINDING}</CodeBlock>
+
+      <h2>Binding a name with Let</h2>
+      <p>
+        <code>&lt;Let&gt;</code>{" "}
+        binds one name in the environment it is written in, and renders nothing
+        where it stands. Written with children it binds what those children
+        render, trailing whitespace trimmed:
+      </p>
+      <CodeBlock>{LET_RENDERED}</CodeBlock>
+      <p>
+        Written with <code>value</code>{" "}
+        it binds that value itself — the object, not a rendering of it — so
+        structured data reaches a later prop or eval block without a round trip
+        through text. A <code>&lt;Let&gt;</code>{" "}
+        has exactly one source: children and <code>value</code>{" "}
+        together are refused, and refused before either one runs.
+      </p>
+      <CodeBlock>{LET_VALUE}</CodeBlock>
 
       <h2>Repeating with Loop</h2>
       <p>

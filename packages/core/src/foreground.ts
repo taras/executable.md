@@ -19,7 +19,7 @@
  *
  * - **Routing** is what a reader sees while the command runs. An ordinary block
  *   forwards both channels to the host's, so a build prints as it builds;
- *   `<Capture as>` takes stdout into the captured value instead; `silent` shows
+ *   `<Let as>` takes stdout into the captured value instead; `silent` shows
  *   neither. Routing never decides success.
  * - **Retention** is what the run keeps afterwards. A host that asked for a
  *   diagnostic journal keeps stdout and stderr; a host that asked for none keeps
@@ -84,7 +84,7 @@ export function* declaredRouting(): Operation<ForegroundRouting | undefined> {
  * Run `body` with `routing` in effect for the foreground commands inside it.
  *
  * Scoped, so a region's routing ends with the region: the block after a
- * `<Capture>` forwards again.
+ * `<Let>` forwards again.
  */
 export function withRouting<T>(
   selected: ForegroundRouting,
@@ -98,7 +98,7 @@ export function withRouting<T>(
 
 /** What one block's output did, once it has finished. */
 export interface ForegroundOutput {
-  /** stdout a `<Capture as>` region asked for; empty otherwise. */
+  /** stdout a `<Let as>` region asked for; empty otherwise. */
   captured: string;
   /** stdout the host asked to retain; undefined when it asked for none. */
   retainedStdout: string | undefined;

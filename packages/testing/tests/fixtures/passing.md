@@ -1,7 +1,7 @@
 # Fixture
 
 <Test name="hello">
-<Capture as="result">Hello World</Capture>
+<Let as="result">Hello World</Let>
 <AssertEquals actual={result} expected={"Hello World"} />
 </Test>
 

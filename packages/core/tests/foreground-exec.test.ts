@@ -195,11 +195,11 @@ describe("Tier FG — foreground execution", () => {
 
   it("FG5: a capture takes stdout for its binding and leaves stderr diagnostic", function* () {
     const source = [
-      '<Capture as="taken">',
+      '<Let as="taken">',
       "```bash exec",
       "echo captured; echo diagnostic >&2",
       "```",
-      "</Capture>",
+      "</Let>",
       "",
       "[{taken}]",
       "",
@@ -364,11 +364,11 @@ describe("Tier FG — foreground execution", () => {
    */
   it("FG12: a capture without a journal binds its stdout and records nothing", function* () {
     const source = [
-      '<Capture as="taken">',
+      '<Let as="taken">',
       "```bash exec",
       "echo bound; echo loud >&2",
       "```",
-      "</Capture>",
+      "</Let>",
       "",
       "[{taken}]",
       "",
@@ -471,11 +471,11 @@ describe("Tier FG — foreground execution", () => {
    */
   it("FG17: a resumed journaled capture rebuilds its binding without running again", function* () {
     const source = [
-      '<Capture as="taken">',
+      '<Let as="taken">',
       "```bash exec",
       "echo recorded-once",
       "```",
-      "</Capture>",
+      "</Let>",
       "",
       "[{taken}]",
       "",
@@ -688,11 +688,11 @@ describe("Tier FG — foreground execution", () => {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const source = [
-      '<Capture as="taken">',
+      '<Let as="taken">',
       "```bash exec",
       "echo account-1234-5678",
       "```",
-      "</Capture>",
+      "</Let>",
       "",
       "[{taken}]",
       "",

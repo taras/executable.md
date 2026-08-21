@@ -186,7 +186,7 @@ describe("testing mode", () => {
       "```js eval",
       "const leak = 1;",
       "```",
-      '<Capture as="cap">captured</Capture>',
+      '<Let as="cap">captured</Let>',
       "<AssertEquals actual={inherited} expected={7} />",
       "</Test>",
       '<Test name="reader">',
@@ -224,7 +224,7 @@ describe("testing mode", () => {
   it("captures persist for the immediately following assertion", function* () {
     const doc = [
       "<Testing><Test>",
-      '<Capture as="result">Hello World</Capture>',
+      '<Let as="result">Hello World</Let>',
       '<AssertEquals actual={result} expected={"Hello World"} />',
       "</Test></Testing>",
       "",
