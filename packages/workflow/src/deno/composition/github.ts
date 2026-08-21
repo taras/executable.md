@@ -33,7 +33,7 @@
  * request for the same branch.
  */
 
-import { ensure, scoped, until } from "effection";
+import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { tmpdir } from "node:os";
 import process from "node:process";
@@ -211,6 +211,71 @@ export function denoGitHubLogin(
       return printed === "" || /\s/.test(printed) ? undefined : printed;
     },
   };
+}
+
+/**
+ * Where a live invocation gets its access, without holding one.
+ *
+ * A source is credential-free and long-lived: an installed middleware or a
+ * provider module may hold one for as long as it likes, because there is nothing
+ * in one to retain. A *session* is what has an identity, and one is opened per
+ * live invocation — after that invocation's ceiling and local authority checks
+ * — and disposed with it. Two calls are two sessions, so an observation and the
+ * mutation it decided go out under one identity while two unrelated invocations
+ * never share one.
+ */
+export interface GitHubSource {
+  readonly endpoint: string;
+  open(): Operation<GitHubAccess>;
+}
+
+/**
+ * One invocation's access over this source.
+ *
+ * The credential is read no earlier than the first request that needs one, and
+ * then not again: every request this invocation makes carries the identity its
+ * first one established. Nothing outlives the session — the next invocation
+ * reads whatever the host holds then, which is what makes an interrupted attempt
+ * reacquire rather than resume under an identity nobody re-proved.
+ */
+function accessSession(access: GitHubAccess): GitHubAccess {
+  let read = false;
+  let held: string | undefined;
+  return {
+    endpoint: access.endpoint,
+    *token(): Operation<string | undefined> {
+      if (!read) {
+        held = yield* access.token();
+        read = true;
+      }
+      return held;
+    },
+    send(request: GitHubHttpRequest): Operation<GitHubHttpResponse> {
+      return access.send(request);
+    },
+  };
+}
+
+/** A source over one access, opening a session per invocation. */
+export function gitHubSource(access: GitHubAccess): GitHubSource {
+  return {
+    endpoint: access.endpoint,
+    open(): Operation<GitHubAccess> {
+      return resource(function* (provide) {
+        // A resource rather than a value, so the session ends with the scope
+        // that opened it whether that scope returned, refused or was cancelled.
+        yield* provide(accessSession(access));
+      });
+    },
+  };
+}
+
+/** The shipped source: the platform's transport and this host's credentials. */
+export function denoGitHubSource(
+  endpoint: string = GITHUB_API,
+  options: GitHubAccessOptions = {},
+): GitHubSource {
+  return gitHubSource(denoGitHubAccess(endpoint, options));
 }
 
 export interface GitHubAccessOptions {

@@ -53,7 +53,7 @@ import type { Operation } from "effection";
 import { canonicalFingerprint } from "@executablemd/core";
 import {
   authorizedHeaders,
-  denoGitHubAccess,
+  denoGitHubSource,
   member,
   nextPage,
   nonEmpty,
@@ -61,6 +61,7 @@ import {
   PAGE_LIMIT,
   PAGE_SIZE,
   type GitHubAccess,
+  type GitHubSource,
   type GitHubHttpResponse,
 } from "../composition/github.ts";
 import { IssueApi } from "../../issue/api.ts";
@@ -305,7 +306,7 @@ export interface GitHubIssuesOptions {
    * document can write widens it.
    */
   readonly ceiling: readonly string[];
-  readonly access?: GitHubAccess;
+  readonly access?: GitHubSource;
 }
 
 /**
@@ -317,7 +318,10 @@ export interface GitHubIssuesOptions {
  * `IssueApi`'s own base error to report that nothing handled the request.
  */
 export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> {
-  const access = options.access ?? denoGitHubAccess();
+  // A source rather than an access: it is credential-free, so holding one for
+  // the middleware's whole lifetime retains nothing. A session — which does have
+  // an identity — is opened per request below, after that request's ceiling.
+  const source = options.access ?? denoGitHubSource();
 
   yield* IssueApi.around(
     {
@@ -338,7 +342,9 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (issue === undefined) {
           throw new IssueUnavailableError();
         }
-        return yield* observed(access, issue, url);
+        // After the ceiling, never before: a session opened first would be an
+        // identity established for a target this host had not authorized.
+        return yield* observed(yield* source.open(), issue, url);
       },
 
       *upsert([issue, upsert], next): Operation<IssueReference> {
@@ -361,7 +367,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (name === undefined) {
           throw new IssueUnavailableError();
         }
-        return yield* reconcile(access, name, issue, upsert);
+        return yield* reconcile(yield* source.open(), name, issue, upsert);
       },
     },
     { at: "min" },

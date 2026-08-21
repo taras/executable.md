@@ -23,8 +23,10 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { lstat } from "@effectionx/fs";
-import { chmod, writeFile } from "node:fs/promises";
-import { scoped, until, type Operation } from "effection";
+import { chmod, readdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
+import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
@@ -40,8 +42,15 @@ import type {
   GitAuthentication,
   GitAuthenticationSession,
 } from "../src/deno/composition/authentication.ts";
-import { denoGitHubAccess } from "../src/deno/composition/github.ts";
-import type { GitHubLogin } from "../src/deno/composition/github.ts";
+import { denoGitHubAccess, gitHubSource } from "../src/deno/composition/github.ts";
+import type {
+  GitHubAccess,
+  GitHubHttpResponse,
+  GitHubLogin,
+  GitHubSource,
+} from "../src/deno/composition/github.ts";
+import { GITHUB, useGitHubIssues } from "../src/deno/issue/github.ts";
+import { IssueApi } from "../src/issue/api.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
@@ -532,6 +541,208 @@ describe("workflow ambient authentication containment", () => {
   });
 });
 
+/**
+ * What a cancelled invocation leaves behind, which must be nothing.
+ *
+ * Cancellation is the case where a completion is most easily invented and a
+ * resource most easily leaked: the operation stops between establishing an
+ * identity and proving anything with it. These drive it deterministically —
+ * blocked in the acquisition, and blocked in the transport it authenticated —
+ * and then read the two places an answer could wrongly appear.
+ */
+describe("workflow ambient authentication cancellation", () => {
+  /** The shipped authentication, with every session's life recorded. */
+  function tracked(inner: GitAuthentication, gate?: () => Operation<void>) {
+    const opened: string[] = [];
+    const disposed: string[] = [];
+    return {
+      opened,
+      disposed,
+      authentication: {
+        open(locator: string): Operation<GitAuthenticationSession> {
+          return resource(function* (provide) {
+            opened.push(locator);
+            // Registered before anything can suspend, so a halt between here
+            // and the block below still runs it.
+            yield* ensure(() => {
+              disposed.push(locator);
+            });
+            if (gate !== undefined) {
+              yield* gate();
+            }
+            yield* provide(yield* inner.open(locator));
+          });
+        },
+      },
+    };
+  }
+
+  /** Whether any credential working directory this provider makes is still there. */
+  function* credentialArtifacts(): Operation<string[]> {
+    const found: string[] = [];
+    for (const entry of yield* until(readdir(tmpdir()))) {
+      if (entry.startsWith("xmd-workflow-credential-")) {
+        found.push(entry);
+      }
+    }
+    return found;
+  }
+
+  it("invents nothing when cancelled while acquisition is blocked", function* () {
+    const root = yield* useStorageRoot();
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const reached = withResolvers<void>();
+      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }), function* () {
+        reached.resolve();
+        yield* suspend();
+      });
+      const counting = countingHost(
+        denoRepositoryHost({ authentication: recorded.authentication }),
+      );
+
+      yield* scoped(function* () {
+        const running = yield* spawn(() =>
+          runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+        );
+        yield* reached.operation;
+        yield* running.halt();
+      });
+
+      // One session opened, one disposed, and nothing performed: the remote was
+      // never contacted, nothing is retained, and no completion exists.
+      expect(recorded.opened).toEqual([served.locator]);
+      expect(recorded.disposed).toEqual([served.locator]);
+      expect(served.requests).toHaveLength(0);
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(subcommands(counting.counters)).not.toContain("clone");
+      expect(yield* credentialArtifacts()).toEqual([]);
+    });
+  });
+
+  it("invents nothing when cancelled while the authenticated transport is blocked", function* () {
+    const root = yield* useStorageRoot();
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }));
+      const inner = denoRepositoryHost({ authentication: recorded.authentication });
+      const reached = withResolvers<void>();
+      // The session is established and attached; what stops is the command that
+      // carries it, which is the moment an identity exists and has proven
+      // nothing.
+      const counting = countingHost({
+        ...inner,
+        *git(invocation) {
+          if (invocation.args[0] === "clone") {
+            reached.resolve();
+            yield* suspend();
+          }
+          return yield* inner.git(invocation);
+        },
+      });
+
+      yield* scoped(function* () {
+        const running = yield* spawn(() =>
+          runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+        );
+        yield* reached.operation;
+        yield* running.halt();
+      });
+
+      // The session existed, was disposed exactly once, and produced no
+      // completion — a cancelled clone is not a repository this run has.
+      expect(recorded.opened).toEqual([served.locator]);
+      expect(recorded.disposed).toEqual([served.locator]);
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(yield* credentialArtifacts()).toEqual([]);
+    });
+  });
+
+  it("disposes one session per invocation on success and on refusal alike", function* () {
+    const root = yield* useStorageRoot();
+    const reachable = yield* protectedRemote(FIRST, "first");
+    const refused = yield* protectedRemote(SECOND, "second");
+    const home = yield* useInvokingHome([{ host: reachable.host, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }));
+      const counting = countingHost(
+        denoRepositoryHost({ authentication: recorded.authentication }),
+      );
+      yield* raised(
+        runDocument(
+          database,
+          [
+            `<Repository name="reachable" url="${reachable.locator}" />`,
+            `<Repository name="unreachable" url="${refused.locator}" />`,
+          ].join("\n"),
+          countingOptions(counting),
+        ),
+      );
+
+      // Two invocations, two sessions, each disposed once — the one that
+      // succeeded and the one that was refused.
+      expect(recorded.opened).toEqual([reachable.locator, refused.locator]);
+      expect(recorded.disposed).toHaveLength(2);
+      expect(new Set(recorded.disposed)).toEqual(new Set(recorded.opened));
+      expect(yield* credentialArtifacts()).toEqual([]);
+    });
+  });
+
+  it("performs a fresh acquisition on the attempt after a cancelled one", function* () {
+    const root = yield* useStorageRoot();
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const source = document(
+      served.locator,
+      `<File path="README.md" as="readme" />`,
+      "",
+      "read: {readme}",
+    );
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const blocked = withResolvers<void>();
+      let block = true;
+      const inner = denoGitAuthentication({ ambient: home.ambient });
+      const recorded = tracked(inner, function* () {
+        if (block) {
+          blocked.resolve();
+          yield* suspend();
+        }
+      });
+      const counting = countingHost(
+        denoRepositoryHost({ authentication: recorded.authentication }),
+      );
+
+      yield* scoped(function* () {
+        const running = yield* spawn(() =>
+          runDocument(database, source, countingOptions(counting)),
+        );
+        yield* blocked.operation;
+        yield* running.halt();
+      });
+      expect(recorded.opened).toHaveLength(1);
+
+      // Nothing was retained, so the next attempt is a first attempt — and it
+      // opens its own session rather than continuing under one nobody re-proved.
+      block = false;
+      const output = yield* runDocument(database, source, countingOptions(counting));
+      expect(String(output)).toContain("read: protected");
+      expect(recorded.opened).toEqual([served.locator, served.locator]);
+      expect(recorded.disposed).toHaveLength(2);
+      expect(yield* credentialArtifacts()).toEqual([]);
+    });
+  });
+});
+
 describe("workflow ambient authentication mechanisms", () => {
   it("names the transport a locator uses, and authenticates only two of them", function* () {
     expect(gitTransport("https://example.invalid/owner/project.git")).toBe("http");
@@ -634,6 +845,115 @@ describe("workflow configured credential settings", () => {
   it("finds nothing for a host that configured nothing", function* () {
     const home = yield* useHomeWithoutAuthentication();
     expect(yield* configuredCredentialSettings(home.ambient)).toEqual([]);
+  });
+});
+
+/**
+ * The one GitHub credential source, through both adapters that share it.
+ *
+ * `<PullRequest>` and `<Issue>` reach different services with different
+ * ceilings, routing and durable records, and after #522 they read their
+ * credential the same way. What has to hold for both is the shape of the
+ * session: opened per live invocation, after that invocation's own checks, and
+ * never spanning two of them.
+ */
+describe("workflow GitHub source sessions", () => {
+  /** An access that counts what a session asks it, and from whom. */
+  function counted(token: string | undefined) {
+    const reads: number[] = [];
+    const sent: string[] = [];
+    return {
+      reads,
+      sent,
+      access: {
+        endpoint: "https://api.invalid",
+        // deno-lint-ignore require-yield
+        *token(): Operation<string | undefined> {
+          reads.push(1);
+          return token;
+        },
+        // deno-lint-ignore require-yield
+        *send(request: { method: string; url: string }): Operation<GitHubHttpResponse> {
+          sent.push(`${request.method} ${request.url}`);
+          return { status: 200, body: "[]" };
+        },
+      },
+    };
+  }
+
+  it("reads the credential once for a session, however many requests it makes", function* () {
+    const counting = counted("from-host");
+    const source = gitHubSource(counting.access);
+
+    yield* scoped(function* () {
+      const access = yield* source.open();
+      expect(yield* access.token()).toBe("from-host");
+      expect(yield* access.token()).toBe("from-host");
+      expect(yield* access.token()).toBe("from-host");
+    });
+
+    // One read. An observation and the mutation it decided carry the identity
+    // the invocation's first request established, rather than whatever the host
+    // happens to hold a moment later.
+    expect(counting.reads).toHaveLength(1);
+  });
+
+  it("gives two invocations two sessions rather than one identity", function* () {
+    const counting = counted("from-host");
+    const source = gitHubSource(counting.access);
+
+    yield* scoped(function* () {
+      const access = yield* source.open();
+      yield* access.token();
+    });
+    yield* scoped(function* () {
+      const access = yield* source.open();
+      yield* access.token();
+    });
+
+    // Two reads, because nothing survived the first invocation. That is what
+    // makes an interrupted attempt reacquire rather than resume under an
+    // identity nobody re-proved.
+    expect(counting.reads).toHaveLength(2);
+  });
+
+  it("holds a source without holding an identity", function* () {
+    const counting = counted("from-host");
+    // Constructed and kept, exactly as installed middleware keeps one, and
+    // never opened. A source that read a credential to exist would be an
+    // identity retained for a middleware's whole lifetime.
+    gitHubSource(counting.access);
+    expect(counting.reads).toEqual([]);
+    expect(counting.sent).toEqual([]);
+  });
+
+  it("refuses an Issue outside the ceiling before any session is opened", function* () {
+    const opened: number[] = [];
+    const source: GitHubSource = {
+      endpoint: "https://api.invalid",
+      *open(): Operation<GitHubAccess> {
+        opened.push(1);
+        throw new Error("a session was opened for a target the ceiling had not admitted");
+      },
+    };
+
+    const refusal = yield* scoped(function* () {
+      yield* useGitHubIssues({
+        ceiling: ["https://github.com/octo/authorized"],
+        access: source,
+      });
+      return yield* raised(
+        IssueApi.operations.read("https://github.com/octo/elsewhere/issues/7", {
+          provider: GITHUB,
+        }),
+      );
+    });
+
+    // The ceiling is a host decision and it is asked first. A session opened
+    // before it would be an identity established for a target this host never
+    // authorized.
+    expect(refusal).toBeDefined();
+    expect(opened).toEqual([]);
   });
 });
 

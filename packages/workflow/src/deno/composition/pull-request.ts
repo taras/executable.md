@@ -81,10 +81,11 @@ import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
 import { currentBranch, gitSession, resolveCommit } from "./git.ts";
 import {
-  denoGitHubAccess,
+  denoGitHubSource,
   gitHubPullRequests,
   parseGitHubRepository,
   type GitHubAccess,
+  type GitHubSource,
 } from "./github.ts";
 import type { RepositoryHost } from "./host.ts";
 import {
@@ -354,7 +355,7 @@ export function* upsertPullRequest(
   database: WorkflowRunDatabase,
   host: RepositoryHost,
   request: PullRequestRequest,
-  access: GitHubAccess = denoGitHubAccess(),
+  source: GitHubSource = denoGitHubSource(),
 ): Operation<PullRequestOutcome> {
   // Admission takes a snapshot, and the snapshot is what the operation runs on.
   // A caller's request and the record inside it are its own objects, and this
@@ -403,6 +404,13 @@ export function* upsertPullRequest(
     // configuration file this run merely stores. It stays in the provider's
     // closure and reaches no durable or public value.
     const locator = selection.repository.locator;
+
+    // One access session for this whole reconciliation, opened after the local
+    // authority check above and shared by its observations and its mutation, so
+    // a pull request is not created under one identity and observed under
+    // another. It is disposed with the scope below; a later attempt on an
+    // interrupted request opens its own.
+    const access = yield* source.open();
 
     const record = yield* withGitHostProvider(
       pullRequestProvider(access, locator, inputs),

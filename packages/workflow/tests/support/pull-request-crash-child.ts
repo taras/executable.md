@@ -30,6 +30,7 @@ import type {
 } from "../../src/deno/composition/github.ts";
 import { report } from "./workspace-process.ts";
 import { published, pullRequest, rewriting } from "./pull-requests.ts";
+import { gitHubSource } from "../../src/deno/composition/github.ts";
 
 /** The real adapter, stopped between the host's answer and this run's record. */
 function interrupted(endpoint: string): GitHubAccess {
@@ -79,7 +80,7 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
         ),
       );
     }),
-    { composition: { host: rewriting(locator), gitHub: interrupted(endpoint) } },
+    { composition: { host: rewriting(locator), gitHub: gitHubSource(interrupted(endpoint)) } },
   );
   report({ ready: false, reason: "the pull request was recorded" });
 }
