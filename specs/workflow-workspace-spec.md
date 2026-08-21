@@ -2360,55 +2360,36 @@ local Git command reaches one, with no XMD-specific credential setup. That is a
 property of the machine the run is standing on, not of the run: authentication is
 a live host input and never retained workflow state.
 
-**The provider process never holds a credential.** Acquisition happens in a
-broker child started for one live invocation: it asks the invoking user's Git
-about one exact repository and holds whatever comes back. The provider holds a
-lease — a capability and a private endpoint — and learns two facts about it:
-whether an identity was proved, and whether the transport rejected it. A
-provider-owned shim is what Git runs, and it is the only program in the system
-that writes a credential anywhere.
+**The credential belongs to one invocation, and to the adapter alone.** The
+trusted Deno host adapter retains one HTTP credential in memory for one live
+provider invocation, acquired lazily after the Repository, locator, checkout and
+ceiling checks that operation requires. It is exposed only to that invocation's
+own Git and helper children, through private child-process environment, and the
+reference is released when the invocation ends.
 
-The capability travels in the environment of the Git command the lease was
-attached to, never on a command line, and the shim file holds neither the
-capability nor a credential. Nothing is written to any file, and no
-`credential.*` configuration is copied onto a command line.
+A provider-owned helper is what Git runs. It answers one exact locator — scheme,
+host with its explicit port, and full repository path — so a transport that was
+redirected somewhere else receives no credential and fails closed. `store` and
+`approve` do nothing and reach no ambient helper or credential store. `erase`
+for the exact locator writes a fixed, nonsecret invocation-local marker and
+nothing else; an `erase` about anywhere else does nothing, so a redirect cannot
+manufacture a rejection. The marker is how a refused identity is told from an
+absent one, and both are authentication unavailability.
 
-The broker answers `get`, for this lease's capability, about this lease's exact
-locator — scheme, host with its explicit port, and full path — so a transport
-that was redirected somewhere else is answered with nothing and fails closed.
-`store`, `approve` and `reject` produce nothing. `erase` is not forwarded and
-produces no output either: it becomes an invocation-local rejection signal, so a
-credential the remote refused is reported as authentication unavailability
-rather than mistaken for an invalid locator. One caller is answered at a time; a
-reconciliation's sequential commands are all this lease's, and overlapping
-callers are not.
+Transport Git resets ambient credential helpers and installs only the
+provider-owned one. No ambient `credential.*` definition or value is copied into
+its arguments, and neither the credential nor the locator nor the marker appears
+in a launcher, a command line, a URL or retained configuration.
 
-The endpoint is protected by what the platform can protect. On a Unix host it is
-a socket inside a directory only the invoking user may enter; on Windows it is a
-random invocation-local named pipe created with no all-user access. Neither is
-trusted alone — the capability is validated before any credential byte is
-emitted.
+Helper installation, spawn, invocation, marker read and marker removal failures
+are infrastructure rather than authentication: they are the host failing to
+provide a mechanism at all, and they fail the run stop. Missing or incomplete
+credentials remain authentication unavailability.
 
-The endpoint and the capability reach the broker and the shim through
-invocation-local environment, never through an argument vector: a capability on
-a command line is a secret every process listing shows, and an endpoint there is
-an address nobody had to be told. The broker says one deterministic thing about
-itself — whether it is listening, and whether it acquired — once, after its
-socket can be connected to, so nothing waits on a timer. Whether a transport
-rejected the identity is *asked* after the command being classified has
-finished, not watched for while it runs.
-
-Teardown is ordered: the lease is invalidated, the Git and helper process group
-is terminated, the broker's IPC is closed, every child is awaited, and only then
-are the endpoint and the launcher removed. A shim that connects during teardown
-is refused rather than racing a broker that is going away, and no endpoint is
-left addressable after its owner is gone.
-
-Broker spawn, listen, protocol, teardown and concurrency failures are
-infrastructure rather than authentication: they are the host failing to provide a
-mechanism at all, and they fail the run stop rather than being reported as a
-credential the host did not have. Missing or incomplete credentials remain
-authentication unavailability.
+The helper contract is assembled the same way for Deno source, compiled and
+Windows hosts. Which one applies is stated by the runtime entrypoint rather than
+inferred from an executable's name, and the mode it dispatches is internal: it
+runs before any public parsing and appears in no help or public grammar.
 
 **What is borrowed.** The first Deno host guarantees the equivalent local
 operation only when that operation can authenticate non-interactively through one
@@ -2420,15 +2401,14 @@ of three host-owned mechanisms:
   and, with no agent, the run refuses rather than searching. Host verification is
   never disabled — the host separately selects the invoking user's known-host
   material, and an unknown host is an ordinary refusal.
-- **HTTP Git transport** uses a host-owned credential broker, queried once for
-  the complete admitted credential-free locator — scheme, host and path. The
-  broker consults the invoking user's own configuration, because that is where a
-  standard Git credential helper and a platform keychain live, and it is the only
-  component that ever holds a credential value. What the provider holds is an
-  opaque lease: it says whether an identity was proved for that locator, and it
-  can attach itself to a command. An answer whose protocol, host or path differs
-  from the request has not authorized the request, and an acquisition for one
-  repository never authorizes another on the same host.
+- **HTTP Git transport** uses the invoking user's own credential helper chain,
+  queried once for the complete admitted credential-free locator — scheme, host
+  with its explicit port, and full repository path — with prompting and both
+  askpass hooks off and `credential.useHttpPath=true` forced. An answer whose
+  protocol, host or path differs from the request has not authorized it, and one
+  that omits the path is an answer about the server rather than the repository.
+  What comes back is retained by the adapter for this invocation alone.
+
 - **GitHub API transport** uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the token
   `gh auth token --hostname github.com` returns. A variable that is set but empty
   is an explicit absence and stops the search. Every shipped Deno GitHub adapter
@@ -2468,7 +2448,8 @@ its fingerprint, never a credential or a credential-source identity.
 live refusal or unavailability, and stays distinct from locator invalidity and
 from remote absence: a transport that carries an identity, attempted with no
 mechanism to prove one, is refused under its own `authentication-unavailable`
-word, decided from whether the broker acquired an identity rather than from
+word, decided from whether an identity was acquired and whether the transport
+rejected it, rather than from
 anything Git printed. A configured helper that answered nothing is not
 authentication, and a transport that then fails is unavailability rather than an
 invalid locator. It never proves remote absence and never

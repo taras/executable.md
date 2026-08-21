@@ -26,6 +26,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
+import type { HelperAssembly } from "@executablemd/workflow/deno";
 import type { WorkflowHost } from "./workflow.ts";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
 
@@ -35,7 +36,7 @@ export const DEFAULT_RUN_STORAGE_ROOT: string = join(homedir(), ".xmd", "runs");
 /** The variable that names a different run store. Absolute, or it is refused. */
 export const RUN_STORAGE_ROOT_ENV = "XMD_WORKFLOW_RUNS";
 
-export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
+export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<WorkflowHost> {
   const configured = yield* readEnv(RUN_STORAGE_ROOT_ENV);
   const root =
     configured === undefined || configured === "" ? DEFAULT_RUN_STORAGE_ROOT : configured;
@@ -56,6 +57,7 @@ export function* useDenoWorkflowHost(): Operation<WorkflowHost> {
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
       return withWorkflowWorkspace(database, operation, {
         ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
+        helper,
       });
     },
   };

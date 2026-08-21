@@ -53,6 +53,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { denoGitAuthentication, UNAUTHENTICATED } from "./authentication.ts";
+import type { HelperAssembly } from "./credential-helper.ts";
 import type {
   GitAttachment,
   GitAuthentication,
@@ -189,10 +190,14 @@ export interface RepositoryHostOptions {
    * could reach. Absent, the shipped one is used.
    */
   readonly authentication?: GitAuthentication;
+  /** How this host writes and starts its own credential helper. */
+  readonly helper?: HelperAssembly;
 }
 
 export function denoRepositoryHost(options: RepositoryHostOptions = {}): RepositoryHost {
-  const authentication = options.authentication ?? denoGitAuthentication();
+  const authentication =
+    options.authentication ??
+    denoGitAuthentication(options.helper === undefined ? {} : { assembly: options.helper });
   return {
     git({ args, cwd, home, input, committedAt, attachment }: GitInvocation): Operation<GitOutcome> {
       // A command with no attachment reaches no authentication mechanism. That

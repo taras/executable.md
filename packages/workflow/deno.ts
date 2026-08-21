@@ -77,10 +77,22 @@ export type {
 } from "./src/deno/suspension.ts";
 
 /**
- * The unadvertised internal modes this host runs for its own credential broker.
+ * The provider-owned credential helper: its assembly, and its internal mode.
  *
- * Exported so an entrypoint can offer them, not so anyone can call them: neither
- * mode appears in help or in the public grammar, and neither can acquire a
- * credential by itself.
+ * Exported so a runtime entrypoint can state what it is and offer the mode, not
+ * so anyone can call it. The mode appears in no help and in no public grammar,
+ * is dispatched before anything public is parsed, and can acquire nothing on its
+ * own.
  */
-export { runInternalMode } from "./src/deno/composition/broker/main.ts";
+export {
+  HELPER_MODE,
+  helperCommand,
+  launcherName,
+  launcherProgram,
+  runCredentialHelperMode,
+} from "./src/deno/composition/credential-helper.ts";
+export type {
+  HelperAssembly,
+  HelperPlatform,
+  HelperRuntime,
+} from "./src/deno/composition/credential-helper.ts";

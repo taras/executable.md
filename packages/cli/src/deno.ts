@@ -14,17 +14,35 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
+import { runCredentialHelperMode } from "@executablemd/workflow/deno";
+import type { HelperAssembly } from "@executablemd/workflow/deno";
 import { useDenoService } from "./deno-service.ts";
-import { runInternalMode } from "@executablemd/workflow/deno";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);
 
-// The unadvertised internal modes run before anything else is parsed: they are
-// not a command, they appear in no help and in no public grammar, and a caller
-// who did not select one gets the ordinary command line unchanged.
-if (runInternalMode(process.argv.slice(2))) {
-  // The mode owns this process from here.
-} else {
+/**
+ * What this host is, stated rather than inferred.
+ *
+ * Running from source the executable is Deno, so the helper's module has to be
+ * named to it. The platform is read here, at the entrypoint, because that is
+ * where the program that is running knows what it is standing on.
+ */
+const HELPER: HelperAssembly = {
+  runtime: "source",
+  platform: process.platform === "win32" ? "windows" : "unix",
+  execPath: process.execPath,
+  modulePath: fileURLToPath(new URL("./credential-helper-entry.ts", import.meta.url)),
+  launcherEnvironment: Object.fromEntries(
+    ["HOME", "DENO_DIR", "XDG_CACHE_HOME", "PATH"]
+      .map((name) => [name, process.env[name]])
+      .filter(([, value]) => value !== undefined && value !== ""),
+  ) as Record<string, string>,
+};
+
+// The internal helper mode runs before anything public is parsed. It is not a
+// command: it appears in no help and in no public grammar, and a caller who did
+// not select it gets the ordinary command line unchanged.
+if (!runCredentialHelperMode(process.argv.slice(2))) {
   await main(function* (args) {
     // The base providers for this host. `at: "min"` puts them beneath ordinary
     // middleware, so middleware installed later can wrap either one.
@@ -45,6 +63,6 @@ if (runInternalMode(process.argv.slice(2))) {
     // no host default: a run with no provider must fail rather than reach the
     // host by accident.
     yield* useHostFiles();
-    yield* runXmd(args, useDenoService, useDenoWorkflowHost);
+    yield* runXmd(args, useDenoService, () => useDenoWorkflowHost(HELPER));
   });
 }

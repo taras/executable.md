@@ -70,6 +70,7 @@ import {
   countingOptions,
   gitHostOutcomes,
   inCheckout,
+  TEST_HELPER,
   raised,
   retainedRepositories,
   runDocument,
@@ -108,7 +109,7 @@ const REPOSITORY = "remote.git";
 /** The shipped authentication, standing in this invoking environment. */
 function hostFor(home: InvokingHome) {
   return denoRepositoryHost({
-    authentication: denoGitAuthentication({ ambient: home.ambient }),
+    authentication: denoGitAuthentication({ ambient: home.ambient, assembly: TEST_HELPER }),
   });
 }
 
@@ -312,7 +313,9 @@ describe("workflow ambient Git authentication", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const recorded = recording(denoGitAuthentication({ ambient: home.ambient }));
+      const recorded = recording(
+        denoGitAuthentication({ ambient: home.ambient, assembly: TEST_HELPER }),
+      );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
       );
@@ -357,7 +360,9 @@ describe("workflow ambient Git authentication", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const recorded = recording(denoGitAuthentication({ ambient: home.ambient }));
+      const recorded = recording(
+        denoGitAuthentication({ ambient: home.ambient, assembly: TEST_HELPER }),
+      );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
       );
@@ -633,7 +638,11 @@ describe("workflow ambient authentication cancellation", () => {
       const reached = withResolvers<void>();
       const watcher = watching();
       const recorded = tracked(
-        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+        denoGitAuthentication({
+          ambient: home.ambient,
+          observe: watcher.observe,
+          assembly: TEST_HELPER,
+        }),
         function* () {
           reached.resolve();
           yield* suspend();
@@ -695,7 +704,11 @@ describe("workflow ambient authentication cancellation", () => {
       const database = yield* createRun();
       const watcher = watching();
       const recorded = tracked(
-        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+        denoGitAuthentication({
+          ambient: home.ambient,
+          observe: watcher.observe,
+          assembly: TEST_HELPER,
+        }),
       );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
@@ -743,7 +756,11 @@ describe("workflow ambient authentication cancellation", () => {
       const database = yield* createRun();
       const watcher = watching();
       const recorded = tracked(
-        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+        denoGitAuthentication({
+          ambient: home.ambient,
+          observe: watcher.observe,
+          assembly: TEST_HELPER,
+        }),
       );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
@@ -784,7 +801,11 @@ describe("workflow ambient authentication cancellation", () => {
       const blocked = withResolvers<void>();
       let block = true;
       const watcher = watching();
-      const inner = denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe });
+      const inner = denoGitAuthentication({
+        ambient: home.ambient,
+        observe: watcher.observe,
+        assembly: TEST_HELPER,
+      });
       const recorded = tracked(inner, function* () {
         if (block) {
           blocked.resolve();
@@ -849,6 +870,7 @@ describe("workflow ambient authentication mechanisms", () => {
     const home = yield* useHomeWithoutAuthentication();
     const session = yield* denoGitAuthentication({
       ambient: { ...home.ambient, SSH_AUTH_SOCK: "/tmp/ambient-agent.sock" },
+      assembly: TEST_HELPER,
     }).open("ssh://git@example.invalid/owner/project.git");
 
     expect(session.attachment.environment).toEqual({
@@ -859,9 +881,10 @@ describe("workflow ambient authentication mechanisms", () => {
 
   it("stands on nothing for SSH with no agent, and says so", function* () {
     const home = yield* useHomeWithoutAuthentication();
-    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
-      "ssh://git@example.invalid/owner/project.git",
-    );
+    const session = yield* denoGitAuthentication({
+      ambient: home.ambient,
+      assembly: TEST_HELPER,
+    }).open("ssh://git@example.invalid/owner/project.git");
 
     expect(session.attachment.environment).toEqual({});
     expect(session.mechanism).toBe("none");
@@ -869,9 +892,10 @@ describe("workflow ambient authentication mechanisms", () => {
 
   it("fixes the settings a retained repository could otherwise name", function* () {
     const home = yield* useInvokingHome([]);
-    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
-      "https://example.invalid/owner/project.git",
-    );
+    const session = yield* denoGitAuthentication({
+      ambient: home.ambient,
+      assembly: TEST_HELPER,
+    }).open("https://example.invalid/owner/project.git");
 
     // The reset is what makes the helper list this session's own: it is
     // multi-valued, so a helper in a configuration file would otherwise be
@@ -890,9 +914,10 @@ describe("workflow ambient authentication mechanisms", () => {
 
   it("lends nothing at all to a locator no mechanism applies to", function* () {
     const home = yield* useInvokingHome([]);
-    const session = yield* denoGitAuthentication({ ambient: home.ambient }).open(
-      "/tmp/xmd-remote/remote.git",
-    );
+    const session = yield* denoGitAuthentication({
+      ambient: home.ambient,
+      assembly: TEST_HELPER,
+    }).open("/tmp/xmd-remote/remote.git");
 
     expect(session.attachment.environment).toEqual({});
     expect(session.attachment.configuration).toEqual([]);

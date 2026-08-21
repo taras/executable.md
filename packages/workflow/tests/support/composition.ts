@@ -31,7 +31,9 @@ import {
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
 } from "../../src/deno/composition/provider.ts";
+import { fileURLToPath } from "node:url";
 import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
+import type { HelperAssembly } from "../../src/deno/composition/credential-helper.ts";
 import type { GitAuthenticationSession } from "../../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome, RepositoryHost } from "../../src/deno/composition/host.ts";
 import { transactWorkspaceRoots } from "../../src/deno/workspace/private.ts";
@@ -94,6 +96,32 @@ export function countingHost(inner: RepositoryHost = denoRepositoryHost()): Coun
       },
     },
   };
+}
+
+/**
+ * The helper assembly a suite runs under.
+ *
+ * Stated here for the same reason an entrypoint states it: what is executing is
+ * a fact about the program, and a suite runs from Deno source on this platform.
+ */
+export const TEST_HELPER: HelperAssembly = {
+  runtime: "source",
+  platform: "unix",
+  execPath: Deno.execPath(),
+  modulePath: fileURLToPath(new URL("./credential-helper-entry.ts", import.meta.url)),
+  launcherEnvironment: launcherEnvironment(),
+};
+
+/** The nonsecret host paths a source launcher needs to start Deno. */
+function launcherEnvironment(): Record<string, string> {
+  const carried: Record<string, string> = {};
+  for (const name of ["HOME", "DENO_DIR", "XDG_CACHE_HOME", "PATH"]) {
+    const value = Deno.env.get(name);
+    if (value !== undefined && value !== "") {
+      carried[name] = value;
+    }
+  }
+  return carried;
 }
 
 export function countingOptions(counting: CountingHost): WorkflowWorkspaceOptions {

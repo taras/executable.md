@@ -47,6 +47,7 @@ import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
 import type { GitAuthentication } from "./authentication.ts";
+import type { HelperAssembly } from "./credential-helper.ts";
 import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 import { stale, type Attached, type StaleReason } from "./identity.ts";
 import {
@@ -102,6 +103,14 @@ export interface CompositionProviderOptions {
    * user's SSH agent and standard Git credential helpers.
    */
   readonly authentication?: GitAuthentication;
+  /**
+   * How this host writes and starts its own credential helper.
+   *
+   * Stated by the runtime entrypoint rather than inferred here: whether this is
+   * Deno source or a compiled binary, and which platform's launcher to write,
+   * are facts about the program that is running.
+   */
+  readonly helper?: HelperAssembly;
 }
 
 /**
@@ -144,9 +153,10 @@ export function useRepositoryComposition(
 ): Operation<void> {
   const host =
     options.host ??
-    denoRepositoryHost(
-      options.authentication === undefined ? {} : { authentication: options.authentication },
-    );
+    denoRepositoryHost({
+      ...(options.authentication === undefined ? {} : { authentication: options.authentication }),
+      ...(options.helper === undefined ? {} : { helper: options.helper }),
+    });
   const observe = options.observe ?? {};
 
   return RepositoryComposition.around(
@@ -215,9 +225,10 @@ export function useGitComposition(
 ): Operation<void> {
   const host =
     options.host ??
-    denoRepositoryHost(
-      options.authentication === undefined ? {} : { authentication: options.authentication },
-    );
+    denoRepositoryHost({
+      ...(options.authentication === undefined ? {} : { authentication: options.authentication }),
+      ...(options.helper === undefined ? {} : { helper: options.helper }),
+    });
   const observe = options.observe ?? {};
 
   return GitComposition.around(

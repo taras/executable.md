@@ -11,15 +11,24 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
+import { runCredentialHelperMode } from "@executablemd/workflow/deno";
+import type { HelperAssembly } from "@executablemd/workflow/deno";
 import { useCompiledService } from "./compiled-service.ts";
-import { runInternalMode } from "@executablemd/workflow/deno";
 
-// The unadvertised internal modes run before anything else is parsed: they are
-// not a command, they appear in no help and in no public grammar, and a caller
-// who did not select one gets the ordinary command line unchanged.
-if (runInternalMode(process.argv.slice(2))) {
-  // The mode owns this process from here.
-} else {
+/**
+ * What this host is, stated rather than inferred.
+ *
+ * The binary carries its own entry module, so the executable *is* the command
+ * and the helper mode is one of the things it can be asked to be.
+ */
+const HELPER: HelperAssembly = {
+  runtime: "compiled",
+  platform: process.platform === "win32" ? "windows" : "unix",
+  execPath: process.execPath,
+};
+
+// Before anything public is parsed, and absent from every public surface.
+if (!runCredentialHelperMode(process.argv.slice(2))) {
   await main(function* (args) {
     // The base providers for this host. `at: "min"` puts them beneath ordinary
     // middleware, so middleware installed later can wrap either one.
@@ -40,6 +49,6 @@ if (runInternalMode(process.argv.slice(2))) {
     // no host default: a run with no provider must fail rather than reach the
     // host by accident.
     yield* useHostFiles();
-    yield* runXmd(args, useCompiledService, useDenoWorkflowHost);
+    yield* runXmd(args, useCompiledService, () => useDenoWorkflowHost(HELPER));
   });
 }

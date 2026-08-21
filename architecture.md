@@ -1141,33 +1141,16 @@ the mutation it decided go out under one identity rather than two, and the
 session is disposed with the invocation. A later attempt on an interrupted
 request opens its own.
 
-No credential value reaches the workflow process at all. Acquisition happens in
-a broker child started for one live invocation, which asks the invoking user's
-Git about one exact repository and holds what comes back; the provider holds a
-capability and a private endpoint, and a provider-owned shim is what Git runs.
-Approving, rejecting, erasing, copying and persisting a credential are therefore
-things this process cannot do rather than things it declines to do — there is
-nothing in it to do them with.
-
-The broker answers one operation, for one capability, about one locator, so a
-redirected transport is answered with nothing. `erase` is not forwarded: it
-becomes an invocation-local signal that the remote refused what it was given,
-which is why a rejected credential and an absent one report the same
-unavailability — and it is asked for after the command being classified has
-finished rather than watched for while it runs. The capability and the endpoint
-travel in invocation-local environment, never in an argument vector, and the
-broker states once, deterministically, whether it is listening and whether it
-acquired.
-
-Teardown is ordered — invalidate, terminate the group, close the IPC, await the
-children, then remove the endpoint and the launcher — because the same steps in
-another sequence would leave a live broker addressable by a path nobody owns. A
-broker that could not start, listen, be spoken to or be torn down is
-infrastructure failing rather than an identity the host lacked, and it fails
-stop; a credential that is merely absent or incomplete stays authentication
-unavailability. A Git-host API is the same shape in a different
-protocol: `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own login, read
-once for the invocation that needs it.
+The trusted Deno host adapter retains one HTTP credential in memory for one live
+provider invocation and exposes it only to that invocation's own Git and helper
+children, through private child-process environment. A provider-owned helper is
+what Git runs, and it answers one exact locator, so a redirected transport
+receives nothing and fails closed. `store` and `approve` reach no ambient helper
+or store; `erase` for the exact locator writes a fixed, nonsecret marker, which
+is how a refused identity is told from an absent one. Both are authentication
+unavailability, never an invalid locator. Helper installation, spawn,
+invocation and marker failures are infrastructure rather than authentication,
+and they fail stop.
 
 A session opened for one locator never authorizes another, nothing about one is
 retained, and a completed replay opens none at all because it performs no remote

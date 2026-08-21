@@ -60,12 +60,18 @@
  * things a passed-through `HOME` would decide.
  */
 
-import { type Operation, resource } from "effection";
+import { ensure, type Operation, resource, until } from "effection";
+import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { denoCredentialBroker } from "./broker/host.ts";
-import type { CredentialBroker, CredentialRequest } from "./broker/host.ts";
-import { internalModes } from "./broker/main.ts";
+import { runProcess } from "./subprocess.ts";
+import {
+  HELPER_VARIABLES,
+  launcherName,
+  launcherProgram,
+  type HelperAssembly,
+} from "./credential-helper.ts";
 
 /**
  * What an authenticated invocation adds to the command it was going to run.
@@ -232,7 +238,31 @@ function pinned(ssh: string, lease: readonly string[]): readonly string[] {
   return ["-c", `core.sshCommand=${ssh}`, "-c", "credential.helper=", ...lease];
 }
 
-export type { CredentialBroker, CredentialLease, CredentialRequest } from "./broker/host.ts";
+/** One credential-free locator, as the invoking user's helper chain is asked. */
+export interface CredentialRequest {
+  readonly protocol: string;
+  readonly host: string;
+  readonly path?: string;
+}
+
+/**
+ * What one live provider invocation holds instead of a bare credential.
+ *
+ * The value is retained lexically by the adapter, for this invocation only. A
+ * caller can ask whether an identity was proved and whether the transport
+ * rejected it, and can attach the invocation to a command — the credential
+ * itself reaches nothing but the private environment of that command's own
+ * child, through the provider-owned helper.
+ */
+export interface CredentialLease {
+  readonly acquired: boolean;
+  rejected(): Operation<boolean>;
+  attachment(): GitAttachment;
+}
+
+export interface CredentialBroker {
+  lease(request: CredentialRequest): Operation<CredentialLease>;
+}
 
 /**
  * The credential request this HTTP locator is, or `undefined` for none.
@@ -273,20 +303,198 @@ export function credentialRequest(locator: string): CredentialRequest | undefine
 export interface GitAuthenticationObserver {
   opened?: (directory: string) => void;
   released?: (directory: string) => void;
+  /**
+   * Each step of teardown, as it happens.
+   *
+   * The order is the contract — references released before the launcher and the
+   * marker go, and both gone before the invocation is finished with — so a suite
+   * watches rather than infers.
+   */
+  step?: (name: string) => void;
 }
 
 export interface GitAuthenticationOptions {
   /** The environment the ambient mechanisms are found in. */
   readonly ambient?: Readonly<Record<string, string | undefined>>;
   readonly observe?: GitAuthenticationObserver;
-  /**
-   * Who owns a credential value for this host.
-   *
-   * Injectable so a suite can prove what a session does with a lease without
-   * standing on a developer's own credentials, and so the one component that
-   * ever holds a value is the one component a test can replace.
-   */
+  /** How this host writes and starts its own credential helper. */
+  readonly assembly?: HelperAssembly;
+  /** Where a credential comes from, when it is not this host's own Git. */
   readonly broker?: CredentialBroker;
+}
+
+/**
+ * The invoking user's own Git, asked once about one exact repository.
+ *
+ * `git credential fill` is the whole of the standard mechanism: it consults the
+ * helpers the user configured, and those are what reach a platform keychain, a
+ * cached token or a manager process. Prompting and both askpass hooks are off,
+ * so an absent credential is an answer that comes back rather than a run that
+ * stops on a question nobody is there for, and `useHttpPath` is forced — without
+ * it Git withholds the path and the answer would be about the server.
+ *
+ * The answer is required to carry back the exact protocol, host and path that
+ * were asked about. A helper may rewrite those, and an answer about somewhere
+ * else has authorized nothing.
+ *
+ * What comes back is retained lexically here, for this invocation, and reaches
+ * nothing but the private environment of this invocation's own Git children.
+ */
+export function denoCredentialBroker(
+  ambient: Readonly<Record<string, string | undefined>> = process.env,
+  observe: GitAuthenticationObserver = {},
+  assembly?: HelperAssembly,
+): CredentialBroker {
+  return {
+    lease(request: CredentialRequest): Operation<CredentialLease> {
+      return resource<CredentialLease>(function* (provide) {
+        const directory = yield* until(mkdtemp(join(tmpdir(), "xmd-workflow-credential-")));
+        observe.opened?.(directory);
+        let closed = false;
+        // The one reference, released when this invocation ends.
+        let held: { username: string; password: string } | undefined;
+        yield* ensure(function* () {
+          closed = true;
+          held = undefined;
+          observe.step?.("released");
+          yield* until(rm(directory, { recursive: true, force: true }));
+          observe.step?.("removed");
+          observe.released?.(directory);
+        });
+
+        const env: Record<string, string> = {};
+        for (const [name, value] of Object.entries(ambient)) {
+          if (value !== undefined) {
+            env[name] = value;
+          }
+        }
+        env["GIT_TERMINAL_PROMPT"] = "0";
+        env["GIT_ASKPASS"] = "";
+        env["SSH_ASKPASS"] = "";
+        env["LC_ALL"] = "C";
+
+        let outcome: { code: number; stdout: string };
+        try {
+          outcome = yield* runProcess({
+            command: "git",
+            args: ["-c", "credential.useHttpPath=true", "credential", "fill"],
+            cwd: directory,
+            env,
+            input:
+              `protocol=${request.protocol}\nhost=${request.host}\n` +
+              `${request.path === undefined ? "" : `path=${request.path}\n`}\n`,
+          });
+        } catch {
+          yield* provide(unacquired());
+          return;
+        }
+        if (outcome.code !== 0) {
+          yield* provide(unacquired());
+          return;
+        }
+        held = readCredential(outcome.stdout, request);
+        if (held === undefined || assembly === undefined) {
+          yield* provide(unacquired());
+          return;
+        }
+
+        const launcher = join(directory, launcherName(assembly));
+        yield* until(writeFile(launcher, launcherProgram(assembly), { mode: 0o700 }));
+        if (assembly.platform !== "windows") {
+          yield* until(chmod(launcher, 0o700));
+        }
+        const marker = join(directory, "rejected");
+
+        yield* provide({
+          get acquired() {
+            return held !== undefined && !closed;
+          },
+          *rejected(): Operation<boolean> {
+            // A fixed, nonsecret file the helper writes when the transport
+            // refused what it was given. Read when a failed command is being
+            // classified, so the answer is about that command.
+            if (closed) {
+              return false;
+            }
+            return yield* until(
+              stat(marker)
+                .then(() => true)
+                .catch(() => false),
+            );
+          },
+          attachment: () =>
+            closed || held === undefined
+              ? NOTHING
+              : Object.freeze({
+                  environment: Object.freeze({
+                    [HELPER_VARIABLES.username]: held.username,
+                    [HELPER_VARIABLES.password]: held.password,
+                    [HELPER_VARIABLES.protocol]: request.protocol,
+                    [HELPER_VARIABLES.host]: request.host,
+                    [HELPER_VARIABLES.path]: request.path ?? "",
+                    [HELPER_VARIABLES.marker]: marker,
+                  }),
+                  configuration: Object.freeze([
+                    // Forced on the transport too: without it Git asks the
+                    // helper about the server rather than the repository, and
+                    // the exact-locator match would have nothing to compare.
+                    "-c",
+                    "credential.useHttpPath=true",
+                    "-c",
+                    `credential.helper=${launcher}`,
+                  ]),
+                }),
+        });
+      });
+    },
+  };
+}
+
+/** The lease of an invocation that proved nothing. */
+function unacquired(): CredentialLease {
+  return {
+    acquired: false,
+    // deno-lint-ignore require-yield
+    *rejected(): Operation<boolean> {
+      return false;
+    },
+    attachment: () => NOTHING,
+  };
+}
+
+/**
+ * The credential in this answer, when the answer is about what was asked.
+ *
+ * Git echoes the request's own fields back beside the ones a helper supplied,
+ * and a helper is free to rewrite them. A rewritten protocol, host or path means
+ * the identity that came back belongs to somewhere else. The path is required
+ * rather than merely checked: an answer that omits it is an answer about the
+ * server, and adopting one would make a single acquisition the identity for
+ * every repository there.
+ */
+function readCredential(
+  output: string,
+  request: CredentialRequest,
+): { username: string; password: string } | undefined {
+  const fields = new Map<string, string>();
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf("=");
+    if (separator > 0) {
+      fields.set(line.slice(0, separator), line.slice(separator + 1));
+    }
+  }
+  const username = fields.get("username");
+  const password = fields.get("password");
+  if (username === undefined || password === undefined || password === "") {
+    return undefined;
+  }
+  if (fields.get("protocol") !== request.protocol || fields.get("host") !== request.host) {
+    return undefined;
+  }
+  if (request.path !== undefined && fields.get("path") !== request.path) {
+    return undefined;
+  }
+  return { username, password };
 }
 
 /**
@@ -301,8 +509,7 @@ export interface GitAuthenticationOptions {
 export function denoGitAuthentication(options: GitAuthenticationOptions = {}): GitAuthentication {
   const ambient = options.ambient ?? process.env;
   const observe = options.observe ?? {};
-  const broker =
-    options.broker ?? denoCredentialBroker({ ambient, observe, internal: internalModes() });
+  const broker = options.broker ?? denoCredentialBroker(ambient, observe, options.assembly);
   const ssh = sshCommand(ambient["HOME"], ambient["SSH_AUTH_SOCK"]);
 
   return {
