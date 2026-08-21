@@ -31,8 +31,14 @@ import {
   launcherProgram,
   type HelperAssembly,
 } from "../src/deno/composition/credential-helper.ts";
-import { denoCredentialBroker } from "../src/deno/composition/authentication.ts";
-import type { CredentialRequest } from "../src/deno/composition/authentication.ts";
+import {
+  denoCredentialBroker,
+  denoCredentialOperations,
+} from "../src/deno/composition/authentication.ts";
+import type {
+  CredentialOperations,
+  CredentialRequest,
+} from "../src/deno/composition/authentication.ts";
 import { TEST_HELPER } from "./support/composition.ts";
 import { useInvokingHome } from "./support/credential-home.ts";
 
@@ -275,7 +281,11 @@ describe("workflow credential acquisition refusals", () => {
         [
           "#!/bin/sh",
           'if [ "$1" != "get" ]; then exit 0; fi',
-          `cat > ${JSON.stringify(record)}`,
+          // Reduced to labels here, so what a failure prints is a setting's
+          // name and a verdict rather than anything the helper was given.
+          `{ cat; echo "prompt=\${GIT_TERMINAL_PROMPT:-unset}"; ` +
+            `echo "askpass=\${GIT_ASKPASS-unset}"; ` +
+            `echo "sshaskpass=\${SSH_ASKPASS-unset}"; } > ${JSON.stringify(record)}`,
           `echo username=${HELD.username}`,
           `echo password=${HELD.password}`,
           "",
@@ -307,6 +317,15 @@ describe("workflow credential acquisition refusals", () => {
     expect(asked).toContain("protocol=https");
     expect(asked).toContain(`host=${HOST}`);
     expect(asked).toContain(`path=${PATH}`);
+
+    // And the helper ran with no way to stop the run on a question: terminal
+    // prompting off, and both askpass hooks present-but-empty rather than
+    // naming a program somebody's environment chose.
+    expect(asked).toContain("prompt=0");
+    expect(asked).toContain("askpass=");
+    expect(asked).not.toContain("askpass=unset");
+    expect(asked).toContain("sshaskpass=");
+    expect(asked).not.toContain("sshaskpass=unset");
   });
 });
 
@@ -378,5 +397,97 @@ describe("workflow credential infrastructure failures", () => {
       yield* until(writeFile(marker, "rejected\n", { mode: 0o600 }));
       expect(yield* lease.rejected()).toBe(true);
     });
+  });
+});
+
+describe("workflow credential injected infrastructure faults", () => {
+  /** The operations this host performs, each replaceable and each able to fail. */
+  function operations(broken: string): CredentialOperations {
+    const real = denoCredentialOperations();
+    const fault = (named: string) =>
+      function* (): Operation<never> {
+        throw new Error(`injected ${named} failure`);
+      };
+    return {
+      writeLauncher: broken === "install" ? fault("install") : real.writeLauncher,
+      markerPresent: broken === "marker-read" ? fault("marker-read") : real.markerPresent,
+      removeWorkingDirectory:
+        broken === "marker-remove" ? fault("marker-remove") : real.removeWorkingDirectory,
+    };
+  }
+
+  /**
+   * Each frozen boundary, and what breaking it must produce.
+   *
+   * Injected rather than arranged with permissions: a privileged runner can
+   * write where it should not be able to, and Windows does not express the same
+   * modes, so a filesystem-arranged fault would be the environment's rather than
+   * this test's.
+   */
+  const BOUNDARIES = ["install", "marker-read", "marker-remove"] as const;
+
+  it("raises rather than reporting a credential this host does not lack", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: PATH, ...HELD }]);
+
+    for (const boundary of BOUNDARIES) {
+      // The try encloses the scope rather than sitting inside it: removal
+      // happens as the invocation ends, so a failure of it arrives out of
+      // teardown rather than out of the body.
+      let raised: unknown;
+      try {
+        yield* scoped(function* () {
+          const lease = yield* denoCredentialBroker(
+            home.ambient,
+            {},
+            TEST_HELPER,
+            operations(boundary),
+          ).lease(EXACT);
+          // The marker read fails when it is reached rather than when the
+          // lease is opened.
+          if (boundary === "marker-read") {
+            yield* lease.rejected();
+          }
+        });
+      } catch (error) {
+        raised = error;
+      }
+
+      expect(raised).toBeDefined();
+      // Infrastructure, not unavailability: this host failed to provide a
+      // mechanism, and saying "no credential" would make a broken machine look
+      // like a clean refusal.
+      expect(String(raised)).toContain("injected");
+      // And nothing about a credential travels with it.
+      expect(String(raised).includes(HELD.password)).toBe(false);
+      expect(String(raised).includes(HELD.username)).toBe(false);
+    }
+  });
+
+  it("reads an absent marker as absent, and nothing else as absent", function* () {
+    const home = yield* useInvokingHome([{ host: HOST, path: PATH, ...HELD }]);
+
+    // The shipped operations, which is the code under test here.
+    yield* scoped(function* () {
+      const lease = yield* denoCredentialBroker(home.ambient, {}, TEST_HELPER).lease(EXACT);
+      expect(yield* lease.rejected()).toBe(false);
+    });
+
+    // A read that fails for any other reason is raised. Only absence is an
+    // answer, because only absence means nothing was refused.
+    const raised = yield* scoped(function* () {
+      try {
+        const lease = yield* denoCredentialBroker(
+          home.ambient,
+          {},
+          TEST_HELPER,
+          operations("marker-read"),
+        ).lease(EXACT);
+        yield* lease.rejected();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    });
+    expect(String(raised)).toContain("injected marker-read failure");
   });
 });

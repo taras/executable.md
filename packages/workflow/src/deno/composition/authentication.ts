@@ -312,6 +312,59 @@ export interface GitAuthenticationObserver {
   step?: (name: string) => void;
 }
 
+/**
+ * The host operations acquisition performs, as one replaceable set.
+ *
+ * A seam rather than a set of filesystem calls, because the failures that have
+ * to be proved are of the operations rather than of any particular directory.
+ * Arranging them with permissions would be arranging the operating system: a
+ * privileged runner can write where it should not be able to, and Windows does
+ * not express the same modes at all, so the fault would be the environment's
+ * rather than the test's.
+ */
+export interface CredentialOperations {
+  /** Install the launcher Git will run. */
+  writeLauncher(path: string, contents: string, executable: boolean): Operation<void>;
+  /**
+   * Whether the rejection marker is there.
+   *
+   * Absent is the one answer that means "not rejected". A marker this host
+   * could not read is a marker it does not know about, and reporting that as
+   * nothing-was-refused would turn a broken filesystem into a clean run.
+   */
+  markerPresent(path: string): Operation<boolean>;
+  /** Remove the invocation's working directory when it ends. */
+  removeWorkingDirectory(path: string): Operation<void>;
+}
+
+/** What this host actually does, when nothing substitutes one for a test. */
+export function denoCredentialOperations(): CredentialOperations {
+  return {
+    *writeLauncher(path: string, contents: string, executable: boolean): Operation<void> {
+      yield* until(writeFile(path, contents, { mode: 0o700 }));
+      if (executable) {
+        yield* until(chmod(path, 0o700));
+      }
+    },
+    *markerPresent(path: string): Operation<boolean> {
+      return yield* until(
+        stat(path).then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") {
+              return false;
+            }
+            throw error;
+          },
+        ),
+      );
+    },
+    *removeWorkingDirectory(path: string): Operation<void> {
+      yield* until(rm(path, { recursive: true, force: true }));
+    },
+  };
+}
+
 export interface GitAuthenticationOptions {
   /** The environment the ambient mechanisms are found in. */
   readonly ambient?: Readonly<Record<string, string | undefined>>;
@@ -343,6 +396,7 @@ export function denoCredentialBroker(
   ambient: Readonly<Record<string, string | undefined>> = process.env,
   observe: GitAuthenticationObserver = {},
   assembly?: HelperAssembly,
+  operations: CredentialOperations = denoCredentialOperations(),
 ): CredentialBroker {
   return {
     lease(request: CredentialRequest): Operation<CredentialLease> {
@@ -356,7 +410,7 @@ export function denoCredentialBroker(
           closed = true;
           held = undefined;
           observe.step?.("released");
-          yield* until(rm(directory, { recursive: true, force: true }));
+          yield* operations.removeWorkingDirectory(directory);
           observe.step?.("removed");
           observe.released?.(directory);
         });
@@ -395,11 +449,15 @@ export function denoCredentialBroker(
           return;
         }
 
+        // Installing the launcher is the one thing acquisition does that can
+        // fail after an identity was proved, and a failure of it is this host
+        // being unable to give Git a helper — never a credential it lacks.
         const launcher = join(directory, launcherName(assembly));
-        yield* until(writeFile(launcher, launcherProgram(assembly), { mode: 0o700 }));
-        if (assembly.platform !== "windows") {
-          yield* until(chmod(launcher, 0o700));
-        }
+        yield* operations.writeLauncher(
+          launcher,
+          launcherProgram(assembly),
+          assembly.platform !== "windows",
+        );
         const marker = join(directory, "rejected");
 
         yield* provide({
@@ -413,11 +471,7 @@ export function denoCredentialBroker(
             if (closed) {
               return false;
             }
-            return yield* until(
-              stat(marker)
-                .then(() => true)
-                .catch(() => false),
-            );
+            return yield* operations.markerPresent(marker);
           },
           attachment: () =>
             closed || held === undefined
