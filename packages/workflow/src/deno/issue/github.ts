@@ -72,6 +72,7 @@ import type {
 } from "../../issue/api.ts";
 import {
   IssueAmbiguousError,
+  IssueProtocolError,
   IssueConflictError,
   IssueUnavailableError,
 } from "../../issue/errors.ts";
@@ -337,7 +338,7 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
         if (issue === undefined) {
           throw new IssueUnavailableError();
         }
-        return yield* observed(access, issue);
+        return yield* observed(access, issue, url);
       },
 
       *upsert([issue, upsert], next): Operation<IssueReference> {
@@ -679,8 +680,20 @@ export function parseGitHubIssueUrl(url: string): GitHubIssueLocation | undefine
  * did not ask about. A pull request is refused, though — GitHub answers for one
  * through the same Issues endpoint, and reporting it as an issue would let a
  * document read a pull request's body as an issue description.
+ *
+ * The requested URL is the identity of the read, and it stays the identity of
+ * the answer. What comes back is checked against what was asked for, and what
+ * is published is the URL the document wrote — never one the response supplied.
+ * Otherwise a service that answered with a different issue would decide what a
+ * document read, and the answer would be retained under the requested URL while
+ * describing something else. The ceiling was admitted against the requested URL
+ * too, so a response cannot reach past it by naming somewhere else.
  */
-function* observed(access: GitHubAccess, issue: GitHubIssueLocation): Operation<IssueDetails> {
+function* observed(
+  access: GitHubAccess,
+  issue: GitHubIssueLocation,
+  requested: string,
+): Operation<IssueDetails> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
     throw new IssueUnavailableError();
@@ -705,8 +718,17 @@ function* observed(access: GitHubAccess, issue: GitHubIssueLocation): Operation<
   if (reading.pullRequest) {
     throw new IssueConflictError();
   }
+  // The same identity check the upsert lookup makes, for the same reason: a
+  // well-formed payload for another issue is well-formed, and shape alone
+  // cannot tell it from the one that was asked for.
+  const home = `${access.endpoint}/repos/${issue.owner}/${issue.repository}`;
+  if (reading.number !== issue.number || reading.repository.toLowerCase() !== home.toLowerCase()) {
+    throw new IssueProtocolError(
+      "the issue tracker answered a read with a different issue than the one requested",
+    );
+  }
   return Object.freeze({
-    url: reading.url,
+    url: requested,
     title: reading.title,
     // Any marker this adapter wrote is its own bookkeeping and not something a
     // document asked to read, so it comes off whichever attempt put it there.

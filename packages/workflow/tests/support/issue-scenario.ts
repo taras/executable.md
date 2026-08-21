@@ -266,6 +266,7 @@ function useScenarioComponents(
       // deno-lint-ignore require-yield
       *fn(): Operation<string> {
         server.issues.length = 0;
+        server.substitutions.clear();
         return "";
       },
     },
@@ -282,6 +283,8 @@ function useScenarioComponents(
           tags: { type: "array", items: { type: "string", minLength: 1 } },
           assignee: { type: "string", minLength: 1 },
           pullRequest: { type: "boolean" },
+          /** The container this tracker reports it belonging to, when not this one. */
+          repository: { type: "string", minLength: 1 },
         },
         required: ["number", "title"],
         additionalProperties: false,
@@ -296,6 +299,7 @@ function useScenarioComponents(
           labels: Array.isArray(props.tags) ? props.tags.map(String) : [],
           assignee: typeof props.assignee === "string" ? props.assignee : null,
           ...(props.pullRequest === true ? { pullRequest: true } : {}),
+          ...(typeof props.repository === "string" ? { repository: props.repository } : {}),
         };
         server.issues.push(seeded);
         return "";
@@ -389,6 +393,26 @@ function useScenarioComponents(
           return "";
         }
         numbered(server, props.number, "close").state = "closed";
+        return "";
+      },
+    },
+    {
+      name: "AnswerInstead",
+      origin: "@executablemd/workflow/test",
+      props: {
+        type: "object",
+        properties: {
+          asked: { type: "integer", minimum: 1 },
+          with: { type: "integer", minimum: 1 },
+        },
+        required: ["asked", "with"],
+        additionalProperties: false,
+      },
+      // deno-lint-ignore require-yield
+      *fn(props: Record<string, Json>): Operation<string> {
+        // The tracker will answer a request for one issue with a well-formed
+        // payload describing another. Nothing about the request changes.
+        server.substitutions.set(Number(props.asked), Number(props.with));
         return "";
       },
     },

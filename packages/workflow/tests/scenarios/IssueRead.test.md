@@ -79,6 +79,41 @@ state the tracker considers perfectly normal.
 <AssertEquals actual={issue.description} expected="" />
 </Test>
 
+## The URL asked for is the issue answered about
+
+A read's identity is the URL the document wrote. A tracker that answers with a
+well-formed payload describing a different issue has answered a different
+question, and shape alone cannot tell the two apart — so the answer is checked
+against the request, and what is published is the URL that was asked for rather
+than one the response supplied.
+
+Below, the tracker is told to answer a request for issue 1 with issue 99, which
+lives in another repository. The request still goes where it always went.
+
+<Test name="A payload describing another issue is refused, not bound">
+<EmptyTracker />
+<EmptyRequestLog />
+<GitHubServer as="server" />
+<RemoteIssue number={1} title="The one that was asked for" body="…" />
+<RemoteIssue
+  number={99}
+  title="A different issue entirely"
+  body="Somewhere else."
+  repository="https://api.github.com/repos/other/elsewhere"
+/>
+<AnswerInstead asked={1} with={99} />
+<GitHubIssues ceiling={[server.repository]} endpoint={server.url} credential="valid">
+<AssertThrows message="a different issue than the one requested">
+<PrintErrors>
+<Issue url={server.repository + "/issues/1"} as="issue" />
+</PrintErrors>
+</AssertThrows>
+</GitHubIssues>
+<ServerRequests as="sent" />
+<AssertEquals actual={sent.methods} expected={["GET"]} />
+<AssertEquals actual={sent.paths} expected={["/repos/octo/project/issues/1"]} />
+</Test>
+
 ## It renders nothing and needs no tracker
 
 <Test name="A read renders exactly nothing">

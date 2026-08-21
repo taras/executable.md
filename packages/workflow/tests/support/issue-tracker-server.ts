@@ -76,6 +76,15 @@ export interface IssueTrackerServer {
   readonly repository: string;
   readonly issues: ServedIssue[];
   readonly requests: ServedRequest[];
+  /**
+   * Which issue this tracker answers with when asked for another.
+   *
+   * A tracker that answers the wrong question is not a malformed tracker: the
+   * payload it sends is well formed, and only its subject is wrong. A scenario
+   * declares one so that "the answer was checked against the request" is
+   * observable rather than assumed.
+   */
+  readonly substitutions: Map<number, number>;
 }
 
 export interface ServerOptions {
@@ -100,6 +109,7 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
     const token = options.token ?? credential();
     const issues: ServedIssue[] = [...(options.issues ?? [])];
     const requests: ServedRequest[] = [];
+    const substitutions = new Map<number, number>();
     let origin = "";
 
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
@@ -123,7 +133,12 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
               : undefined,
           body,
         });
-        const answer = respond({ owner, repository, issues, token, origin }, incoming, url, body);
+        const answer = respond(
+          { owner, repository, issues, token, origin, substitutions },
+          incoming,
+          url,
+          body,
+        );
         // `Connection: close` on every answer, because `fetch` otherwise keeps
         // an idle keep-alive socket the client never reuses, and closing the
         // listener then waits on a connection nobody is using.
@@ -149,7 +164,7 @@ export function useIssueTrackerServer(options: ServerOptions = {}): Operation<Is
       throw new Error("the tracker did not listen on a TCP port");
     }
     origin = `http://127.0.0.1:${address.port}`;
-    yield* provide({ url: origin, owner, repository, issues, requests });
+    yield* provide({ url: origin, owner, repository, issues, requests, substitutions });
   });
 }
 
@@ -159,6 +174,7 @@ interface Store {
   readonly issues: ServedIssue[];
   readonly token: string;
   readonly origin: string;
+  readonly substitutions: Map<number, number>;
 }
 
 interface Answer {
@@ -191,7 +207,11 @@ function respond(store: Store, incoming: IncomingMessage, url: URL, body: unknow
     : undefined;
 
   if (numbered !== undefined) {
-    const found = store.issues.find((issue) => issue.number === numbered);
+    // The substitution applies to the answer, not to the address: the request
+    // still arrives for the issue it named, and what comes back describes a
+    // different one.
+    const answering = store.substitutions.get(numbered) ?? numbered;
+    const found = store.issues.find((issue) => issue.number === answering);
     if (found === undefined) {
       return { status: 404, body: JSON.stringify({ message: "Not Found" }) };
     }

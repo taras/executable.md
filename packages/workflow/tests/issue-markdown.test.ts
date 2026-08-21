@@ -96,6 +96,14 @@ describe("workflow Issue scenarios", () => {
     });
   }
 
+  it("IssueReadSubstituted.test.md states a contract that holds", function* () {
+    const fixture = yield* useScenarioFixture();
+    // Staged twice so the second attempt shows there was nothing to restore.
+    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
+    yield* fixture.stage("IssueReadSubstituted.attempt.stage.md");
+    yield* stated(yield* fixture.observe(pathOf("IssueReadSubstituted.test.md")));
+  });
+
   it("IssueRecovery.test.md states a contract that holds", function* () {
     const fixture = yield* useScenarioFixture();
     // The interrupted attempt first, then one that inherits what it left.
