@@ -23,8 +23,7 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { lstat } from "@effectionx/fs";
-import { chmod, readdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, writeFile } from "node:fs/promises";
 import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -58,6 +57,12 @@ import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.t
 import { useGitHttpRemote } from "./support/git-http.ts";
 import type { GitHttpRemote } from "./support/git-http.ts";
 import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
+import {
+  fixture as pullRequestFixture,
+  published as publishedPullRequest,
+  pullRequest as onePullRequest,
+  REMOTE as PULL_REQUEST_REMOTE,
+} from "./support/pull-requests.ts";
 import type { InvokingHome } from "./support/credential-home.ts";
 import {
   causedBy,
@@ -577,15 +582,24 @@ describe("workflow ambient authentication cancellation", () => {
     };
   }
 
-  /** Whether any credential working directory this provider makes is still there. */
-  function* credentialArtifacts(): Operation<string[]> {
-    const found: string[] = [];
-    for (const entry of yield* until(readdir(tmpdir()))) {
-      if (entry.startsWith("xmd-workflow-credential-")) {
-        found.push(entry);
-      }
-    }
-    return found;
+  /**
+   * The working directories this run's own sessions opened and released.
+   *
+   * Watched rather than scanned for: a prefix search of the temporary directory
+   * is a claim about the whole machine, and two concurrent invocations would
+   * each see the other's.
+   */
+  function watching() {
+    const opened: string[] = [];
+    const released: string[] = [];
+    return {
+      observe: {
+        opened: (directory: string) => opened.push(directory),
+        released: (directory: string) => released.push(directory),
+      },
+      /** Every directory this run opened and did not release. */
+      surviving: () => opened.filter((directory) => !released.includes(directory)),
+    };
   }
 
   it("invents nothing when cancelled while acquisition is blocked", function* () {
@@ -596,10 +610,14 @@ describe("workflow ambient authentication cancellation", () => {
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       const reached = withResolvers<void>();
-      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }), function* () {
-        reached.resolve();
-        yield* suspend();
-      });
+      const watcher = watching();
+      const recorded = tracked(
+        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+        function* () {
+          reached.resolve();
+          yield* suspend();
+        },
+      );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
       );
@@ -619,48 +637,78 @@ describe("workflow ambient authentication cancellation", () => {
       expect(served.requests).toHaveLength(0);
       expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("clone");
-      expect(yield* credentialArtifacts()).toEqual([]);
+      expect(watcher.surviving()).toEqual([]);
     });
   });
 
-  it("invents nothing when cancelled while the authenticated transport is blocked", function* () {
+  it("invents nothing when cancelled mid-transport, after the remote accepted it", function* () {
     const root = yield* useStorageRoot();
-    const served = yield* protectedRemote(FIRST, "first");
+    const bare = yield* useBareRemote(REMOTE);
+    const reached = withResolvers<void>();
+    let holding = true;
+    // Held on the remote rather than around the host: the point of this case is
+    // that a real Git child has a real connection open to a server that proved
+    // the credential and will not answer. Suspending before `git()` would stop
+    // before any of that exists.
+    const served = yield* useGitHttpRemote({
+      remote: bare,
+      label: "first",
+      ...FIRST,
+      hold: (request) => {
+        if (holding && request.accepted) {
+          reached.resolve();
+          return true;
+        }
+        return false;
+      },
+    });
     const home = yield* useInvokingHome([{ host: served.host, ...FIRST }]);
+    const source = document(
+      served.locator,
+      `<File path="README.md" as="readme" />`,
+      "",
+      "read: {readme}",
+    );
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }));
-      const inner = denoRepositoryHost({ authentication: recorded.authentication });
-      const reached = withResolvers<void>();
-      // The session is established and attached; what stops is the command that
-      // carries it, which is the moment an identity exists and has proven
-      // nothing.
-      const counting = countingHost({
-        ...inner,
-        *git(invocation) {
-          if (invocation.args[0] === "clone") {
-            reached.resolve();
-            yield* suspend();
-          }
-          return yield* inner.git(invocation);
-        },
-      });
+      const watcher = watching();
+      const recorded = tracked(
+        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+      );
+      const counting = countingHost(
+        denoRepositoryHost({ authentication: recorded.authentication }),
+      );
 
       yield* scoped(function* () {
         const running = yield* spawn(() =>
-          runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+          runDocument(database, source, countingOptions(counting)),
         );
         yield* reached.operation;
+        // The halt returns only once teardown is complete, which for this host
+        // means the Git child is gone and both its pipes have ended — a
+        // cancellation that merely signalled would return here with the child
+        // still holding the connection.
         yield* running.halt();
       });
 
+      // The remote did accept a request, so the transport really was live and
+      // authenticated when it stopped.
+      expect(served.requests.some((request) => request.accepted)).toBe(true);
       // The session existed, was disposed exactly once, and produced no
       // completion — a cancelled clone is not a repository this run has.
       expect(recorded.opened).toEqual([served.locator]);
       expect(recorded.disposed).toEqual([served.locator]);
       expect(yield* retainedRepositories(database)).toHaveLength(0);
-      expect(yield* credentialArtifacts()).toEqual([]);
+      expect(watcher.surviving()).toEqual([]);
+
+      // And the attempt after it acquires again rather than continuing under an
+      // identity nobody re-proved.
+      holding = false;
+      const output = yield* runDocument(database, source, countingOptions(counting));
+      expect(String(output)).toContain("read: protected");
+      expect(recorded.opened).toEqual([served.locator, served.locator]);
+      expect(watcher.surviving()).toEqual([]);
     });
   });
 
@@ -672,7 +720,10 @@ describe("workflow ambient authentication cancellation", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const recorded = tracked(denoGitAuthentication({ ambient: home.ambient }));
+      const watcher = watching();
+      const recorded = tracked(
+        denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe }),
+      );
       const counting = countingHost(
         denoRepositoryHost({ authentication: recorded.authentication }),
       );
@@ -692,7 +743,7 @@ describe("workflow ambient authentication cancellation", () => {
       expect(recorded.opened).toEqual([reachable.locator, refused.locator]);
       expect(recorded.disposed).toHaveLength(2);
       expect(new Set(recorded.disposed)).toEqual(new Set(recorded.opened));
-      expect(yield* credentialArtifacts()).toEqual([]);
+      expect(watcher.surviving()).toEqual([]);
     });
   });
 
@@ -711,7 +762,8 @@ describe("workflow ambient authentication cancellation", () => {
       const database = yield* createRun();
       const blocked = withResolvers<void>();
       let block = true;
-      const inner = denoGitAuthentication({ ambient: home.ambient });
+      const watcher = watching();
+      const inner = denoGitAuthentication({ ambient: home.ambient, observe: watcher.observe });
       const recorded = tracked(inner, function* () {
         if (block) {
           blocked.resolve();
@@ -738,7 +790,7 @@ describe("workflow ambient authentication cancellation", () => {
       expect(String(output)).toContain("read: protected");
       expect(recorded.opened).toEqual([served.locator, served.locator]);
       expect(recorded.disposed).toHaveLength(2);
-      expect(yield* credentialArtifacts()).toEqual([]);
+      expect(watcher.surviving()).toEqual([]);
     });
   });
 });
@@ -887,9 +939,11 @@ describe("workflow GitHub source sessions", () => {
 
     yield* scoped(function* () {
       const access = yield* source.open();
-      expect(yield* access.token()).toBe("from-host");
-      expect(yield* access.token()).toBe("from-host");
-      expect(yield* access.token()).toBe("from-host");
+      // Compared here and reported as a verdict, so a failure prints whether
+      // the session answered with what the host holds rather than printing it.
+      for (let request = 0; request < 3; request += 1) {
+        expect((yield* access.token()) === "from-host").toBe(true);
+      }
     });
 
     // One read. An observation and the mutation it decided carry the identity
@@ -925,6 +979,35 @@ describe("workflow GitHub source sessions", () => {
     gitHubSource(counting.access);
     expect(counting.reads).toEqual([]);
     expect(counting.sent).toEqual([]);
+  });
+
+  it("opens no session when a completed PullRequest replays", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(PULL_REQUEST_REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const live = pullRequestFixture(remote);
+      const source = publishedPullRequest(...onePullRequest());
+      yield* runWorkflowDocument(database, source, live.options);
+
+      // The same document again, over a source that cannot be opened. A replay
+      // that established an identity would reach it.
+      const opened: number[] = [];
+      const refusing: GitHubSource = {
+        endpoint: "https://api.invalid",
+        *open(): Operation<GitHubAccess> {
+          opened.push(1);
+          throw new Error("a session was opened during replay");
+        },
+      };
+      const replay = pullRequestFixture(remote);
+      yield* runWorkflowDocument(database, source, {
+        composition: { ...replay.options.composition, gitHub: refusing },
+      });
+
+      expect(opened).toEqual([]);
+    });
   });
 
   it("refuses an Issue outside the ceiling before any session is opened", function* () {
@@ -968,33 +1051,54 @@ describe("workflow GitHub ambient credentials", () => {
     };
   }
 
+  /**
+   * Which source answered, never what it answered with.
+   *
+   * A token is a token whether it is real or synthetic, and an assertion that
+   * compares one prints it when it fails. So each source is given a value only
+   * this function knows, and what a test compares is the label it maps back to.
+   */
+  const SOURCES = new Map([
+    ["gh-token-value", "GH_TOKEN"],
+    ["github-token-value", "GITHUB_TOKEN"],
+    ["login-token-value", "login"],
+  ]);
+
+  function whichSource(token: string | undefined): string {
+    return token === undefined ? "none" : (SOURCES.get(token) ?? "unrecognized");
+  }
+
   it("prefers GH_TOKEN, then GITHUB_TOKEN, then the host's own login", function* () {
     const consulted: number[] = [];
-    const supplied = login("from-login", consulted);
+    const supplied = login("login-token-value", consulted);
 
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: { GH_TOKEN: "from-gh", GITHUB_TOKEN: "from-github" },
-        login: supplied,
-      }).token(),
-    ).toBe("from-gh");
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: { GH_TOKEN: "gh-token-value", GITHUB_TOKEN: "github-token-value" },
+          login: supplied,
+        }).token(),
+      ),
+    ).toBe("GH_TOKEN");
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: { GITHUB_TOKEN: "from-github" },
-        login: supplied,
-      }).token(),
-    ).toBe("from-github");
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: { GITHUB_TOKEN: "github-token-value" },
+          login: supplied,
+        }).token(),
+      ),
+    ).toBe("GITHUB_TOKEN");
     // Neither variable is set at all: the machine's own login is what a person
     // who has already run `gh auth login` has, and it is asked last.
-    expect(yield* denoGitHubAccess(undefined, { environment: {}, login: supplied }).token()).toBe(
-      "from-login",
-    );
+    expect(
+      whichSource(yield* denoGitHubAccess(undefined, { environment: {}, login: supplied }).token()),
+    ).toBe("login");
     expect(consulted).toHaveLength(1);
   });
 
   it("treats an empty variable as an explicit absence rather than a fallback", function* () {
     const consulted: number[] = [];
-    const supplied = login("from-login", consulted);
+    const supplied = login("login-token-value", consulted);
 
     // An empty variable names no credential. Sending `Bearer ` would ask GitHub
     // to decide what an empty token means, and looking further would ignore a
@@ -1006,22 +1110,26 @@ describe("workflow GitHub ambient credentials", () => {
       }).token(),
     ).toBeUndefined();
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: { GITHUB_TOKEN: "" },
-        login: supplied,
-      }).token(),
-    ).toBeUndefined();
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: { GITHUB_TOKEN: "" },
+          login: supplied,
+        }).token(),
+      ),
+    ).toBe("none");
     expect(consulted).toEqual([]);
   });
 
   it("answers none when the host's login holds nothing either", function* () {
     const consulted: number[] = [];
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: {},
-        login: login(undefined, consulted),
-      }).token(),
-    ).toBeUndefined();
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: {},
+          login: login(undefined, consulted),
+        }).token(),
+      ),
+    ).toBe("none");
     expect(consulted).toHaveLength(1);
   });
 });

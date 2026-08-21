@@ -61,6 +61,14 @@ export interface GitHttpOptions {
    * says instead of a secret.
    */
   readonly label?: string;
+  /**
+   * Held open after a request has been accepted, and never answered.
+   *
+   * The moment a cancellation test needs: authentication has been proven to the
+   * remote and the transport is live, so what a halt has to tear down is a real
+   * Git child with a real connection open to a server that will not reply.
+   */
+  readonly hold?: (request: ServedGitRequest) => boolean;
 }
 
 /** Where Git keeps `git-http-backend`, asked of Git rather than guessed. */
@@ -223,6 +231,12 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
         outgoing.end();
         // Drained, so the client is not left writing into a request nobody is
         // reading.
+        incoming.resume();
+        return;
+      }
+      if (options.hold?.(requests[requests.length - 1] as ServedGitRequest) === true) {
+        // Accepted, and then nothing. The socket stays open, so the client is
+        // waiting on this end rather than on a refusal.
         incoming.resume();
         return;
       }

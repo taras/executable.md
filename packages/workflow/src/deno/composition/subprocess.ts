@@ -11,6 +11,7 @@
 
 import { ensure, type Operation, withResolvers } from "effection";
 import { spawn as spawnChild } from "node:child_process";
+import process from "node:process";
 
 /** What one invocation reported. A nonzero exit is an answer, not a throw. */
 export interface ProcessOutcome {
@@ -46,7 +47,14 @@ export function* runProcess({
   // selected by the host, not written against one, and `spawn` replaces the
   // child's environment outright when `env` is given — which is the whole point
   // of building one rather than inheriting it.
-  const options = { cwd, env: { ...env } };
+  // `detached` puts the child in a process group of its own, which is what makes
+  // cancellation reach the whole of what it started. Native Git runs its
+  // transport in a helper of its own — `git-remote-http` holds the connection —
+  // and that grandchild inherits these pipes. Signalling only the process this
+  // spawned would leave the helper alive holding them open, so the `close`
+  // waited for below would never arrive and a cancelled operation would hang
+  // instead of tearing down.
+  const options = { cwd, env: { ...env }, detached: true };
   const child =
     input === undefined
       ? spawnChild(command, [...args], { ...options, stdio: ["ignore", "pipe", "pipe"] })
@@ -70,7 +78,16 @@ export function* runProcess({
     if (settled) {
       return;
     }
-    child.kill("SIGKILL");
+    // The group, so the transport helper goes with the command that started it.
+    // A group that is already gone raises, and that is the same answer as a
+    // group that was killed — the wait below is what decides either way.
+    try {
+      if (child.pid !== undefined) {
+        process.kill(-child.pid, "SIGKILL");
+      }
+    } catch {
+      child.kill("SIGKILL");
+    }
     yield* closed.operation;
   });
 

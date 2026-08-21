@@ -201,33 +201,53 @@ describe("workflow GitHub credentials", () => {
    * default access with neither variable set would ask the machine's own
    * `gh auth login` — a developer's real credential, which no suite may read.
    */
+  /**
+   * Which source answered, never what it answered with.
+   *
+   * A token is a token whether it is real or synthetic, and an assertion that
+   * compares one prints it when it fails.
+   */
+  const SOURCES = new Map([
+    ["gh-token-value", "GH_TOKEN"],
+    ["github-token-value", "GITHUB_TOKEN"],
+    ["login-token-value", "login"],
+  ]);
+
+  function whichSource(token: string | undefined): string {
+    return token === undefined ? "none" : (SOURCES.get(token) ?? "unrecognized");
+  }
+
   it("prefers GH_TOKEN, then GITHUB_TOKEN, then the host's own login", function* () {
     const before = { gh: process.env.GH_TOKEN, github: process.env.GITHUB_TOKEN };
     try {
-      process.env.GH_TOKEN = "from-gh";
-      process.env.GITHUB_TOKEN = "from-github";
-      expect(yield* denoGitHubAccess().token()).toBe("from-gh");
+      process.env.GH_TOKEN = "gh-token-value";
+      process.env.GITHUB_TOKEN = "github-token-value";
+      expect(whichSource(yield* denoGitHubAccess().token())).toBe("GH_TOKEN");
     } finally {
       restore("GH_TOKEN", before.gh);
       restore("GITHUB_TOKEN", before.github);
     }
 
-    const login = holding("from-login");
+    const login = holding("login-token-value");
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: { GH_TOKEN: "from-gh", GITHUB_TOKEN: "from-github" },
-        login,
-      }).token(),
-    ).toBe("from-gh");
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: { GH_TOKEN: "gh-token-value", GITHUB_TOKEN: "github-token-value" },
+          login,
+        }).token(),
+      ),
+    ).toBe("GH_TOKEN");
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: { GITHUB_TOKEN: "from-github" },
-        login,
-      }).token(),
-    ).toBe("from-github");
-    expect(yield* denoGitHubAccess(undefined, { environment: {}, login }).token()).toBe(
-      "from-login",
-    );
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: { GITHUB_TOKEN: "github-token-value" },
+          login,
+        }).token(),
+      ),
+    ).toBe("GITHUB_TOKEN");
+    expect(
+      whichSource(yield* denoGitHubAccess(undefined, { environment: {}, login }).token()),
+    ).toBe("login");
 
     // An empty variable names no credential. Sending `Bearer ` would ask GitHub
     // to decide what an empty token means, and looking further would ignore a
@@ -236,11 +256,13 @@ describe("workflow GitHub credentials", () => {
       yield* denoGitHubAccess(undefined, { environment: { GITHUB_TOKEN: "" }, login }).token(),
     ).toBeUndefined();
     expect(
-      yield* denoGitHubAccess(undefined, {
-        environment: {},
-        login: holding(undefined),
-      }).token(),
-    ).toBeUndefined();
+      whichSource(
+        yield* denoGitHubAccess(undefined, {
+          environment: {},
+          login: holding(undefined),
+        }).token(),
+      ),
+    ).toBe("none");
   });
 
   it("cannot observe without a credential, and creates nothing", function* () {
