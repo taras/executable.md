@@ -8,7 +8,6 @@
     "packages/workflow/vendor/cloudflare-computer-dofs/generated/**/*.d.ts"
   ],
   "nodeModulesDir": "auto",
-  "links": ["./packages/acp/vendor/acpx"],
   "lock": {
     "frozen": true
   },
