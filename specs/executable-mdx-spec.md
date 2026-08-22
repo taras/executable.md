@@ -2286,8 +2286,9 @@ export interface FunctionComponentDefinition {
   kind: "function";
   name: string;
   path: string;
-  props: PropsSchema;      // canonical draft-07 JSON Schema (§5.1.1)
-  returns?: ReturnsSchema; // declared return schema (§6.10); absent in text mode
+  props: PropsSchema;         // canonical draft-07 JSON Schema (§5.1.1)
+  captures?: readonly string[]; // props the engine leaves unresolved (§6.5)
+  returns?: ReturnsSchema;    // declared return schema (§6.10); absent in text mode
   fn: FunctionComponent;
 }
 ```
@@ -2324,6 +2325,23 @@ validated `Record<string, Json>` props to the generator (§6.5) — a component
 never sees the raw element or an unvalidated value. A JSON Schema a document
 hands over as a prop value, `schema={responseSchema}`, is ordinary JSON data on
 those props and is validated as such.
+
+**Capture declaration.** A named `export const captures = ["value"]` names
+props the engine does not resolve at all (§6.5). They are stripped before
+expression resolution and excluded from validation, so they meet neither the
+JSON round trip nor the clone, and the component evaluates each itself with
+`capture()`. A capture is therefore how an operand a schema cannot describe —
+`undefined`, a function, a `RegExp`, a particular object — reaches a component.
+
+The declaration is held to the same rules wherever it is written: a capture may
+not also be a schema property, may not be `as` or `slot`, and may not repeat.
+A registration (§5.3) declares the same thing under the same name, so one file
+means the same thing whether a repository directory or a registration supplies
+it — which matters because a repository file overrides a registered default,
+and a component whose operand quietly changed shape across that boundary would
+be a different component. There is no `captures:` frontmatter key: a capture
+arrives by reference, and a Markdown component reads its props through
+interpolation, which has only a value's JSON reading to interpolate.
 
 **Return declaration.** A named `export const returns = { ... }` declares a
 return value under the same contract as the `returns:` frontmatter key,
@@ -4427,8 +4445,9 @@ resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
 
-A **capture** is the exception. A registration may declare props the engine does
-not resolve at all: they are stripped before expression resolution and excluded
+A **capture** is the exception. A registration (§5.3), or a function component's
+own `export const captures` (§5.1.2), may declare props the engine does not
+resolve at all: they are stripped before expression resolution and excluded
 from validation, so they meet neither the JSON round-trip nor the clone, and the
 component evaluates each itself with `capture()` — when, and if, it wants to.
 The value therefore arrives as the author wrote it, which is how an operand that
@@ -8798,6 +8817,8 @@ Each row names the derivation it kills.
 | CR31 | Repository replay | The entry holds path and content, and a replay never probes the filesystem |
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
+| CR35 | A repository `.ts` component declares its own captures | An exported `captures` delivers a symbol operand by reference; without it the same prop meets the JSON gate |
+| CR36 | An exported capture the engine owns | `captures = ["as"]` is refused at load, and the component never runs |
 
 ### Tier WB — The workflow component bundle in core
 

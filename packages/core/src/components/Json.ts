@@ -55,6 +55,15 @@ export const props = {
   additionalProperties: false,
 };
 
+/**
+ * `value` is the engine's to hand over unresolved (§6.5).
+ *
+ * Exported rather than declared only where core registers this component, so
+ * the same file means the same thing whichever tier supplies it: resolved as a
+ * repository `.ts` file, it declares its own operand.
+ */
+export const captures = ["value"];
+
 /** An invocation `<Json>` cannot render, or a value it cannot turn into text. */
 export class JsonRenderError extends Error {
   constructor(message: string, options?: ErrorOptions) {

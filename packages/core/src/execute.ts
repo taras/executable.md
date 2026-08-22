@@ -57,6 +57,7 @@ import {
   validateProps,
 } from "./validate.ts";
 import { useParseCompiler } from "./components/parse-schema.ts";
+import { assertUsableCaptures } from "./components/registration.ts";
 import {
   documentOutline,
   isFunctionComponentPath,
@@ -74,7 +75,7 @@ import {
   sameDocumentTargetFailure,
 } from "./document-targets.ts";
 import type { DocumentOutline, DocumentTargetFailure } from "./document-targets.ts";
-import { parseReturnsDeclaration } from "./frontmatter.ts";
+import { parseCapturesDeclaration, parseReturnsDeclaration } from "./frontmatter.ts";
 import {
   expandSegments,
   expandBody,
@@ -464,6 +465,20 @@ function* durableImportComponent(
       props,
       fn: defaultExport,
     };
+
+    // Declared here rather than only on a registration, because which props
+    // the engine must leave unresolved is a fact about the component's own
+    // operands. Without this a `.ts` file could not describe an operand a
+    // schema cannot describe, and the same component would mean different
+    // things depending on whether a repository file or a registration supplied
+    // it (§5.1.2, §6.5).
+    if ("captures" in mod && mod.captures !== undefined) {
+      const captures = parseCapturesDeclaration(mod.captures);
+      assertUsableCaptures(name, captures, props);
+      if (captures.length > 0) {
+        definition.captures = captures;
+      }
+    }
 
     if ("returns" in mod && mod.returns !== undefined) {
       const returns = parseReturnsDeclaration(mod.returns);
