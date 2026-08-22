@@ -151,6 +151,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/522",
   },
   {
+    path: "packages/workflow/tests/public-entrypoint.test.ts",
+    reason:
+      "imports the Deno entrypoint to inventory what it publishes, which reaches the node:sqlite run store on load, and spawns a Deno subprocess to attempt the exploit; both the surface under test and the probe are Deno's",
+    issue: "https://github.com/taras/executable.md/issues/522",
+  },
+  {
     path: "packages/workflow/tests/credential-helper.test.ts",
     reason:
       "runs the provider-owned credential helper through the Deno source launcher and drives `git credential fill` against isolated fixture homes; the helper mode is dispatched by the Deno entrypoints and has no Node or Bun assembly yet",
