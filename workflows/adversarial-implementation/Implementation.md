@@ -1,5 +1,5 @@
 ---
-required: [plan, authorization, instructions, planner, implementor]
+required: [plan, authorization, instructions, planner, implementor, tracker]
 
 props:
   plan: { type: string }
@@ -14,6 +14,7 @@ props:
   instructions: { type: string }
   planner: { type: string }
   implementor: { type: string }
+  tracker: { type: string }
 
 returns:
   report: { type: string }
@@ -71,7 +72,7 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 ## Target shape
 
-<Capture as="proposalSchema" select="code[lang=json]">
+<Let as="proposalSchema" select="code[lang=json]">
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -86,9 +87,9 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 
-<Capture as="pullRequestVerdictSchema" select="code[lang=json]">
+<Let as="pullRequestVerdictSchema" select="code[lang=json]">
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -127,11 +128,9 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 
-```ts eval
-let pullRequest = {};
-```
+<Let as="pullRequest" value={{}} />
 
 <Agent name={props.implementor}>
   <Session name="implementor">
@@ -304,7 +303,7 @@ let pullRequest = {};
         </Session>
       </Agent>
 
-      <Capture as="checkpointMaterial">
+      <Let as="checkpointMaterial">
         ## Authorized plan
 
         {props.plan}
@@ -349,7 +348,7 @@ let pullRequest = {};
         - {item}
         </Each>
         </Each>
-      </Capture>
+      </Let>
       <UserCheckpoint
         purpose="resolve the pull-request review"
         agent={props.planner}
@@ -359,10 +358,28 @@ let pullRequest = {};
       <If condition={reviewCheckpoint.proceed}>
         <Each in={verdict.findings} let="finding">
           <If condition={finding.disposition === "defer"}>
-            <Issue
-              pullRequest={pullRequest}
-              finding={finding}
-            />
+            <IssueTracker url={props.tracker}>
+              <Issue title={finding.title} as="deferredIssue">
+                {finding.description}
+
+                Evidence:
+
+                <Each in={finding.evidence} let="item">
+                - {item}
+                </Each>
+
+                Deferred from pull request #{pullRequest.number}
+                ({pullRequest.url}), reviewing {pullRequest.headSha} onto
+                {pullRequest.baseSha}.
+
+                The reviewing planner classified this finding as `defer` rather
+                than as a revision, and the user approved that disposition:
+
+                {reviewCheckpoint.assessment}
+                User response: {reviewCheckpoint.response}
+                Rationale: {reviewCheckpoint.rationale}
+              </Issue>
+            </IssueTracker>
           </If>
         </Each>
         <If condition={verdict.passed}>
@@ -494,22 +511,26 @@ A revision iteration commits again, so the head it asks about is not the head
 the existing pull request holds — which is why an unnumbered second request
 would be a **conflict** rather than an update: it asked for one to exist, not
 for whatever is there to become this. The loop therefore says which one it
-means. `let pullRequest = {}` seeds the binding once, before the loop; on the
-first iteration `pullRequest.number` is `undefined`, so `number` is omitted and
-the unnumbered create-or-adopt contract applies; the successful result replaces
-the seed through ordinary `as` binding, and every later iteration passes the
+means. `<Let as="pullRequest" value={{}} />` seeds the binding once, before the
+loop — a direct value rather than rendered content (#528, shipped). On the first
+iteration `pullRequest.number` is `undefined`, so `number` is omitted and the
+unnumbered create-or-adopt contract applies; the successful result replaces the
+seed through ordinary `as` binding, and every later iteration passes the
 retained positive number and selects the numbered update contract for that exact
 pull request. `<Loop>` opens no binding scope, which is what lets one iteration
 read what the previous one bound.
 
-The engine contract underneath it is **#301's, and not built yet**: an
-expression prop evaluating to `undefined` is omitted before prop validation and
-before the durable JSON boundary, so the component never receives `undefined`
-and no journal or replay stores it. A required prop that evaluates to
-`undefined` still fails validation as missing, `null` stays an explicit value
-passed only where a schema accepts it, and an unbound name still fails. Today
-the engine refuses such a prop instead of omitting it, so this is the one part
-of the loop that does not run yet.
+The seed is shipped; the omission it relies on is not. `<Let value>` binds the
+empty object and nothing more — it does not make an ordinary component prop
+whose expression evaluates to `undefined` become omitted. That is the engine
+contract **#301's amendment settles and nothing has built yet**: such a prop is
+omitted before prop validation and before the durable JSON boundary, so the
+component never receives `undefined` and no journal or replay stores it. A
+required prop that evaluates to `undefined` still fails validation as missing,
+`null` stays an explicit value passed only where a schema accepts it, and an
+unbound name still fails. Today the engine refuses such a prop instead of
+omitting it, so the seeded `number={pullRequest.number}` is still the one part
+of this loop that does not run.
 
 ## The reviewer sees what it judges
 
@@ -590,8 +611,16 @@ settled); a composed workflow suspends there for it (#367, shipped).
 
 ## Approval precedes durable effects
 
-Deferred `<Issue>` creation sits **inside** the approved branch, after the
-checkpoint. The planner proposes a disposition; the user's approval is what
+Deferred issue creation sits **inside** the approved branch, after the
+checkpoint. `<IssueTracker url={props.tracker}>` names the container the issues
+belong in and `<Issue title={finding.title} as="deferredIssue">` renders the
+description as its body, binding `{ url }` and nothing else. The authored
+tracker URL selects a target; it grants no authority. The workflow host installs
+an adapter-private ceiling beside its credentials, and a target outside that
+ceiling fails before any provider observes anything — so a document can write
+any URL here and reach nothing the host had not already allowed. `IssueApi` is
+its own boundary: a tracker is not a Repository, and no Git effect is involved
+in filing one. The planner proposes a disposition; the user's approval is what
 turns that proposal into a durable forge object. Creating the issues first
 would make the planner's classification take effect before anyone approved it,
 and an issue is not undone by a later decline.
@@ -605,8 +634,8 @@ approval sets in motion, unchanged and unsummarized:
   description of it;
 - the **revision prompt** that goes to the implementor when the verdict has not
   passed — the literal `verdict.revisionPrompt`; and
-- each finding's **evidence**, because `<Issue>` receives the complete finding
-  and a `defer` disposition turns it into a durable forge object.
+- each finding's **evidence**, because a `defer` disposition renders that
+  finding into a durable forge object and the issue body carries it.
 
 Approving instructions or evidence the user never read would be the same
 authority leak as not asking at all. It is not an invitation to amend them
@@ -628,7 +657,7 @@ revision turn, or acceptance.
 | Written above | Supplied by | Status |
 | --- | --- | --- |
 | `<Expand>` | #369 | unbuilt; public name open. The evaluator under it is shipped (#497), for observation only |
-| `<Issue>` | #296 | unbuilt |
+| `<IssueTracker>`, `<Issue>` | #296, delivered by #516 | shipped — registered by the workflow host |
 | `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
 | `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
 | omitting an expression prop that evaluates to `undefined` | #301 | unbuilt — the loop's `number={pullRequest.number}` depends on it |
@@ -636,20 +665,22 @@ revision turn, or acceptance.
 | shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and now the push and pull-request components over it |
 | the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
 
-The agent, parsing, capture, and control-flow syntax runs today, and so do the
-Git effects: `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` and `<PullRequest>` are
-all built and registered by the workflow host.
+The agent, parsing, binding, and control-flow syntax runs today, and so do the
+forge effects: `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, `<PullRequest>`,
+`<IssueTracker>` and `<Issue>` are all built and registered by the workflow
+host.
 
 The loop body above still does not expand, and it is worth separating the two
-reasons. **Two names resolve to nothing** — `<Expand>` (#369) and `<Issue>`
-(#296) — and one **engine capability is unbuilt**: omitting an expression prop
-that evaluates to `undefined` (#301), which the seeded `number={pullRequest.number}`
-needs on its first pass. Neither of those is a statement about `<Git.Push>` or
-`<PullRequest>`: those are shipped, and this stage still cannot reach them,
-because the `<Expand>` that would produce the change to stage and commit comes
-first. A shipped component behind an unbuilt prerequisite is unreachable here,
-not unbuilt. Until the prerequisites land, the effects this stage stands for
-remain explicit user-run steps between manual stages.
+reasons. **One name resolves to nothing** — `<Expand>` (#369) — and one **engine
+capability is unbuilt**: omitting an expression prop that evaluates to
+`undefined` (#301), which the seeded `number={pullRequest.number}` needs on its
+first pass. Neither is a statement about the forge components. Those are
+shipped, and this stage still cannot reach them, because the `<Expand>` that
+would produce the change to stage and commit comes first. A shipped component
+behind an unbuilt prerequisite is unreachable here, not unbuilt — and the
+deferred-issue path is the furthest one back, since it also waits on the review
+that only a real change produces. Until the prerequisites land, the effects this
+stage stands for remain explicit user-run steps between manual stages.
 
 Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,
 `verdict`, `checkpointMaterial`, and `reviewCheckpoint` are authored bindings and

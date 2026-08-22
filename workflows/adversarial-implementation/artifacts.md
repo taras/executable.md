@@ -136,6 +136,23 @@ descriptive evidence about an event, never identity — nothing is located by
 reconstructing a position from an expansion ID, the current definition, or the
 Workspace.
 
+**A crashed run is inspectable, from a private copy** (#521, shipped). Ordinary
+inspection reads the retained snapshot and costs nothing extra. Only one
+condition falls through to recovery: SQLite's exact
+`SQLITE_READONLY_ROLLBACK` — a hot rollback journal a lost host left behind,
+which a read-only connection may not put back. The extended code is the whole
+signal, because the primary readonly conditions describe a database nobody may
+write for other reasons and answering those with recovery would be guessing.
+
+The retained database and its journal are copied under recovery coordination,
+and SQLite rolls the journal back into the *copy*. The authoritative crashed
+source stays byte-identical, exactly as its lost host left it, still waiting for
+the write-capable owner whose job recovery actually is. Coordination is held for
+the copy and released before the copy is recovered; it grants no executor or
+lifecycle authority and opens no Workspace or provider effects. `list` stays
+complete-or-error: it reports every run or it fails, never a partial listing
+that silently omits the crashed one.
+
 `history --forkable` adds a forkability column and a blockers column, and
 removes nothing — so a caller that does not ask for them reads the same history
 it always did. Selecting an event to fork from is shipped (#368, delivered by

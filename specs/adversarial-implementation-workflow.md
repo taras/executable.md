@@ -503,8 +503,24 @@ explicit composition rather than one implicit workspace:
   upstream change and no implicit stage or commit. `<PullRequest>` requires that
   Push's own matching successful evidence rather than performing a hidden push
   (#295, shipped).
-- `<Issue>` reconciles an approved deferred finding (#296), over the shared
-  external reconciliation of #297.
+- `<IssueTracker>` names the tracker or project new issues belong in, and a
+  paired `<Issue title=… as=…>` files an approved deferred finding with its
+  description as the element body, binding `{ url }` (#296, shipped by #516).
+  The authored tracker URL selects a target and grants no authority: the host
+  installs an adapter-private ceiling beside its credentials, and a target
+  outside it fails before any provider observes anything. `IssueApi` is its own
+  boundary rather than a Git one.
+
+Authentication for all of them is ambient host input, acquired per provider
+invocation (#532, shipped): HTTP Git uses the invoking user's credential-helper
+chain for the exact locator, SSH uses the selected ambient agent and known-host
+policy, and GitHub API calls read `GH_TOKEN`, then `GITHUB_TOKEN`, then
+`gh auth token --hostname github.com`. It is never a public credential prop, a
+workflow secret schema, a copied credential, a retained value, Workspace
+material, a command argument, a URL, a journal field, output, or a diagnostic
+cause. Replay acquires no credentials; an interrupted effect reacquires current
+host authentication and reconciles through its provider contract. Agents receive
+neither credentials nor direct network authority.
 
 Each environmental operation declares its inputs and preconditions, reconciles
 existing state, returns a structured result, and records its observed effects. A
@@ -625,6 +641,16 @@ import, no Agent, process or external provider, and no reconciliation or append.
 History reads already-filtered retained protocol events, so it exposes no value
 the security policy has not already seen, and the authored source position it
 reports is descriptive evidence about an event rather than identity.
+
+Inspection survives a crashed host (#521, shipped). The ordinary reading is of
+the retained snapshot. The single condition it cannot get past is SQLite's exact
+`SQLITE_READONLY_ROLLBACK`, a hot rollback journal a lost host left behind; that
+falls through to recovery, which copies the database and journal under recovery
+coordination and lets SQLite roll the journal back into the private copy. The
+authoritative crashed source is left byte-identical for the write-capable owner
+whose job recovery actually is. Recovery coordination grants no executor or
+lifecycle authority and opens no Workspace or provider effects, and `list`
+remains complete-or-error.
 
 The authority underneath is shipped as #367's second slice (#466). The executor
 lock owns every lifecycle transition, so single-executor ownership, atomic begin
@@ -949,7 +975,7 @@ shipped behavior. They are recorded because the answers constrain what remains.
 9. **How does a document read a prop?** Under the `props` namespace, in
    expression props and in text alike: `agent={props.planner}` and
    `{props.instructions}`. Declaring a prop creates no bare binding
-   (#305, shipped). Authored bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` —
+   (#305, shipped). Authored bindings — from `as`, `<Let>`, `<Each>`, `<Loop>`, `<Return>` —
    stay bare.
 10. **Where may a component body project its caller's content?** Anywhere it
     writes `<Content />`, including nested inside another invocation such as a
