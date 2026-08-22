@@ -67,7 +67,7 @@ describe("Tier CP — capture props", () => {
     expect(seen.expected).toBe(re);
   });
 
-  it("CP8: a capture is the authored expression, even when it reads as JSON", function* () {
+  it("CP8: a capture takes the operand an ordinary prop omits", function* () {
     const seen: Record<string, unknown> = {};
     const capturing: FunctionComponentDefinition = {
       kind: "function",
@@ -85,7 +85,8 @@ describe("Tier CP — capture props", () => {
       props: { type: "object", properties: { probe: {} }, additionalProperties: false },
       // deno-lint-ignore require-yield
       *fn(props): Operation<unknown> {
-        seen.ordinary = props.probe;
+        seen.ordinaryRan = true;
+        seen.ordinaryHasProbe = Object.hasOwn(props, "probe");
         return "";
       },
     };
@@ -118,14 +119,14 @@ describe("Tier CP — capture props", () => {
       );
     });
 
-    // `undefined` is a JSON literal the scanner can read, and reading it is a
-    // projection: it becomes `null`. The capture is delivered from the authored
-    // expression instead, so the component gets what the author wrote.
+    // A capture is handed the value its expression produced, `undefined`
+    // included: it crosses no JSON boundary at all.
     expect(seen.captured).toBe(undefined);
     expect("captured" in seen).toBe(true);
-    // The very same authored text on an ordinary prop keeps the reading it has
-    // always had. The widening is per-prop, decided by the selected definition.
-    expect(seen.ordinary).toBe(null);
+    // The very same authored text on an ordinary prop means absence. The body
+    // runs, and the prop is not among the ones it was given (§6.5).
+    expect(seen.ordinaryRan).toBe(true);
+    expect(seen.ordinaryHasProbe).toBe(false);
   });
 
   it("CP2: a return binds by reference under `as`, and renders nothing without it", function* () {
@@ -267,7 +268,7 @@ describe("Tier CP — capture props", () => {
     };
 
     yield* scoped(function* () {
-      const env: EvalEnv = { values: { nothing: undefined } };
+      const env: EvalEnv = { values: { notJson: () => 1 } };
       yield* Component.around({ env: () => env }, { at: "min" });
       yield* Component.around({
         *raise([segment], next) {
@@ -284,7 +285,7 @@ describe("Tier CP — capture props", () => {
         },
         { at: "min" },
       );
-      yield* expandSegments(scanSegments("<Ordinary n={nothing} />\n"), {}, {}, new Set());
+      yield* expandSegments(scanSegments("<Ordinary n={notJson} />\n"), {}, {}, new Set());
     });
 
     // Undeclared as a capture, so it still meets the gate that rejects a

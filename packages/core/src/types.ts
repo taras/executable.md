@@ -40,9 +40,8 @@ export interface ComponentElement {
    *
    * Scanning happens before a name resolves, so the scanner cannot know
    * whether the definition that will run declares the prop a capture. Reading
-   * the text as JSON is a projection — `undefined` becomes `null`, and a
-   * function, a class instance or a cycle has no JSON shape at all — and a
-   * capture exists precisely to avoid one. Keeping the authored text beside
+   * the text as JSON is a projection — a function, a class instance or a cycle
+   * has no JSON shape at all — and a capture exists precisely to avoid one. Keeping the authored text beside
    * the projection lets expansion, which does know the selected definition,
    * hand a captured prop the exact value its expression produced and every
    * other prop the reading it has always had (§6.5).

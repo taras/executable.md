@@ -2648,6 +2648,35 @@ owner keeps; both are absent from every key list, descriptor, and copy. A
 capability boundary that a handler holding the object could read across is not
 one, whichever of the two properties it was reasoned from.
 
+## The ordinary component prop boundary
+
+An ordinary component's props are JSON, and one resolver decides that for both
+Markdown and function components — before validation, and before anything
+durable is written.
+
+- **A successful `undefined` means the prop is absent.** The resolver leaves it
+  out rather than giving it a value, so the schema answers it: an optional prop
+  stays unset, a declared default is supplied, and a required one fails as a
+  missing property with no body run. That is how one authored invocation can
+  carry an optional identity a preceding result supplies later.
+- **`null` is a value the author wrote.** It crosses the boundary as itself, and
+  only a schema that accepts it accepts it. Absence is never widened to it, and
+  never widened to a root a JSON round trip cannot describe: a function, a
+  symbol and a serialization that threw stay the failure they were, as do an
+  expression that threw and a name that is not bound.
+- **The rule stops at the root.** Everything under it is the same native
+  `JSON.stringify` round trip as before — an `undefined` object member is
+  dropped, an `undefined` array entry becomes `null` — and no recursive
+  normalizer of ours replaces it.
+- **Deliberate bypasses stay bypasses.** A capture is separated before this
+  resolver runs and receives the exact operand, `undefined` included; `<Let
+  value>` binds by reference; a construct that evaluates an arbitrary operand
+  keeps its own contract.
+- **Absence is not durable state.** Prop resolution records nothing of its own.
+  No resolved prop, validated prop, retained event or replay-restored prop holds
+  `undefined`, and a replay reconstructs the same validated prop set through
+  ordinary expansion.
+
 ## Construct inventory
 
 Status is measured against main.

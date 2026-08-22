@@ -851,6 +851,74 @@ describe("workflow PullRequest upsert", () => {
   });
 });
 
+/**
+ * One element, an absent number, and the iteration that supplies it.
+ *
+ * The document below is the shape #537 exists for: an optional identity prop
+ * that is not there yet, written once, and answered by what a preceding
+ * iteration produced.
+ */
+describe("workflow PullRequest across a loop", () => {
+  it("creates without a number, then updates the number it created", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    // One authored element, twice: the first iteration has no number to give
+    // it — `pullRequest.number` is `undefined`, so the prop is absent and the
+    // component asks for a pull request to exist — and the second gives it the
+    // number the first one returned. That is the whole language change, read
+    // through the shipped provider (#537).
+    const source = published(
+      '<Let as="pullRequest" value={{}} />',
+      "<Loop max={2}>",
+      `<PullRequest number={pullRequest.number} title={pullRequest.number ? "${TITLE} (revised)" ` +
+        `: "${TITLE}"} as="pullRequest">`,
+      `<If condition={pullRequest.number}>Revised notes.<Else>${BODY}</Else></If>`,
+      "</PullRequest>",
+      "</Loop>",
+      "",
+      "settled on {pullRequest.number}",
+    );
+    // The author wrote one invocation. Two would prove nothing about a number
+    // that is absent until a result supplies it.
+    expect(source.split("<PullRequest").length - 1).toBe(1);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = fixture(remote);
+      const rendered = String(yield* runWorkflowDocument(database, source, run.options));
+
+      // One pull request, created once and then brought up to date — not two,
+      // and not a second creation adopting the first.
+      expect(creations(run.store)).toBe(1);
+      expect(mutations(run.store)).toEqual(["create", "patch"]);
+      expect(run.store.pullRequests).toHaveLength(1);
+      const [settled] = run.store.pullRequests;
+      expect(settled?.title).toBe(`${TITLE} (revised)`);
+      expect(settled?.body).toBe("\nRevised notes.\n");
+      expect(rendered).toContain(`settled on ${settled?.number}`);
+
+      // The first request carries the normalized absence, and asks for a pull
+      // request from this head; the second carries the created number, and
+      // asks for that pull request.
+      const created = Object(yield* pullRequestRecord(database, 1));
+      const updated = Object(yield* pullRequestRecord(database, 2));
+      expect(Reflect.get(Object(created.request), "inputs")).toMatchObject({ number: null });
+      expect(Reflect.get(Object(created.request), "naturalKey")).toMatchObject({ mode: "create" });
+      expect(Reflect.get(Object(updated.request), "inputs")).toMatchObject({
+        number: settled?.number,
+        title: `${TITLE} (revised)`,
+      });
+      expect(Reflect.get(Object(updated.request), "naturalKey")).toMatchObject({
+        mode: "update",
+        number: settled?.number,
+      });
+      expect(Reflect.get(Object(created.result), "number")).toBe(settled?.number);
+      expect(Reflect.get(Object(updated.result), "number")).toBe(settled?.number);
+    });
+  });
+});
+
 describe("workflow PullRequest containment", () => {
   it("moves nothing local or remote of its own", function* () {
     const root = yield* useStorageRoot();

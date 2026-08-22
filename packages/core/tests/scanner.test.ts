@@ -265,9 +265,10 @@ echo hi
 
 /**
  * Scanning resolves a JSON-compatible expression prop to its value, which is a
- * projection: `undefined` has no JSON reading, so it arrives as `null`. One
- * prop is exempt, because the value it names is bound by reference rather than
- * read as data — see spec §6.5.
+ * projection: a construct that takes an arbitrary operand and is asked for a
+ * scan-time reading of `undefined` gets `null`. Two props are exempt: the one
+ * a construct binds by reference, and an ordinary component's `undefined` —
+ * which means absence, and is decided at expansion — see spec §6.5.
  */
 describe("scanSegments — a prop bound by reference", () => {
   function element(source: string): ComponentElement {
@@ -288,10 +289,26 @@ describe("scanSegments — a prop bound by reference", () => {
   });
 
   it("A-REF2: every other prop still resolves at scan time, including <Let>'s own", function* () {
-    expect(element("<Widget foo={undefined} />").props.foo).toBe(null);
     expect(element("<Widget foo={42} />").props.foo).toBe(42);
-    expect(element("<Widget value={undefined} />").props.value).toBe(null);
+    expect(element("<Widget foo={null} />").props.foo).toBe(null);
     expect(element('<Let as="x" select={undefined}>text</Let>').props.select).toBe(null);
+    expect(element("<If condition={undefined}>t</If>").props.condition).toBe(null);
+  });
+
+  it("A-REF4: an ordinary component keeps a literal `undefined` as an expression", function* () {
+    const widget = element("<Widget foo={undefined} value={undefined} />");
+
+    // Kept as written, so it reaches expansion the way `{record.missing}` does
+    // and is omitted there rather than read as `null` here.
+    expect(widget.expressions).toEqual({ foo: "undefined", value: "undefined" });
+    expect("foo" in widget.props).toBeFalsy();
+    expect("value" in widget.props).toBeFalsy();
+
+    // The neighbours it is not: `null` is a value the author wrote, and a
+    // quoted attribute is text.
+    const neighbours = element('<Widget nulled={null} quoted="undefined" />');
+    expect(neighbours.props).toEqual({ nulled: null, quoted: "undefined" });
+    expect(neighbours.expressions).toEqual({});
   });
 
   it("A-REF3: a quoted <Let value> is a string prop, not an expression", function* () {
