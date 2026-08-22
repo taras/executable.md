@@ -1150,7 +1150,13 @@ redirect at all, since Git would otherwise carry a credential it already holds
 to a destination this run never authorized. `store` and `approve` reach no ambient helper
 or store; `erase` for the exact locator writes a fixed, nonsecret marker, which
 is how a refused identity is told from an absent one. Both are authentication
-unavailability, never an invalid locator. Infrastructure is only what the adapter
+unavailability, never an invalid locator. The containment is only worth what the surface around it allows: a substituted
+Git host sees every invocation, and an authenticated one carries the attachment
+the credential travels in. So the published Deno entrypoint offers a Workspace
+attachment that accepts what a host owns and nothing that could observe or
+become that host; the broad options stay inside the package.
+
+Infrastructure is only what the adapter
 watched fail: starting acquisition, installing the launcher, reading the marker
 for any reason but its absence, and removing what it made. The absence of a
 signal from the helper proves nothing — there is no readiness, preflight or

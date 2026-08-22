@@ -22,7 +22,7 @@ import {
   useWorkflowInputDelivery,
   useWorkflowLifecycle,
   useWorkflowRunHost,
-  withWorkflowWorkspace,
+  withWorkflowHostWorkspace,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
@@ -55,7 +55,7 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
       return useWorkflowInputDelivery({ root });
     },
     attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
-      return withWorkflowWorkspace(database, operation, {
+      return withWorkflowHostWorkspace(database, operation, {
         ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
         helper,
       });

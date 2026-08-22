@@ -2398,6 +2398,15 @@ transport would ordinarily have — a locator that could not be used stays that,
 and a host that could not be reached stays unreachable. Missing or incomplete
 credentials, and an exact rejection, remain authentication unavailability.
 
+What the published entrypoint offers is what a *host* owns: which issue tracker
+it authorizes, and how it assembles its own credential helper. The leaf
+substitutions a suite needs — the Git subprocess, the temporary directory, the
+Git-host transport — do not cross it. A `RepositoryHost` sees every Git
+invocation and an authenticated one carries the credential's attachment, so a
+package a document loaded must have no way to install one, and no way to reach
+the options that would accept one. Those remain reachable only from inside the
+package, where the suites that need them live.
+
 The helper contract is assembled the same way for Deno source, compiled and
 Windows hosts. Which one applies is stated by the runtime entrypoint rather than
 inferred from an executable's name, and the mode it dispatches is internal: it
