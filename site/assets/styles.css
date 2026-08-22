@@ -542,27 +542,31 @@ code {
   color: var(--on-panel);
 }
 
-/* docs sidebar: one ruled stack, active item inverted */
+/* docs sidebar: a plain stack of links, the current page marked by the accent.
+ * The leading rule is transparent at rest so marking it shifts no text. */
 .doc-nav {
   display: flex;
   flex-direction: column;
-  border: var(--rule) solid var(--line);
+  gap: 0.125rem;
 }
 .doc-nav a {
-  padding: 0.5625rem 0.75rem;
+  padding: 0.3125rem 0.5rem;
+  border-left: var(--rule) solid transparent;
   font-size: 0.875rem;
-  color: var(--ink);
-}
-.doc-nav a + a {
-  border-top: var(--rule) solid var(--line);
+  line-height: 1.45;
+  color: var(--body);
 }
 .doc-nav a:hover {
-  background: var(--panel);
-  color: var(--on-panel);
+  border-left-color: var(--line);
+  color: var(--ink);
+}
+.doc-nav a:focus-visible {
+  outline: var(--rule) solid var(--green);
+  outline-offset: 2px;
 }
 .doc-nav a[aria-current="page"] {
-  background: var(--panel);
-  color: var(--on-panel);
+  border-left-color: var(--green);
+  color: var(--green);
   font-weight: 800;
 }
 
