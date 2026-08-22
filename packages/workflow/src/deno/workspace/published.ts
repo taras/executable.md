@@ -25,6 +25,7 @@ import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import type { GitHubIssuesOptions } from "../issue/github.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkflowWorkspace as withBroadWorkspace } from "./host.ts";
+import type { WorkflowAgentInstaller } from "./host.ts";
 
 /**
  * What a host may configure, and the whole of it.
@@ -36,6 +37,14 @@ import { withWorkflowWorkspace as withBroadWorkspace } from "./host.ts";
 export interface WorkflowWorkspaceOptions {
   readonly gitHubIssues?: GitHubIssuesOptions;
   readonly helper?: HelperAssembly;
+  /**
+   * The Agent profile this host installs for a live or partial attachment.
+   *
+   * A host fact like the two beside it: which agent client this program can
+   * reach, and under what ceiling. This package names no agent client, so the
+   * profile arrives from the runtime entrypoint that does.
+   */
+  readonly agent?: WorkflowAgentInstaller;
 }
 
 /** Run `operation` with this run's Workspace attached, as a host installs it. */
@@ -50,5 +59,6 @@ export function withWorkflowWorkspace<T>(
   return withBroadWorkspace(database, operation, {
     ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
     ...(options.helper === undefined ? {} : { helper: options.helper }),
+    ...(options.agent === undefined ? {} : { agent: options.agent }),
   });
 }

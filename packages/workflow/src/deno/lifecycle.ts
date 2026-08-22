@@ -58,6 +58,7 @@ import type {
 } from "../lifecycle/execution.ts";
 import { forkRunRecordEvent } from "../fork.ts";
 import { readForkSource, type ForkSourceSnapshot } from "./fork-source.ts";
+import { removeProviderSessions } from "./provider-sessions.ts";
 import { readForkLineage, type ForkHeadEvents } from "./fork-write.ts";
 import { classifyForkability, type Forkability } from "../lifecycle/forkability.ts";
 import {
@@ -415,7 +416,8 @@ function* readSource(
  * be, including a `running` record whose workflow executor is gone — acquiring
  * the released lock is what proves it.
  *
- * What goes is the run's database. The lock file stays, empty: unlinking a file
+ * What goes is the run's database and the provider sessions it retained. The
+ * lock file stays, empty: unlinking a file
  * this workflow executor still holds would let the next caller create and lock
  * a different file at the same path. An empty lock is host
  * arrangement rather than retained run state, so it is not a category anybody
@@ -461,7 +463,12 @@ function* remove(
     }
 
     yield* rm(path);
-    return Ok({ removed: ["run-storage"] });
+    // After the run's own storage, and under the same lock. A provider session
+    // is retained state this run owns, so deleting the run and leaving the
+    // conversation it was having behind would be a deletion that reported more
+    // than it did. Absent is not removed, and is not reported as such.
+    const sessions = yield* removeProviderSessions(root, hold.runId);
+    return Ok({ removed: sessions ? ["run-storage", "provider-sessions"] : ["run-storage"] });
   });
 }
 

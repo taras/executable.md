@@ -8,6 +8,11 @@
  * compiled binary supply. The binary is Deno too, so both entrypoints install
  * this one rather than each carrying a copy.
  *
+ * A run's Agent profile is attached here too. It is strict — an empty
+ * provider-owned working directory, no MCP servers, no native tool authority —
+ * and it is `packages/cli` rather than `@executablemd/workflow` that composes
+ * it, because the workflow package names no agent client.
+ *
  * Runs live beneath `~/.xmd/runs` by default. `XMD_WORKFLOW_RUNS` names a
  * different absolute directory, which is how a test — or a caller keeping one
  * project's runs apart from another's — works without the real user state
@@ -29,6 +34,7 @@ import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import type { WorkflowHost } from "./workflow.ts";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
+import { useWorkflowAgentProfile } from "./workflow-agent.ts";
 
 /** Where a run lives when nothing says otherwise. */
 export const DEFAULT_RUN_STORAGE_ROOT: string = join(homedir(), ".xmd", "runs");
@@ -58,6 +64,10 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
       return withWorkflowWorkspace(database, operation, {
         ...(gitHubIssues === undefined ? {} : { gitHubIssues }),
         helper,
+        // Only a live or partial attachment reaches this, which is what keeps a
+        // completed replay from starting an agent process to restore a turn it
+        // already has the answer to.
+        agent: (attachment) => useWorkflowAgentProfile({ root, attachment }),
       });
     },
   };

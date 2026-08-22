@@ -10,6 +10,10 @@
  * path any of them resolves is relative to. Installing some without the rest
  * would leave a document resolving paths one provider cannot reach.
  *
+ * A sixth is optional and belongs here for a different reason: the Agent profile
+ * a host installs needs a run to keep provider sessions for, and this is the
+ * only path that has one.
+ *
  * They are installed **inside** the execution rather than at the entrypoint, so
  * they sit beneath the host adapter `xmd run` installs and answer ahead of it.
  * Ordinary `xmd run` keeps its host Files provider untouched; a workflow run's
@@ -97,7 +101,27 @@ export interface WorkflowWorkspaceOptions {
    * standing on.
    */
   readonly helper?: HelperAssembly;
+  /**
+   * What this host installs so a workflow document may prompt an Agent.
+   *
+   * Supplied by the runtime entrypoint, because the profile it installs names
+   * one agent client and this package names none. Absent installs nothing, and a
+   * document that writes `<Agent>` under such a host resolves no component.
+   *
+   * It is installed here rather than at the entrypoint for the same reason
+   * everything else in this function is: a live or partial attachment is the
+   * only thing that has a run to keep provider sessions for. A completed replay
+   * never reaches this path, so it starts no agent process.
+   */
+  readonly agent?: WorkflowAgentInstaller;
 }
+
+/** What an Agent profile is told about the run it is being attached to. */
+export interface WorkflowAgentAttachment {
+  readonly runId: string;
+}
+
+export type WorkflowAgentInstaller = (attachment: WorkflowAgentAttachment) => Operation<void>;
 
 /** Run `operation` with this run's Workspace attached to the document. */
 export function withWorkflowWorkspace<T>(
@@ -120,6 +144,9 @@ export function withWorkflowWorkspace<T>(
         yield* useGitHubIssues(options.gitHubIssues);
       }
       yield* useCompositionComponents();
+      if (options.agent !== undefined) {
+        yield* options.agent({ runId: database.record.runId });
+      }
       return yield* operation;
     }),
   );
