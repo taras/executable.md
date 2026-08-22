@@ -1145,7 +1145,9 @@ The trusted Deno host adapter retains one HTTP credential in memory for one live
 provider invocation and exposes it only to that invocation's own Git and helper
 children, through private child-process environment. A provider-owned helper is
 what Git runs, and it answers one exact locator, so a redirected transport
-receives nothing and fails closed. `store` and `approve` reach no ambient helper
+receives nothing and fails closed — and the transport declines to follow a
+redirect at all, since Git would otherwise carry a credential it already holds
+to a destination this run never authorized. `store` and `approve` reach no ambient helper
 or store; `erase` for the exact locator writes a fixed, nonsecret marker, which
 is how a refused identity is told from an absent one. Both are authentication
 unavailability, never an invalid locator. Helper installation, spawn,

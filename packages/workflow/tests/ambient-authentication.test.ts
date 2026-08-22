@@ -600,6 +600,59 @@ describe("workflow ambient authentication classification", () => {
     });
   });
 
+  /**
+   * A transport that was authenticated here and then sent somewhere else.
+   *
+   * The first server accepts the credential and answers with a redirect, so what
+   * the second target receives is decided by the provider's own helper rather
+   * than by anybody having refused. Git asks about wherever it arrived; the
+   * helper was given one exact repository; the second target is not it.
+   */
+  it("carries no credential to a target it was redirected to", function* () {
+    const root = yield* useStorageRoot();
+    const bare = yield* useBareRemote(REMOTE);
+    const other = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({
+      remote: bare,
+      label: "first",
+      ...FIRST,
+      also: { remote: other, ...SECOND },
+      redirect: (request) =>
+        request.path.startsWith(`/${REPOSITORY}`)
+          ? `http://__ELSEWHERE__${request.path.replace(`/${REPOSITORY}`, "/other.git")}`
+          : undefined,
+    });
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost(hostFor(home));
+      yield* raised(
+        runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+      );
+
+      const original = served.requests.filter((request) =>
+        request.path.startsWith(`/${REPOSITORY}`),
+      );
+      const redirected = served.requests.filter(
+        (request) => !request.path.startsWith(`/${REPOSITORY}`),
+      );
+
+      // The credential was accepted where the invocation was authorized.
+      expect(original.some((request) => request.accepted)).toBe(true);
+      // And the place it was sent to next received no `Authorization` header —
+      // in fact no request at all, because a redirect is a destination this run
+      // never authorized and the transport does not follow one. Git would
+      // otherwise carry a credential it already holds across a same-host
+      // redirect, which the helper's exact-locator refusal cannot prevent.
+      expect(redirected.every((request) => !request.credentialed)).toBe(true);
+      expect(redirected).toHaveLength(0);
+
+      // Nothing was retained from a transport that ended up elsewhere.
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+    });
+  });
+
   it("keeps an ordinary locator refusal when nothing signalled a rejection", function* () {
     const root = yield* useStorageRoot();
     // A port nothing is listening on, so the transport fails before it could

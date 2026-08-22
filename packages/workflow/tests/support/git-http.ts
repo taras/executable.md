@@ -86,6 +86,15 @@ export interface GitHttpOptions {
    * Git child with a real connection open to a server that will not reply.
    */
   readonly hold?: (request: ServedGitRequest) => boolean;
+  /**
+   * Where an accepted request is sent instead of being served.
+   *
+   * A redirect is the case where Git ends up somewhere the invocation was never
+   * authorized for. The credential is accepted here first, so what the second
+   * target receives is decided by the provider's helper rather than by this
+   * server having refused anything.
+   */
+  readonly redirect?: (request: ServedGitRequest) => string | undefined;
 }
 
 /** Where Git keeps `git-http-backend`, asked of Git rather than guessed. */
@@ -232,6 +241,9 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
     git(["config", "http.receivepack", "true"], bare, root);
 
     const backend = backendProgram();
+    // Filled once the listener has a port. A caller that had to name this
+    // server's own origin could not, since it does not exist until it listens.
+    let origin = "";
     const credential = (username: string, password: string) =>
       `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
     const expected = credential(options.username, options.password);
@@ -291,6 +303,14 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
         incoming.resume();
         return;
       }
+      const named = options.redirect?.(requests[requests.length - 1] as ServedGitRequest);
+      const elsewhere = named?.replace("__ELSEWHERE__", origin);
+      if (elsewhere !== undefined) {
+        outgoing.writeHead(302, { Location: elsewhere });
+        outgoing.end();
+        incoming.resume();
+        return;
+      }
       serve(incoming, outgoing, backend, entry.root, entry.user, segment, entry.directory);
     });
 
@@ -308,6 +328,7 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
       throw new Error("the remote did not listen on a TCP port");
     }
     const host = `127.0.0.1:${address.port}`;
+    origin = host;
     yield* provide({
       locator: `http://${host}/${name}`,
       alsoLocator: alsoLocator === "" ? "" : `http://${host}/${alsoLocator}`,

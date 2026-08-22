@@ -234,7 +234,19 @@ function pinned(ssh: string, lease: readonly string[]): readonly string[] {
   // The lease's own words, verbatim: it states a whole `-c` pair, because what
   // it installs is one helper and nothing else. Nothing the invoking user or a
   // retained repository configured is copied here.
-  return ["-c", `core.sshCommand=${ssh}`, "-c", "credential.helper=", ...lease];
+  return [
+    "-c",
+    `core.sshCommand=${ssh}`,
+    // A redirect is a destination this run never authorized, and Git will carry
+    // a credential it already holds across one to the same host — so the
+    // helper's exact-locator refusal is not enough on its own. The retained
+    // locator is where this goes, or it does not go.
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "credential.helper=",
+    ...lease,
+  ];
 }
 
 /** One credential-free locator, as the invoking user's helper chain is asked. */

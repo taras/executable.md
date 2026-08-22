@@ -2369,7 +2369,10 @@ reference is released when the invocation ends.
 
 A provider-owned helper is what Git runs. It answers one exact locator — scheme,
 host with its explicit port, and full repository path — so a transport that was
-redirected somewhere else receives no credential and fails closed. `store` and
+redirected somewhere else receives no credential and fails closed. The transport
+does not follow a redirect at all: Git carries a credential it already holds
+across a same-host redirect, which an exact-locator refusal alone cannot
+prevent, and a redirect is a destination the run never authorized. `store` and
 `approve` do nothing and reach no ambient helper or credential store. `erase`
 for the exact locator writes a fixed, nonsecret invocation-local marker and
 nothing else; an `erase` about anywhere else does nothing, so a redirect cannot
