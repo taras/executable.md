@@ -198,9 +198,9 @@ one retained Workspace and `xmd workflow resume` continues it from the retained
 journal (#366, shipped). The composition inside that run is there too: named
 `<Repository>`, `<Worktree>` and lexical `<Dir>` are registered by the workflow
 host (#293, shipped). The durable effects are there too: deterministic
-local Git effects (#294), explicit `<Git.Push>` (#495), and `<PullRequest>`
-(#295) are all registered by the workflow host. `<Issue>` (#296) is the one that
-is still not built. Together they cover the work that should not depend on model
+local Git effects (#294), explicit `<Git.Push>` (#495), `<PullRequest>` (#295)
+and the `<IssueTracker>`/`<Issue>` pair (#296) are all registered by the
+workflow host. Together they cover the work that should not depend on model
 judgment:
 
 - retain each handoff, plan, review, and decision as a filtered journal event
