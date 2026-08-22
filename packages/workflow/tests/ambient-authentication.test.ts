@@ -24,6 +24,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { lstat } from "@effectionx/fs";
 import { chmod, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
@@ -32,12 +33,13 @@ import type { ComponentRegistration } from "@executablemd/core";
 import { RepositoryCompositionError } from "../src/composition/errors.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import {
-  CredentialInfrastructureError,
   denoGitAuthentication,
   gitTransport,
   sshCommand,
+  unauthenticable,
 } from "../src/deno/composition/authentication.ts";
 import type {
+  GitAttachment,
   GitAuthentication,
   GitAuthenticationSession,
 } from "../src/deno/composition/authentication.ts";
@@ -155,10 +157,6 @@ function isRepositoryRefusal(value: unknown): value is RepositoryCompositionErro
   return value instanceof RepositoryCompositionError;
 }
 
-function isInfrastructure(value: unknown): value is CredentialInfrastructureError {
-  return value instanceof CredentialInfrastructureError;
-}
-
 function* present(path: string): Operation<boolean> {
   try {
     yield* lstat(path);
@@ -174,6 +172,36 @@ function* checkoutPath(database: WorkflowRunDatabase): Operation<string> {
     throw new Error("the run retains no Repository");
   }
   return repository.record.checkoutPath;
+}
+
+/**
+ * Run this session's helper the way Git runs it, and answer its exit status.
+ *
+ * The real provider-owned helper, in the real private environment the session
+ * attached. Nothing it prints is read here — what these tests are about is what
+ * it wrote down, and the credential is never one of the things compared.
+ */
+function driveHelper(
+  attached: GitAttachment,
+  operation: string,
+  asked: Readonly<Record<string, string>>,
+): number {
+  // The reset comes first and names nothing; the launcher is the one that does.
+  const named = attached.configuration.find((entry: string) =>
+    entry.startsWith("credential.helper=/"),
+  );
+  const outcome = spawnSync(String(named).replace("credential.helper=", ""), [operation], {
+    input: `${Object.entries(asked)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n")}\n\n`,
+    env: {
+      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+      ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
+      ...attached.environment,
+    },
+    encoding: "utf8",
+  });
+  return outcome.status ?? -1;
 }
 
 function document(locator: string, ...lines: string[]): string {
@@ -504,37 +532,112 @@ describe("workflow ambient Git authentication", () => {
   });
 });
 
-describe("workflow ambient authentication infrastructure", () => {
-  it("fails stop when the helper it installed cannot be run", function* () {
+describe("workflow ambient authentication classification", () => {
+  it("asks the invoking chain once, and forwards neither store nor erase", function* () {
     const root = yield* useStorageRoot();
-    const served = yield* protectedRemote(FIRST, "first");
+    const bare = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
     const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
-    // A launcher naming a runtime that is not on this machine. The identity was
-    // proved; what fails is this host running its own program.
-    const broken = { ...TEST_HELPER, execPath: "/xmd-no-such-runtime" };
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(
-        denoRepositoryHost({
-          authentication: denoGitAuthentication({ ambient: home.ambient, assembly: broken }),
-        }),
+      const counting = countingHost(hostFor(home));
+      yield* runWorkflowDocument(
+        database,
+        published(served.locator, `<Git.Push />`),
+        countingOptions(counting),
       );
+      expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
+
+      // Two live provider invocations — the Repository's creation and the
+      // Push's reconciliation — so two acquisitions. What matters is what they
+      // are: the Push observes, mutates and observes again, and the provider's
+      // own helper is asked on every one of those, while the invoking user's
+      // chain is asked once and only ever `get`. No `store` and no `erase`
+      // reach it, because this run has no opinion about what the machine it is
+      // standing on should remember.
+      const asked = yield* home.operations();
+      expect(asked).toEqual(["get", "get"]);
+      expect(asked.filter((operation) => operation !== "get")).toEqual([]);
+    });
+  });
+
+  it("classifies an exact rejection as unavailable, and a mismatched one not at all", function* () {
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
+
+    yield* scoped(function* () {
+      const session = yield* denoGitAuthentication({
+        ambient: home.ambient,
+        assembly: TEST_HELPER,
+      }).open(served.locator);
+      expect(session.mechanism).toBe("credential-helper");
+      expect(yield* unauthenticable(served.locator, session)).toBe(false);
+
+      // Written by the real provider helper, driven the way Git drives one when
+      // a transport refused what it was given.
+      const asked = {
+        protocol: "http",
+        host: served.host,
+        path: REPOSITORY,
+      };
+      expect(
+        driveHelper(session.attachment, "erase", { ...asked, host: "elsewhere.invalid" }),
+      ).toBe(0);
+      // Another locator's erase means nothing here: a redirect must not be able
+      // to make this run report a rejection it never had.
+      expect(yield* unauthenticable(served.locator, session)).toBe(false);
+
+      expect(driveHelper(session.attachment, "erase", asked)).toBe(0);
+      // The exact one does. A credential the remote refused leaves this host in
+      // the same position as one it never had.
+      expect(yield* unauthenticable(served.locator, session)).toBe(true);
+    });
+  });
+
+  it("keeps an ordinary locator refusal when nothing signalled a rejection", function* () {
+    const root = yield* useStorageRoot();
+    // A port nothing is listening on, so the transport fails before it could
+    // authenticate. The host holds a credential for it and no rejection was
+    // signalled, which is the case that must stay an ordinary refusal.
+    const closed = "http://127.0.0.1:1/remote.git";
+    const home = yield* useInvokingHome([{ host: "127.0.0.1:1", path: REPOSITORY, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost(hostFor(home));
       const failure = yield* raised(
-        runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+        runDocument(database, document(closed, "unreachable"), countingOptions(counting)),
       );
 
-      // Infrastructure, not a refusal. A run that reported "no credential"
-      // here would be turning a broken host into a clean answer, and one that
-      // reported an invalid locator would be blaming the document.
-      expect(causedBy(failure, isInfrastructure)).toBeDefined();
-      expect(causedBy(failure, isRepositoryRefusal)).toBeUndefined();
-      // Nothing was completed and nothing retained.
+      // Neither authentication-unavailable nor infrastructure. Whether the
+      // helper was ever reached says nothing: what this run knows is that the
+      // locator could not be used.
+      expect(causedBy(failure, isRepositoryRefusal)?.reason).toBe("invalid-locator");
       expect(yield* retainedRepositories(database)).toHaveLength(0);
-      expect(served.requests.every((request) => !request.accepted)).toBe(true);
-      // And no credential travels with the cause.
-      expect(carriesCredential(String(failure))).toBe(false);
-      expect(carriesCredential((failure as Error)?.stack ?? "")).toBe(false);
+    });
+  });
+
+  it("leaves a Push against an unreachable remote to its own reconciliation", function* () {
+    const root = yield* useStorageRoot();
+    const bare = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost(hostFor(home));
+      yield* runWorkflowDocument(
+        database,
+        published(served.locator, `<Git.Push />`),
+        countingOptions(counting),
+      );
+
+      // The published branch is there, and the outcome is the reconciliation's
+      // own — a Push carries no authentication classification of its own, and
+      // this change did not give it one.
+      expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
+      expect((yield* gitHostOutcomes(database))[0]?.status).toBe("ok");
     });
   });
 });

@@ -2,17 +2,17 @@
  * An invoking home whose Git already knows how to authenticate, and one that
  * does not.
  *
- * The shipped provider never receives a credential: it re-states the credential
- * helpers the invoking user configured, and Git asks them itself. So a suite
- * cannot inject an answer — it has to be the invoking user, which is what this
- * is. The helper is an ordinary program named by an ordinary `~/.gitconfig`,
- * and every secret in the exchange passes between Git and that program.
+ * The adapter acquires by asking the invoking user's ordinary helper chain, so a
+ * suite cannot inject an answer — it has to *be* the invoking user. That is what
+ * this is: an ordinary `~/.gitconfig` naming an ordinary program, which is the
+ * same shape a keychain helper or a credential manager has.
  *
- * Nothing here is ever asserted on. A remote reports whether what arrived was
- * the credential it requires; this end only makes one available.
+ * The credential itself is never asserted on. A protected remote reports whether
+ * what arrived was the one it requires, and the operation log below reports
+ * which questions this chain was asked — a fixed vocabulary, never a value.
  */
 
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 import { type Operation, until } from "effection";
@@ -41,7 +41,7 @@ export interface KnownHost {
  * authorize somewhere else" an observable rather than an assumption. It answers
  * only `get`: `store` and `erase` produce nothing and change nothing.
  */
-function helperProgram(known: readonly KnownHost[]): string {
+function helperProgram(known: readonly KnownHost[], log: string): string {
   const branches = known.map(
     (entry) =>
       `    "${entry.host}|${entry.path ?? ""}")\n` +
@@ -51,6 +51,9 @@ function helperProgram(known: readonly KnownHost[]): string {
   );
   return [
     "#!/bin/sh",
+    // Every operation, before anything is decided about it. A nonsecret word
+    // per line: which question was asked, never what it was answered with.
+    `echo "$1" >> ${JSON.stringify(log)}`,
     'if [ "$1" != "get" ]; then exit 0; fi',
     "host=",
     "path=",
@@ -73,6 +76,15 @@ function helperProgram(known: readonly KnownHost[]): string {
 export interface InvokingHome {
   /** The environment the provider is told it is standing in. */
   readonly ambient: Record<string, string>;
+  /**
+   * Every operation this chain was asked, in order.
+   *
+   * `get`, `store` or `erase` — the whole of Git's credential vocabulary, and
+   * nothing about what any of them carried. What it proves is that acquisition
+   * asks once and that a transport forwards neither of the other two: a run has
+   * no opinion about what the machine it is standing on should remember.
+   */
+  operations(): Operation<string[]>;
 }
 
 /**
@@ -85,7 +97,8 @@ export interface InvokingHome {
 export function* useInvokingHome(known: readonly KnownHost[]): Operation<InvokingHome> {
   const home = yield* useTempDirectory("xmd-invoking-home-");
   const helper = join(home, "credential-helper.sh");
-  yield* until(writeFile(helper, helperProgram(known), { mode: 0o700 }));
+  const log = join(home, "operations");
+  yield* until(writeFile(helper, helperProgram(known, log), { mode: 0o700 }));
   yield* until(chmod(helper, 0o700));
   // Deliberately no `useHttpPath`. Whether a helper is told which repository it
   // is being asked about must not depend on the invoking user having configured
@@ -101,7 +114,19 @@ export function* useInvokingHome(known: readonly KnownHost[]): Operation<Invokin
       HOME: home,
       ...WITHOUT_MACHINE_CONFIGURATION,
     },
+    operations: () => recorded(log),
   };
+}
+
+/** The operations a helper recorded, or none when it was never asked. */
+function* recorded(path: string): Operation<string[]> {
+  const written = yield* until(
+    readFile(path, "utf8").then(
+      (contents: string) => contents,
+      () => "",
+    ),
+  );
+  return written.split("\n").filter((line) => line !== "");
 }
 
 /**
@@ -127,6 +152,11 @@ export function* useHomeWithoutAuthentication(): Operation<InvokingHome> {
       ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
       HOME: home,
       ...WITHOUT_MACHINE_CONFIGURATION,
+    },
+    // A home with no helper is a home nothing was ever asked.
+    // deno-lint-ignore require-yield
+    *operations(): Operation<string[]> {
+      return [];
     },
   };
 }

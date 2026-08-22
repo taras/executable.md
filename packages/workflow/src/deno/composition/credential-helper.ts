@@ -46,15 +46,6 @@ export const HELPER_VARIABLES = Object.freeze({
   host: "XMD_HTTP_CREDENTIAL_HOST",
   path: "XMD_HTTP_CREDENTIAL_PATH",
   marker: "XMD_HTTP_CREDENTIAL_MARKER",
-  /**
-   * Where the helper records that it ran at all.
-   *
-   * The one way an invocation can tell a helper that declined from a helper
-   * that never started. Both leave Git unable to authenticate, but the first is
-   * a host that holds nothing and the second is a host that could not run its
-   * own program — and those are not the same answer.
-   */
-  invoked: "XMD_HTTP_CREDENTIAL_INVOKED",
 });
 
 /** The argument that selects the internal helper mode. */
@@ -226,12 +217,6 @@ export function isCredentialHelperMode(argv: readonly string[]): boolean {
 export function* runCredentialHelper(argv: readonly string[]): Operation<void> {
   const operation = argv[1] ?? "";
   const input = yield* until(readAll());
-  // Recorded before anything is decided, so it says this program ran rather
-  // than that it agreed to anything.
-  const ran = process.env[HELPER_VARIABLES.invoked];
-  if (ran !== undefined && ran !== "") {
-    yield* until(writeFile(ran, "invoked\n", { mode: 0o600 }));
-  }
   let marked: string | undefined;
   const answer = answerCredentialRequest(operation, input, process.env, (path) => {
     marked = path;
