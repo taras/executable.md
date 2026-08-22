@@ -326,14 +326,16 @@ text and no transcript.
 
 Continuation is decided before ACPX is contacted:
 
-- no record means this session has never been established, and one may be
-  created;
+- a session may be created only when there is no record **and** ACPX holds
+  nothing under that key. The key is derived from the run, the provider and the
+  agent alone, so it survives losing the record — and ACPX would reuse the
+  session it still has while ignoring the creation options supplied with it;
 - a record whose identity and policy fingerprint still agree, and whose native
   session the provider still holds, reattaches;
-- an unreadable record, a record from a version this host does not have, a
-  changed provider, agent or policy, a provider that no longer holds the session,
-  and an adapter that answers with a different native session are each one
-  explicit incompatibility.
+- an ACPX session with no record of its own, an unreadable record, a record from
+  a version this host does not have, a changed provider, agent or policy, a
+  provider that no longer holds the session, and an adapter that answers with a
+  different native session are each one explicit incompatibility.
 
 No incompatible case starts a replacement session. ACPX fixes a session's
 creation-time options when the ACP session is created and ignores them when it

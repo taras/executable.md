@@ -1487,14 +1487,18 @@ Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the
 host resolves the same logical key under a new empty working directory:
 
-- no record means this session has never been established, and one may be
-  created;
+- a session may be created only when there is no record **and** the provider
+  holds nothing under that key. The key does not depend on the record, so losing
+  the record does not make the provider forget — and a provider that still holds
+  the session would reuse its own persistent state and ignore the creation
+  options this host supplies, leaving the host talking to a session whose ceiling
+  it cannot name;
 - a record whose identity and policy fingerprint still agree, and whose native
   session the provider still holds, reattaches;
-- an unreadable record, a record from a version this host does not have, a
-  changed provider, agent or policy, a provider that no longer holds the session,
-  and an adapter that answers with a different native session are each one
-  explicit incompatibility.
+- a provider session with no record of its own, an unreadable record, a record
+  from a version this host does not have, a changed provider, agent or policy, a
+  provider that no longer holds the session, and an adapter that answers with a
+  different native session are each one explicit incompatibility.
 
 No incompatible case starts a replacement session, and none injects a transcript
 while claiming conversation continuity.

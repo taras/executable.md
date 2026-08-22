@@ -222,6 +222,18 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
 
     const cases = [
       {
+        name: "a lost mapping over a session the provider still holds",
+        // Nothing planted: the mapping is gone and the provider is not. The key
+        // is derived from the run, provider and agent alone, so it survived —
+        // and `ensureSession()` would reuse the record ACPX still has, ignoring
+        // the creation options this host supplies. Resolution has to refuse it,
+        // which is why this case goes through `resolveProviderSession()` rather
+        // than through the direct identity check below.
+        // deno-lint-ignore require-yield
+        *plant(_paths: ProviderSessionPaths): Operation<void> {},
+        probe: holding,
+      },
+      {
         name: "an unreadable record",
         *plant(paths: ProviderSessionPaths): Operation<void> {
           yield* ensureDir(paths.mappings);
