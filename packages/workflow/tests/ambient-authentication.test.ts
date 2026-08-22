@@ -31,7 +31,8 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { RepositoryCompositionError } from "../src/composition/errors.ts";
-import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import { GitHostUnavailableError } from "../src/git-host/errors.ts";
+import { denoRepositoryHost, useGitAuthentication } from "../src/deno/composition/host.ts";
 import {
   denoGitAuthentication,
   gitTransport,
@@ -151,6 +152,10 @@ function forbidden(reached: string[]): GitAuthentication {
       throw new Error("a session was opened where none may be");
     },
   };
+}
+
+function isUnavailable(value: unknown): value is GitHostUnavailableError {
+  return value instanceof GitHostUnavailableError;
 }
 
 function isRepositoryRefusal(value: unknown): value is RepositoryCompositionError {
@@ -618,7 +623,16 @@ describe("workflow ambient authentication classification", () => {
     });
   });
 
-  it("leaves a Push against an unreachable remote to its own reconciliation", function* () {
+  /**
+   * A Push that acquired a credential and could not see the remote.
+   *
+   * The one observation is failed deterministically rather than by taking a
+   * server away: what is under test is the classification, and a live listener
+   * that happens to answer would be proving the success path instead. Both
+   * invocations still acquire for real, so the case is exactly "an identity was
+   * held, nothing signalled a rejection, and the transport could not answer".
+   */
+  it("leaves a Push whose observation fails to its own reconciliation", function* () {
     const root = yield* useStorageRoot();
     const bare = yield* useBareRemote(REMOTE);
     const served = yield* useGitHttpRemote({ remote: bare, label: "first", ...FIRST });
@@ -626,18 +640,41 @@ describe("workflow ambient authentication classification", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const counting = countingHost(hostFor(home));
-      yield* runWorkflowDocument(
-        database,
-        published(served.locator, `<Git.Push />`),
-        countingOptions(counting),
+      const inner = hostFor(home);
+      const counting = countingHost({
+        useAuthentication: (locator: string) => useGitAuthentication(inner, locator),
+        useDirectory: () => inner.useDirectory(),
+        *git(invocation) {
+          if (invocation.args[0] === "ls-remote") {
+            return { code: 1, stdout: "", stderr: "" };
+          }
+          return yield* inner.git(invocation);
+        },
+      });
+
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          published(served.locator, `<Git.Push />`),
+          countingOptions(counting),
+        ),
       );
 
-      // The published branch is there, and the outcome is the reconciliation's
-      // own — a Push carries no authentication classification of its own, and
-      // this change did not give it one.
-      expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
-      expect((yield* gitHostOutcomes(database))[0]?.status).toBe("ok");
+      // Both invocations acquired, and the ambient chain saw nothing but the
+      // two questions acquisition asks.
+      expect(yield* home.operations()).toEqual(["get", "get"]);
+
+      // The Git host could not answer, which is what this is. Not
+      // authentication-unavailable, not infrastructure, and not a locator
+      // refusal — an acquired credential with no rejection keeps Push's own
+      // reconciliation outcome.
+      expect(causedBy(failure, isUnavailable)).toBeDefined();
+      expect(causedBy(failure, isRepositoryRefusal)).toBeUndefined();
+
+      // Nothing was published: the mutation is never reached from an
+      // observation that proved nothing.
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(remoteBranch(bare, "publish/1.4")).toBeUndefined();
     });
   });
 });
