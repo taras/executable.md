@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const OBSERVE = `import { execute } from "@executablemd/core";
 import { guardDurableStream, serializeDurableEvent } from "@executablemd/durable-streams";
@@ -75,6 +76,8 @@ export default define.page(function Journal() {
         persisted, and replay never re-runs it: restoring a journal reads
         through <code>readAll()</code>, which delegates straight to the backend.
       </p>
+
+      <NextCard href="/docs/reference" label="Reference" />
     </>
   );
 });

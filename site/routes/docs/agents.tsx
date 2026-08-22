@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const REVIEW = `<Agent>
   <Session name="review">
@@ -177,6 +178,8 @@ export default define.page(function Agents() {
         workflow and includes an advanced ACPX walkthrough for client
         integration work.
       </p>
+
+      <NextCard href="/docs/journal" label="Journal gates" />
     </>
   );
 });
