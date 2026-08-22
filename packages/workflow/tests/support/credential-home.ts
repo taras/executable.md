@@ -41,7 +41,7 @@ export interface KnownHost {
  * authorize somewhere else" an observable rather than an assumption. It answers
  * only `get`: `store` and `erase` produce nothing and change nothing.
  */
-function helperProgram(known: readonly KnownHost[], log: string): string {
+function helperProgram(known: readonly KnownHost[], log: string, gate?: string): string {
   const branches = known.map(
     (entry) =>
       `    "${entry.host}|${entry.path ?? ""}")\n` +
@@ -55,6 +55,18 @@ function helperProgram(known: readonly KnownHost[], log: string): string {
     // per line: which question was asked, never what it was answered with.
     `echo "$1" >> ${JSON.stringify(log)}`,
     'if [ "$1" != "get" ]; then exit 0; fi',
+    ...(gate === undefined
+      ? []
+      : [
+          // Started, and then waiting. Bounded, so a suite that never releases
+          // it leaves nothing running rather than a helper that waits forever.
+          `: > ${JSON.stringify(`${gate}.started`)}`,
+          `waited=0`,
+          `while [ ! -f ${JSON.stringify(`${gate}.release`)} ] && [ "$waited" -lt 120 ]; do`,
+          `  sleep 1`,
+          `  waited=$((waited + 1))`,
+          `done`,
+        ]),
     "host=",
     "path=",
     "while IFS= read -r line; do",
@@ -94,11 +106,26 @@ export interface InvokingHome {
  * this process's environment is, so what the provider borrows is only what this
  * fixture put in front of it.
  */
-export function* useInvokingHome(known: readonly KnownHost[]): Operation<InvokingHome> {
+export interface InvokingHomeOptions {
+  /**
+   * A path this home's helper blocks on before it answers.
+   *
+   * It reports that it has started by creating `<gate>.started`, and waits until
+   * `<gate>.release` appears. That is what puts a real `git credential fill`
+   * child in the middle of an acquisition, so a cancellation has something
+   * genuine to terminate rather than a seam standing in for one.
+   */
+  readonly gate?: string;
+}
+
+export function* useInvokingHome(
+  known: readonly KnownHost[],
+  options: InvokingHomeOptions = {},
+): Operation<InvokingHome> {
   const home = yield* useTempDirectory("xmd-invoking-home-");
   const helper = join(home, "credential-helper.sh");
   const log = join(home, "operations");
-  yield* until(writeFile(helper, helperProgram(known, log), { mode: 0o700 }));
+  yield* until(writeFile(helper, helperProgram(known, log, options.gate), { mode: 0o700 }));
   yield* until(chmod(helper, 0o700));
   // Deliberately no `useHttpPath`. Whether a helper is told which repository it
   // is being asked about must not depend on the invoking user having configured

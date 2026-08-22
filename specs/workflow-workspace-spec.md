@@ -2384,10 +2384,19 @@ provider-owned one. No ambient `credential.*` definition or value is copied into
 its arguments, and neither the credential nor the locator nor the marker appears
 in a launcher, a command line, a URL or retained configuration.
 
-Helper installation, spawn, invocation, marker read and marker removal failures
-are infrastructure rather than authentication: they are the host failing to
-provide a mechanism at all, and they fail the run stop. Missing or incomplete
-credentials remain authentication unavailability.
+Only what the adapter directly observes is infrastructure: an acquisition
+process that could not be started, a launcher that could not be installed, a
+marker read that failed for any reason other than the marker's absence, and a
+teardown removal that failed. Those are the host failing to provide a mechanism,
+and they fail the run stop.
+
+The absence of a helper signal proves nothing. There is no readiness handshake,
+no preflight and no channel to the helper: the run cannot tell a helper that
+declined from one that never started, and it does not try. An acquired credential
+with no rejection therefore keeps whatever classification the Repository or Push
+transport would ordinarily have — a locator that could not be used stays that,
+and a host that could not be reached stays unreachable. Missing or incomplete
+credentials, and an exact rejection, remain authentication unavailability.
 
 The helper contract is assembled the same way for Deno source, compiled and
 Windows hosts. Which one applies is stated by the runtime entrypoint rather than

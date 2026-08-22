@@ -27,6 +27,7 @@ import { chmod, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { ensure, resource, scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { when } from "@effectionx/converge";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
@@ -866,55 +867,66 @@ describe("workflow ambient authentication cancellation", () => {
   function watching() {
     const opened: string[] = [];
     const released: string[] = [];
+    const steps: string[] = [];
     return {
       observe: {
         opened: (directory: string) => opened.push(directory),
         released: (directory: string) => released.push(directory),
+        step: (name: string) => steps.push(name),
       },
+      steps: () => steps,
       /** Every directory this run opened and did not release. */
       surviving: () => opened.filter((directory) => !released.includes(directory)),
     };
   }
 
-  it("invents nothing when cancelled while acquisition is blocked", function* () {
+  it("kills and awaits a real acquisition it cancelled", function* () {
     const root = yield* useStorageRoot();
     const served = yield* protectedRemote(FIRST, "first");
-    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
+    const witness = yield* useTempDirectory("xmd-acquire-gate-");
+    const gate = `${witness}/gate`;
+    // The invoking user's own helper, blocked inside `git credential fill`. What
+    // a halt has to terminate here is a real acquisition child, not a seam
+    // standing in for one.
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }], {
+      gate,
+    });
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const reached = withResolvers<void>();
       const watcher = watching();
-      const recorded = tracked(
-        denoGitAuthentication({
-          ambient: home.ambient,
-          observe: watcher.observe,
-          assembly: TEST_HELPER,
-        }),
-        function* () {
-          reached.resolve();
-          yield* suspend();
-        },
-      );
       const counting = countingHost(
-        denoRepositoryHost({ authentication: recorded.authentication }),
+        denoRepositoryHost({
+          authentication: denoGitAuthentication({
+            ambient: home.ambient,
+            observe: watcher.observe,
+            assembly: TEST_HELPER,
+          }),
+        }),
       );
 
       yield* scoped(function* () {
         const running = yield* spawn(() =>
           runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
         );
-        yield* reached.operation;
+        // Wait until the helper says it is running, so the halt lands inside
+        // acquisition rather than before or after it.
+        yield* when(() => present(`${gate}.started`));
+        // Returns only once the acquisition group is gone and its pipes have
+        // ended, which is what makes this a termination rather than a signal.
         yield* running.halt();
       });
 
-      // One session opened, one disposed, and nothing performed: the remote was
-      // never contacted, nothing is retained, and no completion exists.
-      expect(recorded.opened).toEqual([served.locator]);
-      expect(recorded.disposed).toEqual([served.locator]);
+      // It really was blocked inside acquisition, and it never finished: the
+      // chain was asked, and nothing released it.
+      expect(yield* present(`${gate}.started`)).toBe(true);
+      expect(yield* home.operations()).toEqual(["get"]);
+
+      // No transport was opened, nothing was retained, and the working
+      // directory the acquisition needed is gone.
       expect(served.requests).toHaveLength(0);
-      expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(subcommands(counting.counters)).not.toContain("clone");
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
     });
   });
@@ -984,12 +996,19 @@ describe("workflow ambient authentication cancellation", () => {
       expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
 
+      // Teardown released the credential reference and then removed what the
+      // invocation had made, in that order: a launcher or a marker outliving
+      // the reference they belong to would be state nobody owns.
+      expect(watcher.steps()).toEqual(["released", "removed"]);
+      expect(watcher.surviving()).toEqual([]);
+
       // And the attempt after it acquires again rather than continuing under an
-      // identity nobody re-proved.
+      // identity nobody re-proved — a second question to the invoking chain.
       holding = false;
       const output = yield* runDocument(database, source, countingOptions(counting));
       expect(String(output)).toContain("read: protected");
       expect(recorded.opened).toEqual([served.locator, served.locator]);
+      expect(yield* home.operations()).toEqual(["get", "get"]);
       expect(watcher.surviving()).toEqual([]);
     });
   });

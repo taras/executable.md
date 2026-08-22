@@ -1150,9 +1150,12 @@ redirect at all, since Git would otherwise carry a credential it already holds
 to a destination this run never authorized. `store` and `approve` reach no ambient helper
 or store; `erase` for the exact locator writes a fixed, nonsecret marker, which
 is how a refused identity is told from an absent one. Both are authentication
-unavailability, never an invalid locator. Helper installation, spawn,
-invocation and marker failures are infrastructure rather than authentication,
-and they fail stop.
+unavailability, never an invalid locator. Infrastructure is only what the adapter
+watched fail: starting acquisition, installing the launcher, reading the marker
+for any reason but its absence, and removing what it made. The absence of a
+signal from the helper proves nothing — there is no readiness, preflight or
+channel to it — so an acquired credential with no rejection keeps the ordinary
+transport classification rather than acquiring a new one.
 
 A session opened for one locator never authorizes another, nothing about one is
 retained, and a completed replay opens none at all because it performs no remote
