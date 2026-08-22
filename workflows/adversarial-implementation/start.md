@@ -1,9 +1,10 @@
 ---
-required: [request, repository]
+required: [request, repository, tracker]
 
 props:
   request: { type: string }
   repository: { type: string }
+  tracker: { type: string }
   base: { type: string, default: main }
   branch: { type: string, default: agent/adversarial-implementation }
   planner: { type: string, default: codex }
@@ -84,7 +85,7 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
         implementor={props.implementor}
         as="planning" />
       <If condition={planning.decision.proceed && planning.verdictPassed}>
-        <Capture as="planReport">
+        <Let as="planReport">
           ## Implementation plan
 
           {planning.plan}
@@ -92,7 +93,7 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
           ## Planner review
 
           {planning.review}
-        </Capture>
+        </Let>
         <UserCheckpoint
           purpose="authorize implementation"
           agent={props.planner}
@@ -105,6 +106,7 @@ specification](../../specs/executable-mdx-spec.md) is the authority for both.
             instructions={instructions}
             planner={props.planner}
             implementor={props.implementor}
+            tracker={props.tracker}
             as="implementation" />
           <If condition={implementation.decision.proceed && implementation.verdictPassed}>
             <UserCheckpoint
@@ -445,7 +447,7 @@ text, raising nothing for the error mode to decide.
 [`UserCheckpoint`](./UserCheckpoint.md), and [`Planning`](./Planning.md) is
 written entirely in shipped syntax: `<Glob>`, `<File>`, `<Parse>`,
 `<SafeParse>`, `<Elicit>`, `<If>`/`<Else>`, `<Loop>`/`<Break>`, `<Each>`,
-`<Capture>`, `<Output>`, `<Return>`, and the `<Agent>`, `<Session>`, and
+`<Let>`, `<Output>`, `<Return>`, and the `<Agent>`, `<Session>`, and
 `<Prompt>` agent components. A caller that already knows an answer wraps a
 checkpoint in an `<Answers>` region instead of reaching a person.
 `InstructionFiles` and `UserCheckpoint` run as written; `Discovery` and
@@ -455,43 +457,44 @@ workflow Agent is given none.
 **Composed by the workflow host.** `<Repository>`, `<Worktree>`, `<Dir>`,
 `<Git.Switch>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>` and `<PullRequest>`
 are built and registered by `@executablemd/workflow/composition` (#293, #294,
-#495, #504), which is what makes the composition above executable under a
+#495, #504, #516), which is what makes the composition above executable under a
 workflow run. Registration is scope-local and the workflow host is what installs
-it, so plain `xmd run` — which composes no workflow — reports all eight
+it, so plain `xmd run` — which composes no workflow — reports all ten
 unresolved. That is where a document ran, not whether a component exists.
 
-**Not expressible.** Two names resolve to nothing under either host:
+**Not expressible.** One name resolves to nothing under either host:
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
 | `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
-| `<Issue>` | #296 | unbuilt |
 
-`<Git.Push>` and `<PullRequest>` have left that list. `<Git.Push />` publishes
-the selected checkout's current branch and commit to the same branch at the
-Repository's own `origin`, with no props, no result, no force-push, no upstream
-change and no implicit stage or commit (#495). `<PullRequest>` creates or brings
-up to date one pull request for the branch this run published, and requires that
-Push's own matching successful evidence rather than pushing anything itself
-(#500, #504). `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left it
-earlier as Workspace-local durable effects (#294), over the shared Git-host
-reconciliation both remote effects use (#297).
+`<IssueTracker>` and `<Issue>` have left that list (#296, delivered by #516):
+a tracker names the container new issues belong in, and a paired
+`<Issue title=… as=…>` renders its description as the element body and binds
+`{ url }`. `<Git.Push>` and `<PullRequest>` left it earlier. `<Git.Push />`
+publishes the selected checkout's current branch and commit to the same branch
+at the Repository's own `origin`, with no props, no result, no force-push, no
+upstream change and no implicit stage or commit (#495). `<PullRequest>` creates
+or brings up to date one pull request for the branch this run published, and
+requires that Push's own matching successful evidence rather than pushing
+anything itself (#500, #504). `<Git.Switch>`, `<Git.Add>` and staged-only
+`<Git.Commit>` left it earliest as Workspace-local durable effects (#294), over
+the shared Git-host reconciliation the remote effects use (#297).
 
 `<Agent.AddDir>` is not on it either, and never will be — #302 settles that a
 workflow Agent receives no checkout, no materialization, no Workspace or host
 path as cwd, and no registered directory, so there is no component here to
-build. What is still missing is the forge component that files a deferred
-finding, and the public component that expands generated XMD.
+build. What is still missing is the public component that expands generated
+XMD.
 
 So what remains non-executable is the implementation stage — but not because its
 Git and forge effects are missing. The named checkouts the Workspace is composed
 from are here, and so are the local Git effects, the push and the pull request.
 What the stage waits on is what comes *before* them: `<Expand>` (#369) to
-produce the change at all, `<Issue>` (#296) to file a deferred finding, and
-#301's omission of an expression prop that evaluates to `undefined`, which the
-pull-request loop's seeded `number` depends on. `<Git.Push>` and `<PullRequest>`
-are shipped and simply out of reach behind those, which is a different thing
-from unbuilt.
+produce the change at all, and #301's omission of an expression prop that
+evaluates to `undefined`, which the pull-request loop's seeded `number` depends
+on. The push, the pull request and the deferred-issue path are all shipped and
+simply out of reach behind those, which is a different thing from unbuilt.
 
 What can be exercised today is discovery through plan convergence and the user
 gates around them, running in one document execution and one existing working

@@ -52,7 +52,7 @@ is render the evidence each agent needs into its prompt.
 
 ## Target shape
 
-<Capture as="verdictSchema" select="code[lang=json]">
+<Let as="verdictSchema" select="code[lang=json]">
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -66,7 +66,7 @@ is render the evidence each agent needs into its prompt.
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 
 <Agent name={props.implementor}>
   <Session name="implementor">
@@ -165,7 +165,7 @@ is render the evidence each agent needs into its prompt.
         </Session>
       </Agent>
 
-      <Capture as="checkpointMaterial">
+      <Let as="checkpointMaterial">
         ## Implementation plan
 
         {plan}
@@ -179,7 +179,7 @@ is render the evidence each agent needs into its prompt.
         Revision prompt:
 
         {verdict.revisionPrompt}
-      </Capture>
+      </Let>
       <UserCheckpoint
         purpose="resolve the plan review"
         agent={props.planner}
