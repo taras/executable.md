@@ -496,33 +496,35 @@ describe("Tier CR — what a document gets", () => {
   // The capture belongs to the definition that was selected, not to the name.
   // An override is an ordinary Markdown component, so its `value` crosses the
   // prop JSON boundary exactly as any other component's would.
-  it("CR22c: an override keeps ordinary prop projection, capture and all", function* () {
+  it("CR22c: an override crosses the ordinary prop boundary, absence and all", function* () {
     const dir = yield* useFixture();
     yield* writeTextFile(join(dir, "doc.md"), "<Json value={undefined} />\n");
-    // `required` plus `type: null` is what makes this discriminating: the prop
-    // must arrive, and must arrive as the scanner's reading. A definition
-    // treated as capturing would strip `value` before validation, and the
-    // required check would fail instead.
+    // `required` is what makes this discriminating: on the ordinary boundary
+    // this operand is an absence, so the required check is what answers it. A
+    // definition treated as capturing would strip `value` before validation
+    // and reach the body instead.
     yield* writeTextFile(
       join(dir, "Json.md"),
       [
         "---",
         "required: [value]",
         "props:",
-        "  value: { type: 'null' }",
+        "  value: { type: 'string' }",
         "---",
         "",
         "override saw the projection",
       ].join("\n"),
     );
 
-    // Core's `<Json>` fails this exact operand as "no JSON text", because it
-    // receives the authored `undefined`. The override receives the scanner's
-    // JSON reading of the same text — the behavior every non-capturing
-    // component has always had.
+    // Core's `<Json>` fails this exact operand as "no JSON text", because its
+    // capture is handed the authored `undefined`. The override is handed the
+    // ordinary reading of the same text, where `undefined` means the prop is
+    // not there — the behavior every non-capturing component has (§6.5).
     const rendered = yield* reportOf(() => run(dir));
-    expect(rendered).toContain("override saw the projection");
+    expect(rendered).toContain("value");
+    expect(rendered).toContain("required");
     expect(rendered).not.toContain("no JSON text");
+    expect(rendered).not.toContain("override saw the projection");
   });
 
   it("CR23: a broken local component fails instead of falling back to core's", function* () {

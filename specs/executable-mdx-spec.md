@@ -4421,11 +4421,42 @@ Results are validated via JSON round-trip for serialization safety.
 | `data={{ key: "val" }}` | `props.data = { key: "val" }` | — |
 | `pr={pr}` | `expressions.pr = "pr"` | eval → `props.pr = env.values.pr` |
 | `total={a + b}` | `expressions.total = "a + b"` | eval → `props.total = 3` |
+| `value={undefined}` | `expressions.value = "undefined"` | eval → `undefined` → `value` is absent |
+| `number={pr.number}`, no such member | `expressions.number = "pr.number"` | eval → `undefined` → `number` is absent |
 
 Expression evaluation happens **before** `validateProps` so that
 resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
+
+**A successful `undefined` is an absence.** An expression that evaluates
+without failing and produces `undefined` leaves its prop out rather than giving
+it a value. That happens in the one resolver both component kinds pass through,
+before `validateProps`, so the schema answers the absence the way it answers a
+prop nobody wrote: an optional prop stays unset, a declared `default` is
+supplied, and a required one fails as a missing property with no component body
+run. This is how an author writes one invocation whose optional identity prop is
+not there until a preceding result supplies it — `number={pullRequest.number}`
+asks for a pull request to exist on the first iteration and names the created
+one on the next.
+
+`null` is not an absence: it is a value the author wrote, and only a schema that
+accepts it accepts it. Nothing here reaches below the root either — one native
+`JSON.stringify` still decides every nested member, so an `undefined` inside an
+object is dropped and one inside an array becomes `null`. An expression that
+throws, a name that is not bound, and a root value JSON has no text for are each
+the failure they always were: only a successful `undefined` is an absence.
+
+Because absence is the resolver's answer rather than a reading of the text, the
+scanner keeps an ordinary component's literal `{undefined}` as an expression.
+`value={undefined}` and `value={record.missing}` reach expansion the same way
+and mean the same thing there. A structural construct evaluates its own operand
+under its own contract and is unaffected (§5.3).
+
+Nothing durable records the absence. Prop resolution writes no journal entry, so
+a replay expands the invocation again and reconstructs the same validated prop
+set, and no resolved prop, validated prop, retained event or restored prop holds
+`undefined`.
 
 A **capture** is the exception. A registration (§5.3) may declare props the
 engine does not resolve at all: they are stripped before expression resolution and excluded
@@ -4444,8 +4475,8 @@ capture, because scanning happens before a name resolves to a definition. So it
 keeps the authored text beside the reading, and expansion — which does know the
 selected definition — hands a captured prop the result of evaluating that text
 and every other prop the reading. `value={undefined}` therefore reaches a
-capturing component as `undefined` rather than as `null`, and the same prop
-written on a component that does not capture it is `null` exactly as before.
+capturing component as `undefined`, and the same text written on a component
+that does not capture it is a prop that is not there.
 Which of the two happens is the selected definition's answer, so a repository
 file that overrides a capturing default is an ordinary component and its props
 cross the ordinary boundary.
@@ -4455,11 +4486,11 @@ Resolving a JSON literal at scan time is itself a projection: `undefined` has no
 JSON reading, so it would arrive as `null`, and JSON has no shape at all for a
 function, a class instance or a cycle. Because `<Let>` binds what its expression
 produced rather than a reading of it (§6.5), the scanner keeps the authored
-expression text for that one prop and resolves nothing. `value={undefined}`
-therefore reaches expansion as an expression and binds `undefined`. A quoted
-`value="text"` is an ordinary string attribute and is not affected, and every
-other prop — including `<Let>`'s own `select`, and a `value` prop on an ordinary
-component — resolves at scan time exactly as before.
+expression text for that one prop and resolves nothing, whatever it says.
+`value={undefined}` therefore reaches expansion as an expression and binds
+`undefined`. A quoted `value="text"` is an ordinary string attribute and is not
+affected, and every other prop — including `<Let>`'s own `select`, and a
+construct's arbitrary-value operand — resolves at scan time exactly as before.
 
 The `expressions` field is always present on `ComponentElement`
 (empty `{}` when no eval expressions exist). A prop name appears in
@@ -8055,7 +8086,8 @@ visible warning blocks, gather into a separate error report).
 | A15 | Boolean prop | `<Comp verbose />` → props.verbose: true |
 | A16 | Numeric expression prop | `<Comp count={42} />` → props.count: 42 |
 | A-REF1 | A prop bound by reference | `<Let value={…}>` keeps the authored text in `expressions.value` and resolves no JSON, whatever the text is |
-| A-REF2 | Every other prop is unchanged | `foo={undefined}` on an ordinary component, a `value` prop on an ordinary component, and `<Let select={undefined}>` all still resolve to `null` at scan time |
+| A-REF2 | Every other prop is unchanged | `foo={42}`, `foo={null}`, `<Let select={undefined}>` and `<If condition={undefined}>` all still resolve at scan time |
+| A-REF4 | An ordinary literal `undefined` | `<Widget foo={undefined} value={undefined} />` keeps both as expressions and resolves no prop, while `{null}` and a quoted `"undefined"` stay the value and the text they are |
 | A-REF3 | A quoted `<Let value>` | `value="plain"` is an ordinary string prop, not an expression |
 | A17 | Modifier with params | `` ```bash timeout=30s exec `` → modifiers: [{name: "timeout", params: "30s"}, {name: "exec"}] |
 | A14b | Component inside inline code span | `` Use `<Content />` for slot `` → single TextSegment |
@@ -8159,6 +8191,20 @@ visible warning blocks, gather into a separate error report).
 | LET10 | Reaches the environment | A direct binding is read by later prose interpolation, by a component's expression prop, and by a later eval block |
 | LET11 | Partial replay | A `<Let value={source}>` between a replayed producer eval and a live consumer eval rebinds by reference; the journal holds the root import, the two eval effects and Close, and no record of its own |
 | LET12 | `Let` is reserved, `Capture` is not | `Let` cannot be registered or bundled, while a repository component named `Capture` resolves and renders |
+
+### Tier EU — a prop that evaluates to `undefined` (§6.5)
+
+| # | Test | Verify |
+|---|------|--------|
+| EU1 | Runtime absence | A member that is not there resolves successfully and leaves the prop with no own key on the validated props |
+| EU2 | Literal absence | `value={undefined}` takes the same path as `value={record.missing}` |
+| EU3 | Declared default | A schema `default` fills the absence, which is only possible because omission precedes validation |
+| EU4 | Required | The ordinary missing-property failure, with no component body run |
+| EU5 | `null` | A nullable prop receives `null` as an own value, beside an absence in the same document |
+| EU6 | Failure | An expression that throws is still the positioned expression-prop failure; EP13/EP15 keep the unbound name and EP14 the non-serializable root |
+| EU7 | Nested | One object member and one array entry take native `JSON.stringify` normalization — dropped and `null` |
+| EU8 | Durability and replay | The retained record holds no `undefined` and no record of prop resolution; a partial replay reconstructs the same props through ordinary expansion, and a completed one reuses its terminal result and imports nothing again |
+| CP8 | The function-component path | The same rule reaches a function component's props, while the capture beside it is handed the exact `undefined` |
 
 ### Tier D — Code execution and modifier middleware
 
@@ -8806,7 +8852,7 @@ Each row names the derivation it kills.
 | CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
 | CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
 | CR22 | End to end | A repository component replaces one of core's in a running document |
-| CR22c | An override is an ordinary component | A repository `Json.md` receives the scanner's JSON reading of `value={undefined}`, capture and all |
+| CR22c | An override is an ordinary component | A repository `Json.md` given `value={undefined}` fails its own required check, where core's capturing `<Json>` fails as no JSON text |
 | CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
 | CR24 | Structural is not shadowed | A file named after a construct never supplies it |
 | CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
@@ -9976,3 +10022,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 99 | The source is chosen before it runs | Presence of `value` and of children is read from what the author wrote, so a construct naming both sources expands no child and evaluates no expression; `value={undefined}` is the direct source, because presence is own-key presence rather than a value test |
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
+| 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |

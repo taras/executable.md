@@ -2683,10 +2683,10 @@ function* expandFunctionComponent(
     // The scanner resolved this one because its text reads as JSON, but the
     // definition that was selected declares it a capture — so the reading is
     // not what the author asked for. Evaluating the authored text is: it is
-    // the same expression, run where the by-reference contract holds, and it
-    // is the only way `value={undefined}` reaches a component as `undefined`
-    // rather than as `null`. A prop written as a quoted attribute has no
-    // authored expression and stays the literal string it was.
+    // the same expression, run where the by-reference contract holds, so a
+    // value JSON has no shape for reaches the component as itself. A prop
+    // written as a quoted attribute has no authored expression and stays the
+    // literal string it was.
     const authored = authoredExpressions[key];
     if (authored === undefined) {
       literalCaptures[key] = value;
@@ -3153,7 +3153,17 @@ function* resolveExpressionProps(
   for (const [propName, expression] of Object.entries(expressions)) {
     const result = evaluateIn(evalEnv, expression, componentName, propName);
 
-    if (typeof result === "function" || typeof result === "undefined") {
+    // A successful `undefined` is the absence of a value, and absence is
+    // written by leaving the prop out (§6.5). It happens here, before
+    // validation, so an optional prop stays unset, a declared default is
+    // supplied by the schema, and a required one fails as missing — and no
+    // prop, event or journal value ever holds `undefined`. `null` is a value
+    // the author wrote and crosses the boundary as itself.
+    if (typeof result === "undefined") {
+      continue;
+    }
+
+    if (typeof result === "function") {
       throw new Error(
         `Expression prop "${propName}" on <${componentName} /> evaluated ` +
           `to a non-serializable value (${typeof result}). Props must be ` +

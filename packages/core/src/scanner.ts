@@ -12,7 +12,7 @@
 import { Err, Ok } from "effection";
 import type { Result } from "effection";
 import { validateBindingName } from "./live-env.ts";
-import { bindsByReference } from "./structural.ts";
+import { bindsByReference, isStructural } from "./structural.ts";
 import type {
   Segment,
   TextSegment,
@@ -623,6 +623,14 @@ function parseAttributes(
       const exprText = text.slice(pos + 1, exprEnd).trim();
       if (bindsByReference(componentName, attrName)) {
         expressions[attrName] = exprText;
+      } else if (exprText === "undefined" && !isStructural(componentName)) {
+        // An ordinary component's prop is absent when its expression produces
+        // `undefined`, and the resolver that crosses the JSON boundary at
+        // expansion is where that is decided (§6.5). Reading the literal here
+        // would answer with `null` before the prop ever reaches it. A construct
+        // evaluates its own operand under its own contract, so what it is
+        // handed at scan time is unchanged.
+        expressions[attrName] = exprText;
       } else {
         const result = parseExpressionValue(exprText);
         if (result.kind === "resolved") {
@@ -783,7 +791,10 @@ export function parseExpressionValue(expr: string): ExpressionResult {
     return { kind: "resolved", value: false };
   }
 
-  // null/undefined
+  // `null` is JSON. A literal `undefined` reads as `null` here for a construct
+  // that takes an arbitrary operand and is asked for a scan-time reading of it;
+  // an ordinary component's is kept as an expression by the caller, because
+  // absence is what it means there.
   if (trimmed === "null" || trimmed === "undefined") {
     return { kind: "resolved", value: null };
   }

@@ -15,6 +15,8 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import { ensureDir, writeTextFile } from "@effectionx/fs";
 import { useTempDirectory } from "@executablemd/test-support/temp";
+import { useStubFs } from "@executablemd/runtime/test";
+import { asText } from "./helpers.ts";
 import * as path from "node:path";
 
 function* writeFiles(dir: string, files: Record<string, string>): Operation<void> {
@@ -643,3 +645,249 @@ describe("Tier EP — Expression prop evaluation", () => {
     expect(output).toContain("child-data=from-parent");
   });
 });
+
+/**
+ * Tier EU — an expression prop that evaluates to `undefined` (spec §6.5).
+ *
+ * Absence is a thing an author writes: a prop whose value has not been produced
+ * yet is simply not there. It is decided once, in the resolver both component
+ * kinds pass through, before validation and before anything durable is written.
+ * The function-component call path is CP8; these are the Markdown one, and the
+ * boundary the two of them share.
+ */
+describe("Tier EU — a prop that evaluates to undefined", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /**
+   * A component that reports what it was given. Its body reads `props` from an
+   * eval block rather than through `{props.value}`, because interpolation
+   * renders an absent prop and a `null` one the same way and these cases are
+   * about telling them apart.
+   */
+  function probe(declaration: string[], report = 'own=${Object.hasOwn(props, "value")}'): string {
+    return [
+      "---",
+      "props:",
+      "  type: object",
+      "  properties:",
+      ...declaration,
+      "  additionalProperties: false",
+      "---",
+      "```js eval",
+      "return `" + report + "`;",
+      "```",
+    ].join("\n");
+  }
+
+  it("EU1: a member that is not there is a prop that is not there", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(["    value: {}"]),
+      "doc.md": [
+        "```js eval",
+        "const record = { present: 1 };",
+        "```",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    expect(output).toContain("own=false");
+  });
+
+  it("EU2: a literal `undefined` takes that same path", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(["    value: {}"]),
+      "doc.md": "<Probe value={undefined} />",
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    expect(output).toContain("own=false");
+  });
+
+  it("EU3: a declared default answers the absence", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(
+        ["    value:", "      type: string", '      default: "fallback"'],
+        'own=${Object.hasOwn(props, "value")} value=${props.value}',
+      ),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    // Omission happens before validation, which is the only reason the schema
+    // gets to supply its default.
+    expect(output).toContain("own=true value=fallback");
+  });
+
+  it("EU4: a required prop is missing, and the body does not run", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": [
+        "---",
+        "props:",
+        "  type: object",
+        "  properties:",
+        "    value: {}",
+        "  required:",
+        "    - value",
+        "  additionalProperties: false",
+        "---",
+        "THE BODY RAN",
+      ].join("\n"),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    expect(output).toContain("value");
+    expect(output).toContain("required");
+    expect(output).not.toContain("THE BODY RAN");
+  });
+
+  it("EU5: `null` is a value the author wrote, not an absence", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(
+        ["    value:", '      type: ["string", "null"]'],
+        'own=${Object.hasOwn(props, "value")} value=${String(props.value)};',
+      ),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={null} />",
+        "",
+        "<Probe value={record.missing} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    expect(output).toContain("own=true value=null;");
+    expect(output).toContain("own=false value=undefined;");
+  });
+
+  it("EU6: an expression that throws is still the failure it was", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(["    value: {}"]),
+      "doc.md": [
+        "```js eval",
+        "const record = { boom() { throw new Error('no value here'); } };",
+        "```",
+        "",
+        "<Probe value={record.boom()} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    expect(output).toContain("Failed to evaluate expression prop");
+    expect(output).toContain("no value here");
+  });
+
+  it("EU7: a nested `undefined` keeps its native JSON reading", function* () {
+    const tmpDir = yield* useTempDirectory("expr-props-test-");
+    yield* writeFiles(tmpDir, {
+      "components/Probe.md": probe(
+        ["    value:", "      type: object"],
+        "json=${JSON.stringify(props.value)}",
+      ),
+      "doc.md": [
+        "```js eval",
+        "const record = {};",
+        "```",
+        "",
+        "<Probe value={{ a: record.missing, b: [record.missing, 1], c: 2 }} />",
+      ].join("\n"),
+    });
+    const output = yield* said(tmpDir, new InMemoryStream());
+    // One `JSON.stringify` decides everything below the root, as it always
+    // has: an object member goes, an array entry becomes `null`.
+    expect(output).toContain('json={"b":[null,1],"c":2}');
+  });
+
+  it("EU8: nothing durable holds it, and replay reconstructs the same props", function* () {
+    const document = [
+      "```ts eval",
+      "const record = {};",
+      "```",
+      "",
+      "<Probe value={record.missing} />",
+      "",
+      "```ts eval",
+      'return "and after";',
+      "```",
+    ].join("\n");
+
+    const stream = new InMemoryStream();
+    yield* useStubFs({
+      "README.md": document,
+      "components/Probe.md": probe(
+        ["    value:", "      type: string", '      default: "fallback"'],
+        'own=${Object.hasOwn(props, "value")} value=${props.value}',
+      ),
+    });
+
+    const golden = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    expect(golden).toContain("own=true value=fallback");
+    expect(golden).toContain("and after");
+
+    const full = stream.snapshot();
+    // Resolving the prop wrote nothing of its own: the record is the imports
+    // and the evals it always was.
+    expect(full.map(kind)).toEqual([
+      "import_component",
+      "eval",
+      "import_component",
+      "eval",
+      "eval",
+      "close",
+    ]);
+    expect(holdsUndefined(full)).toBe(false);
+
+    // A crash before the last eval: the run resumes into the live suffix and
+    // expands the invocation again, so the absent prop is reconstructed rather
+    // than restored.
+    const prefix = full.slice(0, full.length - 2);
+    const resumedStream = new InMemoryStream(prefix);
+    const resumed = asText(
+      yield* collect(yield* execute({ path: "README.md", stream: resumedStream })),
+    );
+    expect(resumed).toBe(golden);
+    expect(holdsUndefined(resumedStream.snapshot())).toBe(false);
+
+    // A completed run is answered from its own terminal outcome: nothing is
+    // imported a second time, so no body runs.
+    const replayed = asText(yield* collect(yield* execute({ path: "README.md", stream })));
+    expect(replayed).toBe(golden);
+    expect(stream.snapshot().map(kind)).toEqual(full.map(kind));
+  });
+});
+
+/** What one journal event is, for an assertion about a run's whole record. */
+// deno-lint-ignore no-explicit-any
+function kind(event: any): string {
+  return event.type === "yield" ? String(event.description.type) : String(event.type);
+}
+
+/** Whether anything reachable from a durable record holds `undefined`. */
+function holdsUndefined(node: unknown): boolean {
+  if (node === undefined) {
+    return true;
+  }
+  if (node === null || typeof node !== "object") {
+    return false;
+  }
+  return Reflect.ownKeys(node).some((key) =>
+    holdsUndefined((node as Record<PropertyKey, unknown>)[key]),
+  );
+}
