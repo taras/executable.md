@@ -15,6 +15,9 @@ const P_SM = "margin:0;font-size:0.875rem;line-height:1.6;color:var(--body);";
 const P_MD =
   "margin:0;max-width:74ch;font-size:0.9375rem;line-height:1.6;color:var(--body);";
 const P_MEASURED = `${P_SM}max-width:74ch;`;
+/** A panel's opening claim, set at the weight of a heading. */
+const PANEL_LEDE =
+  "margin:0;font-size:1.0625rem;line-height:1.45;color:var(--ink);font-weight:800;letter-spacing:-0.01em;";
 const CHAIN_ITEM =
   `${MONO}font-size:0.8125rem;font-weight:700;color:var(--ink);`;
 const STEP_NUMBER =
@@ -475,6 +478,13 @@ function Step(
 }
 
 /** One of the three runtimes the same CLI installs under. */
+/** Where the work goes once you know how to do it. */
+const PRINCIPLES: { label: string; body: string }[] = [
+  { label: "Don't know how", body: "Use an agent to figure it out." },
+  { label: "Know how", body: "Make it a program." },
+  { label: "Judgment remains", body: "Keep only that part agentic." },
+];
+
 const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
   {
     name: "Deno",
@@ -563,7 +573,7 @@ export default define.page(function Home({ url }) {
             <div class="panel">
               <div class="panel-head">What you read is what runs</div>
               <div class="panel-body">
-                <p style="margin:0;font-size:1.0625rem;line-height:1.45;color:var(--ink);font-weight:800;letter-spacing:-0.01em;">
+                <p style={PANEL_LEDE}>
                   There is no workflow hidden behind the document. The document
                   is the workflow.
                 </p>
@@ -581,12 +591,12 @@ export default define.page(function Home({ url }) {
             <h2>The README as a CLI.</h2>
           </div>
           <p style={P_MD}>
-            Procedure belongs in the document; judgment belongs where the
-            document asks for it. <Term>xmd</Term>{" "}
-            moves procedure out of probabilistic interpretation and into
+            What you already know how to do belongs in the document; judgment
+            belongs where the document asks for it. <Term>xmd</Term>{" "}
+            moves known work out of probabilistic interpretation and into
             executable software: tests, file loading, sequencing, retries, and
             cleanup run as code, while planning, review, interpretation, and
-            design decisions stay with people or agents. Once procedure is
+            design decisions stay with people or agents. Once known work is
             executable, documentation does not need a parallel implementation to
             stay in sync — a README can explain the work to a person and expose
             the same work as runnable entry points for a CLI or an agent.
@@ -653,6 +663,55 @@ export default define.page(function Home({ url }) {
             happening, while headings and explicit inputs reveal only the
             operation needed at the point it is needed.
           </p>
+        </section>
+
+        {/* Principles */}
+        <section id="principles" class="section" style="gap:1.5rem;">
+          <div class="section-head">
+            <h2>When you know how, make it a program.</h2>
+          </div>
+          <p style={P_MD}>
+            <Term>xmd</Term>{" "}
+            is not trying to make agents more autonomous. It is trying to
+            minimize how much work needs to remain agentic. When you know what
+            you want but don't know how to get there, use an agent. When you
+            know how to get there, make it a program and leave the agent only
+            the judgment that remains.
+          </p>
+
+          <div class="panel">
+            <div class="panel-head">The point</div>
+            <div class="panel-body">
+              <p style={PANEL_LEDE}>
+                The goal isn't autonomous agents. It's to minimize how much work
+                needs to remain agentic.
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-3" style="align-items:stretch;">
+            {PRINCIPLES.map((principle) => (
+              <div
+                key={principle.label}
+                class="card"
+                style="display:flex;flex-direction:column;gap:0.5625rem;min-width:0;"
+              >
+                <span class="eyebrow">{principle.label}</span>
+                <p style="margin:0;font-size:0.875rem;line-height:1.55;color:var(--body);">
+                  {principle.body}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <p style={P_MD}>
+            One-off work can stay agentic. Repeated work that you know how to do
+            can become an <Term>xmd</Term> workflow.
+          </p>
+
+          <a class="link-rule" href="/docs" style="align-self:flex-start;">
+            Read the docs →
+          </a>
         </section>
 
         {/* Agents */}
