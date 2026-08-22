@@ -33,6 +33,30 @@ import type { ElicitationRequest } from "@executablemd/core";
 const DOCUMENT = fileURLToPath(new URL("../../components/BootstrapNpmPackage.md", import.meta.url));
 
 const BOOTSTRAP_VERSION = "0.0.0-bootstrap.0";
+
+/**
+ * The complete `package.json` the document must write, byte for byte.
+ *
+ * Written out rather than built with `JSON.stringify`, because the thing being
+ * checked is that `<Json>` produced these bytes and the document authored the
+ * final newline itself. Rebuilding it the way the document used to would make
+ * the comparison agree with whatever serialization ran.
+ */
+const EXPECTED_MANIFEST = `{
+  "name": "@executablemd/fixture",
+  "version": "${BOOTSTRAP_VERSION}",
+  "description": "Placeholder reserving the @executablemd/fixture package name.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taras/executable.md.git"
+  },
+  "homepage": "https://executable.md",
+  "files": [
+    "README.md"
+  ]
+}
+`;
 const CODE = "123456";
 const USER = "taras";
 
@@ -121,6 +145,7 @@ npm() {
       esac
       ;;
     pack)
+      cp package.json "$NPM_MANIFEST_FILE"
       if [ "\${NPM_PACK_FAILS-}" = "1" ]; then
         echo '[{"files":[]}]'
         echo "npm error code EPACK" >&2
@@ -171,6 +196,14 @@ interface Fixture {
   trustFile: string;
   /** File the fake npm appends one line per call to. */
   logFile: string;
+  /**
+   * Where the fake npm copies the manifest it packed.
+   *
+   * The document writes `package.json` into a `<TempDir>` that is gone by the
+   * time the run ends, so the bytes are kept here while `npm pack` can still
+   * see them.
+   */
+  manifestFile: string;
   /** File holding the fake npm function, sourced through `BASH_ENV`. */
   envFile: string;
 }
@@ -205,6 +238,7 @@ function useFixture(): Operation<Fixture> {
       stateFile: join(root, "registry-state"),
       trustFile: join(root, "trust-state"),
       logFile: join(root, "npm.log"),
+      manifestFile: join(root, "packed-manifest.json"),
       envFile: join(root, "fake-npm.sh"),
     };
     yield* writeTextFile(fixture.envFile, FAKE_NPM);
@@ -281,6 +315,7 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
       yield* writeTextFile(fixture.trustFile, options.trust);
     }
     yield* writeTextFile(fixture.logFile, "");
+    yield* rm(fixture.manifestFile, { force: true });
 
     const requests: ElicitationRequest[] = [];
     const counter = { execs: 0 };
@@ -336,6 +371,7 @@ function run(fixture: Fixture, options: RunOptions = {}): Operation<Run> {
             ...process.env,
             BASH_ENV: fixture.envFile,
             NPM_LOG: fixture.logFile,
+            NPM_MANIFEST_FILE: fixture.manifestFile,
             NPM_STATE_FILE: fixture.stateFile,
             NPM_TRUST_FILE: fixture.trustFile,
             NPM_TRUST_EXPECTED: EXPECTED_TRUST,
@@ -490,6 +526,24 @@ describe("bootstrap an npm package", () => {
       expect(packAt).toBeGreaterThanOrEqual(0);
       expect(publishAt).toBeGreaterThan(packAt);
       expect(trustAt).toBeGreaterThan(publishAt);
+    });
+
+    it("writes the manifest npm packs, formatted and newline-terminated", function* () {
+      const fixture = yield* useFixture();
+      const result = yield* run(fixture, { state: "missing", trust: "" });
+
+      expect(result.ok).toBe(true);
+      // The bytes `npm pack` saw, not the bytes the preview printed: the file is
+      // what gets published, and the preview is indented for reading.
+      expect(yield* exists(fixture.manifestFile)).toBe(true);
+      expect(yield* readTextFile(fixture.manifestFile)).toBe(EXPECTED_MANIFEST);
+
+      // And the preview is that same manifest, each line indented by two.
+      const preview = EXPECTED_MANIFEST.trimEnd()
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join("\n");
+      expect(result.output).toContain(preview);
     });
 
     it("installs the missing trust on a reservation that is already there", function* () {

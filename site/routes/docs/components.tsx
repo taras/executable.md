@@ -197,6 +197,20 @@ const GLOB_PIPELINE = `<TempDir>
 </Each>
 </TempDir>`;
 
+const JSON_PROMPT = `<Let as="schema" value={{
+  type: "object",
+  required: ["bump"]
+}} />
+
+<Prompt>
+Return JSON matching this schema:
+
+<Json value={schema} />
+</Prompt>`;
+
+const JSON_FILE = `<File path="package.json"><Json value={manifest} />
+</File>`;
+
 const PARSE = `<Let as="schema" select="code[lang=json]">
 \`\`\`json
 {
@@ -682,6 +696,38 @@ export default define.page(function Components() {
         that you never wrote — and as with{" "}
         <code>&lt;File&gt;</code>, nothing from the underlying error is
         reproduced: its code selects a phrase from a fixed list.
+      </p>
+
+      <h2>Rendering a value as JSON</h2>
+      <p>
+        <code>&lt;Json&gt;</code>{" "}
+        turns a value the document already holds into JSON text, right where you
+        write it. <code>&lt;Let&gt;</code> introduces the value,{" "}
+        <code>&lt;Json&gt;</code> renders it, and <code>&lt;Parse&gt;</code>
+        {" "}
+        below turns text back into a value — three visible steps rather than a
+        <code>JSON.stringify</code> hidden in an eval block.
+      </p>
+      <CodeBlock>{JSON_PROMPT}</CodeBlock>
+      <p>
+        The formatting is fixed: two spaces per level, keys in the order the
+        object has them, and nothing else to choose. There is no{" "}
+        <code>indent</code>, <code>pretty</code>{" "}
+        or replacer option, and it binds nothing — <code>as</code>{" "}
+        is refused, because this renders text.
+      </p>
+      <p>
+        It also adds{" "}
+        <strong>no trailing newline</strong>. Text lands exactly where the
+        element sits, so a file that has to end in a newline gets one from the
+        document that writes it:
+      </p>
+      <CodeBlock>{JSON_FILE}</CodeBlock>
+      <p>
+        Ordinary <code>{"{binding}"}</code>{" "}
+        interpolation is unchanged — it still coerces a value to a string the
+        way it always has. Nothing converts to JSON behind your back; you ask
+        for it by name.
       </p>
 
       <h2>Parsing generated JSON</h2>
