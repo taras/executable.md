@@ -24,7 +24,7 @@ You are the repository implementor. Follow the approved plan.
 </Session.Launch>
 
 <Session name="implementer">
-<Capture as="answer"><Prompt>what changed?</Prompt></Capture>
+<Prompt as="answer">what changed?</Prompt>
 </Session>
 
 <AssertMatch actual={answer} expected={/nothing yet/} />
