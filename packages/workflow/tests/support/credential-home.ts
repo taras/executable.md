@@ -88,6 +88,8 @@ function helperProgram(known: readonly KnownHost[], log: string, gate?: string):
 export interface InvokingHome {
   /** The environment the provider is told it is standing in. */
   readonly ambient: Record<string, string>;
+  /** The directory itself, for a child process told where to stand. */
+  readonly home: string;
   /**
    * Every operation this chain was asked, in order.
    *
@@ -136,6 +138,7 @@ export function* useInvokingHome(
   // rather than a path that happens not to exist.
   yield* until(mkdir(join(home, ".ssh"), { recursive: true }));
   return {
+    home,
     ambient: {
       ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
       HOME: home,
@@ -175,6 +178,7 @@ export function* useHomeWithoutAuthentication(): Operation<InvokingHome> {
   const home = yield* useTempDirectory("xmd-bare-home-");
   yield* until(writeFile(join(home, ".gitconfig"), "[user]\n\tname = Nobody\n"));
   return {
+    home,
     ambient: {
       ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
       HOME: home,
