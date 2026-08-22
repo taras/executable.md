@@ -448,7 +448,12 @@ function parseComponentTag(
   }
 
   // Parse attributes
-  const { props, expressions, end: attrEnd } = parseAttributes(text, pos, name);
+  const {
+    props,
+    expressions,
+    authoredExpressions,
+    end: attrEnd,
+  } = parseAttributes(text, pos, name);
   if (attrEnd === -1) {
     return null;
   }
@@ -471,6 +476,7 @@ function parseComponentTag(
         name,
         props,
         expressions,
+        authoredExpressions,
         children: [],
         selfClosing: true,
         position: positionAt(index, start),
@@ -497,6 +503,7 @@ function parseComponentTag(
       name,
       props,
       expressions,
+      authoredExpressions,
       children,
       selfClosing: false,
       position: positionAt(index, start),
@@ -508,6 +515,8 @@ function parseComponentTag(
 interface ParsedAttributes {
   props: Record<string, Json>;
   expressions: Record<string, string>;
+  /** Authored text of the `{…}` props resolved into `props` above. */
+  authoredExpressions: Record<string, string>;
   end: number; // position after last attribute, before /> or >
 }
 
@@ -519,16 +528,17 @@ function parseAttributes(
 ): ParsedAttributes {
   const props: Record<string, Json> = {};
   const expressions: Record<string, string> = {};
+  const authoredExpressions: Record<string, string> = {};
 
   while (pos < text.length) {
     pos = skipWhitespace(text, pos);
     if (pos >= text.length) {
-      return { props, expressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1 };
     }
 
     // End of attributes?
     if (text[pos] === "/" || text[pos] === ">") {
-      return { props, expressions, end: pos };
+      return { props, expressions, authoredExpressions, end: pos };
     }
 
     // Spread props: {...expr}
@@ -541,7 +551,7 @@ function parseAttributes(
       // Skip spread — consume the expression
       const exprEnd = findMatchingBrace(text, pos);
       if (exprEnd === -1) {
-        return { props, expressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1 };
       }
       // We don't evaluate spread props — just skip them
       pos = exprEnd + 1;
@@ -555,7 +565,7 @@ function parseAttributes(
     }
     const attrName = text.slice(attrNameStart, pos);
     if (!attrName) {
-      return { props, expressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1 };
     }
 
     pos = skipWhitespace(text, pos);
@@ -585,14 +595,14 @@ function parseAttributes(
 
     // Attribute value
     if (pos >= text.length) {
-      return { props, expressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1 };
     }
 
     if (text[pos] === '"') {
       // String attribute: "value"
       const strEnd = findClosingQuote(text, pos + 1, '"');
       if (strEnd === -1) {
-        return { props, expressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1 };
       }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
@@ -600,7 +610,7 @@ function parseAttributes(
       // String attribute: 'value'
       const strEnd = findClosingQuote(text, pos + 1, "'");
       if (strEnd === -1) {
-        return { props, expressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1 };
       }
       props[attrName] = text.slice(pos + 1, strEnd);
       pos = strEnd + 1;
@@ -608,7 +618,7 @@ function parseAttributes(
       // Expression attribute: {expr}
       const exprEnd = findMatchingBrace(text, pos);
       if (exprEnd === -1) {
-        return { props, expressions, end: -1 };
+        return { props, expressions, authoredExpressions, end: -1 };
       }
       const exprText = text.slice(pos + 1, exprEnd).trim();
       if (bindsByReference(componentName, attrName)) {
@@ -617,17 +627,21 @@ function parseAttributes(
         const result = parseExpressionValue(exprText);
         if (result.kind === "resolved") {
           props[attrName] = result.value;
+          // Kept beside the reading of it: whether this prop is a capture is
+          // the selected definition's answer, and no definition is selected
+          // yet.
+          authoredExpressions[attrName] = exprText;
         } else {
           expressions[attrName] = result.expression;
         }
       }
       pos = exprEnd + 1;
     } else {
-      return { props, expressions, end: -1 };
+      return { props, expressions, authoredExpressions, end: -1 };
     }
   }
 
-  return { props, expressions, end: -1 };
+  return { props, expressions, authoredExpressions, end: -1 };
 }
 
 /**

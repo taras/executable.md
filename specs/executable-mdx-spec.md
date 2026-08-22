@@ -4457,6 +4457,18 @@ an expression that throws throws into that component rather than becoming an
 engine prop error. A capture is not durable: it is journaled neither as a prop
 nor as a value, and a replay recomputes it from the restored bindings.
 
+The scanner resolves a `{…}` prop whose text reads as JSON, and that
+resolution is a projection like any other. It cannot know whether the prop is a
+capture, because scanning happens before a name resolves to a definition. So it
+keeps the authored text beside the reading, and expansion — which does know the
+selected definition — hands a captured prop the result of evaluating that text
+and every other prop the reading. `value={undefined}` therefore reaches a
+capturing component as `undefined` rather than as `null`, and the same prop
+written on a component that does not capture it is `null` exactly as before.
+Which of the two happens is the selected definition's answer, so a repository
+file that overrides a capturing default is an ordinary component and its props
+cross the ordinary boundary.
+
 `<Let value>` is the other exception, and it is taken earlier — while scanning.
 Resolving a JSON literal at scan time is itself a projection: `undefined` has no
 JSON reading, so it would arrive as `null`, and JSON has no shape at all for a
@@ -8544,6 +8556,7 @@ visible warning blocks, gather into a separate error report).
 | J5 | Shape first | `as`, paired content including whitespace, and a missing `value` each refuse before the operand evaluates, and no binding is created |
 | J6 | Once | One expression evaluation and one `JSON.stringify` call; a `toJSON` hook runs exactly once |
 | J7 | Two failures | Root `undefined`/function/symbol fail as no JSON text; `bigint` and a cycle fail as serialization that threw; a throwing getter or `toJSON` preserves the exact cause, records the invocation position, and emits no partial JSON |
+| J7b | The authored `value={undefined}` | Fails as no JSON text and renders no `null`, while an authored `value={null}` still renders `null` |
 | J8 | Resolution | `Json.md` overrides core's default; otherwise the name inspects as an ordinary `@executablemd/core` registration with a closed empty schema and the capture list `["value"]` |
 | J9 | Durability | No JSON-specific effect is journaled, component resolution stays an ordinary import, partial replay re-serializes the reconstructed value, and completed replay runs neither the component nor its hooks |
 | J10 | Composition | `<Prompt>` sends and retains exactly the rendered JSON, with only the authored bytes around it |
@@ -8810,6 +8823,7 @@ Each row names the derivation it kills.
 | CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
 | CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
 | CR22 | End to end | A repository component replaces one of core's in a running document |
+| CR22c | An override is an ordinary component | A repository `Json.md` receives the scanner's JSON reading of `value={undefined}`, capture and all |
 | CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
 | CR24 | Structural is not shadowed | A file named after a construct never supplies it |
 | CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
@@ -9980,3 +9994,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 98 | `<Let value>` binds by reference, not through the prop JSON boundary | Expression evaluation and environment lookup are reused; component-prop serialization is not, at either end. The scanner resolves no JSON for this one prop, and expansion projects none, so a document can bind `undefined`, a function, a class instance or a cyclic object — values ordinary props omit, reject or rewrite — and identity holds within the execution that produced it |
 | 99 | The source is chosen before it runs | Presence of `value` and of children is read from what the author wrote, so a construct naming both sources expands no child and evaluates no expression; `value={undefined}` is the direct source, because presence is own-key presence rather than a value test |
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
+| 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |

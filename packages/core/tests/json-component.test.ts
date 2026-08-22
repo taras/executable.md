@@ -242,6 +242,29 @@ describe("Tier JSON — the two ways serialization fails", () => {
     }
   });
 
+  it("J7: the authored `value={undefined}` fails as no JSON text, not as null", function* () {
+    const result = yield* run("before<Json value={undefined} />after\n");
+
+    expect(reported(result)).toContain(NO_TEXT);
+    expect(reported(result)).not.toContain(THREW);
+    // The regression this guards: the scanner can read `undefined` as a JSON
+    // literal, and reading it produces `null`. Rendering "null" here would mean
+    // the operand reached the component as its JSON projection.
+    expect(result.output).not.toContain("null");
+    // The authored bytes on either side are untouched by the failure.
+    expect(result.output).toContain("before");
+    expect(result.output).toContain("after");
+  });
+
+  it("J7: an authored `value={null}` still renders null", function* () {
+    const result = yield* run("<Json value={null} />\n");
+
+    // The pair matters: `undefined` and `null` are different operands, and
+    // before the authored expression reached the component they were not.
+    expect(result.observed).toEqual([]);
+    expect(result.output).toContain("null");
+  });
+
   it("J7: a bigint and a cycle fail as serialization that threw", function* () {
     const cycle: Record<string, unknown> = { name: "loop" };
     cycle.self = cycle;

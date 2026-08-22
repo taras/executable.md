@@ -67,6 +67,67 @@ describe("Tier CP — capture props", () => {
     expect(seen.expected).toBe(re);
   });
 
+  it("CP8: a capture is the authored expression, even when it reads as JSON", function* () {
+    const seen: Record<string, unknown> = {};
+    const capturing: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Capturing",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      captures: ["probe"],
+      *fn(): Operation<unknown> {
+        seen.captured = yield* capture("probe");
+        return "";
+      },
+    };
+    const ordinary: FunctionComponentDefinition = {
+      kind: "function",
+      name: "Ordinary",
+      props: { type: "object", properties: { probe: {} }, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(props): Operation<unknown> {
+        seen.ordinary = props.probe;
+        return "";
+      },
+    };
+    const defs: Record<string, FunctionComponentDefinition> = {
+      Capturing: capturing,
+      Ordinary: ordinary,
+    };
+
+    yield* scoped(function* () {
+      const env: EvalEnv = { values: {} };
+      yield* Component.around({ env: () => env }, { at: "min" });
+      yield* Component.around(
+        {
+          // deno-lint-ignore require-yield
+          *importComponent([name]) {
+            const found = defs[name];
+            if (!found) {
+              throw new Error(`no component ${name}`);
+            }
+            return found;
+          },
+        },
+        { at: "min" },
+      );
+      yield* expandSegments(
+        scanSegments("<Capturing probe={undefined} /><Ordinary probe={undefined} />\n"),
+        {},
+        {},
+        new Set(),
+      );
+    });
+
+    // `undefined` is a JSON literal the scanner can read, and reading it is a
+    // projection: it becomes `null`. The capture is delivered from the authored
+    // expression instead, so the component gets what the author wrote.
+    expect(seen.captured).toBe(undefined);
+    expect("captured" in seen).toBe(true);
+    // The very same authored text on an ordinary prop keeps the reading it has
+    // always had. The widening is per-prop, decided by the selected definition.
+    expect(seen.ordinary).toBe(null);
+  });
+
   it("CP2: a return binds by reference under `as`, and renders nothing without it", function* () {
     const payload = { kind: "by-ref" };
     const def: FunctionComponentDefinition = {

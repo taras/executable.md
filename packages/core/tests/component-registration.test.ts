@@ -493,6 +493,38 @@ describe("Tier CR — what a document gets", () => {
     expect(rendered).not.toContain("serialized");
   });
 
+  // The capture belongs to the definition that was selected, not to the name.
+  // An override is an ordinary Markdown component, so its `value` crosses the
+  // prop JSON boundary exactly as any other component's would.
+  it("CR22c: an override keeps ordinary prop projection, capture and all", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "doc.md"), "<Json value={undefined} />\n");
+    // `required` plus `type: null` is what makes this discriminating: the prop
+    // must arrive, and must arrive as the scanner's reading. A definition
+    // treated as capturing would strip `value` before validation, and the
+    // required check would fail instead.
+    yield* writeTextFile(
+      join(dir, "Json.md"),
+      [
+        "---",
+        "required: [value]",
+        "props:",
+        "  value: { type: 'null' }",
+        "---",
+        "",
+        "override saw the projection",
+      ].join("\n"),
+    );
+
+    // Core's `<Json>` fails this exact operand as "no JSON text", because it
+    // receives the authored `undefined`. The override receives the scanner's
+    // JSON reading of the same text — the behavior every non-capturing
+    // component has always had.
+    const rendered = yield* reportOf(() => run(dir));
+    expect(rendered).toContain("override saw the projection");
+    expect(rendered).not.toContain("no JSON text");
+  });
+
   it("CR23: a broken local component fails instead of falling back to core's", function* () {
     const dir = yield* useFixture();
     // Core's <TempDir> renders its content, so a fall-through would succeed
