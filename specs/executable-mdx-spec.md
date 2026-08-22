@@ -2686,6 +2686,17 @@ called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
 
+A host may register defaults of its own on the same terms. The workflow host
+registers `<Evaluate source={…} />` for a live or partial run: the operation an
+authored workflow document writes where an Agent's proposed fragment should be
+admitted and performed. Its schema is closed on one required string prop, paired
+content is refused, and it declares no `returns`, so its retained result renders
+where it is written and an ordinary `as` captures it. Registration is what makes
+the operation reachable; the ceilings it runs under come from values the host
+captured before any document existed, and no prop, binding or middleware return
+value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
+§8.4 is the contract.
+
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
 `<TempDir>` invocation creates fresh is the directory (§6.11); the component
@@ -9504,6 +9515,31 @@ document against a real run database.
 |---|------|--------|
 | WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
+### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
+
+| # | Test | Verify |
+|---|------|--------|
+| WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
+| WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
+| WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
+| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the registration even while it is live |
+| WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
+
+### Tier WAL — The workflow Agent observation loop
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAL1 | The loop | Two observations then a proposal across three turns in one provider session, each observation reaching the next turn, with no Workspace or caller path in provider setup |
+| WAL2 | Completed replay | The same document over its own journal restores identical output, journals nothing new, and never enters the provider |
+| WAL3 | Partial replay | An interrupted run resumes, asks only for the turn it never finished, repeats no committed observation or read, and reattaches the same session |
+| WAL4 | Exhaustion | Reaching the authored bound fails at the document's own final gate, with every completed turn and admission retained |
+| WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
+| WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
+| WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
 
 ### Tier WFX — A killed run resumes from its frontier
 
