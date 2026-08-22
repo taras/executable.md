@@ -31,11 +31,17 @@
  * The record carries its own version, the identity it was created under and the
  * fingerprint of the session policy in force when the provider created it. A
  * later attachment reattaches only when all three still agree and the provider
- * still holds the native session the record names. Anything else — an absent or
- * unreadable record, a changed provider, agent or policy, a native identity the
- * adapter cannot resume — is one explicit incompatibility. None of them starts a
+ * still holds the native session the record names. Anything else — an unreadable
+ * record, a changed provider, agent or policy, a native identity the adapter
+ * cannot resume — is one explicit incompatibility. None of them starts a
  * replacement session: a session created under a wider policy is exactly what
  * silently continuing would resume.
+ *
+ * A session may be created only when *both* sides say there is none. The logical
+ * key does not depend on this mapping, so losing it does not make the provider
+ * forget — and a provider still holding a session under that key would reuse its
+ * persistent record and ignore the creation options this host supplies. Absent
+ * here therefore means absent on both sides, and anything else is refused.
  */
 
 import { createHash } from "node:crypto";
@@ -306,6 +312,23 @@ export function* resolveProviderSession(
     return retained;
   }
   if (retained.value === undefined) {
+    // Absent is only "never established" when the provider agrees. The logical
+    // key is derived from the run, the provider and the agent alone, so it
+    // survives losing this mapping — and a provider still holding a session
+    // under it would have `ensureSession()` reuse that persistent record and
+    // ignore the creation options handed to it. This host would then be talking
+    // to a session whose ceiling it cannot name, which is the one outcome the
+    // policy fingerprint exists to make impossible.
+    const orphaned = yield* probe(key);
+    if (orphaned !== undefined) {
+      return Err(
+        new WorkflowAgentSessionError(
+          "the provider already holds an Agent session under this run's key, and this run " +
+            "retains nothing about it — so this host cannot tell what ceiling it was created " +
+            "under. Start a new run rather than continuing this one.",
+        ),
+      );
+    }
     return Ok({ kind: "create", record: intended });
   }
 
