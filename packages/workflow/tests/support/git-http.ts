@@ -95,6 +95,16 @@ export interface GitHttpOptions {
    * server having refused anything.
    */
   readonly redirect?: (request: ServedGitRequest) => string | undefined;
+  /**
+   * Called when a held authenticated connection closes.
+   *
+   * The only thing this end can say about a cancellation: the client that had
+   * authenticated and was waiting is gone. Nonsecret and argument-free — it
+   * reports that the transport ended, never what was on it — and it is what
+   * lets a suite place the transport's end in the same sequence as the
+   * authentication cleanup that must follow it.
+   */
+  readonly closed?: () => void;
 }
 
 /** Where Git keeps `git-http-backend`, asked of Git rather than guessed. */
@@ -299,7 +309,9 @@ export function useGitHttpRemote(options: GitHttpOptions): Operation<GitHttpRemo
       }
       if (options.hold?.(requests[requests.length - 1] as ServedGitRequest) === true) {
         // Accepted, and then nothing. The socket stays open, so the client is
-        // waiting on this end rather than on a refusal.
+        // waiting on this end rather than on a refusal — and when it goes, this
+        // is where that is observed.
+        incoming.socket.on("close", () => options.closed?.());
         incoming.resume();
         return;
       }

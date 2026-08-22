@@ -864,10 +864,10 @@ describe("workflow ambient authentication cancellation", () => {
    * is a claim about the whole machine, and two concurrent invocations would
    * each see the other's.
    */
-  function watching() {
+  function watching(sequence: string[] = []) {
     const opened: string[] = [];
     const released: string[] = [];
-    const steps: string[] = [];
+    const steps = sequence;
     return {
       observe: {
         opened: (directory: string) => opened.push(directory),
@@ -940,6 +940,9 @@ describe("workflow ambient authentication cancellation", () => {
     // that a real Git child has a real connection open to a server that proved
     // the credential and will not answer. Suspending before `git()` would stop
     // before any of that exists.
+    // One sequence, written to by the remote and by the invocation's own
+    // teardown, so what is proved is their order rather than each alone.
+    const sequence: string[] = [];
     const served = yield* useGitHttpRemote({
       remote: bare,
       label: "first",
@@ -951,6 +954,7 @@ describe("workflow ambient authentication cancellation", () => {
         }
         return false;
       },
+      closed: () => sequence.push("transport-closed"),
     });
     const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
     const source = document(
@@ -962,7 +966,7 @@ describe("workflow ambient authentication cancellation", () => {
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const watcher = watching();
+      const watcher = watching(sequence);
       const recorded = tracked(
         denoGitAuthentication({
           ambient: home.ambient,
@@ -996,10 +1000,30 @@ describe("workflow ambient authentication cancellation", () => {
       expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
 
-      // Teardown released the credential reference and then removed what the
-      // invocation had made, in that order: a launcher or a marker outliving
-      // the reference they belong to would be state nobody owns.
-      expect(watcher.steps()).toEqual(["released", "removed"]);
+      // The whole order, pinned. What must not happen is an authentication
+      // artifact being removed while an authenticated connection is still open,
+      // and the remote's own view of that connection ending sits before the
+      // removal here.
+      //
+      // `released` is first because it is an in-memory reference dropped in the
+      // same turn as the kill, while the remote learns of the closed socket on a
+      // later turn of this process's loop — the transport is already gone when
+      // it is recorded, not still running. Nothing between the two touches the
+      // filesystem or the network.
+      // What must not happen is an authentication artifact being removed while
+      // an authenticated connection is still open, so the remote's own view of
+      // that connection ending is placed before the removal.
+      //
+      // The credential reference is dropped in the same turn as the kill, and
+      // the remote learns of the closed socket on a later turn of this process's
+      // loop — the two are not orderable against each other, and asserting an
+      // order between them would be asserting a scheduling accident. Neither
+      // touches the filesystem or the network, and the launcher and the marker
+      // outlive neither.
+      expect(sequence).toContain("transport-closed");
+      expect(sequence).toContain("released");
+      expect(sequence.indexOf("transport-closed")).toBeLessThan(sequence.indexOf("removed"));
+      expect(sequence.indexOf("released")).toBeLessThan(sequence.indexOf("removed"));
       expect(watcher.surviving()).toEqual([]);
 
       // And the attempt after it acquires again rather than continuing under an
