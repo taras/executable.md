@@ -102,6 +102,12 @@
     // the same file out of the Node and Bun execution suites.
     "packages/workflow/tests/workspace-effect-loaded-copy.test.ts",
     "packages/web/client/main.tsx",
-    "packages/web/client/request.ts"
+    "packages/web/client/request.ts",
+    // The Deno agent-session coordinator's proof and the child it spawns reach
+    // for `Deno` directly — the advisory lock and the killed owner are Deno's.
+    // The runtime exclusions keep the same test out of the Node and Bun
+    // execution suites.
+    "packages/runtime/tests/agent-session-coordinator.test.ts",
+    "packages/runtime/tests/fixtures/agent-session-owner.ts"
   ]
 }
