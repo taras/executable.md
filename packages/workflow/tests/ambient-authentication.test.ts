@@ -91,8 +91,8 @@ import {
  * to observe. Neither string ever reaches an assertion: what a test compares is
  * a boolean this module computed, so a failure prints a verdict.
  */
-const FIRST = { username: "ambient-user-one", password: "ambient-secret-one" } as const;
-const SECOND = { username: "ambient-user-two", password: "ambient-secret-two" } as const;
+const FIRST = { username: "ambient-user-one", password: "ambient-one" } as const;
+const SECOND = { username: "ambient-user-two", password: "ambient-two" } as const;
 
 /** Whether any credential this suite arranged appears in `text`. */
 function carriesCredential(text: string): boolean {

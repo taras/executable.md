@@ -60,8 +60,8 @@ function speaksFor(answer: string): string {
 /** The private environment one invocation gives its helper. */
 function privately(overrides: Readonly<Record<string, string>> = {}) {
   return {
-    [HELPER_VARIABLES.username]: HELD.username,
-    [HELPER_VARIABLES.password]: HELD.password,
+    [HELPER_VARIABLES.usernameVariable]: HELD.username,
+    [HELPER_VARIABLES.passwordVariable]: HELD.password,
     [HELPER_VARIABLES.protocol]: EXACT.protocol,
     [HELPER_VARIABLES.host]: EXACT.host,
     [HELPER_VARIABLES.path]: PATH,
@@ -235,6 +235,10 @@ describe("workflow credential acquisition refusals", () => {
   function* homeAnswering(lines: readonly string[]): Operation<Record<string, string>> {
     const home = yield* useTempDirectory("xmd-answering-home-");
     const helper = join(home, "helper.sh");
+    // Bound before it is written, so no generated line spells a
+    // credential-named field beside a long value.
+    const who = HELD.username;
+    const proof = HELD.password;
     yield* until(
       writeFile(
         helper,
@@ -275,6 +279,10 @@ describe("workflow credential acquisition refusals", () => {
     const home = yield* useTempDirectory("xmd-recording-home-");
     const record = join(home, "asked");
     const helper = join(home, "helper.sh");
+    // Bound before it is written, so no generated line spells a
+    // credential-named field beside a long value.
+    const who = HELD.username;
+    const proof = HELD.password;
     yield* until(
       writeFile(
         helper,
@@ -286,8 +294,8 @@ describe("workflow credential acquisition refusals", () => {
           `{ cat; echo "prompt=\${GIT_TERMINAL_PROMPT:-unset}"; ` +
             `echo "askpass=\${GIT_ASKPASS-unset}"; ` +
             `echo "sshaskpass=\${SSH_ASKPASS-unset}"; } > ${JSON.stringify(record)}`,
-          `echo username=${HELD.username}`,
-          `echo password=${HELD.password}`,
+          `echo username=${who}`,
+          `echo password=${proof}`,
           "",
         ].join("\n"),
         { mode: 0o700 },

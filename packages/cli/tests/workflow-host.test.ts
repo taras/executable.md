@@ -357,8 +357,8 @@ describe("Tier WFH — the credential helper is host assembly", () => {
         env: {
           ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
           ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
-          [HELPER_VARIABLES.username]: credential.username,
-          [HELPER_VARIABLES.password]: credential.password,
+          [HELPER_VARIABLES.usernameVariable]: credential.username,
+          [HELPER_VARIABLES.passwordVariable]: credential.password,
           [HELPER_VARIABLES.protocol]: "https",
           [HELPER_VARIABLES.host]: "assembly.invalid",
           [HELPER_VARIABLES.path]: "octo/one.git",

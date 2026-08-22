@@ -490,8 +490,8 @@ export function denoCredentialBroker(
               ? NOTHING
               : Object.freeze({
                   environment: Object.freeze({
-                    [HELPER_VARIABLES.username]: held.username,
-                    [HELPER_VARIABLES.password]: held.password,
+                    [HELPER_VARIABLES.usernameVariable]: held.username,
+                    [HELPER_VARIABLES.passwordVariable]: held.password,
                     [HELPER_VARIABLES.protocol]: request.protocol,
                     [HELPER_VARIABLES.host]: request.host,
                     [HELPER_VARIABLES.path]: request.path ?? "",
