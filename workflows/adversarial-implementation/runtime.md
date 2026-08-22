@@ -144,6 +144,15 @@ a completed run replays it in full. Reading a run back is shipped too —
 snapshots, taking no executor lease, advancing nothing, attaching no Workspace,
 and appending nothing (#367's first slice, delivered by #460).
 
+A run whose host was lost is readable too (#521, shipped). Ordinary inspection
+reads the retained snapshot; only SQLite's exact `SQLITE_READONLY_ROLLBACK` —
+the hot journal a lost host left, which a read-only connection may not put back
+— falls through to recovery, which copies the database and its journal under
+coordination and rolls the journal back into the copy. The crashed source stays
+byte-identical, still waiting for the write-capable owner whose job recovery is.
+That coordination confers no executor or lifecycle authority and opens no
+Workspace or provider effects, and `list` stays complete-or-error.
+
 Lifecycle authority is here too. The executor lock owns the transitions, so
 single-executor ownership, atomic begin and settle, `cancel` and `delete` are
 shipped (#367's second slice, delivered by #466). Cancellation never reaches

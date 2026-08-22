@@ -35,7 +35,7 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
 
 ## Target shape
 
-<Capture as="assessmentSchema" select="code[lang=json]">
+<Let as="assessmentSchema" select="code[lang=json]">
 
 ```json
 {
@@ -62,9 +62,9 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
 }
 ```
 
-</Capture>
+</Let>
 
-<Capture as="decisionSchema" select="code[lang=json]">
+<Let as="decisionSchema" select="code[lang=json]">
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -81,7 +81,7 @@ value — `assessment`, `recommendation`, `question`, `options`, `response`, and
   "additionalProperties": false
 }
 ```
-</Capture>
+</Let>
 
 <Agent name={props.agent}>
   <Session name="user-checkpoint">

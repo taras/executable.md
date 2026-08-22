@@ -158,7 +158,7 @@ these names and a repository file never stands in for it:
    matchers; it reads them as elements before they expand, which is why a
    registered component could not implement it.
 3. `<Return>` selects a value component's return value.
-4. `<Content>`, `<Output>`, `<Capture>`, `<Each>`, and `<PrintErrors>` complete
+4. `<Content>`, `<Output>`, `<Let>`, `<Each>`, and `<PrintErrors>` complete
    the set. `<PrintErrors>` accepts no props: it names a region, sets `print`
    for it, and turns a failure that reaches it into one printed error whose
    `cause` is the complete original failure. `throw` is the one mode it does not
@@ -244,7 +244,7 @@ executable-block content, in eval blocks, and in expression props alike:
 `agent={props.planner}` and `{props.instructions}` are both correct, and
 declaring `planner` creates no bare `{planner}` binding
 ([#305](https://github.com/taras/executable.md/issues/305), shipped). Authored
-bindings — from `as`, `<Capture>`, `<Each>`, `<Loop>`, `<Return>` — stay bare,
+bindings — from `as`, `<Let>`, `<Each>`, `<Loop>`, `<Return>` — stay bare,
 which is why `<Dir path={worktree}>` reads the path a self-closing `<Worktree>`
 bound.
 
@@ -260,28 +260,26 @@ The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
 `UserCheckpoint` therefore uses shipped syntax throughout. None of them asks for
 a directory: a workflow Agent is given none, so each stage reasons over what its
 prompt renders. `Implementation` is the exception, and not for that reason: its loop body
-invokes `<Expand>` and `<Issue>`, which resolve to nothing. The `<Git.Add>`,
-`<Git.Commit>`, `<Git.Push>` and `<PullRequest>` beside them do resolve — under
-a workflow run, where the host registers them.
+invokes `<Expand>`, which resolves to nothing. The `<Git.Add>`, `<Git.Commit>`,
+`<Git.Push>`, `<PullRequest>`, `<IssueTracker>` and `<Issue>` beside it do
+resolve — under a workflow run, where the host registers them.
 
-Two names in this workflow resolve to nothing today, and each is owed by one
-issue:
+One name in this workflow resolves to nothing today, and one issue owes it:
 
 | Name | Owed by |
 | --- | --- |
 | `<Expand>` | #369 |
-| `<Issue>` | #296 |
 
-`<Git.Push>` and `<PullRequest>` left that list when #495 and #504 shipped them
-as registered workflow-host components; `<Git.Switch>`, `<Git.Add>` and
-staged-only `<Git.Commit>` left it when #294 shipped them as Workspace-local
-durable effects. All four remote and local Git effects sit over the shared
-Git-host reconciliation #297 shipped. `<Agent.AddDir>` is absent for a different
-reason: #302 settles that a workflow Agent gets no checkout, no materialization,
-no cwd of its own and no registered directory, so it is not an implementation
-target this workflow is waiting on. What still resolves to nothing is the forge
-component that files a deferred finding, plus the public component that expands
-generated XMD.
+`<IssueTracker>` and `<Issue>` left that list when #516 shipped them for #296;
+`<Git.Push>` and `<PullRequest>` left it when #495, #500 and #504 shipped them;
+`<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left it when #294
+shipped them as Workspace-local durable effects. The Git effects sit over the
+shared Git-host reconciliation #297 shipped, and the issue effects sit over
+`IssueApi`, which is its own boundary rather than a Git one. `<Agent.AddDir>` is
+absent for a different reason: #302 settles that a workflow Agent gets no
+checkout, no materialization, no cwd of its own and no registered directory, so
+it is not an implementation target this workflow is waiting on. What still
+resolves to nothing is the public component that expands generated XMD.
 
 `<Repository>`, `<Worktree>` and `<Dir>` have left that list:
 `@executablemd/workflow/composition` registers all three (#293, shipped), which
@@ -307,7 +305,7 @@ cwd for XMD's own file effects, and a workflow Agent has no directory of any kin
 (#302).
 
 Everything else the workflow writes resolves: `<If>`, `<Else>`, `<Loop>`,
-`<Break>`, `<Each>`, `<Capture>`, `<Output>` and `<Return>` as structural syntax;
+`<Break>`, `<Each>`, `<Let>`, `<Output>` and `<Return>` as structural syntax;
 `<Elicit>`, `<File>`, `<Glob>`, `<Parse>` and `<SafeParse>` as core defaults;
 `<Agent>`, `<Session>` and `<Prompt>` as registered agent components; and
 `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning` and
@@ -370,7 +368,27 @@ and continuing it unattended. Reachable stage names are not a running workflow.
 | shared Git-host effect reconciliation | #297 | shipped — one request-only surface; the components over it are not |
 | explicit `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
 | `<PullRequest>` over an explicitly pushed head | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
-| provenance-linked deferred `<Issue>` | #296 | open |
+| provenance-linked deferred `<Issue>`, in an `<IssueTracker>` | #296, delivered by #516 | shipped — registered by the workflow host; `IssueApi`, not a Git effect |
+| ambient host authentication for private Git and supported forge effects | #532 | shipped — live host input, never a document prop or retained value |
+
+**Authentication is the host's, acquired live** (#532, shipped). A run's
+retained state says which repository an effect belongs to; it must not say who
+this run is, because identity is a property of the machine the run is standing
+on and a run resumed a week later elsewhere authenticates as whoever is there
+then. HTTP Git asks the invoking user's ordinary credential-helper chain about
+the exact locator. SSH uses the selected ambient agent and the invoking user's
+known-host policy, where an unknown host is a refusal. GitHub API calls read
+`GH_TOKEN`, then `GITHUB_TOKEN`, then `gh auth token --hostname github.com`.
+
+A session is opened for one provider invocation and disposed with it. There is
+no credential prop, no workflow secret schema, and nothing copied: a credential
+is not an argument, a URL, a configuration file, the ambient environment, a
+context, Workspace material, a retained value, a journal field, rendered output,
+or a diagnostic cause. Replay acquires nothing at all — a completed effect
+restores its retained result without reaching authentication — and an
+interrupted one reacquires current host authentication and reconciles through
+its provider contract. Agents receive neither credentials nor direct network
+authority; this is a boundary the host holds, and no document can widen it.
 
 Names are stable component identity, not magic configuration lookup: a
 Repository's locator and base are ordinary root props or expressions. The first
