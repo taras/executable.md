@@ -230,6 +230,7 @@ describe("workflow Git.Push across a process boundary", () => {
       const ready = withResolvers<Record<string, unknown>>();
       const decoder = new TextDecoder();
       let out = "";
+      let err = "";
       yield* spawn(function* () {
         const subscription = yield* child.stdout;
         let next = yield* subscription.next();
@@ -242,11 +243,46 @@ describe("workflow Git.Push across a process boundary", () => {
           next = yield* subscription.next();
         }
       });
-      const announcement = yield* ready.operation;
-      return { announcement };
+      // Drained, so a child that died on its way to the handshake says why
+      // rather than leaving this waiting on a line that is never coming.
+      yield* spawn(function* () {
+        const subscription = yield* child.stderr;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          err += decoder.decode(next.value, { stream: true });
+          next = yield* subscription.next();
+        }
+      });
+
+      const announcement = yield* race([
+        ready.operation,
+        call(function* (): Operation<Record<string, unknown>> {
+          const status = yield* child.join();
+          throw new Error(
+            `the protected push crash child ended before its handshake ` +
+              `(${JSON.stringify(status)}): ${err}`,
+          );
+        }),
+      ]);
+
+      // Read from outside the child, while it is still standing in its own
+      // uncommitted transaction.
+      const outside = committedTypes(path);
+      process.kill(child.pid, "SIGKILL");
+      const status = yield* child.join();
+      return { announcement, outside, status };
     });
 
+    // Killed, not asked. A signal performs no cleanup, no commit and no
+    // rollback, which is the only way to produce the state under test.
+    expect(during.status.signal).toBe("SIGKILL");
+    expect(during.status.code ?? null).toBeNull();
     expect(during.announcement["pushed"]).toBe(true);
+
+    // The two ends disagree, and they disagreed before the signal as well as
+    // after it: the remote holds the branch and the run's own history has no
+    // result for the push that put it there.
+    expect(during.outside).not.toContain(GIT_HOST_EFFECT);
 
     // The crash process acquired twice: once for the Repository it created, and
     // once for the Push it performed. Its chain was asked nothing else.
