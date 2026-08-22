@@ -17,6 +17,9 @@ import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cliRuntime, runCli } from "@executablemd/test-support/launch";
@@ -321,6 +324,50 @@ describe("Tier WFH — the credential helper is host assembly", () => {
       expect(written).not.toContain("username");
       expect(written).not.toContain("rejected");
     }
+  });
+
+  /**
+   * The entrypoint itself, asked to be a helper.
+   *
+   * Calling the predicate proves what it returns; it does not prove that
+   * anything consults it. This starts the real Deno-source entrypoint — the one
+   * with a public parser in it — hands it a credential request the way Git does,
+   * and reads back what a helper answers rather than what a command line parser
+   * says about an argument it did not recognize.
+   */
+  it("answers as a helper when the real source entrypoint is asked to be one", function* () {
+    const entrypoint = fileURLToPath(new URL("../src/deno.ts", import.meta.url));
+    const credential = { username: "assembly-user", password: "assembly-secret" };
+    const outcome = spawnSync(
+      Deno.execPath(),
+      ["run", "--allow-all", entrypoint, HELPER_MODE, "get"],
+      {
+        input: "protocol=https\nhost=assembly.invalid\npath=octo/one.git\n\n",
+        env: {
+          ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+          ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
+          [HELPER_VARIABLES.username]: credential.username,
+          [HELPER_VARIABLES.password]: credential.password,
+          [HELPER_VARIABLES.protocol]: "https",
+          [HELPER_VARIABLES.host]: "assembly.invalid",
+          [HELPER_VARIABLES.path]: "octo/one.git",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    // Reduced to a label before anything is asserted, so a failure prints a
+    // verdict rather than a credential.
+    const answered = typeof outcome.stdout === "string" ? outcome.stdout : "";
+    expect(answered.includes(credential.password) ? "answered" : "silent").toBe("answered");
+    expect(outcome.status).toBe(0);
+
+    // And nothing about a command line. A parser that had seen this first would
+    // be refusing an argument it does not know rather than answering Git.
+    const said = typeof outcome.stderr === "string" ? outcome.stderr : "";
+    expect(said).not.toContain("usage:");
+    expect(said).not.toContain("unknown");
+    expect(answered).not.toContain("usage:");
   });
 
   it("is an internal mode, dispatched before public parsing and absent from help", function* () {
