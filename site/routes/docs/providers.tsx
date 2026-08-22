@@ -77,7 +77,7 @@ export default define.page(function Providers() {
         (so <code>--component-dir</code> isn't required) is on the roadmap.
       </p>
 
-      <NextCard href="/docs/reference" label="Reference" />
+      <NextCard href="/docs/agents" label="Coding agents" />
     </>
   );
 });

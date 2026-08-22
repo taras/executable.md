@@ -946,7 +946,7 @@ export default define.page(function Components() {
         </li>
       </ul>
 
-      <NextCard href="/docs/exec-eval" label="Exec & Eval" />
+      <NextCard href="/docs/control-flow" label="Control flow" />
     </>
   );
 });

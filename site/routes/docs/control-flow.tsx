@@ -1,5 +1,6 @@
 import { define } from "../../utils.ts";
 import { CodeBlock } from "../../components/Code.tsx";
+import { NextCard } from "../../components/NextCard.tsx";
 
 const SIMPLE = `<If condition={hasFailures}>
 ## Test failures
@@ -345,6 +346,8 @@ export default define.page(function ControlFlow() {
         replays what completed and executes the rest live. Which one happened is
         runtime knowledge, not journal state.
       </p>
+
+      <NextCard href="/docs/exec-eval" label="Exec & Eval" />
     </>
   );
 });
