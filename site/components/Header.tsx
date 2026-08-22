@@ -9,7 +9,9 @@ const LINK_ACTIVE =
   "font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--green);border-bottom:var(--rule) solid var(--green);padding-bottom:1px;";
 
 /** `active` marks the top-level section the current page belongs to. */
-export function Header({ active }: { active?: "docs" } = {}) {
+export function Header(
+  { active }: { active?: "docs" | "workflows" } = {},
+) {
   return (
     <header style="position:sticky;top:0;z-index:50;background:var(--paper);border-bottom:var(--rule) solid var(--line);">
       <div
@@ -20,6 +22,12 @@ export function Header({ active }: { active?: "docs" } = {}) {
           <Wordmark size="1rem" fold />
         </a>
         <nav style="display:flex;align-items:center;gap:1.125rem;font-size:0.8125rem;">
+          <a
+            href="/designing-workflows"
+            style={active === "workflows" ? LINK_ACTIVE : LINK}
+          >
+            Designing workflows
+          </a>
           <a href="/docs" style={active === "docs" ? LINK_ACTIVE : LINK}>
             Docs
           </a>
