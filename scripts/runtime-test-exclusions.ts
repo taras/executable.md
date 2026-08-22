@@ -379,6 +379,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/456",
   },
   {
+    path: "packages/runtime/tests/agent-session-coordinator.test.ts",
+    reason:
+      "the subject is the Deno agent-session coordinator: a non-blocking advisory lock through Deno.FsFile.tryLock, raced against real Deno child processes that are killed mid-ownership to leave a tombstone. Both the lock primitive and the children are Deno's; the provider-neutral half of the same contract — owner kinds, contention, quiescence and the record shape — runs on every runtime through packages/acp/tests/native-launch.test.ts and packages/cli/tests/agent-session-coordinator.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/517",
+  },
+  {
     path: "packages/cli/tests/workflow-installation.test.ts",
     reason:
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",

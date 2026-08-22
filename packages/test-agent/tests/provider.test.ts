@@ -10,6 +10,7 @@ import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
 import type { SessionRouteContext } from "@executablemd/acp";
 import { useTestAgentProvider } from "../src/provider.ts";
+import { createDeterministicSessionCoordinator } from "../src/session-coordinator.ts";
 import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
 
@@ -34,7 +35,13 @@ describe("Tier TS — test-agent ACPX state", () => {
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      resolveRoute: (_context: SessionRouteContext) => INST,
+      // deno-lint-ignore require-yield
+      *routeFor(_context: SessionRouteContext) {
+        return { route: INST, resolved: () => {} };
+      },
+      // The test agent advertises native launch, so every session and prompt
+      // it serves takes ownership first. This partition owns its own.
+      coordinator: createDeterministicSessionCoordinator(),
       dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(
@@ -75,10 +82,12 @@ describe("Tier TS — test-agent ACPX state", () => {
       agents: ["test"],
       workerCommand: ["xmd", "test-agent"],
       probeRoute: PROBE,
-      resolveRoute: (context: SessionRouteContext) => {
+      // deno-lint-ignore require-yield
+      *routeFor(context: SessionRouteContext) {
         routes.push(String(context.session ?? "default"));
-        return INST;
+        return { route: INST, resolved: () => {} };
       },
+      coordinator: createDeterministicSessionCoordinator(),
       dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(

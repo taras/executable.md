@@ -69,6 +69,7 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import type {
+  AgentProviderFactory,
   DocumentTargetInfo,
   FileRootDocument,
   PropsSchema,
@@ -76,6 +77,7 @@ import type {
 } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
+import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
   installTestingComponents,
   TestFailureError,
@@ -86,6 +88,7 @@ import { installTestAgentComponents, runTestAgentWorker } from "@executablemd/te
 import { installWebComponents, installWebElicitation } from "@executablemd/web";
 import { timebox } from "@effectionx/timebox";
 import { timeout as runTimeout } from "@executablemd/runtime";
+import { installForegroundLauncher } from "@executablemd/runtime";
 import { resolveAgentConfig } from "./agent-config.ts";
 import { TIMEOUT_FLAGS, resolveRunTimeouts } from "./timeouts.ts";
 import type { RunTimeouts } from "./timeouts.ts";
@@ -455,7 +458,10 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
  * — before any document executes. Nothing starts an agent: the provider
  * validates availability on first use.
  */
-function* installAgentStack(flags: AgentFlags): Operation<void> {
+function* installAgentStack(
+  flags: AgentFlags,
+  coordinator: AgentSessionCoordinator | undefined,
+): Operation<void> {
   const config = resolveAgentConfig(flags);
   if ("error" in config) {
     console.error(config.error);
@@ -463,15 +469,23 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
     return;
   }
 
-  yield* registerAgentProvider("acpx", createAcpxProvider());
+  // The coordinator this host built, if it built one. It reaches the provider
+  // directly rather than through a context: who owns a session is a security
+  // decision, and one a document could replace is not one.
+  const acpx = createAcpxProvider(coordinator === undefined ? undefined : { coordinator });
+  yield* registerAgentProvider("acpx", acpx);
   const defaultAgent =
     config.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
 
-  let factory;
-  try {
-    factory = yield* AgentProviders.operations.resolve(flags.agentProvider);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+  // The trusted host selects its own root provider by name. Document-level
+  // selection goes through the installation protocol; this is the host saying
+  // what it configured, which no document is composing around.
+  const providers: Record<string, AgentProviderFactory> = { acpx };
+  const factory = Object.hasOwn(providers, flags.agentProvider)
+    ? providers[flags.agentProvider]
+    : undefined;
+  if (!factory) {
+    console.error(`Unknown agent provider "${flags.agentProvider}"`);
     yield* exit(1);
     return;
   }
@@ -483,6 +497,10 @@ function* installAgentStack(flags: AgentFlags): Operation<void> {
     rootProvider: { factory, options: { defaultAgent, permissionMode } },
   });
   yield* installPermissionMode(permissionMode);
+  // `xmd run` is the one command that has a terminal to give away. Help,
+  // document inspection and `xmd test` install no launcher, so a document that
+  // reaches <Session.Launch> under any of them refuses instead of spawning.
+  yield* installForegroundLauncher();
 }
 
 /**
@@ -535,6 +553,15 @@ interface DocumentConfig {
 export interface DocumentMode {
   testing: boolean;
   agent?: AgentFlags;
+  /**
+   * Who owns an agent session on this host, when this host can say.
+   *
+   * Carried on the mode because the mode is what a trusted host states about
+   * one run — and delivered from here straight into the provider's
+   * dependencies. It is deliberately not contextual: ownership is a security
+   * decision, and one a document could replace is not one.
+   */
+  sessionCoordinator?: AgentSessionCoordinator;
   props?: Record<string, Json>;
   /**
    * What a trusted host attaches to this one execution.
@@ -591,7 +618,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
   // through the deterministic TestAgent stack instead.
   if (mode.agent) {
-    yield* installAgentStack(mode.agent);
+    yield* installAgentStack(mode.agent, mode.sessionCoordinator);
   }
 }
 
@@ -1567,6 +1594,7 @@ function* dispatch(
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
   workflowHost: WorkflowHost | undefined,
+  coordinator: AgentSessionCoordinator | undefined,
 ): Operation<void> {
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
@@ -1638,6 +1666,7 @@ function* dispatch(
         {
           testing: false,
           props: props.value,
+          ...(coordinator === undefined ? {} : { sessionCoordinator: coordinator }),
           agent: {
             agentProvider: config.agentProvider,
             defaultAgent: config.defaultAgent,
@@ -1791,6 +1820,10 @@ export function* runXmd(
   // failure mode the whole boundary exists to prevent — so the default is the
   // one that creates and executes nothing.
   installWorkflowHost: HostWorkflowInstaller = unsupportedWorkflowHost,
+  // Absent on a host that cannot own an agent session. Node and Bun pass none,
+  // and every advertised provider-returned operation refuses there rather than
+  // acting without knowing who owns the session.
+  coordinator?: AgentSessionCoordinator,
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -1830,7 +1863,7 @@ export function* runXmd(
     !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
 
   if (!isRun) {
-    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost);
+    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator);
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -1841,6 +1874,6 @@ export function* runXmd(
   }
 
   yield* underRunDeadline(timeouts, () =>
-    dispatch(evalFlags, helpRequest, installService, workflowHost),
+    dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator),
   );
 }

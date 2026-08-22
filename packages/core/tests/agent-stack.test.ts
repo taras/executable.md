@@ -19,7 +19,8 @@ import { execute } from "../src/execute.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { PermissionOutcome, PermissionRequest } from "../src/agent/agent-api.ts";
-import { AgentProviders, registerAgentProvider } from "../src/agent/provider-api.ts";
+import { registerAgentProvider } from "../src/agent/provider-api.ts";
+import { useLaunchInstallation, useProviderInstallation } from "../src/agent/launch-install.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "../src/agent/provider-api.ts";
 import {
   installApproveAll,
@@ -126,36 +127,52 @@ function* installAskComponent(outcomes: string[]): Operation<void> {
   ]);
 }
 
+const PROVIDER_OPTIONS: AgentProviderOptions = {
+  defaultAgent: "rec",
+  permissionMode: "deny-all",
+};
+
 describe("Tier AG — provider registry and permission policies", () => {
-  it("AG1: a registered name resolves to its factory; an unknown name throws", function* () {
+  it("AG1: a registered name installs and receives the options; an unknown name refuses", function* () {
     const seen: AgentProviderOptions[] = [];
     yield* registerAgentProvider("stub", recordingFactory(seen));
-    expect(typeof (yield* AgentProviders.operations.resolve("stub"))).toBe("function");
+    yield* useLaunchInstallation();
+
+    // Installing is the only way to reach a registered provider: nothing hands
+    // a factory back up the public chain for a handler to answer with.
+    yield* useProviderInstallation("stub", PROVIDER_OPTIONS);
+    expect(seen).toEqual([PROVIDER_OPTIONS]);
 
     let message = "";
     try {
-      yield* AgentProviders.operations.resolve("bogus");
+      yield* useProviderInstallation("bogus", PROVIDER_OPTIONS);
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain('Unknown agent provider "bogus"');
+    expect(seen).toEqual([PROVIDER_OPTIONS]);
   });
 
-  it("AG2: a nested registration shadows the same name only; siblings resolve outward", function* () {
+  it("AG2: a nested registration shadows the same name only; siblings install outward", function* () {
     const outer: AgentProviderOptions[] = [];
     const inner: AgentProviderOptions[] = [];
-    const outerFactory = recordingFactory(outer);
-    yield* registerAgentProvider("shared", outerFactory);
-    yield* registerAgentProvider("outer-only", outerFactory);
+    yield* registerAgentProvider("shared", recordingFactory(outer));
+    yield* registerAgentProvider("outer-only", recordingFactory(outer));
+    yield* useLaunchInstallation();
 
     yield* scoped(function* () {
-      const innerFactory = recordingFactory(inner);
-      yield* registerAgentProvider("shared", innerFactory);
-      expect(yield* AgentProviders.operations.resolve("shared")).toBe(innerFactory);
-      expect(yield* AgentProviders.operations.resolve("outer-only")).toBe(outerFactory);
+      yield* registerAgentProvider("shared", recordingFactory(inner));
+      yield* useProviderInstallation("shared", PROVIDER_OPTIONS);
+      yield* useProviderInstallation("outer-only", PROVIDER_OPTIONS);
     });
+    // The inner registration answered its own name; the sibling went outward.
+    expect(inner).toHaveLength(1);
+    expect(outer).toHaveLength(1);
 
-    expect(yield* AgentProviders.operations.resolve("shared")).toBe(outerFactory);
+    // And the shadow ends with the scope that made it.
+    yield* useProviderInstallation("shared", PROVIDER_OPTIONS);
+    expect(outer).toHaveLength(2);
+    expect(inner).toHaveLength(1);
   });
 
   it("AG3: deny-all denies through the base; approve-all selects an allow option", function* () {

@@ -8783,6 +8783,8 @@ Each row names the derivation it kills.
 | AF9-AF12 | Fatality survives nesting | A `throwOnError` prompt ends the document inside `<Agent>`, inside `<Agent><Session>`, and inside a repository component projecting it as content; the error stays the original `AgentPromptError` |
 | AF13-AF15 | Registered defaults | Each name resolves to core's registration, a repository component overrides it, and a repository `Prompt` contacts no provider |
 | AF16-AF20 | Prompt-failure policy | Absent by default; forces `throwOnError` when it says yes; an explicit `throwOnError` wins without consulting it; a repository `Prompt` never consults it |
+| AF21 | `<Session.Launch>` is a caller, not a second implementation | It renders its body and calls `Agent.launch()` with what it rendered; the phase sequencing, retention and result belong to that one canonical operation, and the component holds none of them |
+| AF22 | A refused launch is an observation | The failure is raised as an error segment whose cause carries `phase` and `failureClass`, so `<AssertThrows as="…">` binds a value an author can assert which refusal it was on, rather than the wording of a message |
 
 ### Tier CR — Component registration and resolution
 

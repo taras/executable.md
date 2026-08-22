@@ -18,6 +18,17 @@ export type TurnResult = { cancelled: true } | { cancelled: false; text: string 
 export interface WorkerAgent {
   /** Resolves once the behavior document reached its first matcher. */
   ready(): Operation<void>;
+  /**
+   * Materialize the provider-native session, under the instruction layer the
+   * client attached, and assert the identity that names it.
+   *
+   * The returned id is deliberately not the ACP session id. A native id is
+   * something an agent asserts about its own durable state; a client that
+   * guessed one from the ACP id would be inferring an identity nobody claimed,
+   * and a test agent that returned the same string for both would make that
+   * mistake untestable.
+   */
+  startSession(instructions: string | undefined): Operation<string>;
   runTurn(text: string): Operation<TurnResult>;
   cancel(): void;
 }
@@ -26,6 +37,28 @@ export interface WorkerAgent {
 export interface AcpByteStreams {
   input: ReadableStream<Uint8Array>;
   output: WritableStream<Uint8Array>;
+}
+
+/**
+ * The instruction layer a client attached to session creation.
+ *
+ * ACPX writes it to `_meta.systemPrompt`, as the whole text or as an
+ * `{ append }` fragment. Anything else is not an instruction layer this agent
+ * recognizes, and is read as none rather than coerced.
+ */
+function systemPromptOf(meta: { [key: string]: unknown } | null | undefined): string | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  const value = meta.systemPrompt;
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const append = (value as { append?: unknown }).append;
+    return typeof append === "string" ? append : undefined;
+  }
+  return undefined;
 }
 
 function extractText(prompt: ContentBlock[]): string {
@@ -80,20 +113,26 @@ function useAcpConnection(
       .agent({ name: "xmd-test-agent" })
       .onRequest("initialize", () => ({
         protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: { loadSession: true },
+        // `close` is what a native session launch needs: releasing a session
+        // an XMD instruction layer is about to be installed on, and releasing
+        // ACP ownership before a native UI takes over.
+        agentCapabilities: { loadSession: true, sessionCapabilities: { close: {} } },
       }))
-      .onRequest("session/new", () =>
+      .onRequest("session/new", (ctx) =>
         handle(function* () {
           yield* worker.ready();
-          return { sessionId: randomUUID() };
+          const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
+          return { sessionId: randomUUID(), _meta: { agentSessionId: nativeSessionId } };
         }),
       )
-      .onRequest("session/load", () =>
+      .onRequest("session/load", (ctx) =>
         handle(function* () {
           yield* worker.ready();
-          return {};
+          const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
+          return { _meta: { agentSessionId: nativeSessionId } };
         }),
       )
+      .onRequest("session/close", () => ({}))
       .onRequest("session/prompt", (ctx) =>
         handle(function* (): Operation<PromptResponse> {
           const result = yield* worker.runTurn(extractText(ctx.params.prompt));

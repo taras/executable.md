@@ -182,10 +182,40 @@ Within one test, `(agent, logical session, cwd)` identifies one resumable
 scenario. Repeated prompts to that session advance the same document. Different
 sessions and working directories have independent state.
 
-Each `<Test>` receives a fresh provider, scenarios, and journals even when it
-uses the same scenario declaration and keys as another test. When
-`<TestAgent>` is used without an enclosing `<Test>`, its own scope is the
-isolation boundary.
+Each `<Test>` receives a fresh provider partition — its own ACPX runtime,
+session store, managed sessions, serial queues, availability cache, route slot,
+session coordinator, scenarios and teardown — even when it uses the same
+scenario declaration and keys as another test. When `<TestAgent>` is used
+without an enclosing `<Test>`, its own scope is the isolation boundary.
+
+One ACP provider is *installed*, and it is installed once: `<TestAgent>`
+registers a partition-selecting factory and installs it in its own invocation,
+before projecting its content. Installation and state are different things, and
+only one of them carries authority. Installing in the invocation is what makes
+the provider reachable from the content at all, and it is what makes that one
+factory closure the only holder of the document's launch authority. Selecting
+per test is what keeps one test's sessions, queues and records out of the next.
+
+The selector is a construction dependency of that factory, asked afresh for
+every dispatch, and it answers with a partition handle and nothing else — work,
+never permission. Prompt selection happens inside the stream's subscription, so
+constructing a prompt stream still selects and starts nothing. A handle this
+module did not create, or one whose owner has been torn down, reaches no state:
+it refuses before any ACP work rather than falling back to another partition.
+
+Two sibling tests naming the same agent, session and directory therefore do not
+contend. They are not two owners of one session; they are two sessions, each
+owned by a coordinator of its own.
+
+`<TestAgent>` also installs a controlled native launcher for its body. The test
+agent's native UI is fictional in the way its agent is — the worker asserts a
+native identity and nothing here has a UI to resume it in — so a
+`<Session.Launch>` under `<TestAgent>` is recorded and answered rather than
+started, and never reaches the host's terminal. That is what lets an authored
+launch run under `xmd test`, where the host installs no launcher at all. A
+harness supplies what that launcher records and how each launch ends through the
+`NativeLaunchObserver` context; left unset, launches succeed and are recorded
+nowhere.
 
 A scenario may remain suspended at a prompt matcher when its scope ends.
 Structured teardown halts and awaits it; it does not require the document to
@@ -196,7 +226,7 @@ reach EOF and does not report unconsumed stages.
 The controller owns:
 
 - scenario registration and resolution;
-- per-test ACPX configuration and provider;
+- per-partition ACPX configuration and provider state;
 - the scenarios and their journals;
 - a virtual filesystem containing each behavior document and its permitted
   dependencies;

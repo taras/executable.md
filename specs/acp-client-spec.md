@@ -8,7 +8,7 @@ the `rootProvider` factory seam described below.
 ## The Agent Api
 
 `Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
-sessions, distinct from the stateless Sample Api. It has exactly four
+sessions, distinct from the stateless Sample Api. It has exactly five
 operations:
 
 ```ts
@@ -16,6 +16,7 @@ interface AgentApi {
   agent(name?: string): Operation<Agent>;
   session(name?: string): Operation<Session>;
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
+  launch(request: AgentLaunchRequest): Operation<void>;
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
 }
 ```
@@ -25,8 +26,25 @@ interface AgentApi {
   `{ agent?; session?: string | Session; timeout? }`.
 - `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
   (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
-- **Base behavior:** with no provider installed, `agent()`, `session()`, and
-  `prompt()` report a missing provider; `prompt()` reports it **coldly** — the
+- `launch()` routes one frozen, one-use `AgentLaunchRequest` and answers
+  nothing. `Agent.launch(instructions, options)` is the canonical operation that
+  issues that request, retains the launch's phases, and derives its
+  `SessionLaunchResult`; the route is where public middleware sees the ask, and
+  authority to perform it reaches the installed provider directly rather than
+  travelling on this chain (specs/native-agent-session-launch-spec.md). A launch
+  performs no model turn, and a provider that answers `prompt()` does not
+  thereby answer it: native session launch is its own capability, installed on
+  its own.
+- Every operation that can act on an **advertised** provider-returned session —
+  `session()`, a subscribed `prompt()` stream, a launch, and an incomplete
+  launch replay — takes exclusive ownership of it first, through the session
+  coordinator its host passed into the provider. Resolving an agent and placing
+  a session own nothing. Acquisition never waits: contention refuses, and a host
+  that installs no coordinator refuses every one of them before contacting an
+  agent.
+- **Base behavior:** with no provider installed, `agent()`, `session()`,
+  `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
+  **coldly** — the
   returned stream is handed back without starting a turn, and the failure
   surfaces only when it is subscribed. `requestPermission` has a working base
   that **denies**: it selects `reject_once`, then `reject_always`, and otherwise
@@ -85,7 +103,7 @@ components.
 
 ## Components
 
-`installAgentComponents()` registers six components for the installing scope
+`installAgentComponents()` registers seven components for the installing scope
 (§5.3). They are ordinary function components and non-reserved **defaults**: a
 repository component with one of these names is chosen ahead of them, and the
 engine owns their expression props, schema validation, `as` capture, content
@@ -120,8 +138,16 @@ boundary runs after the component has returned.
   renders.
 - **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
   prompts. Self-closing validates only (no output).
-- **`<Session name>`** resolves a session and pins it onto nested prompts.
-  Self-closing validates only.
+- **`<Session name>`** resolves a session and pins it onto nested prompts and
+  launches. Self-closing validates only.
+- **`<Session.Launch>`** prepares one durable session from its rendered body and
+  hands the provider's native UI the terminal for it, rendering nothing itself
+  and returning only after that UI exits
+  (specs/native-agent-session-launch-spec.md). Its props are exactly `agent` and
+  `session`, which mirror `<Prompt>`; no executable name, native session id,
+  argv or instruction-channel selection appears on the document surface. The
+  dotted name addresses a subdirectory, so a repository override for it is
+  `components/Session/Launch.md`.
 - **`<Prompt>`** sends one prompt and renders the reply.
   - Content is the rendered children; a self-closing `<Prompt text="…" />` uses
     the `text` prop instead.
@@ -157,6 +183,12 @@ producing identical output and identical aggregated failures. A prompt failure
 that was thrown through `throwOnError` is marked `raised`; a partial replay
 re-throws it, while a full replay omits it from aggregate restoration because it
 was already handled where it occurred.
+
+A native session launch is not a prompt and does not reuse `agent_prompt`. It
+retains its own `agent_session_launch` records, one per completed phase, so an
+interrupted launch resumes the provider session it already prepared rather than
+creating a replacement; the shape is specified in
+specs/native-agent-session-launch-spec.md.
 
 ## Config
 

@@ -12,14 +12,15 @@
  * append, report failures, or read.
  */
 
-import { each, ensure, race, resource, until, withResolvers } from "effection";
-import type { Operation, WithResolvers } from "effection";
+import { createContext, each, ensure, race, resource, until, withResolvers } from "effection";
+import type { Context, Operation, WithResolvers } from "effection";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 // @effectionx/fs has no realpath, so canonical symlink resolution uses the
 // node:fs/promises primitive directly.
 import { realpath } from "node:fs/promises";
 import { readTextFile, stat } from "@executablemd/runtime";
+import type { NativeLaunchOutcome, NativeLaunchRequest } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { encodeMessage, formatRoute, parseWorkerMessage, PROBE_INSTANCE } from "./protocol.ts";
 import type { ControllerMessage, WorkerMessage } from "./protocol.ts";
@@ -43,6 +44,52 @@ export interface TestAgentController {
   }): Operation<ScenarioHandle>;
 }
 
+/**
+ * One provider-native session the agent created, and the instruction layer it
+ * was created under.
+ *
+ * This is the agent's own account of a launch preparation. What XMD says it
+ * sent lives in the durable launch record; what the agent received is this,
+ * and the two being the same is what proves the prepared text crossed as a
+ * session instruction layer rather than as a user message.
+ */
+export interface NativeSessionReport {
+  scenarioId: string;
+  nativeSessionId: string;
+  systemPrompt?: string;
+}
+
+/** Where a harness collects those reports; unobserved by default. */
+export const NativeSessionObserver: Context<((report: NativeSessionReport) => void) | undefined> =
+  createContext<((report: NativeSessionReport) => void) | undefined>(
+    "testAgent.nativeSessionObserver",
+    undefined,
+  );
+
+/**
+ * What a `<TestAgent>` launch is allowed to do instead of starting a UI.
+ *
+ * The test agent's native UI is fictional in exactly the way its agent is: the
+ * worker asserts a native identity, and nothing on this side has a UI to resume
+ * it in. So `<TestAgent>` installs a launcher of its own — one that records
+ * what it was asked to start and reports how it ended — and a document under it
+ * never reaches the host's terminal, whether or not the host has one.
+ *
+ * A harness fills this in to see those requests and decide their outcome. Left
+ * unset, launches are recorded nowhere and succeed.
+ */
+export interface NativeLaunchControl {
+  record?(request: NativeLaunchRequest): void;
+  outcome?(request: NativeLaunchRequest): NativeLaunchOutcome;
+  /** What the launch blocks on, so a harness controls how long it is held. */
+  wait?(request: NativeLaunchRequest): Operation<void>;
+}
+
+/** Where a harness controls those launches; unobserved by default. */
+export const NativeLaunchObserver: Context<NativeLaunchControl | undefined> = createContext<
+  NativeLaunchControl | undefined
+>("testAgent.nativeLaunchObserver", undefined);
+
 /** How a turn failed. Recorded against the scenario, never published. */
 export interface ScenarioFailure {
   kind: "mismatch" | "exhausted" | "config";
@@ -63,6 +110,16 @@ export interface ScenarioRecord extends ScenarioHandle {
   journal: DurableEvent[];
   failure?: ScenarioFailure;
   fatal?: string;
+  sessions: NativeSessionReport[];
+  /**
+   * The provider-native session identity this scenario asserts.
+   *
+   * The scenario owns it, not the worker process: a real agent keeps its own
+   * durable session state, so a reconnect names the state it already had. A
+   * per-process identity would make every reattach look like a replacement
+   * session, which is the one thing a launch must never do.
+   */
+  nativeSessionId: string;
 }
 
 /**
@@ -107,6 +164,7 @@ function scenarioPath(scenario: ScenarioRecord, path: string): string | undefine
 export function useTestAgentController(): Operation<TestAgentControllerInternals> {
   return resource(function* (provide) {
     const token = randomUUID();
+    const observeSession = yield* NativeSessionObserver.get();
     const scenarios = new Map<string, ScenarioRecord>();
     const active = new Map<string, ActiveConnection>();
     const canonicalRoots = new Map<string, string>();
@@ -217,6 +275,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
               mode: "scenario",
               doc: scenario.document,
               journal: scenario.journal,
+              nativeSessionId: scenario.nativeSessionId,
             });
           }
           yield* each.next();
@@ -308,6 +367,23 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           send(connection, { t: "recorded" });
           return;
         }
+        case "session": {
+          // Deliberately unanswered. The worker's controller channel is one
+          // ordered request/reply queue shared with journal commits, and a
+          // reply nobody is reading — or one read by whoever asks next — is
+          // how a turn and a session report deadlock each other. The worker
+          // already knows this identity: it came with the scenario config.
+          const report: NativeSessionReport = {
+            scenarioId: attached.id,
+            nativeSessionId: attached.nativeSessionId,
+          };
+          if (message.systemPrompt !== undefined) {
+            report.systemPrompt = message.systemPrompt;
+          }
+          attached.sessions.push(report);
+          observeSession?.(report);
+          return;
+        }
         case "fatal": {
           attached.fatal = message.message;
           send(connection, { t: "recorded" });
@@ -341,6 +417,8 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           rootDir: resolve(options.rootDir),
           document: options.document,
           journal: [],
+          sessions: [],
+          nativeSessionId: `native-${randomUUID()}`,
         };
         scenarios.set(id, scenario);
         yield* ensure(function* () {
@@ -356,6 +434,7 @@ export function useTestAgentController(): Operation<TestAgentControllerInternals
           } finally {
             // Always clear state — even if worker revocation failed.
             scenario.journal.length = 0;
+            scenario.sessions.length = 0;
             scenario.failure = undefined;
             scenario.fatal = undefined;
             canonicalRoots.delete(id);

@@ -13,6 +13,17 @@ import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentPromptError } from "./errors.ts";
+import type { Expansion } from "../expansion.ts";
+
+/** `path:line:column`, `line:column`, or `unknown` — the durable effect key. */
+export function formatLocation(metadata: Expansion): string {
+  const position = metadata.position;
+  if (!position) {
+    return "unknown";
+  }
+  const at = `${position.line}:${position.column}`;
+  return position.path ? `${position.path}:${at}` : at;
+}
 
 interface AgentInternalApi {
   /** Report a failed prompt to the per-execution collector. */
@@ -21,6 +32,8 @@ interface AgentInternalApi {
   nextPromptSequence(): Operation<number>;
   /** Allocate the next per-location ordinal for durable prompt identity. */
   promptOrdinal(location: string): Operation<number>;
+  /** Allocate the next per-location ordinal for durable launch identity. */
+  launchOrdinal(location: string): Operation<number>;
   /** Default agent inherited by `<AgentProvider>`; undefined when unset. */
   defaultAgentName: string | undefined;
   /** Permission mode inherited by `<AgentProvider>`. */
@@ -62,6 +75,10 @@ export const AgentInternal: Api<AgentInternalApi> = createApi<AgentInternalApi>(
   // deno-lint-ignore require-yield
   *promptOrdinal(_location: string): Operation<number> {
     throw noExecution("promptOrdinal()");
+  },
+  // deno-lint-ignore require-yield
+  *launchOrdinal(_location: string): Operation<number> {
+    throw noExecution("launchOrdinal()");
   },
   defaultAgentName: undefined,
   permissionMode: "deny-all",

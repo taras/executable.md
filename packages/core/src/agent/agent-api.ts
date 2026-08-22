@@ -2,8 +2,10 @@
  * The Agent Api — Effection Api for stateful coding-agent sessions
  * (specs/acp-client-spec.md). Distinct from the stateless Sample Api.
  *
- * Providers install middleware for `agent`, `session`, and `prompt`; the
- * base handlers fail until one is installed. `requestPermission` has a
+ * Providers install middleware for `agent`, `session`, `prompt`, and
+ * `launch`; the base handlers fail until one is installed. A provider that
+ * answers `prompt` does not thereby answer `launch` — native session launch
+ * is its own capability and is installed on its own. `requestPermission` has a
  * working base implementation that denies every request; permission
  * policies layer on top of it.
  *
@@ -18,6 +20,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation, Stream } from "effection";
+import type { AgentLaunchRequest } from "./launch-request.ts";
 
 /** The public agent value — an agent name resolvable by the provider. */
 export type Agent = string;
@@ -42,6 +45,34 @@ export interface PromptOptions {
   agent?: Agent;
   session?: string | Session;
   timeout?: number;
+}
+
+/**
+ * Which logical agent and session a native launch prepares. Mirrors
+ * `PromptOptions` for `agent` and `session`; a launch is not bounded by a
+ * turn timeout, because the person using the native UI decides when it ends.
+ */
+export interface LaunchOptions {
+  agent?: Agent;
+  session?: string | Session;
+}
+
+/**
+ * A native UI that was prepared, handed the terminal, and exited normally.
+ *
+ * Nonzero exit, a signal, cancellation, detach failure, process creation
+ * failure, an unsupported provider, and preparation refusal all fail the
+ * operation instead of producing one of these.
+ *
+ * `launcher` is the provider's stable adapter identity — `claude`, `codex` —
+ * never an executable path. `nativeSessionId` is the identity the provider
+ * asserted, never one XMD inferred from an ACP string.
+ */
+export interface SessionLaunchResult {
+  agent: Agent;
+  session: Session;
+  nativeSessionId: string;
+  launcher: string;
 }
 
 export type PermissionMode = "approve-all" | "approve-reads" | "deny-all";
@@ -71,6 +102,16 @@ export interface AgentApi {
   agent(name?: string): Operation<Agent>;
   session(name?: string): Operation<Session>;
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
+  /**
+   * Route one launch request.
+   *
+   * This answers nothing. A return value is not evidence a launch happened, and
+   * the invocation that issued the request ignores whatever comes back: the
+   * only thing that settles a launch is what it retained. Middleware may
+   * inspect the request, narrow it with `with()`, refuse by throwing, or
+   * delegate it onward.
+   */
+  launch(request: AgentLaunchRequest): Operation<void>;
   requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
 }
 
@@ -96,7 +137,10 @@ function noProvider(operation: string): Error {
   );
 }
 
-export const Agent: Api<AgentApi> = createApi<AgentApi>("Agent", {
+/** The stable name every loaded copy composes through. */
+export const AGENT_API = "Agent";
+
+export const Agent: Api<AgentApi> = createApi<AgentApi>(AGENT_API, {
   // deno-lint-ignore require-yield
   *agent(_name?: string): Operation<Agent> {
     throw noProvider("agent()");
@@ -112,6 +156,10 @@ export const Agent: Api<AgentApi> = createApi<AgentApi>("Agent", {
         throw noProvider("prompt()");
       },
     };
+  },
+  // deno-lint-ignore require-yield
+  *launch(_request: AgentLaunchRequest): Operation<void> {
+    throw noProvider("launch()");
   },
   // deno-lint-ignore require-yield
   *requestPermission(request: PermissionRequest): Operation<PermissionOutcome> {
