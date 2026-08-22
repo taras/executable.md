@@ -178,6 +178,97 @@ Structured distillation is preferred when later control flow depends on the
 result. Free-form summaries are useful context, but they are not substitutes for
 validated workflow state.
 
+## Workflow-owned development artifacts
+
+A development workflow owns its material environment and logical run state.
+Worktrees, working directories, captured handoffs, implementation plans,
+feedback, decisions, branches, and pull requests do not belong to whichever
+agent happened to create them. The document captures or resolves those assets
+deterministically and passes required content into agent prompts explicitly.
+
+`<File>` and `<Glob>` already perform such operations, and the command already
+supplies the run around them: `xmd workflow start` creates a workflow run with
+one retained Workspace and `xmd workflow resume` continues it from the retained
+journal (#366, shipped). The composition inside that run is there too: named
+`<Repository>`, `<Worktree>` and lexical `<Dir>` are registered by the workflow
+host (#293, shipped). The durable effects are there too: deterministic
+local Git effects (#294), explicit `<Git.Push>` (#495), `<PullRequest>` (#295)
+and the `<IssueTracker>`/`<Issue>` pair (#296) are all registered by the
+workflow host. Together they cover the work that should not depend on model
+judgment:
+
+- retain each handoff, plan, review, and decision as a filtered journal event
+  bound to the Workspace root current when it was written;
+- create or resolve a named repository, worktree, branch, file, or pull request
+  only when that environmental asset is needed;
+- establish the working directory inherited by child operations;
+- read and write exact content through the contextual filesystem boundary;
+- return paths, commit identities, pull-request numbers, and URLs as workflow
+  data;
+- reconcile existing external state when an execution resumes; and
+- record the inputs, observed state, effects, and outputs of each operation.
+
+Agent calls analyze evidence and propose changes; they do not perform them. Under
+a workflow run an Agent reaches no checkout at all, and a proposal reaches the
+Workspace as generated XMD that a constrained evaluator preflights completely
+and expands as ordinary durable effects. That evaluator is built for observation
+(#497) — pinned identities, exact request ceilings, one retained admission — and
+what is still owed is admission for a mutating fragment, the bounded
+request/result loop an Agent observes the repository through (#302), and the
+public component a document writes to reach either (#369). Deterministic components apply approved
+environmental changes and provide exact required content to the next call.
+Generated files are optional exports rather than the handoff protocol. This
+removes manual copying between agent-owned transcripts, plan files, and working
+directories.
+
+Live run state is scoped to the operation that owns it: created inside the
+operation it describes, provided contextually, and torn down with it. Nothing
+accumulates runs in a module-scoped registry, so concurrent runs cannot observe
+each other. What outlives the process is retained deliberately, in the run's own
+store, addressed by a public run ID.
+
+Resources clean up with their enclosing execution by default. Agent sessions,
+processes, streams, and other ongoing effects always stop. Cleanup releases live
+attachments without deleting run-owned state: every run status is retained until
+an explicit deletion, so a failed or cancelled execution keeps its checkouts and
+its journal, and reports the path, branch, and reason that recovery is required.
+Durable published results such as commits, issues, and pull requests remain
+addressable after scoped resources close.
+
+## Living workflows with `xmd play`
+
+`xmd run` executes a fixed document. `xmd play` treats the document as a living
+collaborative workspace:
+
+```sh
+xmd play workflow.md
+```
+
+The executable document, rather than a hidden conversation, is the shared source
+of workflow intent and progress. Agents propose visible document changes or new
+executions. The runtime validates proposals, enforces policy, and performs
+deterministic effects. The user approves material changes and remains the final
+authority for product behavior, scope, architecture, risk, and lasting
+constraints.
+
+An accepted proposal becomes an inspectable document revision. Rejected
+proposals, failed executions, reviewer rejections, and later successful attempts
+retain their provenance so the engineering history explains how the workflow
+changed. Hidden session history may help an agent reason, but it is never the
+only source of consequential workflow state.
+
+Named agent sessions remain scope-owned while Play is active. Each invocation
+receives explicit workflow context and references to workflow-owned artifacts.
+The document and execution record identify what each agent received, what it
+proposed, what the runtime applied, and which user decision authorized a
+material transition.
+
+Play rests on the same deterministic asset and agent orchestration needed by an
+automated implementation loop. The loop is the proving ground for worktree,
+file, pull-request, review, decision, cleanup, and recovery semantics. Play adds
+collaborative document evolution after those operations are reliable; it does
+not replace them with agent-managed shell work.
+
 ## Foundation and agent layer
 
 Executable.md separates two concerns:
@@ -192,6 +283,13 @@ The easy authoring experience builds on the foundation without exposing its
 mechanics in ordinary agent documents. New agent capabilities should compose
 through components and contextual APIs instead of adding unrelated special cases
 to the expansion engine.
+
+Composing with the foundation is not the same as deciding for it. Public
+middleware around an execution or a document expansion may inspect what it is
+given, narrow it, install contextual behavior, refuse, and delegate; canonical
+core alone brings that execution or expansion into being and publishes its
+outcome, so no composed layer can substitute a document, an output stream, a
+success, or a failure (#432, #433).
 
 ## Relationship to Agent Skills
 
@@ -222,6 +320,10 @@ its declared props:
 6. What happens when it fails or returns invalid output?
 7. Why did the workflow take a branch or stop?
 8. What evidence in the execution record supports those answers?
+9. Which environmental assets did the workflow create or resolve, and who owns
+   their cleanup or retention?
+10. In Play, what document change was proposed, what effects were validated, and
+    which user decision accepted it?
 
 If those answers depend on hidden host behavior, implicit transcript sharing, or
 an agent's own account of what it did, the design does not satisfy the product
