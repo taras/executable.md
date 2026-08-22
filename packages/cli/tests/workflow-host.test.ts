@@ -336,10 +336,17 @@ describe("Tier WFH — the credential helper is host assembly", () => {
    * says about an argument it did not recognize.
    */
   it("answers as a helper when the real source entrypoint is asked to be one", function* () {
+    // The Deno source entrypoint is a Deno program, and this file belongs to
+    // the Node and Bun corpus as well. Which entrypoint is under test is asked
+    // of the harness rather than assumed, exactly as every other case here does.
+    if (cliRuntime() !== "deno") {
+      return;
+    }
     const entrypoint = fileURLToPath(new URL("../src/deno.ts", import.meta.url));
     const credential = { username: "assembly-user", password: "assembly-secret" };
     const outcome = spawnSync(
-      Deno.execPath(),
+      // Under Deno this is the Deno binary, which is what runs a source module.
+      process.execPath,
       ["run", "--allow-all", entrypoint, HELPER_MODE, "get"],
       {
         input: "protocol=https\nhost=assembly.invalid\npath=octo/one.git\n\n",

@@ -145,6 +145,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "packages/workflow/tests/ambient-authentication.test.ts",
+    reason:
+      "drives the Deno host adapter's HTTP credential acquisition against a real node:sqlite WorkflowRun database, a real `git` subprocess and a provider-owned helper the Deno source assembly launches; the adapter, the store and the helper are all the Deno one by design",
+    issue: "https://github.com/taras/executable.md/issues/522",
+  },
+  {
+    path: "packages/workflow/tests/credential-helper.test.ts",
+    reason:
+      "runs the provider-owned credential helper through the Deno source launcher and drives `git credential fill` against isolated fixture homes; the helper mode is dispatched by the Deno entrypoints and has no Node or Bun assembly yet",
+    issue: "https://github.com/taras/executable.md/issues/522",
+  },
+  {
     path: "packages/workflow/tests/repository-components.test.ts",
     reason:
       "drives <Repository> and <Dir> against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
