@@ -57,6 +57,7 @@ import {
   TITLE,
   TOKEN,
 } from "./support/pull-requests.ts";
+import { gitHubSource } from "../src/deno/composition/github.ts";
 
 function isAuthorityFailure(value: unknown): value is PullRequestAuthorityError {
   return value instanceof PullRequestAuthorityError;
@@ -420,7 +421,7 @@ describe("workflow PullRequest authority", () => {
 
       const failure = yield* raised(
         runWorkflowDocument(database, source, {
-          composition: { host: counting.host, gitHub: fakeGitHubAccess(store) },
+          composition: { host: counting.host, gitHub: gitHubSource(fakeGitHubAccess(store)) },
         }),
       );
       expect(String(failure)).toContain("does not support this effect kind");

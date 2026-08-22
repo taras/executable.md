@@ -46,6 +46,8 @@ import { transactWorkspaceRoots } from "../workspace/private.ts";
 import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
 import { gitSession, type GitSession } from "./git.ts";
 import { denoRepositoryHost, type RepositoryHost } from "./host.ts";
+import type { GitAuthentication } from "./authentication.ts";
+import type { HelperAssembly } from "./credential-helper.ts";
 import { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 import { stale, type Attached, type StaleReason } from "./identity.ts";
 import {
@@ -60,7 +62,7 @@ import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
 import { createGitPush } from "./push.ts";
 import { upsertPullRequest } from "./pull-request.ts";
-import type { GitHubAccess } from "./github.ts";
+import type { GitHubSource } from "./github.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
@@ -91,7 +93,24 @@ export interface CompositionProviderOptions {
    * observe or route through. Absent, the provider builds the default access,
    * which reaches `api.github.com` and the process environment.
    */
-  readonly gitHub?: GitHubAccess;
+  readonly gitHub?: GitHubSource;
+  /**
+   * What the host lends a Git command that transports to a remote.
+   *
+   * Only reaches the default host: a suite that supplies its own `host` has
+   * already replaced the thing an attachment would be attached to. Absent, the
+   * default host uses the shipped ambient authentication, which is the invoking
+   * user's SSH agent and standard Git credential helpers.
+   */
+  readonly authentication?: GitAuthentication;
+  /**
+   * How this host writes and starts its own credential helper.
+   *
+   * Stated by the runtime entrypoint rather than inferred here: whether this is
+   * Deno source or a compiled binary, and which platform's launcher to write,
+   * are facts about the program that is running.
+   */
+  readonly helper?: HelperAssembly;
 }
 
 /**
@@ -132,7 +151,12 @@ export function useRepositoryComposition(
   database: WorkflowRunDatabase,
   options: CompositionProviderOptions = {},
 ): Operation<void> {
-  const host = options.host ?? denoRepositoryHost();
+  const host =
+    options.host ??
+    denoRepositoryHost({
+      ...(options.authentication === undefined ? {} : { authentication: options.authentication }),
+      ...(options.helper === undefined ? {} : { helper: options.helper }),
+    });
   const observe = options.observe ?? {};
 
   return RepositoryComposition.around(
@@ -199,7 +223,12 @@ export function useGitComposition(
   database: WorkflowRunDatabase,
   options: CompositionProviderOptions = {},
 ): Operation<void> {
-  const host = options.host ?? denoRepositoryHost();
+  const host =
+    options.host ??
+    denoRepositoryHost({
+      ...(options.authentication === undefined ? {} : { authentication: options.authentication }),
+      ...(options.helper === undefined ? {} : { helper: options.helper }),
+    });
   const observe = options.observe ?? {};
 
   return GitComposition.around(

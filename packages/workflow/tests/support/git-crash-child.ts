@@ -55,7 +55,8 @@ import { currentWorkspaceRoot } from "../../src/deno/workspace/root.ts";
 import { transactWorkspaceRoots, usePrivateWorkspace } from "../../src/deno/workspace/private.ts";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
-import { denoRepositoryHost } from "../../src/deno/composition/host.ts";
+import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
+import { denoGitAuthentication } from "../../src/deno/composition/authentication.ts";
 import type { GitInvocation, GitOutcome } from "../../src/deno/composition/host.ts";
 import { count, report } from "./workspace-process.ts";
 import { addDocument, commitDocument, crashDocument, pushDocument } from "./git-crash-process.ts";
@@ -148,7 +149,29 @@ function* crash(
  * is precisely the state the next execution has to reconcile without pushing
  * again.
  */
-function* pushCrash(root: string, runId: string, locator: string): Operation<void> {
+/**
+ * The invoking environment a crash child stands in, when one is named.
+ *
+ * Only a home path and a helper module cross this boundary — both nonsecret,
+ * both host paths. The credential is whatever that home's own helper chain
+ * holds, acquired inside this process and never handed to it.
+ */
+function ambientFor(home: string): Record<string, string> {
+  return {
+    ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+    HOME: home,
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
+
+function* pushCrash(
+  root: string,
+  runId: string,
+  locator: string,
+  home?: string,
+  helperModule?: string,
+): Operation<void> {
   yield* useWorkflowRunStorage({ root });
   const opened = yield* WorkflowRunStorage.operations.lookup(runId);
   if (!opened.ok) {
@@ -156,7 +179,29 @@ function* pushCrash(root: string, runId: string, locator: string): Operation<voi
   }
   const database = opened.value;
 
-  const inner = denoRepositoryHost();
+  // The real Deno source assembly, when this child was told where its helper
+  // module lives. Without one it lends nothing, which is the unauthenticated
+  // shape the other crash modes use.
+  const assembly =
+    helperModule === undefined
+      ? undefined
+      : ({
+          runtime: "source",
+          platform: "unix",
+          execPath: process.execPath,
+          modulePath: helperModule,
+          launcherEnvironment: {
+            ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+            ...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
+            ...(process.env.DENO_DIR === undefined ? {} : { DENO_DIR: process.env.DENO_DIR }),
+          },
+        } as const);
+  const inner =
+    home === undefined || assembly === undefined
+      ? denoRepositoryHost()
+      : denoRepositoryHost({
+          authentication: denoGitAuthentication({ ambient: ambientFor(home), assembly }),
+        });
   const host = {
     *git(invocation: GitInvocation): Operation<GitOutcome> {
       const outcome = yield* inner.git(invocation);
@@ -171,6 +216,9 @@ function* pushCrash(root: string, runId: string, locator: string): Operation<voi
       return outcome;
     },
     useDirectory: inner.useDirectory,
+    // Forwarded, so this child acquires for real rather than standing on a host
+    // that lends nothing.
+    useAuthentication: (asked: string) => useGitAuthentication(inner, asked),
   };
 
   yield* withWorkflowWorkspace(
@@ -240,13 +288,18 @@ function* inspect(root: string, runId: string): Operation<void> {
 main(function* () {
   // `process.argv` rather than `Deno.args`: this file is Deno-only to run, and
   // still has to typecheck under the Node project like every other source.
-  const [mode, root, runId, locator, operation] = process.argv.slice(2);
+  const [mode, root, runId, locator, operation, helperModule] = process.argv.slice(2);
   if (mode === "crash") {
     yield* crash(root, runId, locator, operation ?? "");
     return;
   }
   if (mode === "push") {
-    yield* pushCrash(root, runId, locator);
+    // The home and the helper module are optional: only the protected-transport
+    // proof needs them, and only a credential-free locator and these two host
+    // paths ever cross this boundary.
+    // `operation` carries the isolated home for this mode, since the two are
+    // never both meaningful.
+    yield* pushCrash(root, runId, locator, operation, helperModule);
     return;
   }
   if (mode === "inspect") {

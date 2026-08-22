@@ -48,6 +48,7 @@ import {
   REMOTE,
   TOKEN,
 } from "./support/pull-requests.ts";
+import { gitHubSource } from "../src/deno/composition/github.ts";
 
 const RUN = "release-1.4";
 
@@ -140,7 +141,7 @@ describe("workflow PullRequest durability", () => {
 
       const replayed = String(
         yield* runWorkflowDocument(database, published(...pullRequest()), {
-          composition: { host: run.counting.host, gitHub: unreachable() },
+          composition: { host: run.counting.host, gitHub: gitHubSource(unreachable()) },
         }),
       );
 
@@ -324,7 +325,7 @@ describe("workflow PullRequest durability", () => {
       yield* scoped(function* () {
         const task = yield* spawn(() =>
           runWorkflowDocument(database, published(...pullRequest()), {
-            composition: { host: run.counting.host, gitHub: blocking },
+            composition: { host: run.counting.host, gitHub: gitHubSource(blocking) },
           }),
         );
         yield* creating.operation;
@@ -398,7 +399,7 @@ describe("workflow PullRequest durability", () => {
       yield* scoped(function* () {
         const task = yield* spawn(() =>
           runWorkflowDocument(database, published(...numbered(12)), {
-            composition: { host: run.counting.host, gitHub: interrupted },
+            composition: { host: run.counting.host, gitHub: gitHubSource(interrupted) },
           }),
         );
         yield* observing.operation;

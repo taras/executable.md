@@ -15,14 +15,21 @@
  * Git reads the caller's environment, and almost everything it finds there can
  * change what a clone produces: `~/.gitconfig` can set `core.hooksPath`,
  * `init.templateDir` or a URL rewrite; `GIT_DIR` and `GIT_WORK_TREE` can point a
- * command at a repository nobody named; a credential helper can attach an
- * identity to a locator this run admitted as credential-free. A workflow's
- * retained state must not depend on whose machine it was created on, so the
- * environment is built from nothing and `HOME` points at the disposable
- * materialization rather than at a person.
+ * command at a repository nobody named. A workflow's retained state must not
+ * depend on whose machine it was created on, so the environment is built from
+ * nothing and `HOME` points at the disposable materialization rather than at a
+ * person.
  *
- * `GIT_TERMINAL_PROMPT=0` is the other half: a locator that needs a credential
- * fails instead of blocking a run on a prompt nobody is there to answer.
+ * `GIT_TERMINAL_PROMPT=0` is the other half: a command that needs an answer
+ * nobody is there to give fails instead of blocking the run on a prompt.
+ *
+ * The one thing deliberately borrowed from the invoking environment is
+ * authentication, and only by a command that transports to a remote. It arrives
+ * through `authentication.ts` rather than through this environment, is acquired
+ * for that command's own exact locator, and is disposed with the command. A
+ * command with no `remote` reaches no authentication mechanism at all — which is
+ * what makes a completed replay, which performs no remote operation, reach none
+ * either.
  *
  * ## Why the configuration is fixed as well
  *
@@ -40,19 +47,22 @@
  * leaves the ones that run after it.
  */
 
-import { ensure, type Operation, resource, until, withResolvers } from "effection";
-import { spawn as spawnChild } from "node:child_process";
+import { ensure, type Operation, resource, until } from "effection";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
+import { denoGitAuthentication, UNAUTHENTICATED } from "./authentication.ts";
+import type { HelperAssembly } from "./credential-helper.ts";
+import type {
+  GitAttachment,
+  GitAuthentication,
+  GitAuthenticationSession,
+} from "./authentication.ts";
+import { runProcess, type ProcessOutcome } from "./subprocess.ts";
 
 /** What one Git invocation reported. A nonzero exit is an answer, not a throw. */
-export interface GitOutcome {
-  readonly code: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
+export type GitOutcome = ProcessOutcome;
 
 export interface GitInvocation {
   readonly args: readonly string[];
@@ -75,12 +85,41 @@ export interface GitInvocation {
    * decides for itself is when. Absent for every command that writes no object.
    */
   readonly committedAt?: number;
+  /**
+   * What this command's provider invocation borrowed from the host.
+   *
+   * Handed down rather than acquired here. One invocation opens one session,
+   * after the authority checks that operation requires, and every native
+   * command it runs attaches that same one — so an observation and the mutation
+   * that follows it go out under one identity rather than two. Absent for every
+   * command that stays inside the materialization.
+   */
+  readonly attachment?: GitAttachment;
 }
 
 export interface RepositoryHost {
   git(invocation: GitInvocation): Operation<GitOutcome>;
   /** A host directory owned by the acquiring scope, removed when it ends. */
   useDirectory(): Operation<string>;
+  /**
+   * One authentication session for this exact locator, owned by the acquiring
+   * scope and disposed with it.
+   *
+   * Optional, because a suite that substitutes the whole host has already
+   * replaced the thing a session would be attached to. Such a host lends none,
+   * and every operation reads that as an absent mechanism rather than an error.
+   */
+  useAuthentication?(locator: string): Operation<GitAuthenticationSession>;
+}
+
+/** This host's session for one locator, or that of a host which lends none. */
+export function* useGitAuthentication(
+  host: RepositoryHost,
+  locator: string,
+): Operation<GitAuthenticationSession> {
+  return host.useAuthentication === undefined
+    ? UNAUTHENTICATED
+    : yield* host.useAuthentication(locator);
 }
 
 /**
@@ -142,83 +181,39 @@ function environment(home: string, committedAt: number | undefined): Record<stri
   };
 }
 
-export function denoRepositoryHost(): RepositoryHost {
+export interface RepositoryHostOptions {
+  /**
+   * What this host lends a remote-touching invocation.
+   *
+   * The trusted host decides which ambient mechanisms exist, which is why this
+   * is here rather than anywhere a document, a middleware or a retained record
+   * could reach. Absent, the shipped one is used.
+   */
+  readonly authentication?: GitAuthentication;
+  /** How this host writes and starts its own credential helper. */
+  readonly helper?: HelperAssembly;
+}
+
+export function denoRepositoryHost(options: RepositoryHostOptions = {}): RepositoryHost {
+  const authentication =
+    options.authentication ??
+    denoGitAuthentication(options.helper === undefined ? {} : { assembly: options.helper });
   return {
-    *git({ args, cwd, home, input, committedAt }: GitInvocation): Operation<GitOutcome> {
-      // `node:child_process` rather than the runtime's own global: this adapter
-      // is selected by the host, not written against one, and `spawn` replaces
-      // the child's environment outright when `env` is given — which is the
-      // whole point of building one above rather than inheriting it.
-      const options = { cwd, env: environment(home, committedAt) };
-      const child =
-        input === undefined
-          ? spawnChild("git", [...CONFIGURATION, ...args], {
-              ...options,
-              stdio: ["ignore", "pipe", "pipe"],
-            })
-          : spawnChild("git", [...CONFIGURATION, ...args], {
-              ...options,
-              stdio: ["pipe", "pipe", "pipe"],
-            });
+    git({ args, cwd, home, input, committedAt, attachment }: GitInvocation): Operation<GitOutcome> {
+      // A command with no attachment reaches no authentication mechanism. That
+      // is what makes a completed replay reach none: replay performs no remote
+      // operation, so no invocation ever opens a session to attach.
+      return runProcess({
+        command: "git",
+        args: [...CONFIGURATION, ...(attachment?.configuration ?? []), ...args],
+        cwd,
+        env: { ...environment(home, committedAt), ...(attachment?.environment ?? {}) },
+        ...(input === undefined ? {} : { input }),
+      });
+    },
 
-      // Registered with no suspension point between spawning and registering,
-      // so a halt cannot land between the two and leave a Git process running
-      // after the scope that started it is gone.
-      //
-      // Teardown waits for the child to close rather than only signalling it.
-      // `kill` returns once the signal is queued, not once it has been
-      // delivered, so a cleanup that returned there would let the scope that
-      // owns this command finish while the process it started is still alive —
-      // and the disposable materialization it is working in is removed moments
-      // later. `close` is the event that fires once the process is gone and
-      // both pipes have ended, which is what makes cancellation complete rather
-      // than merely started.
-      let settled = false;
-      const closed = withResolvers<void>();
-      child.on("close", () => closed.resolve());
-      yield* ensure(function* () {
-        if (settled) {
-          return;
-        }
-        child.kill("SIGKILL");
-        yield* closed.operation;
-      });
-
-      const outcome = withResolvers<GitOutcome>();
-      if (input !== undefined && child.stdin !== null) {
-        // A pipe the command stops reading is the command's answer, and its
-        // exit status is what says so — but the write still fails, and an
-        // unhandled stream error would take the process down rather than this
-        // operation. Reporting it here lets `close` settle first when there is
-        // an exit to report.
-        child.stdin.on("error", (error: Error) => {
-          outcome.reject(error);
-        });
-        child.stdin.end(input, "utf8");
-      }
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-      // `close` rather than `exit`: it is the event that fires once both pipes
-      // have ended, so what is read here is everything Git wrote rather than
-      // whatever had arrived when it stopped.
-      child.on("close", (code: number | null) => {
-        outcome.resolve({ code: code ?? -1, stdout, stderr });
-      });
-      child.on("error", (error: Error) => {
-        outcome.reject(error);
-      });
-
-      const result = yield* outcome.operation;
-      settled = true;
-      return result;
+    useAuthentication(locator: string): Operation<GitAuthenticationSession> {
+      return authentication.open(locator);
     },
 
     useDirectory(): Operation<string> {

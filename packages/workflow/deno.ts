@@ -44,19 +44,21 @@ export {
   workflowRunPath,
 } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
-export { withWorkflowWorkspace } from "./src/deno/workspace/host.ts";
-export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/host.ts";
+// The narrow one, under the name a host already knows. The function beside it
+// in `workspace/host.ts` accepts the leaf substitutions a suite needs — the Git
+// subprocess, the temporary directory, the Git-host transport — and a
+// `RepositoryHost` sees every `GitInvocation`, attachment included. A package
+// that could install one could read the credential this adapter is holding, so
+// none of that crosses this entrypoint; the suites that need it import from
+// source, inside the package.
+export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
+export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
 export {
   WORKSPACE_GIT_ADD,
   WORKSPACE_GIT_SWITCH,
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
 } from "./src/deno/composition/provider.ts";
-export type {
-  CompositionObserver,
-  CompositionProviderOptions,
-} from "./src/deno/composition/provider.ts";
-export { denoRepositoryHost } from "./src/deno/composition/host.ts";
 export {
   GITHUB,
   parseGitHubIssueTarget,
@@ -64,7 +66,6 @@ export {
   useGitHubIssues,
 } from "./src/deno/issue/github.ts";
 export type { GitHubIssuesOptions } from "./src/deno/issue/github.ts";
-export type { GitInvocation, GitOutcome, RepositoryHost } from "./src/deno/composition/host.ts";
 export { WORKSPACE_FILE } from "./src/deno/workspace/files.ts";
 export { WORKSPACE_ROOT } from "./src/deno/workspace/logical-path.ts";
 export { useWorkflowInputDelivery } from "./src/deno/delivery.ts";

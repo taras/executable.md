@@ -44,6 +44,7 @@ import {
   type CompositionProviderOptions,
 } from "../composition/provider.ts";
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
+import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkspaceEffects } from "./effect.ts";
 import { useWorkflowFiles } from "./files.ts";
 import { WORKSPACE_ROOT } from "./logical-path.ts";
@@ -88,6 +89,14 @@ export interface WorkflowWorkspaceOptions {
    * reaches `IssueApi`'s own base error.
    */
   readonly gitHubIssues?: GitHubIssuesOptions;
+  /**
+   * How this host writes and starts its own credential helper.
+   *
+   * Supplied by the runtime entrypoint, which is the only place that knows
+   * whether this is Deno source or a compiled binary and which platform it is
+   * standing on.
+   */
+  readonly helper?: HelperAssembly;
 }
 
 /** Run `operation` with this run's Workspace attached to the document. */
@@ -101,8 +110,12 @@ export function withWorkflowWorkspace<T>(
     scoped(function* () {
       yield* useLogicalWorkspaceCwd();
       yield* useWorkflowFiles(database);
-      yield* useRepositoryComposition(database, options.composition);
-      yield* useGitComposition(database, options.composition);
+      const composition = {
+        ...options.composition,
+        ...(options.helper === undefined ? {} : { helper: options.helper }),
+      };
+      yield* useRepositoryComposition(database, composition);
+      yield* useGitComposition(database, composition);
       if (options.gitHubIssues !== undefined) {
         yield* useGitHubIssues(options.gitHubIssues);
       }

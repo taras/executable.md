@@ -798,7 +798,10 @@ Initial props:
 | `as` | no | ordinary binding of the Workspace-relative checkout path |
 
 There are initially no public `path`, `provider`, `remote` or credential props.
-Workspace owns placement; the host owns authorization and credentials.
+Workspace owns placement; the host owns authorization and credentials. A locator
+that needs one is reached through the authentication the invoking host already
+has, on the terms §13.1 states — there is no XMD credential store, credential
+prop, token argument, workflow secret schema or credential-copy command.
 
 When first reached, Repository authorizes the locator, resolves `base` or the
 remote default branch, pins the resulting commit and creates or reconciles the
@@ -1277,9 +1280,12 @@ requests. It is selected from the private retained locator — the admitted
 credential-free HTTPS, SSH-URL and `git@github.com:owner/repository` forms, with
 an optional terminal `.git` — and a Repository this adapter does not recognize
 is refused as an unsupported effect kind from observation, before any remote
-work. The credential is read from `GH_TOKEN`, then `GITHUB_TOKEN`, only after
-local authority succeeds; stored `gh auth` credentials are not read and no
-credential is inherited by a child process. Creation is one REST creation; an
+work. The credential is read from `GH_TOKEN`, then `GITHUB_TOKEN`, then
+`gh auth token --hostname github.com`, only after local authority succeeds; a
+variable that is set but empty names no credential and stops the search rather
+than continuing it, and no credential is inherited by a child process. The same
+three sources, in the same order, are what every shipped GitHub adapter
+uses — §13.1. Creation is one REST creation; an
 update is one REST field change and, when the draft state differs, one GraphQL
 draft transition, each issued at most once per attempt and followed by exactly
 one observation that decides the outcome. A rejected mutation, a partial
@@ -2335,9 +2341,10 @@ absolute paths Git writes into a linked worktree's administration are reduced to
 Workspace paths before capture and reconstructed only inside a live
 materialization, so nothing retained is specific to the machine that created it.
 Deleting a materialization costs time and nothing else. Git runs with a built
-environment rather than an inherited one — no user configuration, no credential
-helper, no terminal prompt, and a fixed workflow identity — so a clone does not
-vary with whoever ran the host. The narrower retention invariant is about paths:
+environment rather than an inherited one — no user configuration, no terminal
+prompt, and a fixed workflow identity — so a clone does not vary with whoever ran
+the host. Authentication is the one thing borrowed from the invoking environment,
+and §13.1 says exactly what is borrowed and when. The narrower retention invariant is about paths:
 a provider-generated disposable materialization path is never retained, and
 never accepted as a control path. Content is retained as Git produced it,
 including absolute symbolic-link targets a commit happens to record.
@@ -2345,6 +2352,136 @@ including absolute symbolic-link targets a commit happens to record.
 SQLite is a host implementation detail. The CLI deliberately exposes no remote
 host-selection option yet, while retaining a control surface that can be
 delegated without changing the document language.
+
+### 13.1 Ambient host authentication
+
+A workflow reaches a private clone or a protected remote wherever the equivalent
+local Git command reaches one, with no XMD-specific credential setup. That is a
+property of the machine the run is standing on, not of the run: authentication is
+a live host input and never retained workflow state.
+
+**The credential belongs to one invocation, and to the adapter alone.** The
+trusted Deno host adapter retains one HTTP credential in memory for one live
+provider invocation, acquired lazily after the Repository, locator, checkout and
+ceiling checks that operation requires. It is exposed only to that invocation's
+own Git and helper children, through private child-process environment, and the
+reference is released when the invocation ends.
+
+A provider-owned helper is what Git runs. It answers one exact locator — scheme,
+host with its explicit port, and full repository path — so a transport that was
+redirected somewhere else receives no credential and fails closed. The transport
+does not follow a redirect at all: Git carries a credential it already holds
+across a same-host redirect, which an exact-locator refusal alone cannot
+prevent, and a redirect is a destination the run never authorized. `store` and
+`approve` do nothing and reach no ambient helper or credential store. `erase`
+for the exact locator writes a fixed, nonsecret invocation-local marker and
+nothing else; an `erase` about anywhere else does nothing, so a redirect cannot
+manufacture a rejection. The marker is how a refused identity is told from an
+absent one, and both are authentication unavailability.
+
+Transport Git resets ambient credential helpers and installs only the
+provider-owned one. No ambient `credential.*` definition or value is copied into
+its arguments, and neither the credential nor the locator nor the marker appears
+in a launcher, a command line, a URL or retained configuration.
+
+Only what the adapter directly observes is infrastructure: an acquisition
+process that could not be started, a launcher that could not be installed, a
+marker read that failed for any reason other than the marker's absence, and a
+teardown removal that failed. Those are the host failing to provide a mechanism,
+and they fail the run stop.
+
+The absence of a helper signal proves nothing. There is no readiness handshake,
+no preflight and no channel to the helper: the run cannot tell a helper that
+declined from one that never started, and it does not try. An acquired credential
+with no rejection therefore keeps whatever classification the Repository or Push
+transport would ordinarily have — a locator that could not be used stays that,
+and a host that could not be reached stays unreachable. Missing or incomplete
+credentials, and an exact rejection, remain authentication unavailability.
+
+What the published entrypoint offers is what a *host* owns: which issue tracker
+it authorizes, and how it assembles its own credential helper. The leaf
+substitutions a suite needs — the Git subprocess, the temporary directory, the
+Git-host transport — do not cross it. A `RepositoryHost` sees every Git
+invocation and an authenticated one carries the credential's attachment, so a
+package a document loaded must have no way to install one, and no way to reach
+the options that would accept one. Those remain reachable only from inside the
+package, where the suites that need them live.
+
+The helper contract is assembled the same way for Deno source, compiled and
+Windows hosts. Which one applies is stated by the runtime entrypoint rather than
+inferred from an executable's name, and the mode it dispatches is internal: it
+runs before any public parsing and appears in no help or public grammar.
+
+**What is borrowed.** The first Deno host guarantees the equivalent local
+operation only when that operation can authenticate non-interactively through one
+of three host-owned mechanisms:
+
+- **SSH Git transport** uses the exact ambient SSH agent the trusted host
+  selects. `HOME` is still the disposable materialization, so no key file and no
+  `~/.ssh/config` on the machine is reachable; the agent socket is named outright
+  and, with no agent, the run refuses rather than searching. Host verification is
+  never disabled — the host separately selects the invoking user's known-host
+  material, and an unknown host is an ordinary refusal.
+- **HTTP Git transport** uses the invoking user's own credential helper chain,
+  queried once for the complete admitted credential-free locator — scheme, host
+  with its explicit port, and full repository path — with prompting and both
+  askpass hooks off and `credential.useHttpPath=true` forced. An answer whose
+  protocol, host or path differs from the request has not authorized it, and one
+  that omits the path is an answer about the server rather than the repository.
+  What comes back is retained by the adapter for this invocation alone.
+
+- **GitHub API transport** uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the token
+  `gh auth token --hostname github.com` returns. A variable that is set but empty
+  is an explicit absence and stops the search. Every shipped Deno GitHub adapter
+  — pull request (§7.5) and the issue read/upsert provider (§10.3) — shares these
+  sources and this order; their ceilings, routing, reconciliation and durable
+  records remain distinct and unchanged.
+
+A helper may perform its own provider-defined refresh while answering. The
+provider never terminal-prompts and never launches an environment-selected
+askpass program, and it copies no `credential.*` configuration onto a command
+line.
+
+**When it is opened.** Lazily, and per live provider invocation: after the
+Repository and locator authority checks that operation requires, shared by that
+invocation's observations and its mutation so both go out under one identity, and
+disposed with the invocation. A later attempt on an interrupted request opens its
+own. The invocation keeps the exact retained locator as its destination. A
+request for another Repository opens a separate exact-locator session; what one
+session stands on is never carried forward as authority for another. Host helpers
+remain free to return the same account for several locators according to their
+own policy.
+
+**What still cannot decide anything.** The native Git command still runs in the
+provider-built environment and, for Push, in the provider-owned control
+repository. A retained `.git/config`, caller Git configuration, caller SSH
+configuration, URL rewrites, hooks, signing programs, filesystem monitors, push
+URLs and transport programs remain unable to select behavior — `credential.helper`
+and `core.sshCommand` join that family, fixed on the command line where they
+outrank every configuration file, for every invocation that transports to a
+remote. Authentication material, helper output and Git-host CLI output remain
+invocation-local and never enter arguments, document-visible context, the
+Workspace, durable identity, the journal, rendered output, diagnostics or failure
+causes. Repository identity continues to retain the credential-free locator and
+its fingerprint, never a credential or a credential-source identity.
+
+**What it never does.** A missing, rejected or unreadable credential is ordinary
+live refusal or unavailability, and stays distinct from locator invalidity and
+from remote absence: a transport that carries an identity, attempted with no
+mechanism to prove one, is refused under its own `authentication-unavailable`
+word, decided from whether an identity was acquired and whether the transport
+rejected it, rather than from
+anything Git printed. A configured helper that answered nothing is not
+authentication, and a transport that then fails is unavailability rather than an
+invalid locator. It never proves remote absence and never
+authorizes, adopts or records completion. A completed Repository, Push, pull
+request or Issue replay reaches no authentication mechanism and no remote. An
+interrupted external effect reacquires the authentication currently available to
+its host and reconciles under its existing durable request and natural key.
+
+There is no public `Git.Fetch` here. The shipped Git scope is Repository clone
+and its remote reads, plus `Git.Push` observation and mutation; a future public
+fetch operation requires its own language and durability contract.
 
 ## 14. Contract inventory
 

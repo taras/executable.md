@@ -22,6 +22,7 @@ import {
   type GitHubStore,
   type StoredPullRequest,
 } from "./github.ts";
+import { gitHubSource } from "../../src/deno/composition/github.ts";
 
 /** The repository the document names, and the one the fake GitHub holds. */
 export const LOCATOR = "https://github.com/octo/project";
@@ -100,7 +101,7 @@ export function fixture(remote: BareRemote, pullRequests: StoredPullRequest[] = 
     options: {
       composition: {
         host: counting.host,
-        gitHub: fakeGitHubAccess(store),
+        gitHub: gitHubSource(fakeGitHubAccess(store)),
         observe: {
           effect: (kind, name) => counting.counters.effects.push(`${kind}:${name}`),
           attachment: (kind, name) => counting.counters.attachments.push(`${kind}:${name}`),

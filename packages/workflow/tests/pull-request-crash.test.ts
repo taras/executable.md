@@ -42,6 +42,7 @@ import {
   rewriting,
   TOKEN,
 } from "./support/pull-requests.ts";
+import { gitHubSource } from "../src/deno/composition/github.ts";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 const CRASH_CHILD = fileURLToPath(
@@ -160,7 +161,7 @@ describe("workflow PullRequest across a process boundary", () => {
       yield* runWorkflowDocument(database, published(...pullRequest()), {
         composition: {
           host: rewriting(remote.locator),
-          gitHub: fakeGitHubAccess(store),
+          gitHub: gitHubSource(fakeGitHubAccess(store)),
         },
       });
 

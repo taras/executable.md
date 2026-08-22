@@ -39,6 +39,11 @@ import {
   subcommands,
 } from "./support/composition.ts";
 import { PUSH_BRANCH, pushDocument } from "./support/git-crash-process.ts";
+import { useGitHttpRemote } from "./support/git-http.ts";
+import { useInvokingHome } from "./support/credential-home.ts";
+import { denoRepositoryHost } from "../src/deno/composition/host.ts";
+import { denoGitAuthentication } from "../src/deno/composition/authentication.ts";
+import { TEST_HELPER } from "./support/composition.ts";
 
 const REPOSITORY = fileURLToPath(new URL("../../..", import.meta.url));
 const CRASH_CHILD = fileURLToPath(new URL("./support/git-crash-child.ts", import.meta.url));
@@ -167,6 +172,178 @@ describe("workflow Git.Push across a process boundary", () => {
       );
       expect(head.commit).toBe(pushedCommit);
       expect(remoteBranch(remote, PUSH_BRANCH)).toBe(pushedCommit);
+    });
+  });
+
+  /**
+   * The same crash, through a remote that demands a credential.
+   *
+   * What this adds is the identity. The killed process acquired for its
+   * Repository and again for its Push, published through a protected transport,
+   * and died before its journal knew. The resumption stands in a different
+   * invoking home entirely — a different credential chain, asked once — and
+   * adopts the request the first one left rather than publishing a second time.
+   */
+  it("adopts a protected publication under authentication it acquired afresh", function* () {
+    const root = yield* useStorageRoot();
+    const bare = yield* useBareRemote(REMOTE);
+    const served = yield* useGitHttpRemote({
+      remote: bare,
+      label: "protected",
+      username: "crash-user",
+      password: "crash-secret",
+    });
+    const crashHome = yield* useInvokingHome([
+      { host: served.host, path: "remote.git", username: "crash-user", password: "crash-secret" },
+    ]);
+    const resumeHome = yield* useInvokingHome([
+      { host: served.host, path: "remote.git", username: "crash-user", password: "crash-secret" },
+    ]);
+    const helperModule = fileURLToPath(
+      new URL("./support/credential-helper-entry.ts", import.meta.url),
+    );
+    const runId = "git-push-crash-protected";
+    yield* withStorage(root, function* () {
+      yield* createRun({ runId });
+    });
+    const path = runPath(root, runId);
+
+    const during = yield* scoped(function* () {
+      const child = yield* execProcess(process.execPath, {
+        arguments: [
+          "run",
+          "--allow-all",
+          "--frozen",
+          CRASH_CHILD,
+          "push",
+          root,
+          runId,
+          // Only the credential-free locator and two host paths cross this
+          // boundary. What the child authenticates with is whatever its own
+          // isolated home holds.
+          served.locator,
+          crashHome.home,
+          helperModule,
+        ],
+        cwd: REPOSITORY,
+      });
+      const ready = withResolvers<Record<string, unknown>>();
+      const decoder = new TextDecoder();
+      let out = "";
+      let err = "";
+      yield* spawn(function* () {
+        const subscription = yield* child.stdout;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          out += decoder.decode(next.value, { stream: true });
+          const end = out.indexOf("\n");
+          if (end >= 0) {
+            ready.resolve(JSON.parse(out.slice(0, end)));
+          }
+          next = yield* subscription.next();
+        }
+      });
+      // Drained, so a child that died on its way to the handshake says why
+      // rather than leaving this waiting on a line that is never coming.
+      yield* spawn(function* () {
+        const subscription = yield* child.stderr;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          err += decoder.decode(next.value, { stream: true });
+          next = yield* subscription.next();
+        }
+      });
+
+      const announcement = yield* race([
+        ready.operation,
+        call(function* (): Operation<Record<string, unknown>> {
+          const status = yield* child.join();
+          throw new Error(
+            `the protected push crash child ended before its handshake ` +
+              `(${JSON.stringify(status)}): ${err}`,
+          );
+        }),
+      ]);
+
+      // Read from outside the child, while it is still standing in its own
+      // uncommitted transaction.
+      const outside = committedTypes(path);
+      process.kill(child.pid, "SIGKILL");
+      const status = yield* child.join();
+      return { announcement, outside, status };
+    });
+
+    // Killed, not asked. A signal performs no cleanup, no commit and no
+    // rollback, which is the only way to produce the state under test.
+    expect(during.status.signal).toBe("SIGKILL");
+    expect(during.status.code ?? null).toBeNull();
+    expect(during.announcement["pushed"]).toBe(true);
+
+    // The two ends disagree, and they disagreed before the signal as well as
+    // after it: the remote holds the branch and the run's own history has no
+    // result for the push that put it there.
+    expect(during.outside).not.toContain(GIT_HOST_EFFECT);
+
+    // The crash process acquired twice: once for the Repository it created, and
+    // once for the Push it performed. Its chain was asked nothing else.
+    expect(yield* crashHome.operations()).toEqual(["get", "get"]);
+
+    // Exactly one accepted publication reached the remote, and the journal knows
+    // nothing about it.
+    const accepted = served.requests.filter(
+      (request) =>
+        request.accepted && request.method === "POST" && request.path.endsWith("/git-receive-pack"),
+    );
+    expect(accepted).toHaveLength(1);
+    expect(committedTypes(path)).not.toContain(GIT_HOST_EFFECT);
+
+    const pushedCommit = remoteBranch(bare, PUSH_BRANCH);
+    expect(pushedCommit).toBeDefined();
+
+    yield* withStorage(root, function* () {
+      const opened = yield* WorkflowRunStorage.operations.lookup(runId);
+      if (!opened.ok) {
+        throw opened.error;
+      }
+      const database = opened.value;
+      const counting = countingHost(
+        denoRepositoryHost({
+          authentication: denoGitAuthentication({
+            ambient: resumeHome.ambient,
+            assembly: TEST_HELPER,
+          }),
+        }),
+      );
+      yield* runWorkflowDocument(database, pushDocument(served.locator), countingOptions(counting));
+
+      // A different chain entirely, asked once — the Repository replays from
+      // what the crash retained and acquires nothing, so the only acquisition
+      // here is the Push's own.
+      expect(yield* resumeHome.operations()).toEqual(["get"]);
+
+      // It observed, recognized its own completion and adopted it. One remote
+      // mutation across two processes, and no second publication.
+      expect(subcommands(counting.counters).filter((name) => name === "ls-remote")).toHaveLength(1);
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(
+        served.requests.filter(
+          (request) =>
+            request.accepted &&
+            request.method === "POST" &&
+            request.path.endsWith("/git-receive-pack"),
+        ),
+      ).toHaveLength(1);
+
+      const [outcome] = yield* gitHostOutcomes(database);
+      expect(outcome?.status).toBe("ok");
+      const record = parseGitHostReconciliationRecord(outcome?.record);
+      expect(record?.decision).toBe("adopted");
+      expect(record?.preState).toEqual({ remoteCommit: pushedCommit });
+      expect(Reflect.get(Object(record?.result), "sourceCommit")).toBe(pushedCommit);
+      // One durable request, across both processes.
+      expect(yield* gitHostEvents(database)).toHaveLength(1);
+
+      expect(remoteBranch(bare, PUSH_BRANCH)).toBe(pushedCommit);
     });
   });
 });

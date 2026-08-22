@@ -20,6 +20,7 @@ import { denoGitHubAccess } from "../../src/deno/composition/github.ts";
 import type { GitHubAccess, GitHubHttpResponse } from "../../src/deno/composition/github.ts";
 import { credentialFor } from "./issue-tracker-server.ts";
 import type { CredentialCondition } from "./issue-tracker-server.ts";
+import { gitHubSource } from "../../src/deno/composition/github.ts";
 
 /** What a scenario can watch a provider do. */
 export interface ProviderLog {
@@ -158,7 +159,7 @@ export function useProviderComponents(log: ProviderLog): Operation<void> {
           failsTransport: props.failsTransport === true,
           interruptsAfterCreate: props.interruptsAfterCreate === true,
         });
-        yield* useGitHubIssues({ ceiling, access });
+        yield* useGitHubIssues({ ceiling, access: gitHubSource(access) });
         return yield* content();
       },
     },

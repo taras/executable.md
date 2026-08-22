@@ -1119,10 +1119,56 @@ transaction is what makes an interrupted attempt reach the host once.
 A provider that needs a program must also not inherit configuration the run
 merely stores. A checkout's `.git/config` is retained document data, and several
 ordinary settings in one name a destination or a program — a push URL, a URL
-rewrite, a hook, a credential helper, a signing program. The Deno push provider
-therefore runs its transport in a disposable repository of its own that reads
-the selected checkout's object database through a read-only alternate, and aims
-it at the exact private retained locator rather than at a configured remote.
+rewrite, a hook, a credential helper, an SSH command, a signing program. The
+Deno push provider therefore runs its transport in a disposable repository of
+its own that reads the selected checkout's object database through a read-only
+alternate, and aims it at the exact private retained locator rather than at a
+configured remote. The two settings that would otherwise choose how a remote
+operation authenticates — `credential.helper` and `core.sshCommand` — are fixed
+on the command line, where they outrank every configuration file, for every
+invocation that transports to a remote.
+
+Authentication itself is the one live host input such an invocation borrows, and
+it is not the same question as inherited configuration. Retained state says
+which repository an effect belongs to; it must never say who the run is, because
+an identity belongs to the machine a run is standing on and a run resumed
+elsewhere authenticates as whoever is there then. So one live provider
+invocation — a Repository creation, a Push reconciliation, a pull-request or
+Issue call — opens one authentication session lazily, for its own exact retained
+locator, after the authority checks that operation requires. Every native
+command that invocation runs attaches that same session, so an observation and
+the mutation it decided go out under one identity rather than two, and the
+session is disposed with the invocation. A later attempt on an interrupted
+request opens its own.
+
+The trusted Deno host adapter retains one HTTP credential in memory for one live
+provider invocation and exposes it only to that invocation's own Git and helper
+children, through private child-process environment. A provider-owned helper is
+what Git runs, and it answers one exact locator, so a redirected transport
+receives nothing and fails closed — and the transport declines to follow a
+redirect at all, since Git would otherwise carry a credential it already holds
+to a destination this run never authorized. `store` and `approve` reach no ambient helper
+or store; `erase` for the exact locator writes a fixed, nonsecret marker, which
+is how a refused identity is told from an absent one. Both are authentication
+unavailability, never an invalid locator. The containment is only worth what the surface around it allows: a substituted
+Git host sees every invocation, and an authenticated one carries the attachment
+the credential travels in. So the published Deno entrypoint offers a Workspace
+attachment that accepts what a host owns and nothing that could observe or
+become that host; the broad options stay inside the package.
+
+Infrastructure is only what the adapter
+watched fail: starting acquisition, installing the launcher, reading the marker
+for any reason but its absence, and removing what it made. The absence of a
+signal from the helper proves nothing — there is no readiness, preflight or
+channel to it — so an acquired credential with no rejection keeps the ordinary
+transport classification rather than acquiring a new one.
+
+A session opened for one locator never authorizes another, nothing about one is
+retained, and a completed replay opens none at all because it performs no remote
+operation to attach one to. A missing or rejected credential is ordinary live
+refusal: it proves no absence and adopts no completion, and a transport that
+carries an identity attempted with no mechanism to prove one is refused under
+its own word rather than as a locator that names nothing.
 
 Only an answer the terminal accepted decides the effect. A conflict, a permanent
 ambiguity and a temporary unavailability so accepted publish the effect's failed
@@ -2624,7 +2670,7 @@ Status is measured against main.
 | `<Repository>` / `<Worktree>` / `<Dir>` composition | names a Git repository and its linked checkouts inside the run-owned Workspace, installs each as contextual working directory, and retains creation identity beside the retained Git bytes | built on the #293 stack, Deno provider only |
 | transactional Git effects (`Git.Switch` / `Git.Add` / `Git.Commit`) | publish local Git mutations with their journal result; the enclosing Repository and the contextual working directory select which retained checkout one runs in, and neither observation carries authority — the observed record is compared with the retained row and the directory with the checkouts that row holds, so a failure of authority, of retained state or of an unrecognized native condition fails the run instead of publishing a result | built on the #294 stack, Deno provider only |
 | `Git.Push` | publishes the selected checkout's exact current named branch and commit to the same branch on the retained Repository's canonical `origin`, reconciled through the shared Git-host state machine rather than through a Workspace transaction: no props and no component result, no force, no upstream mutation and no implicit staging or committing; the durable request and record carry the Repository's filtered identity without its checkout path, and the transport runs in a provider-owned isolated control repository reading the checkout's objects through an object-source attachment whose alternates chain and object tree are proven contained before the first remote observation, aimed at the exact private retained locator | built on the #370 stack, Deno provider only |
-| `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan that requires the record's natural key, inputs and result to describe one publication — and a missing, conflicting or unreadable one fails locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN` then `GITHUB_TOKEN`, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
+| `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan that requires the record's natural key, inputs and result to describe one publication — and a missing, conflicting or unreadable one fails locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own `gh` login, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
 | `<Issue>` | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not authority: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.workflow.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The Deno workflow host installs configured GitHub middleware and installs none otherwise, so absence of configuration is fail-closed | built on the #296 stack; GitHub middleware, Deno host |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |

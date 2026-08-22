@@ -33,6 +33,11 @@ import {
   type GitFailureReason,
 } from "../../composition/errors.ts";
 import type { GitOutcome, RepositoryHost } from "./host.ts";
+import { unauthenticable } from "./authentication.ts";
+import type { GitAttachment, GitAuthenticationSession } from "./authentication.ts";
+
+/** The refusal a locator needing a credential this host has none for reports. */
+const AUTHENTICATION = "authentication-unavailable";
 
 /** The branch a checkout gets when the base names something that is not one. */
 export const PROVIDER_BRANCH = "xmd/base";
@@ -54,12 +59,20 @@ export class GitRefusal extends Error {
  * The root is also `HOME`, so Git reads no configuration belonging to whoever
  * happens to be running the host.
  */
-/** The two things one command may need beyond its arguments and its directory. */
+/** The three things one command may need beyond its arguments and its directory. */
 export interface GitCommand {
   /** Bytes handed to the command on standard input. */
   readonly input?: string;
   /** The whole Unix second an object-writing command records. */
   readonly committedAt?: number;
+  /**
+   * What the provider invocation running this command borrowed from the host.
+   *
+   * Present on the three commands in this module that leave the
+   * materialization, and absent on every other one. One session is opened per
+   * invocation, and every command that invocation runs attaches the same one.
+   */
+  readonly attachment?: GitAttachment;
 }
 
 export interface GitSession {
@@ -132,13 +145,22 @@ export function* clone(
   locator: string,
   directory: string,
   parent: string,
+  session: GitAuthenticationSession,
 ): Operation<void> {
   const outcome = yield* git.run(
     ["clone", "--no-checkout", "--no-hardlinks", "--", locator, directory],
     parent,
+    { attachment: session.attachment },
   );
   if (outcome.code !== 0) {
-    throw new GitRefusal("invalid-locator");
+    // Which refusal this is comes from what the host had, never from what Git
+    // printed: a remote writes into that stream, and a classification read out
+    // of a sentence would let it decide what this run reports. A transport that
+    // carries an identity, attempted with no mechanism to prove one, could not
+    // have authenticated whatever else may also be wrong with it.
+    throw new GitRefusal(
+      (yield* unauthenticable(locator, session)) ? AUTHENTICATION : "invalid-locator",
+    );
   }
 }
 
@@ -787,8 +809,11 @@ export function* observeRemoteRef(
   locator: string,
   ref: string,
   format: GitObjectFormat,
+  session: GitAuthenticationSession,
 ): Operation<RemoteRefObservation> {
-  const outcome = yield* git.run(["ls-remote", "--", locator, ref], directory);
+  const outcome = yield* git.run(["ls-remote", "--", locator, ref], directory, {
+    attachment: session.attachment,
+  });
   if (outcome.code !== 0) {
     return { state: "unreachable" };
   }
@@ -846,10 +871,12 @@ export function* pushRefspec(
   directory: string,
   locator: string,
   refspec: string,
+  session: GitAuthenticationSession,
 ): Operation<boolean> {
   const outcome = yield* git.run(
     ["push", "--porcelain", "--no-verify", "--", locator, refspec],
     directory,
+    { attachment: session.attachment },
   );
   return outcome.code === 0;
 }
