@@ -34,6 +34,27 @@ export interface ComponentElement {
    *  Always present — empty object {} when no eval expressions exist.
    *  A prop name appears in either props or expressions, never both. */
   expressions: Record<string, string>;
+  /**
+   * The authored text of `{…}` props the scanner could read as JSON and so
+   * resolved into `props`.
+   *
+   * Scanning happens before a name resolves, so the scanner cannot know
+   * whether the definition that will run declares the prop a capture. Reading
+   * the text as JSON is a projection — `undefined` becomes `null`, and a
+   * function, a class instance or a cycle has no JSON shape at all — and a
+   * capture exists precisely to avoid one. Keeping the authored text beside
+   * the projection lets expansion, which does know the selected definition,
+   * hand a captured prop the exact value its expression produced and every
+   * other prop the reading it has always had (§6.5).
+   *
+   * Only props written as an expression appear here. A quoted attribute is a
+   * string the author wrote, not an expression, and is `props` either way.
+   *
+   * Optional, unlike `expressions`: this is the scanner's record of how a prop
+   * was written, and an element built directly — by a test, or by a construct
+   * assembling one — was not written anywhere. Absent means the same as empty.
+   */
+  authoredExpressions?: Record<string, string>;
   children: Segment[];
   selfClosing: boolean;
   /**

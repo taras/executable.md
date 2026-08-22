@@ -373,29 +373,32 @@ has no such circle to break.
 uploading — so this is a look at the exact files that will be published, from
 the exact directory they will be published from.
 
+The manifest is a value first and text second. `<Json>` is what turns the one
+into the other, at two spaces per level, and it adds nothing around what it
+renders — so the newline every `package.json` ends with is written below, in the
+file, where you can see it.
+
+<Let as="artifactPackage" value={{
+  name: packageName,
+  version: bootstrapVersion,
+  description: `Placeholder reserving the ${packageName} package name.`,
+  license: "MIT",
+  repository: {
+    type: "git",
+    url: `git+https://github.com/${repository}.git`,
+  },
+  homepage: "https://executable.md",
+  files: ["README.md"],
+}} />
+
+<Let as="artifactManifest"><Json value={artifactPackage} /></Let>
+
 ```ts eval
-const artifactManifest = `${
-  JSON.stringify(
-    {
-      name: packageName,
-      version: bootstrapVersion,
-      description: `Placeholder reserving the ${packageName} package name.`,
-      license: "MIT",
-      repository: {
-        type: "git",
-        url: `git+https://github.com/${repository}.git`,
-      },
-      homepage: "https://executable.md",
-      files: ["README.md"],
-    },
-    null,
-    2,
-  )
-}\n`;
-const artifactDisplay = artifactManifest.trimEnd().split("\n").map((line) => `  ${line}`).join("\n");
+const artifactDisplay = artifactManifest.split("\n").map((line) => `  ${line}`).join("\n");
 ```
 
-<File path="package.json">{artifactManifest}</File>
+<File path="package.json">{artifactManifest}
+</File>
 
 <File path="README.md">
 # {packageName}

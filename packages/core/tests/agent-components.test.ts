@@ -230,6 +230,38 @@ describe("Tier AC — agent components", () => {
     expect(output.match(/<Prompt \/>/g)).toHaveLength(1);
   });
 
+  // The composition the whole component exists for, black box: a value bound by
+  // `<Let>`, rendered by `<Json>`, consumed and retained by `<Prompt>`. Import
+  // graphs cannot prove authored syntax, so the exact bytes are pinned here.
+  it("AC21: <Prompt> sends and retains exactly what <Json> rendered", function* () {
+    const stub = createStubProvider();
+    yield* installStub(stub);
+    const stream = new InMemoryStream();
+    const { result } = yield* runDoc(
+      '<Let as="schema" value={{ type: "object", required: ["bump"] }} />\n\n' +
+        "<Prompt>before<Json value={schema} />after</Prompt>\n",
+      stream,
+    );
+    expect(result.ok).toBe(true);
+
+    const expected = 'before{\n  "type": "object",\n  "required": [\n    "bump"\n  ]\n}after';
+    expect(stub.promptCalls.length).toBe(1);
+    // Two-space JSON, the authored bytes on either side, and no newline of its
+    // own between them.
+    expect(stub.promptCalls[0]!.content).toBe(expected);
+
+    const events = yield* stream.readAll();
+    const prompts = events.filter(
+      (event) => event.type === "yield" && event.description.type === "agent_prompt",
+    );
+    expect(prompts.length).toBe(1);
+    const entry = prompts[0]!;
+    if (entry.type === "yield") {
+      // `<Prompt>` still owns its own record, holding the text it consumed.
+      expect(entry.description.input).toBe(expected);
+    }
+  });
+
   it("AC4: as binding captures the response instead of emitting it", function* () {
     const stub = createStubProvider();
     yield* installStub(stub);

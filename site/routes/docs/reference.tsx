@@ -56,8 +56,19 @@ export default define.page(function Reference() {
         </li>
         <li>
           <code>&lt;Let as="name"&gt;</code>{" "}
-          binds one name in the current environment: what its children render,
-          or the exact value a <code>value</code> prop names.
+          binds one name in the current environment — what its children render,
+          or the exact value a <code>value</code>{" "}
+          prop names — and renders nothing itself.
+        </li>
+        <li>
+          <code>&lt;Json value={"{...}"} /&gt;</code>{" "}
+          renders one value as two-space JSON text where it is written, and
+          binds nothing.
+        </li>
+        <li>
+          <code>&lt;Parse schema={"{...}"} as="name"&gt;</code>{" "}
+          turns the text its children render into a validated value, and renders
+          nothing.
         </li>
         <li>
           <code>&lt;If condition={"{...}"}&gt;</code> with an optional{" "}

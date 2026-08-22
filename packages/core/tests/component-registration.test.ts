@@ -362,7 +362,7 @@ describe("Tier CR — resolution order", () => {
 
   it("CR16b: a repository file overrides every component core supplies", function* () {
     const dir = yield* useFixture();
-    for (const name of ["Fetch", "File", "Glob", "Parse", "SafeParse", "TempDir"]) {
+    for (const name of ["Fetch", "File", "Glob", "Json", "Parse", "SafeParse", "TempDir"]) {
       yield* writeTextFile(join(dir, `${name}.md`), "mine\n");
       const selection = yield* select(name, [dir]);
       expect(selection.kind).toBe("repository");
@@ -371,7 +371,7 @@ describe("Tier CR — resolution order", () => {
 
   it("CR17: core's components resolve when nothing is on disk", function* () {
     const dir = yield* useFixture();
-    for (const name of ["Fetch", "File", "Glob", "Parse", "SafeParse", "TempDir"]) {
+    for (const name of ["Fetch", "File", "Glob", "Json", "Parse", "SafeParse", "TempDir"]) {
       const selection = yield* select(name, [dir]);
       expect(selection.kind).toBe("registered");
       expect(originOf(selection)).toBe(CORE_ORIGIN);
@@ -476,6 +476,55 @@ describe("Tier CR — what a document gets", () => {
     expect(String(yield* run(dir))).toContain("MINE");
   });
 
+  it("CR22b: a repository Json.md replaces core's serializer, end to end", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "doc.md"), "<Json value={{ serialized: true }} />\n");
+    // The override declares `value` as an ordinary prop: `captures` belongs to
+    // the registration core made, and a repository file makes none.
+    yield* writeTextFile(
+      join(dir, "Json.md"),
+      ["---", "props:", "  value: { type: object }", "---", "", "MINE"].join("\n"),
+    );
+
+    // Core's own would have rendered the object as JSON text; the repository
+    // file renders a word instead, so the output says which one ran.
+    const rendered = String(yield* run(dir));
+    expect(rendered).toContain("MINE");
+    expect(rendered).not.toContain("serialized");
+  });
+
+  // The capture belongs to the definition that was selected, not to the name.
+  // An override is an ordinary Markdown component, so its `value` crosses the
+  // prop JSON boundary exactly as any other component's would.
+  it("CR22c: an override keeps ordinary prop projection, capture and all", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "doc.md"), "<Json value={undefined} />\n");
+    // `required` plus `type: null` is what makes this discriminating: the prop
+    // must arrive, and must arrive as the scanner's reading. A definition
+    // treated as capturing would strip `value` before validation, and the
+    // required check would fail instead.
+    yield* writeTextFile(
+      join(dir, "Json.md"),
+      [
+        "---",
+        "required: [value]",
+        "props:",
+        "  value: { type: 'null' }",
+        "---",
+        "",
+        "override saw the projection",
+      ].join("\n"),
+    );
+
+    // Core's `<Json>` fails this exact operand as "no JSON text", because it
+    // receives the authored `undefined`. The override receives the scanner's
+    // JSON reading of the same text — the behavior every non-capturing
+    // component has always had.
+    const rendered = yield* reportOf(() => run(dir));
+    expect(rendered).toContain("override saw the projection");
+    expect(rendered).not.toContain("no JSON text");
+  });
+
   it("CR23: a broken local component fails instead of falling back to core's", function* () {
     const dir = yield* useFixture();
     // Core's <TempDir> renders its content, so a fall-through would succeed
@@ -568,6 +617,29 @@ describe("Tier CR — inspection describes without running", () => {
     // No `returns`: declaring one would make `as` mandatory, and the
     // uncaptured mode is where a status decides whether the document carries on.
     expect("returns" in info).toBe(false);
+  });
+
+  it("CR25c: Json is an ordinary core default taking one captured operand", function* () {
+    const dir = yield* useFixture();
+    const info = yield* inspectComponent({ name: "Json", componentDirs: [dir] });
+
+    expect(info.kind).toBe("registered");
+    if (info.kind !== "registered" || info.origin.kind !== "registered") {
+      throw new Error("Json did not inspect as a registered component");
+    }
+    expect(info.origin.origin).toBe(CORE_ORIGIN);
+    // Not reserved: `Json.md` above is chosen ahead of it.
+    expect(info.origin.reserved).toBe(false);
+    // Closed and empty: `value` is a capture, and a schema cannot describe a
+    // value it never sees.
+    expect(info.props).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect("returns" in info).toBe(false);
+
+    const selection = yield* select("Json", [dir]);
+    if (selection.kind !== "registered") {
+      throw new Error("Json did not select as a registered component");
+    }
+    expect(selection.definition.captures).toEqual(["value"]);
   });
 
   it("CR26: a structural name inspects as the construct, with no definition", function* () {

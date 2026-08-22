@@ -873,6 +873,7 @@ export function* expandSegments(
           segment.name,
           segment.props,
           segment.expressions,
+          segment.authoredExpressions ?? {},
           segment.children,
           segment.selfClosing,
           hideSet,
@@ -2130,6 +2131,8 @@ function* expandComponent(
   name: string,
   props: Record<string, Json>,
   expressions: Record<string, string>,
+  /** Authored text of the props the scanner resolved into `props` (§6.5). */
+  authoredExpressions: Record<string, string>,
   children: Segment[],
   selfClosing: boolean,
   hideSet: Set<string>,
@@ -2214,6 +2217,7 @@ function* expandComponent(
       name,
       props,
       expressions,
+      authoredExpressions,
       children,
       selfClosing,
       imported,
@@ -2618,6 +2622,8 @@ function* expandFunctionComponent(
   name: string,
   props: Record<string, Json>,
   expressions: Record<string, string>,
+  /** Authored text of the props the scanner resolved into `props` (§6.5). */
+  authoredExpressions: Record<string, string>,
   children: Segment[],
   selfClosing: boolean,
   definition: FunctionComponentDefinition,
@@ -2670,10 +2676,22 @@ function* expandFunctionComponent(
   const openProps: Record<string, Json> = {};
   const openExpressions: Record<string, string> = {};
   for (const [key, value] of Object.entries(props)) {
-    if (captured.has(key)) {
+    if (!captured.has(key)) {
+      openProps[key] = value;
+      continue;
+    }
+    // The scanner resolved this one because its text reads as JSON, but the
+    // definition that was selected declares it a capture — so the reading is
+    // not what the author asked for. Evaluating the authored text is: it is
+    // the same expression, run where the by-reference contract holds, and it
+    // is the only way `value={undefined}` reaches a component as `undefined`
+    // rather than as `null`. A prop written as a quoted attribute has no
+    // authored expression and stays the literal string it was.
+    const authored = authoredExpressions[key];
+    if (authored === undefined) {
       literalCaptures[key] = value;
     } else {
-      openProps[key] = value;
+      expressionCaptures[key] = authored;
     }
   }
   for (const [key, value] of Object.entries(expressions)) {

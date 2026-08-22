@@ -2650,7 +2650,7 @@ nothing. A non-string is not an error — it is a value with no destination.
 
 #### The components core supplies
 
-Some components are core's own: `<TempDir>` (§6.11), `<Parse>` and
+Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
 `<SafeParse>` (§6.12), `<File>` (§6.13), `<Glob>` (§6.14), and `<Fetch>`
 (§6.18). Each is already
 in the module graph, so it ships in the compiled binary and every published
@@ -3642,6 +3642,8 @@ interface, and each operation is also exported directly:
 | `content(slot?)` | Render the invoking component's content, or a named slot of it; throws `ContentError` when that content fails (§5.1.2, §6.3) | throws a missing-provider error |
 | `hasContent()` | Whether the invoking element was written with content rather than self-closed | throws a missing-provider error |
 | `hasBinding()` | Whether the invocation has an engine-owned result binding — whether `as` was written (§6.10) | throws a missing-provider error |
+| `hasCapture(name)` | Whether the invocation wrote this capture prop at all (§6.5) | `false` |
+| `capture(name)` | Evaluate a capture prop now, against the caller's bindings, and deliver the result by reference (§6.5) | throws: not inside a function component invocation |
 | `handleFailure(failure)` | What an ordinary function-component failure means, after complete invocation teardown (§6.9) | fails the operation with `failure.error` |
 | `retain(resource)` | Create a resource in the invocation-site scope, so it outlives this invocation (§4.4) | throws: not inside a component invocation |
 
@@ -3667,6 +3669,18 @@ invocation (`yield* env`); a provider is middleware returning the value.
 compatibility aliases backed by `codeBlock()` and `content(slot?)`. The
 `useContent` binding injected into eval blocks (§4.3) is a separate,
 mode-carrying closure rather than this alias.
+
+`hasCapture(name)` and `capture(name)` are the other half of the invocation's
+inputs, and they are lazy on purpose. A registration's `captures` are stripped
+before expression resolution and excluded from validation (§5.3), so nothing is
+evaluated until the component asks. `hasCapture` reads the shape — was the prop
+written — without running anything, which is what lets a component refuse a
+malformed invocation before an operand expression can call a getter or a
+function. `capture` then evaluates the expression once, against the environment
+resolved at the invocation site before the invocation began, and hands back the
+exact result: no JSON round trip, no clone, no schema. An expression that throws
+throws into the component that asked for it, so the failure belongs to that
+invocation rather than becoming an engine prop error.
 
 `hasContent()` reports the shape of the invocation, not a prediction about what
 it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
@@ -4413,8 +4427,8 @@ resolved values can be type-checked. Results must be JSON-serializable
 (validated via JSON round-trip). Evaluation errors are thrown, not
 rendered as ErrorSegments — consistent with PropValidationError.
 
-A **capture** is the exception. A registration may declare props the engine does
-not resolve at all: they are stripped before expression resolution and excluded
+A **capture** is the exception. A registration (§5.3) may declare props the
+engine does not resolve at all: they are stripped before expression resolution and excluded
 from validation, so they meet neither the JSON round-trip nor the clone, and the
 component evaluates each itself with `capture()` — when, and if, it wants to.
 The value therefore arrives as the author wrote it, which is how an operand that
@@ -4423,6 +4437,18 @@ component. Nothing is evaluated for a capture the component never asks for, and
 an expression that throws throws into that component rather than becoming an
 engine prop error. A capture is not durable: it is journaled neither as a prop
 nor as a value, and a replay recomputes it from the restored bindings.
+
+The scanner resolves a `{…}` prop whose text reads as JSON, and that
+resolution is a projection like any other. It cannot know whether the prop is a
+capture, because scanning happens before a name resolves to a definition. So it
+keeps the authored text beside the reading, and expansion — which does know the
+selected definition — hands a captured prop the result of evaluating that text
+and every other prop the reading. `value={undefined}` therefore reaches a
+capturing component as `undefined` rather than as `null`, and the same prop
+written on a component that does not capture it is `null` exactly as before.
+Which of the two happens is the selected definition's answer, so a repository
+file that overrides a capturing default is an ordinary component and its props
+cross the ordinary boundary.
 
 `<Let value>` is the other exception, and it is taken earlier — while scanning.
 Resolving a JSON literal at scan time is itself a projection: `undefined` has no
@@ -5812,13 +5838,90 @@ wrapping form the directory is the invocation's own resource, so §4.4's teardow
 stops everything the content created — including daemons started inside it —
 before the directory is removed. No filesystem operation is fire-and-forget.
 
-### 6.12 Parsing JSON: `<Parse>` and `<SafeParse>`
+### 6.12 JSON in both directions: `<Json>`, `<Parse>` and `<SafeParse>`
+
+A document moves between structured values and JSON text at boundaries it
+writes down. `<Let>` introduces a value (§6.5), `<Json>` renders one as text,
+and `<Parse>` turns text back into a validated value. All three are core's own
+components (§5.3), none of them calls an agent, and none of them happens
+implicitly: ordinary `{binding}` interpolation keeps its existing string
+coercion, so a document that means JSON says so.
+
+#### Rendering a value: `<Json>`
+
+```md
+<Let as="schema" value={{ type: "object", required: ["bump"] }} />
+
+<Prompt>
+Return JSON matching this schema:
+
+<Json value={schema} />
+</Prompt>
+```
+
+`<Json>` is self-closing and contentless, and takes exactly one public prop.
+`value` is required, and its presence is syntactic — `value={undefined}` supplies
+the prop and then fails serialization. There is no `indent`, `pretty`, compact,
+replacer, key-order, schema or newline option, and `as` is not accepted: this
+renders text and binds nothing.
+
+**The invocation's shape is decided before its operand runs.** A literal `as`,
+any paired invocation — including one whose content is only whitespace — and a
+missing `value` are each refused before `value` is evaluated, so a malformed
+invocation cannot trigger a getter, a function call, or any other work the
+operand expression would do.
+
+**The operand arrives by reference.** `value` is a capture (§5.3, §6.5): the
+engine does not resolve it, so it meets neither the prop JSON round trip nor the
+clone, and the component evaluates it itself with `capture()`. Every other prop
+stays on the ordinary JSON gate. An expression that throws before it produces a
+value remains that invocation's ordinary captured-expression failure.
+
+**Serialization is one call.** The successful output is exactly what
+
+```ts
+JSON.stringify(value, null, 2)
+```
+
+produces, called once. Objects and arrays are pretty-printed two spaces per
+level; strings, numbers, booleans and `null` use native JSON representations.
+Property enumeration, nested `undefined`/function/symbol handling, non-finite
+numbers, `toJSON`, and supported built-ins are the runtime's own semantics,
+neither restated nor normalized here. The component does not sort keys,
+canonicalize values, validate against a schema, or append a trailing newline —
+a file that must end in one authors that newline where it is written. It also
+writes nothing to the value it was given: the source object or array keeps its
+identity, its contents, and its extensibility. A getter or a `toJSON` hook may
+of course change its own state, because running them is what `JSON.stringify`
+does.
+
+**The output lands where the element was written**, as one function-component
+result, so nothing is added around it and no partial prefix can escape.
+
+**Two failures, and they are different facts.** A result that is not a string
+means the value has no JSON text at all — root `undefined`, a function, a symbol
+— while an exception means serialization started and could not finish: a
+`bigint`, a circular reference, or a hook that threw. Both fail at the positioned
+`<Json>` invocation with no partial output, name the component, and distinguish
+which of the two happened. The original thrown value is preserved as the cause
+through the normal component failure chain (§6.8.1); neither the error nor the
+rejected value is interpolated into the message, because doing so could invoke a
+hostile accessor a second time.
+
+`<Json>` creates no binding, owns no scope or resource, and has no durable
+effect or journal record of its own — resolving the component is the ordinary
+`import_component` every component resolution produces. A live run or a partial
+replay reaches it through normal expansion and serializes the value that
+execution reconstructed; completed-root terminal reuse is unchanged. A
+surrounding `<Prompt>` or `<File>` keeps its own request or write record,
+including the JSON text it consumed; `<Json>` neither duplicates nor redacts it.
+
+#### Parsing text: `<Parse>` and `<SafeParse>`
 
 Generated content becomes a value a document can act on by being parsed against
 a schema. `<Parse>` binds the validated value or fails; `<SafeParse>` binds a
-result the document can inspect. Both are core's own components (§5.3), and
-neither calls an agent: parsing is provider-neutral, and repair is written in
-Markdown where a reader can see it.
+result the document can inspect. Parsing is provider-neutral, and repair is
+written in Markdown where a reader can see it.
 
 ```md
 <Parse schema={schema} as="verdict">
@@ -8423,6 +8526,24 @@ visible warning blocks, gather into a separate error report).
 | TD19 | A refused operation | A provider that denies `temporary-directory` fails the execution with the fixed diagnostic, renders no content, and lets no later sibling run |
 | TD17 | Colocated document | `xmd test packages/core/src/components/TempDir.test.md` narrates the lifetime — ordinary cwd, live directory inside, removed and restored after, a captured directory live for a sibling, and the bare form's path — with no search path and no JavaScript |
 
+### Tier JSON — `<Json>` (§6.12)
+
+| # | Test | Verify |
+|---|------|--------|
+| J1 | Text and round trip | Objects and nested arrays/objects render valid two-space JSON; scalars and `null` use native text, and the output parses back to the value |
+| J2 | Native container rules | One representative object and array show nested `undefined`, function, symbol and non-finite handling as `JSON.stringify` defines it |
+| J3 | Position | Adjacent authored bytes survive on both sides, and no newline is added |
+| J4 | Raw operand | The captured expression's exact result arrives by identity; the source object and array keep their contents, extensibility and frozen state; ordinary interpolation is unchanged |
+| J5 | Shape first | `as`, paired content including whitespace, and a missing `value` each refuse before the operand evaluates, and no binding is created |
+| J6 | Once | One expression evaluation and one `JSON.stringify` call; a `toJSON` hook runs exactly once |
+| J7 | Two failures | Root `undefined`/function/symbol fail as no JSON text; `bigint` and a cycle fail as serialization that threw; a throwing getter or `toJSON` preserves the exact cause, records the invocation position, and emits no partial JSON |
+| J7b | The authored `value={undefined}` | Fails as no JSON text and renders no `null`, while an authored `value={null}` still renders `null` |
+| J8 | Resolution | `Json.md` overrides core's default; otherwise the name inspects as an ordinary `@executablemd/core` registration with a closed empty schema and the capture list `["value"]` |
+| J9 | Durability | No JSON-specific effect is journaled, component resolution stays an ordinary import, partial replay re-serializes the reconstructed value, and completed replay runs neither the component nor its hooks |
+| J10 | Composition | `<Prompt>` sends and retains exactly the rendered JSON, with only the authored bytes around it |
+| J11 | Bootstrap migration | `components/BootstrapNpmPackage.md` builds its manifest with `<Let value>` and renders it through `<Json>`; the complete written manifest is compared byte for byte, including its trailing newline, which the document authors rather than the component |
+| J12 | One taught contract | The construct inventory, §6.12, this plan, decision 100, the site component documentation and the reference all state the same `<Let>` → `<Json>` → `<Parse>` direction and the same exclusions |
+
 ### Tier PC — `<Parse>` and `<SafeParse>`
 
 | # | Test | Verify |
@@ -8683,6 +8804,7 @@ Each row names the derivation it kills.
 | CR19/CR20 | Candidate order | Markdown before TypeScript, earlier directories first, dots addressing subdirectories |
 | CR21 | Order independence | Reserved beats default however the two were installed, across scopes and within one |
 | CR22 | End to end | A repository component replaces one of core's in a running document |
+| CR22c | An override is an ordinary component | A repository `Json.md` receives the scanner's JSON reading of `value={undefined}`, capture and all |
 | CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
 | CR24 | Structural is not shadowed | A file named after a construct never supplies it |
 | CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
@@ -9850,3 +9972,5 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 97 | `<Let>` replaces `<Capture>` with no alias | One public primitive rather than two spellings for the same syntax. `Capture` leaves the reserved set entirely, so `<Capture>` resolves an ordinary component; the project is pre-release and states no requirement to keep the old spelling |
 | 98 | `<Let value>` binds by reference, not through the prop JSON boundary | Expression evaluation and environment lookup are reused; component-prop serialization is not, at either end. The scanner resolves no JSON for this one prop, and expansion projects none, so a document can bind `undefined`, a function, a class instance or a cyclic object — values ordinary props omit, reject or rewrite — and identity holds within the execution that produced it |
 | 99 | The source is chosen before it runs | Presence of `value` and of children is read from what the author wrote, so a construct naming both sources expands no child and evaluates no expression; `value={undefined}` is the direct source, because presence is own-key presence rather than a value test |
+| 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
+| 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
