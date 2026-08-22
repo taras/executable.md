@@ -14,8 +14,11 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
-import { isCredentialHelperMode, runCredentialHelper } from "@executablemd/workflow/deno";
-import type { HelperAssembly } from "@executablemd/workflow/deno";
+import {
+  isCredentialHelperMode,
+  runCredentialHelper,
+} from "@executablemd/workflow/credential-helper";
+import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import { useDenoService } from "./deno-service.ts";
 
 const ENTRYPOINT = fileURLToPath(import.meta.url);

@@ -4,7 +4,8 @@
   "license": "MIT",
   "exports": {
     ".": "./mod.ts",
-    "./deno": "./deno.ts"
+    "./deno": "./deno.ts",
+    "./credential-helper": "./src/deno/composition/credential-helper.ts"
   },
   "publish": {
     "exclude": ["!vendor/cloudflare-computer-dofs/generated/**/*.d.ts"]

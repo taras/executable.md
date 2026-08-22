@@ -31,6 +31,7 @@ import {
   WORKSPACE_REPOSITORY,
   WORKSPACE_WORKTREE,
 } from "../../src/deno/composition/provider.ts";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { denoRepositoryHost, useGitAuthentication } from "../../src/deno/composition/host.ts";
 import type { HelperAssembly } from "../../src/deno/composition/credential-helper.ts";
@@ -107,7 +108,7 @@ export function countingHost(inner: RepositoryHost = denoRepositoryHost()): Coun
 export const TEST_HELPER: HelperAssembly = {
   runtime: "source",
   platform: "unix",
-  execPath: Deno.execPath(),
+  execPath: process.execPath,
   modulePath: fileURLToPath(new URL("./credential-helper-entry.ts", import.meta.url)),
   launcherEnvironment: launcherEnvironment(),
 };
@@ -116,7 +117,7 @@ export const TEST_HELPER: HelperAssembly = {
 function launcherEnvironment(): Record<string, string> {
   const carried: Record<string, string> = {};
   for (const name of ["HOME", "DENO_DIR", "XDG_CACHE_HOME", "PATH"]) {
-    const value = Deno.env.get(name);
+    const value = process.env[name];
     if (value !== undefined && value !== "") {
       carried[name] = value;
     }

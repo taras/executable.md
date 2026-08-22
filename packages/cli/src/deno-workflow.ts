@@ -26,7 +26,7 @@ import {
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import type { HelperAssembly } from "@executablemd/workflow/deno";
+import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
 import type { WorkflowHost } from "./workflow.ts";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
 

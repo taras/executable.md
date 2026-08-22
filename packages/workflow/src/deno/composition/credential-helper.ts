@@ -39,7 +39,7 @@ import { writeFile } from "node:fs/promises";
 import process from "node:process";
 
 /** The private variables a helper is given, and nothing else. */
-export const HELPER_VARIABLES = Object.freeze({
+export const HELPER_VARIABLES: Readonly<Record<string, string>> = Object.freeze({
   username: "XMD_HTTP_CREDENTIAL_USERNAME",
   password: "XMD_HTTP_CREDENTIAL_PASSWORD",
   protocol: "XMD_HTTP_CREDENTIAL_PROTOCOL",
@@ -49,7 +49,7 @@ export const HELPER_VARIABLES = Object.freeze({
 });
 
 /** The argument that selects the internal helper mode. */
-export const HELPER_MODE = "__xmd-credential-helper";
+export const HELPER_MODE: string = "__xmd-credential-helper";
 
 /** What a host is, said by the host rather than inferred. */
 export type HelperRuntime = "source" | "compiled";

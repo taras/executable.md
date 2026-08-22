@@ -75,26 +75,3 @@ export type {
   SuspensionControllerOptions,
   SuspensionNotice,
 } from "./src/deno/suspension.ts";
-
-/**
- * The provider-owned credential helper: its assembly, and its internal mode.
- *
- * Exported so a runtime entrypoint can state what it is and offer the mode, not
- * so anyone can call it. The mode appears in no help and in no public grammar,
- * is dispatched before anything public is parsed, and can acquire nothing on its
- * own.
- */
-export {
-  HELPER_MODE,
-  HELPER_VARIABLES,
-  helperCommand,
-  launcherName,
-  launcherProgram,
-  isCredentialHelperMode,
-  runCredentialHelper,
-} from "./src/deno/composition/credential-helper.ts";
-export type {
-  HelperAssembly,
-  HelperPlatform,
-  HelperRuntime,
-} from "./src/deno/composition/credential-helper.ts";
