@@ -115,6 +115,8 @@ export interface GitAuthenticationSession {
    * none, and the refusal vocabulary says so.
    */
   rejected(): Operation<boolean>;
+  /** Whether the provider's own helper ran, when one was installed. */
+  ran(): Operation<boolean>;
 }
 
 /**
@@ -150,6 +152,10 @@ export const UNAUTHENTICATED: GitAuthenticationSession = Object.freeze({
   // deno-lint-ignore require-yield
   *rejected(): Operation<boolean> {
     return false;
+  },
+  // deno-lint-ignore require-yield
+  *ran(): Operation<boolean> {
+    return true;
   },
 });
 
@@ -255,6 +261,14 @@ export interface CredentialRequest {
  */
 export interface CredentialLease {
   readonly acquired: boolean;
+  /**
+   * Whether the provider's own helper ran at all.
+   *
+   * A transport that failed while holding an identity has two very different
+   * explanations: a helper that declined, and a helper that could not be
+   * started. Only the first is a credential this host does not have.
+   */
+  ran(): Operation<boolean>;
   rejected(): Operation<boolean>;
   attachment(): GitAttachment;
 }
@@ -459,10 +473,14 @@ export function denoCredentialBroker(
           assembly.platform !== "windows",
         );
         const marker = join(directory, "rejected");
+        const invoked = join(directory, "invoked");
 
         yield* provide({
           get acquired() {
             return held !== undefined && !closed;
+          },
+          *ran(): Operation<boolean> {
+            return closed ? true : yield* operations.markerPresent(invoked);
           },
           *rejected(): Operation<boolean> {
             // A fixed, nonsecret file the helper writes when the transport
@@ -484,6 +502,7 @@ export function denoCredentialBroker(
                     [HELPER_VARIABLES.host]: request.host,
                     [HELPER_VARIABLES.path]: request.path ?? "",
                     [HELPER_VARIABLES.marker]: marker,
+                    [HELPER_VARIABLES.invoked]: invoked,
                   }),
                   configuration: Object.freeze([
                     // Forced on the transport too: without it Git asks the
@@ -505,6 +524,10 @@ export function denoCredentialBroker(
 function unacquired(): CredentialLease {
   return {
     acquired: false,
+    // deno-lint-ignore require-yield
+    *ran(): Operation<boolean> {
+      return true;
+    },
     // deno-lint-ignore require-yield
     *rejected(): Operation<boolean> {
       return false;
@@ -584,6 +607,10 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
             *rejected(): Operation<boolean> {
               return false;
             },
+            // deno-lint-ignore require-yield
+            *ran(): Operation<boolean> {
+              return true;
+            },
           });
           return;
         }
@@ -600,6 +627,9 @@ export function denoGitAuthentication(options: GitAuthenticationOptions = {}): G
           },
           *rejected(): Operation<boolean> {
             return lease === undefined ? false : yield* lease.rejected();
+          },
+          *ran(): Operation<boolean> {
+            return lease === undefined ? true : yield* lease.ran();
           },
           // Acquisition, not configuration. A helper that answered nothing
           // leaves this `none`, and a transport that then fails failed for want
@@ -631,6 +661,32 @@ export function noGitAuthentication(): GitAuthentication {
  * authenticated — which is a different thing from a locator that names nothing
  * and from a remote that holds nothing.
  */
+/**
+ * A host that could not run its own credential helper.
+ *
+ * Infrastructure, not authentication. The provider installed a launcher, Git was
+ * told to use it, and the program never ran — so this run learned nothing about
+ * whether an identity was available, and reporting one absent would be inventing
+ * an answer. It carries no credential and nothing a helper printed.
+ */
+export class CredentialInfrastructureError extends Error {
+  override name = "CredentialInfrastructureError";
+
+  constructor() {
+    super("the credential helper this host installed could not be run");
+  }
+}
+
+/**
+ * Whether a failed transport failed because this host could not run its helper.
+ *
+ * Asked before the refusal is classified, and only when an identity was proved:
+ * a helper that was never installed is not a helper that failed to start.
+ */
+export function* uninvokable(session: GitAuthenticationSession): Operation<boolean> {
+  return session.mechanism === "credential-helper" && !(yield* session.ran());
+}
+
 export function* unauthenticable(
   locator: string,
   session: GitAuthenticationSession,

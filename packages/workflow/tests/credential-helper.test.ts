@@ -352,30 +352,6 @@ describe("workflow credential infrastructure failures", () => {
     expect(String(raised).includes(HELD.username)).toBe(false);
   });
 
-  it("cannot install a launcher into a place it may not write", function* () {
-    const home = yield* useInvokingHome([{ host: HOST, path: PATH, ...HELD }]);
-    // A launcher naming a runtime that is not there is written, but what runs it
-    // answers nothing — the acquisition succeeded and the helper is the part
-    // that fails, which is infrastructure rather than an absent credential.
-    const broken: HelperAssembly = { ...TEST_HELPER, execPath: "/xmd-no-such-runtime" };
-
-    yield* scoped(function* () {
-      const lease = yield* denoCredentialBroker(home.ambient, {}, broken).lease(EXACT);
-      expect(lease.acquired).toBe(true);
-      const named = lease
-        .attachment()
-        .configuration.find((entry: string) => entry.startsWith("credential.helper="));
-      expect(String(named)).toContain("credential-helper");
-      // The launcher names the runtime it was told to name, and nothing about
-      // the credential is in it.
-      const written = yield* until(
-        readFile(String(named).replace("credential.helper=", ""), "utf8"),
-      );
-      expect(written).toContain("/xmd-no-such-runtime");
-      expect(written.includes(HELD.password)).toBe(false);
-    });
-  });
-
   it("treats a marker it cannot read as a failure, never as `not rejected`", function* () {
     const home = yield* useInvokingHome([{ host: HOST, path: PATH, ...HELD }]);
 
@@ -412,7 +388,15 @@ describe("workflow credential injected infrastructure faults", () => {
       writeLauncher: broken === "install" ? fault("install") : real.writeLauncher,
       markerPresent: broken === "marker-read" ? fault("marker-read") : real.markerPresent,
       removeWorkingDirectory:
-        broken === "marker-remove" ? fault("marker-remove") : real.removeWorkingDirectory,
+        broken === "marker-remove"
+          ? // Removes, then raises. A fault that skipped the removal would be
+            // leaving this suite's own directories behind on every iteration —
+            // the failure under test is the reporting of it, not the leak.
+            function* (path: string): Operation<never> {
+              yield* real.removeWorkingDirectory(path);
+              throw new Error("injected marker-remove failure");
+            }
+          : real.removeWorkingDirectory,
     };
   }
 

@@ -32,6 +32,7 @@ import type { ComponentRegistration } from "@executablemd/core";
 import { RepositoryCompositionError } from "../src/composition/errors.ts";
 import { denoRepositoryHost } from "../src/deno/composition/host.ts";
 import {
+  CredentialInfrastructureError,
   denoGitAuthentication,
   gitTransport,
   sshCommand,
@@ -152,6 +153,10 @@ function forbidden(reached: string[]): GitAuthentication {
 
 function isRepositoryRefusal(value: unknown): value is RepositoryCompositionError {
   return value instanceof RepositoryCompositionError;
+}
+
+function isInfrastructure(value: unknown): value is CredentialInfrastructureError {
+  return value instanceof CredentialInfrastructureError;
 }
 
 function* present(path: string): Operation<boolean> {
@@ -499,6 +504,41 @@ describe("workflow ambient Git authentication", () => {
   });
 });
 
+describe("workflow ambient authentication infrastructure", () => {
+  it("fails stop when the helper it installed cannot be run", function* () {
+    const root = yield* useStorageRoot();
+    const served = yield* protectedRemote(FIRST, "first");
+    const home = yield* useInvokingHome([{ host: served.host, path: REPOSITORY, ...FIRST }]);
+    // A launcher naming a runtime that is not on this machine. The identity was
+    // proved; what fails is this host running its own program.
+    const broken = { ...TEST_HELPER, execPath: "/xmd-no-such-runtime" };
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost(
+        denoRepositoryHost({
+          authentication: denoGitAuthentication({ ambient: home.ambient, assembly: broken }),
+        }),
+      );
+      const failure = yield* raised(
+        runDocument(database, document(served.locator, "unreachable"), countingOptions(counting)),
+      );
+
+      // Infrastructure, not a refusal. A run that reported "no credential"
+      // here would be turning a broken host into a clean answer, and one that
+      // reported an invalid locator would be blaming the document.
+      expect(causedBy(failure, isInfrastructure)).toBeDefined();
+      expect(causedBy(failure, isRepositoryRefusal)).toBeUndefined();
+      // Nothing was completed and nothing retained.
+      expect(yield* retainedRepositories(database)).toHaveLength(0);
+      expect(served.requests.every((request) => !request.accepted)).toBe(true);
+      // And no credential travels with the cause.
+      expect(carriesCredential(String(failure))).toBe(false);
+      expect(carriesCredential((failure as Error)?.stack ?? "")).toBe(false);
+    });
+  });
+});
+
 describe("workflow ambient authentication containment", () => {
   /**
    * A checkout's own configuration, naming the two settings this change adds to
@@ -516,10 +556,22 @@ describe("workflow ambient authentication containment", () => {
     const witness = yield* useTempDirectory("xmd-ambient-helper-");
     const sentinel = `${witness}/helper-ran`;
     const planted = `${witness}/helper.sh`;
+    const operations = `${witness}/operations`;
     yield* until(
-      writeFile(planted, ["#!/bin/sh", `echo ran > ${sentinel}`, "exit 1", ""].join("\n"), {
-        mode: 0o700,
-      }),
+      writeFile(
+        planted,
+        [
+          "#!/bin/sh",
+          // Every operation it is ever asked, recorded. `store` and `erase`
+          // reaching an ambient helper would be this run deciding what the
+          // machine should remember, which it never does.
+          `echo "$1" >> ${operations}`,
+          `echo ran > ${sentinel}`,
+          "exit 1",
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      ),
     );
     yield* until(chmod(planted, 0o700));
 
@@ -552,6 +604,9 @@ describe("workflow ambient authentication containment", () => {
       // document named never ran.
       expect(remoteBranch(bare, "publish/1.4")).toBeDefined();
       expect(yield* present(sentinel)).toBe(false);
+      // Not one operation reached it — no `get`, and no `store` or `erase`
+      // afterwards either.
+      expect(yield* present(operations)).toBe(false);
       expect((yield* gitHostOutcomes(database))[0]?.status).toBe("ok");
 
       // The trap really was armed. The same checkout, pushed the ordinary way —

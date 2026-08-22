@@ -33,7 +33,7 @@ import {
   type GitFailureReason,
 } from "../../composition/errors.ts";
 import type { GitOutcome, RepositoryHost } from "./host.ts";
-import { unauthenticable } from "./authentication.ts";
+import { CredentialInfrastructureError, unauthenticable, uninvokable } from "./authentication.ts";
 import type { GitAttachment, GitAuthenticationSession } from "./authentication.ts";
 
 /** The refusal a locator needing a credential this host has none for reports. */
@@ -153,6 +153,11 @@ export function* clone(
     { attachment: session.attachment },
   );
   if (outcome.code !== 0) {
+    if (yield* uninvokable(session)) {
+      // Not a refusal at all. This host installed a helper and could not run
+      // it, so nothing was learned about whether an identity was available.
+      throw new CredentialInfrastructureError();
+    }
     // Which refusal this is comes from what the host had, never from what Git
     // printed: a remote writes into that stream, and a classification read out
     // of a sentence would let it decide what this run reports. A transport that
