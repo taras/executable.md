@@ -99,44 +99,6 @@ export interface WorkflowWorkspaceOptions {
   readonly helper?: HelperAssembly;
 }
 
-/**
- * What a host may configure from outside this package.
- *
- * Deliberately not {@link WorkflowWorkspaceOptions}. That type carries the leaf
- * substitutions a suite needs — the Git subprocess, the temporary directory, the
- * Git-host transport — and any one of them is a seam through which a credential
- * this run acquires would become visible to whoever supplied it. A
- * `RepositoryHost` sees every `GitInvocation`, and an authenticated invocation
- * carries its attachment; a package that could install one could read what the
- * adapter is holding.
- *
- * So the public surface is what a *host* legitimately decides: which issue
- * tracker it authorizes, and how it assembles its own credential helper. The
- * broad options remain reachable from inside this package, where the suites that
- * need them live and where nothing a loaded package writes can reach.
- */
-export interface WorkflowHostOptions {
-  readonly gitHubIssues?: GitHubIssuesOptions;
-  readonly helper?: HelperAssembly;
-}
-
-/**
- * Run `operation` with this run's Workspace attached, as a host installs it.
- *
- * The one entrypoint outside this package. It accepts what a host owns and
- * nothing that could observe an authenticated Git invocation.
- */
-export function withWorkflowHostWorkspace<T>(
-  database: WorkflowRunDatabase,
-  operation: Operation<T>,
-  options: WorkflowHostOptions = {},
-): Operation<T> {
-  return withWorkflowWorkspace(database, operation, {
-    ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
-    ...(options.helper === undefined ? {} : { helper: options.helper }),
-  });
-}
-
 /** Run `operation` with this run's Workspace attached to the document. */
 export function withWorkflowWorkspace<T>(
   database: WorkflowRunDatabase,

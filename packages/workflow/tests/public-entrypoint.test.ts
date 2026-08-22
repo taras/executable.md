@@ -4,43 +4,137 @@
  * The adapter holds a credential in memory for one invocation and hands it to
  * its own Git children. That containment is only worth as much as the surface
  * around it: a `RepositoryHost` sees every `GitInvocation`, and an authenticated
- * one carries the attachment the credential travels in. If a package that a
- * document loaded could install one — or reach the options that accept one —
- * then everything else in this contract is arithmetic on a value it has already
- * read.
+ * one carries the attachment the credential travels in. If a package a document
+ * loaded could install one — or reach the options that accept one — then
+ * everything else in this contract is arithmetic on a value it has already read.
  *
- * So this suite asks the question from outside. It imports the entrypoint the
- * way anybody else would, and looks for the seams rather than trusting that they
- * are absent.
+ * So this asks from outside, through the entrypoint anybody else imports, and
+ * attempts the exploit rather than describing it. It runs in an isolated home
+ * whose helper records every question it is asked, so "nothing was reached" is
+ * something the fixture observed rather than something this file asserts about
+ * itself. No outcome is ever printed as anything but a fixed label.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { scoped, type Operation } from "effection";
 import * as published from "../deno.ts";
-import type { WorkflowHostOptions } from "../deno.ts";
-// Source-relative, and only resolvable for code that already lives here.
-import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
-
-/** The seams a host may configure, and the whole of them. */
-const HOST_OWNED = ["gitHubIssues", "helper"] as const;
+import type { WorkflowWorkspaceOptions } from "../deno.ts";
+import { useInvokingHome } from "./support/credential-home.ts";
 
 /**
- * Every name a package that imported the entrypoint can see.
+ * A compile-time proof, not a runtime one.
  *
- * Read from the module rather than from the source, so a re-export added
- * anywhere in the graph is caught here rather than by reading the file it was
- * added to.
+ * `Assert<false>` is the only instantiation that type-checks, so this line stops
+ * compiling the moment `composition` becomes a key of the published options —
+ * which is the moment a substituted host has somewhere to go.
  */
-const REACHABLE = Object.keys(published);
+type Assert<T extends false> = T;
+type CompositionIsNotAKey = Assert<
+  "composition" extends keyof WorkflowWorkspaceOptions ? true : false
+>;
+
+/** Named so the type above is used rather than merely written. */
+const COMPOSITION_IS_NOT_A_KEY: CompositionIsNotAKey = false;
+
+/** Every name a package that imported the entrypoint can see. */
+const REACHABLE: readonly string[] = Object.keys(published);
+
+/** What the attempt below found, reduced before anything is asserted. */
+type Outcome = "absent" | "reached" | "refused";
 
 describe("workflow published Deno entrypoint", () => {
-  it("offers nothing that can observe a Git invocation", function* () {
-    // Each of these is a way to see, or to become, the thing an authenticated
-    // command runs through. None of them is a host's business, and none is
-    // published.
+  it("offers no route from the entrypoint to an authenticated invocation", function* () {
+    const home = yield* useInvokingHome([
+      { host: "exploit.invalid", path: "octo/one.git", username: "u", password: "p" },
+    ]);
+
+    // The attempt. If the old factory is still published, this walks the route
+    // it opened — build a host, open a session for a locator, take the
+    // attachment — and says only which of three things happened.
+    const outcome: Outcome = yield* scoped(function* (): Operation<Outcome> {
+      const factory = (published as Record<string, unknown>)["denoRepositoryHost"];
+      if (typeof factory !== "function") {
+        return "absent";
+      }
+      try {
+        const host = (factory as (options: unknown) => Record<string, unknown>)({});
+        const open = host["useAuthentication"];
+        if (typeof open !== "function") {
+          return "refused";
+        }
+        const session = yield* (open as (locator: string) => Operation<Record<string, unknown>>)(
+          "https://exploit.invalid/octo/one.git",
+        );
+        // Reached at all is the finding. What it holds is never read, printed
+        // or compared.
+        return session["attachment"] === undefined ? "refused" : "reached";
+      } catch {
+        return "refused";
+      }
+    });
+
+    expect(outcome).toBe("absent");
+    // And the invoking chain was never asked anything, which is what makes the
+    // absence a fact about behavior rather than about a name.
+    expect(yield* home.operations()).toEqual([]);
+  });
+
+  it("never reads a legacy composition property a caller invents", function* () {
+    const home = yield* useInvokingHome([
+      { host: "exploit.invalid", path: "octo/one.git", username: "u", password: "p" },
+    ]);
+
+    const recorded: string[] = [];
+    const read: string[] = [];
+    const hostile = {
+      get composition() {
+        // Reached only if the wrapper spreads what it was handed instead of
+        // naming what it accepts.
+        read.push("composition");
+        return {
+          host: {
+            git(invocation: { args: readonly string[] }) {
+              recorded.push(invocation.args.join(" "));
+              return { code: 0, stdout: "", stderr: "" };
+            },
+            useDirectory: () => "/tmp",
+          },
+        };
+      },
+    };
+
+    // Applied rather than called, so the property travels on a real argument
+    // object through the real published function.
+    const attach = published.withWorkflowWorkspace as unknown as (
+      ...args: readonly unknown[]
+    ) => unknown;
+    try {
+      Reflect.apply(attach, undefined, [{}, function* () {}, hostile]);
+    } catch {
+      // A bogus database fails somewhere past the projection. What matters is
+      // what was read on the way there.
+    }
+
+    expect(read).toEqual([]);
+    expect(recorded).toEqual([]);
+    expect(yield* home.operations()).toEqual([]);
+  });
+
+  it("publishes the host-owned names and keeps the private seams private", function* () {
+    // Read from the module rather than the source, so a re-export added
+    // anywhere in the graph is caught here.
+    expect(REACHABLE).toContain("withWorkflowWorkspace");
+    for (const constant of [
+      "WORKSPACE_GIT_ADD",
+      "WORKSPACE_GIT_SWITCH",
+      "WORKSPACE_REPOSITORY",
+      "WORKSPACE_WORKTREE",
+    ]) {
+      expect(REACHABLE).toContain(constant);
+    }
     for (const seam of [
       "denoRepositoryHost",
-      "withWorkflowWorkspace",
       "useRepositoryComposition",
       "useGitComposition",
       "denoGitAuthentication",
@@ -48,59 +142,6 @@ describe("workflow published Deno entrypoint", () => {
     ]) {
       expect(REACHABLE).not.toContain(seam);
     }
-  });
-
-  it("publishes one Workspace attachment, and it is the narrow one", function* () {
-    expect(REACHABLE).toContain("withWorkflowHostWorkspace");
-    expect(REACHABLE).not.toContain("withWorkflowWorkspace");
-  });
-
-  it("accepts only what a host owns", function* () {
-    // A value, so the shape is checked by the compiler rather than described in
-    // a comment. Adding `composition` here stops compiling, which is the point:
-    // the option that carries a substituted host is not on this type.
-    const options: WorkflowHostOptions = {};
-    const named: readonly string[] = HOST_OWNED;
-    expect(named).toEqual(["gitHubIssues", "helper"]);
-    expect(Object.keys(options)).toEqual([]);
-  });
-
-  it("hands a substituted host no route in, however it is spelled", function* () {
-    // The exploit, attempted rather than reasoned about: a package that loaded
-    // this entrypoint builds the recording host it would want and looks for
-    // somewhere to put it.
-    const recorded: unknown[] = [];
-    const hostile = {
-      git(invocation: unknown) {
-        recorded.push(invocation);
-        return { code: 0, stdout: "", stderr: "" };
-      },
-      useDirectory: () => "/tmp",
-    };
-
-    const attempted = published as unknown as Record<string, unknown>;
-    // Nothing published takes one. `withWorkflowHostWorkspace` is the only
-    // attachment, and its third argument names two members, neither of which is
-    // a host.
-    const attach = attempted["withWorkflowHostWorkspace"];
-    expect(typeof attach).toBe("function");
-    // Its own arity: a database, an operation, and options. A fourth positional
-    // seam would be another way in.
-    expect((attach as (...args: unknown[]) => unknown).length).toBeLessThanOrEqual(3);
-
-    // And no published name is a host factory that would produce one either.
-    for (const name of REACHABLE) {
-      expect(name).not.toContain("RepositoryHost");
-      expect(name).not.toContain("Composition");
-    }
-    expect(recorded).toEqual([]);
-    expect(hostile.git({})).toEqual({ code: 0, stdout: "", stderr: "" });
-  });
-
-  it("keeps the broad options reachable from inside the package", function* () {
-    // Not a loophole: this import is source-relative and only resolves for code
-    // that already lives here. The suites that substitute a Git subprocess need
-    // it, and a loaded package cannot write it.
-    expect(typeof withWorkflowWorkspace).toBe("function");
+    expect(COMPOSITION_IS_NOT_A_KEY).toBe(false);
   });
 });

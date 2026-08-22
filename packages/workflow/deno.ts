@@ -44,14 +44,21 @@ export {
   workflowRunPath,
 } from "./src/deno/path.ts";
 export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
-// The narrow one. `withWorkflowWorkspace` and its options carry the leaf
-// substitutions a suite needs — the Git subprocess, the temporary directory, the
-// Git-host transport — and a `RepositoryHost` sees every `GitInvocation`,
-// attachment included. A package that could install one could read the
-// credential this adapter is holding, so none of that crosses this entrypoint;
-// the suites that need it import from source, inside the package.
-export { withWorkflowHostWorkspace } from "./src/deno/workspace/host.ts";
-export type { WorkflowHostOptions } from "./src/deno/workspace/host.ts";
+// The narrow one, under the name a host already knows. The function beside it
+// in `workspace/host.ts` accepts the leaf substitutions a suite needs — the Git
+// subprocess, the temporary directory, the Git-host transport — and a
+// `RepositoryHost` sees every `GitInvocation`, attachment included. A package
+// that could install one could read the credential this adapter is holding, so
+// none of that crosses this entrypoint; the suites that need it import from
+// source, inside the package.
+export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
+export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
+export {
+  WORKSPACE_GIT_ADD,
+  WORKSPACE_GIT_SWITCH,
+  WORKSPACE_REPOSITORY,
+  WORKSPACE_WORKTREE,
+} from "./src/deno/composition/provider.ts";
 export {
   GITHUB,
   parseGitHubIssueTarget,
