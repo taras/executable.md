@@ -880,6 +880,71 @@ describe("Tier NO — session ownership", () => {
     });
   });
 
+  it("NO11: a release whose ACP close failed keeps the session owned", function* () {
+    // The ordinary release path, which `session()` and a prompt's cleanup
+    // share. A close that failed released nothing, so nothing may say this
+    // owner stopped — and the next one is told to recover the session rather
+    // than being handed one an unfinished release may still be in.
+    for (const site of ["session", "prompt"] as const) {
+      const harness = createFakeRuntime();
+      const trace = newTrace();
+      // Observed inside, asserted outside: this scope's teardown reports the
+      // close it could not complete, and a failure raised in the body would be
+      // replaced by it — so an assertion in there proves nothing.
+      const seen: Record<string, unknown> = {};
+      let reported: Error | undefined;
+      try {
+        yield* scoped(function* () {
+          yield* installLaunchStack(harness, trace);
+          harness.closeFailure = new Error("the agent connection would not close");
+
+          if (site === "session") {
+            yield* Agent.operations.session();
+          } else {
+            yield* scoped(function* () {
+              const stream = yield* Agent.operations.prompt("hello", {});
+              const subscription = yield* stream;
+              let next = yield* subscription.next();
+              while (!next.done) {
+                next = yield* subscription.next();
+              }
+            });
+          }
+
+          const ensured = harness.ensureCalls.length;
+          const refusal = yield* attempt(trace, INSTRUCTIONS);
+          seen.establishedOne = ensured === 1;
+          seen.refusal = refusal?.class;
+          seen.ownership = trace.ownership.acquisitions.at(-1)?.outcome;
+          seen.noFurtherAcp = harness.ensureCalls.length === ensured;
+          seen.launches = trace.launches.length;
+
+          // Let teardown's own close succeed, so what it reports below is the
+          // one release that actually failed.
+          harness.closeFailure = undefined;
+        });
+      } catch (error) {
+        reported = error instanceof Error ? error : new Error(String(error));
+      }
+
+      expect([site, seen]).toEqual([
+        site,
+        {
+          establishedOne: true,
+          // Quiescence was never acknowledged, so the record is still active,
+          // and the next owner is refused before any ACP work.
+          refusal: "session-recovery-required",
+          ownership: "recovery-required",
+          noFurtherAcp: true,
+          launches: 0,
+        },
+      ]);
+      // Preserved: the provider scope still reports the close it could not
+      // complete, rather than swallowing it to keep the session looking clean.
+      expect([site, reported?.message]).toEqual([site, "the agent connection would not close"]);
+    }
+  });
+
   it("NO10: no launch path ever discards persistent session state", function* () {
     const harness = createFakeRuntime();
     const trace = newTrace();

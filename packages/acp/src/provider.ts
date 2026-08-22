@@ -966,7 +966,12 @@ function* useAcpxProviderState(
       const acp = yield* getRuntime();
       yield* until(acp.close({ handle: entry.handle, reason: "releasing session ownership" }));
     } catch (error) {
+      // Reported, and the entry stays live. A close that failed released
+      // nothing, and marking it stale here would tell `holding()` this scope
+      // holds nothing — which is what lets the caller acknowledge quiescence
+      // and publish an idle record for a session ACP may still be in.
       cleanupErrors.push(toError(error));
+      return;
     }
     entry.stale = true;
   }
