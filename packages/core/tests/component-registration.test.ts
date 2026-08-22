@@ -576,55 +576,6 @@ describe("Tier CR — what a document gets", () => {
 
     expect(String(yield* run(dir))).toContain("LOADED");
   });
-
-  // A capture is declared on the component, not only on a registration: the
-  // same file has to mean the same thing whichever tier supplies it.
-  it("CR35: a repository .ts component declares its own captures", function* () {
-    const body = [
-      "import { capture } from '@executablemd/core';",
-      "export const props = { type: 'object', properties: {}, additionalProperties: false };",
-      "export default function*() { return `operand:${typeof (yield* capture('value'))}`; }",
-    ];
-
-    /** One fixture directory holding the document and a `Probe.ts`. */
-    function* probing(declaration: string[]): Operation<string> {
-      // A directory per variant, because a module is cached by URL: rewriting
-      // one path would keep running whichever version was imported first.
-      const dir = yield* useLocalFixture();
-      yield* writeTextFile(join(dir, "doc.md"), '<Probe value={Symbol("live")} />\n');
-      yield* writeTextFile(join(dir, "Probe.ts"), [...declaration, ...body].join("\n"));
-      return yield* reportOf(() => run(dir));
-    }
-
-    // Without the export, `value` is an ordinary prop: it meets the JSON gate
-    // and the closed schema, and never reaches the component. This is the
-    // control — it is what makes the assertion below about the export.
-    const ungated = yield* probing([]);
-    expect(ungated).not.toContain("operand:");
-    expect(ungated).toContain("non-serializable value (symbol)");
-
-    // A symbol is a value JSON cannot describe at all, so one arriving intact
-    // is proof the engine left the prop alone rather than projecting it. A
-    // scan-time JSON literal would not prove it: the scanner resolves those
-    // before expansion, so only an expression reaches the component raw.
-    expect(yield* probing(["export const captures = ['value'];"])).toContain("operand:symbol");
-  });
-
-  it("CR36: a repository .ts component cannot capture a name the engine owns", function* () {
-    const dir = yield* useLocalFixture();
-    yield* writeTextFile(join(dir, "doc.md"), "<Probe />\n");
-    yield* writeTextFile(
-      join(dir, "Probe.ts"),
-      ["export const captures = ['as'];", "export default function*() { return 'LOADED'; }"].join(
-        "\n",
-      ),
-    );
-
-    const report = yield* reportOf(() => run(dir));
-    expect(report).toContain("the engine owns that prop");
-    // Refused at load, so the component never ran.
-    expect(report).not.toContain("LOADED");
-  });
 });
 
 describe("Tier CR — inspection describes without running", () => {

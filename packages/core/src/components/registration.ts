@@ -157,12 +157,8 @@ function collision(name: string, kind: Kind, first: string, second: string): Err
 /**
  * A capture is a prop the schema never sees, so it may not also be one the
  * schema describes, and it may not be a name the engine already owns.
- *
- * Exported because a repository `.ts` component declares captures too
- * (§5.1.2), and the two declaration sites are held to one set of rules rather
- * than to two that can drift.
  */
-export function assertUsableCaptures(
+function assertUsableCaptures(
   name: string,
   captures: readonly string[] | undefined,
   props: PropsSchema,

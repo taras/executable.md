@@ -22,29 +22,6 @@ export function parseFrontmatter(raw: unknown): ParsedFrontmatter {
 }
 
 /**
- * Parse a `captures` declaration into the prop names the engine leaves alone.
- *
- * Shape only: an array of non-empty strings. Which names a component may
- * actually claim is `assertUsableCaptures()`'s question, so a registration and
- * a `.ts` export are held to one set of rules rather than two.
- *
- * There is no Markdown spelling. A capture arrives by reference, and a
- * Markdown component's body reads its props through interpolation, which has
- * only the JSON reading of a value to interpolate.
- */
-export function parseCapturesDeclaration(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`"captures" must be an array of prop names`);
-  }
-  return value.map((entry) => {
-    if (typeof entry !== "string" || entry.length === 0) {
-      throw new Error(`"captures" must be an array of prop names`);
-    }
-    return entry;
-  });
-}
-
-/**
  * Parse a `returns` declaration into a return schema. Markdown frontmatter
  * and a function component's `export const returns` share this, so the two
  * declaration sites cannot drift.

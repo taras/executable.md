@@ -1,11 +1,12 @@
 /**
  * Tier JSON — `<Json>` (spec §6.12).
  *
- * `Json.test.md` is the reader-facing half: what the text looks like and what
- * parses back out of it. This is the half a document cannot safely say. The
- * operands here are hostile on purpose — a getter that counts its own reads, a
- * `toJSON` that throws, a cycle, a `bigint` — and Markdown has no way to write
- * them without an eval block that would teach the wrong thing.
+ * Two halves. The first is what the text looks like and what parses back out
+ * of it, driven through real expansion of authored source. The second is what
+ * a document cannot safely say: the operands there are hostile on purpose — a
+ * getter that counts its own reads, a `toJSON` that throws, a cycle, a
+ * `bigint` — and Markdown has no way to write them without an eval block that
+ * would teach the wrong thing.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -111,6 +112,112 @@ function reaches(error: unknown, target: unknown, seen = new Set<unknown>()): bo
     ? reaches(error.cause, target, seen)
     : false;
 }
+
+describe("Tier JSON — what the text says", () => {
+  it("J1: an object renders two-space JSON that parses back to it", function* () {
+    const source = { name: "widget", version: 2, tags: ["a", "b"] };
+    const result = yield* run("<Json value={source} />\n", { source });
+
+    expect(result.output.trim()).toBe(
+      [
+        "{",
+        '  "name": "widget",',
+        '  "version": 2,',
+        '  "tags": [',
+        '    "a",',
+        '    "b"',
+        "  ]",
+        "}",
+      ].join("\n"),
+    );
+    // Valid JSON, and the same value: layout is pinned above, meaning here.
+    expect(JSON.parse(result.output)).toEqual(source);
+  });
+
+  it("J1: nesting indents one level deeper each time", function* () {
+    const source = { matrix: [[1, 2]], meta: { deep: { ok: true } } };
+    const result = yield* run("<Json value={source} />\n", { source });
+
+    expect(result.output.trim()).toBe(
+      [
+        "{",
+        '  "matrix": [',
+        "    [",
+        "      1,",
+        "      2",
+        "    ]",
+        "  ],",
+        '  "meta": {',
+        '    "deep": {',
+        '      "ok": true',
+        "    }",
+        "  }",
+        "}",
+      ].join("\n"),
+    );
+  });
+
+  it("J1: arrays and scalars use their native JSON text", function* () {
+    const cases: ReadonlyArray<readonly [string, unknown, string]> = [
+      ["list", ["alpha", "beta"], '[\n  "alpha",\n  "beta"\n]'],
+      ["text", "widget", '"widget"'],
+      ["count", 42, "42"],
+      ["flag", true, "true"],
+      ["nothing", null, "null"],
+    ];
+    for (const [name, value, expected] of cases) {
+      const result = yield* run(`<Json value={${name}} />\n`, { [name]: value });
+      expect(result.observed).toEqual([]);
+      expect(result.output.trim()).toBe(expected);
+    }
+  });
+
+  it("J2: container members follow native JSON rules", function* () {
+    const source = {
+      kept: 1,
+      dropped: undefined,
+      run: () => {},
+      tag: Symbol("tag"),
+      huge: Infinity,
+      unknown: NaN,
+      list: [undefined, () => {}, Infinity],
+    };
+    const result = yield* run("<Json value={source} />\n", { source });
+
+    // Omitted in an object, `null` in an array — `JSON.stringify`'s rules, not
+    // this component's, and not normalized on the way through.
+    expect(result.output.trim()).toBe(
+      [
+        "{",
+        '  "kept": 1,',
+        '  "huge": null,',
+        '  "unknown": null,',
+        '  "list": [',
+        "    null,",
+        "    null,",
+        "    null",
+        "  ]",
+        "}",
+      ].join("\n"),
+    );
+  });
+
+  it("J3: the text lands in place, with nothing added around it", function* () {
+    const result = yield* run("before<Json value={source} />after\n", { source: { ok: true } });
+
+    expect(result.output).toContain('before{\n  "ok": true\n}after');
+  });
+
+  it("J4: ordinary interpolation still coerces rather than serializing", function* () {
+    const source = { name: "widget" };
+    const result = yield* run("<Json value={source} />|{source}\n", { source });
+
+    const [rendered = "", interpolated = ""] = result.output.trim().split("|");
+    expect(rendered).toBe('{\n  "name": "widget"\n}');
+    // Unchanged: choosing JSON is something the document says out loud.
+    expect(interpolated).toBe("[object Object]");
+  });
+});
 
 describe("Tier JSON — the operand arrives live", () => {
   it("J4/J6: evaluates the expression once and serializes that exact object", function* () {
