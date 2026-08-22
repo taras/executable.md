@@ -86,6 +86,7 @@ export type {
  */
 export {
   HELPER_MODE,
+  HELPER_VARIABLES,
   helperCommand,
   launcherName,
   launcherProgram,

@@ -26,6 +26,15 @@ import {
   GitHubIssuesConfigError,
   gitHubIssuesConfiguration,
 } from "../src/github-issues-config.ts";
+import {
+  HELPER_MODE,
+  helperCommand,
+  isCredentialHelperMode,
+  launcherName,
+  launcherProgram,
+} from "@executablemd/workflow/deno";
+import type { HelperAssembly, HelperPlatform, HelperRuntime } from "@executablemd/workflow/deno";
+import { HELPER_VARIABLES } from "@executablemd/workflow/deno";
 
 /** The one sentence a host without workflow support says. */
 const UNSUPPORTED =
@@ -209,5 +218,135 @@ describe("Tier WFH — GitHub issue handling is host configuration", () => {
       expect(raised).toBeInstanceOf(GitHubIssuesConfigError);
       expect(String(raised)).toContain(GITHUB_ISSUES_ENV);
     }
+  });
+});
+
+/**
+ * Tier WFH — the credential helper each host assembles.
+ *
+ * A host knows what it is; a library guessing from an executable's name does
+ * not. So the runtime entrypoints state whether they are Deno source or a
+ * compiled binary and which platform they are standing on, and this is where
+ * those four combinations are held to one contract.
+ *
+ * The values are injected rather than read from this machine, which is what lets
+ * the Windows shapes be proved on a host that is not Windows. Actually executing
+ * them there is delivery's business; what is frozen here is the assembly.
+ */
+describe("Tier WFH — the credential helper is host assembly", () => {
+  const MODULE = "/opt/xmd source/packages/workflow/helper.ts";
+  const SPACED = "C:\\Program Files\\xmd\\xmd.exe";
+
+  function assembly(
+    runtime: HelperRuntime,
+    platform: HelperPlatform,
+    execPath: string,
+    modulePath?: string,
+  ): HelperAssembly {
+    return { runtime, platform, execPath, ...(modulePath === undefined ? {} : { modulePath }) };
+  }
+
+  it("names the module to Deno from source, and the binary itself when compiled", function* () {
+    // From source the executable is Deno, so the helper's module has to be
+    // named to it. Compiled, the executable is the host and carries its own
+    // mode: there is no module to name and none is invented.
+    expect(helperCommand(assembly("source", "unix", "/usr/local/bin/deno", MODULE))).toEqual([
+      "/usr/local/bin/deno",
+      "run",
+      "--allow-all",
+      MODULE,
+      HELPER_MODE,
+    ]);
+    expect(helperCommand(assembly("compiled", "unix", "/usr/local/bin/xmd"))).toEqual([
+      "/usr/local/bin/xmd",
+      HELPER_MODE,
+    ]);
+  });
+
+  it("writes a shell launcher on Unix and a batch launcher on Windows", function* () {
+    const unix = launcherProgram(assembly("source", "unix", "/usr/local/bin/deno", MODULE));
+    expect(unix.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(launcherName(assembly("source", "unix", "/usr/local/bin/deno", MODULE))).toBe(
+      "credential-helper",
+    );
+
+    // A `#!` line means nothing on Windows, and a shell that is not present
+    // cannot be what starts a credential helper.
+    for (const windows of [
+      assembly("source", "windows", "C:\\deno\\deno.exe", MODULE),
+      assembly("compiled", "windows", SPACED),
+    ]) {
+      const written = launcherProgram(windows);
+      expect(written).not.toContain("#!");
+      expect(written.startsWith("@echo off")).toBe(true);
+      expect(launcherName(windows)).toBe("credential-helper.cmd");
+    }
+  });
+
+  it("quotes a path with spaces on either platform", function* () {
+    // Neither `Program Files` nor a source tree somebody checked out into a
+    // directory with a space in it may split into two words.
+    const windows = launcherProgram(assembly("compiled", "windows", SPACED));
+    expect(windows).toContain(`"${SPACED}"`);
+
+    const unix = launcherProgram(assembly("source", "unix", "/opt/my deno/deno", MODULE));
+    expect(unix).toContain("'/opt/my deno/deno'");
+    expect(unix).toContain(`'${MODULE}'`);
+  });
+
+  it("passes Git's operation through, whatever the platform", function* () {
+    // Git appends `get`, `store` or `erase` to whatever it runs, and the
+    // launcher is the thing that has to hand it on.
+    expect(launcherProgram(assembly("source", "unix", "/usr/local/bin/deno", MODULE))).toContain(
+      '"$@"',
+    );
+    expect(launcherProgram(assembly("compiled", "windows", SPACED))).toContain("%*");
+  });
+
+  it("puts no credential, locator or marker in any launcher", function* () {
+    // A launcher outlives nothing: everything it would need to answer with
+    // reaches the helper through the private environment of the one command
+    // that installed it.
+    for (const shape of [
+      assembly("source", "unix", "/usr/local/bin/deno", MODULE),
+      assembly("compiled", "unix", "/usr/local/bin/xmd"),
+      assembly("source", "windows", "C:\\deno\\deno.exe", MODULE),
+      assembly("compiled", "windows", SPACED),
+    ]) {
+      const written = launcherProgram(shape);
+      for (const variable of Object.values(HELPER_VARIABLES)) {
+        expect(written).not.toContain(variable);
+      }
+      expect(written).not.toContain("password");
+      expect(written).not.toContain("username");
+      expect(written).not.toContain("rejected");
+    }
+  });
+
+  it("is an internal mode, dispatched before public parsing and absent from help", function* () {
+    // Selected by an argument no public grammar mentions, and a caller who did
+    // not select it gets the ordinary command line unchanged.
+    expect(isCredentialHelperMode([HELPER_MODE, "get"])).toBe(true);
+    expect(isCredentialHelperMode(["run", "flow.md"])).toBe(false);
+    expect(isCredentialHelperMode([])).toBe(false);
+
+    yield* useFixture(function* (fixture) {
+      const help = yield* runCli(["--help"], {
+        cwd: fixture.dir,
+        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+      }).join();
+      expect(help.code).toBe(0);
+      expect(help.stdout).not.toContain(HELPER_MODE);
+      // The mode itself, not the word: `--secret-detection` legitimately says
+      // what it scans for, and this is about a grammar nobody is offered.
+      expect(help.stdout).not.toContain("credential-helper");
+
+      const workflow = yield* runCli(["workflow", "--help"], {
+        cwd: fixture.dir,
+        env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: fixture.runs },
+      }).join();
+      expect(workflow.stdout).not.toContain(HELPER_MODE);
+      expect(workflow.stdout).not.toContain("credential-helper");
+    });
   });
 });

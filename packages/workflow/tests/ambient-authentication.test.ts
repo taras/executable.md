@@ -1000,16 +1000,6 @@ describe("workflow ambient authentication cancellation", () => {
       expect(yield* retainedRepositories(database)).toHaveLength(0);
       expect(watcher.surviving()).toEqual([]);
 
-      // The whole order, pinned. What must not happen is an authentication
-      // artifact being removed while an authenticated connection is still open,
-      // and the remote's own view of that connection ending sits before the
-      // removal here.
-      //
-      // `released` is first because it is an in-memory reference dropped in the
-      // same turn as the kill, while the remote learns of the closed socket on a
-      // later turn of this process's loop — the transport is already gone when
-      // it is recorded, not still running. Nothing between the two touches the
-      // filesystem or the network.
       // What must not happen is an authentication artifact being removed while
       // an authenticated connection is still open, so the remote's own view of
       // that connection ending is placed before the removal.
