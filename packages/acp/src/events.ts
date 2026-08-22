@@ -19,11 +19,21 @@ export interface TurnIdentity {
   session: Session;
 }
 
+/**
+ * What the host decided about this turn, whatever the adapter reported.
+ *
+ * A refusal the host authored — a denied native permission request — outranks
+ * the adapter's own result: an adapter that carries on after being told no would
+ * otherwise report a turn the host had already refused as completed.
+ */
+export type TurnRefusal = () => Error | undefined;
+
 export function* consumeTurn(
   turn: AcpRuntimeTurn,
   identity: TurnIdentity,
   channel: Channel<AgentPromptEvent, string>,
   markCompleted: () => void,
+  refused?: TurnRefusal,
 ): Operation<void> {
   yield* channel.send({ type: "started", agent: identity.agent, session: identity.session });
   let text = "";
@@ -43,6 +53,10 @@ export function* consumeTurn(
       status: "failed",
       error: error instanceof Error ? error : new Error(String(error)),
     };
+  }
+  const refusal = refused?.();
+  if (refusal) {
+    terminal = { type: "terminal", status: "failed", error: refusal };
   }
   yield* channel.send(terminal);
   markCompleted();

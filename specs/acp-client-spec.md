@@ -275,6 +275,71 @@ inside a more permissive one can never be overruled by it.
 
 Every permission request therefore receives a concrete decision.
 
+### The workflow Agent profile
+
+`xmd workflow` installs a stricter profile than `xmd run`, and installs it only
+while a live or partial run is attached. A completed replay restores its Prompt
+records without contacting a provider at all, so it starts nothing.
+
+Under that profile an Agent receives no Workspace, checkout, materialized root,
+caller path or ACP `additionalDirectories`. Its process runs in a directory the
+host owns: created empty before the session is established, never written to by
+this host, never read back, and removed when the attachment ends. The runtime is
+created with `mcpServers: []`, each session with `allowedTools: []`, and the
+permission mode is `deny-all` with non-interactive denial. A fixed session
+instruction layer states that boundary to the Agent in the same terms.
+
+`allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
+omission is ACPX's own default, and this host is making a different statement.
+
+A native permission request under this profile does not reach
+`Agent.requestPermission`. The provider answers it: a reject option when ACP
+offered one, otherwise cancellation — and the turn the request belonged to fails
+with a fixed diagnostic, whatever the adapter reports afterwards. An authored
+`<ApproveAll>`, or any other public permission handler, composes around nothing
+here, because there is no native tool authority to widen. The diagnostic names
+nothing the request carried: no tool title, raw input, path or command.
+
+This is what the host asks for and what it refuses. It is not a proof that every
+ACP adapter exposes no tool when asked for none; that portable proof is tracked
+separately and does not widen this ceiling.
+
+Nothing else changes. `<Prompt>` is still exactly one turn, the Agent Api gains
+no operation, and `xmd run` keeps its caller-selected cwd, its omitted MCP and
+session options, and its public permission routing.
+
+#### Retained sessions
+
+A provider session outlives one execution, so a continued run reattaches the
+conversation it was having rather than replaying its transcript into a new one.
+The logical key is derived from the workflow run, the provider, the resolved
+agent command and the authored `<Session>` name — with a literal marker for an
+unnamed one — and it is also the key ACPX holds the session under. A directory is
+not part of it: the host-owned working directory is arrangement that is recreated
+empty on every attachment.
+
+The run retains one small record per logical key, beside its own storage: the
+record's version, the identity it was created under, the ACPX session key, the
+fingerprint of the session policy in force when the session was created, and the
+provider-native session identity once the adapter asserts one. It holds no prompt
+text and no transcript.
+
+Continuation is decided before ACPX is contacted:
+
+- no record means this session has never been established, and one may be
+  created;
+- a record whose identity and policy fingerprint still agree, and whose native
+  session the provider still holds, reattaches;
+- an unreadable record, a record from a version this host does not have, a
+  changed provider, agent or policy, a provider that no longer holds the session,
+  and an adapter that answers with a different native session are each one
+  explicit incompatibility.
+
+No incompatible case starts a replacement session. ACPX fixes a session's
+creation-time options when the ACP session is created and ignores them when it
+reuses a persistent record, so continuing without comparing the retained policy
+would be continuing a session created under a wider one.
+
 ## Command-line configuration
 
 `xmd run` configures the agent stack; the options are exclusive to it, and
@@ -378,6 +443,14 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
+- **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
+  rather than a document, decides: `agentCwd` answers with the directory an Agent
+  runs in when the contextual one is not a directory an agent process could stand
+  in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
+  `ensureSession()` exactly as given; `permissions: "strict"` selects the
+  workflow profile's permission path; and `sessions` replaces directory-walk
+  placement with a host's own, and is where a retained session this host cannot
+  continue is refused. Every one of them defaults to the `xmd run` behavior above.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.

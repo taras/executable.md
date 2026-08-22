@@ -53,6 +53,30 @@ export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 // source, inside the package.
 export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
+export type { WorkflowAgentAttachment, WorkflowAgentInstaller } from "./src/deno/workspace/host.ts";
+export {
+  providerSessionDirectory,
+  providerSessionKey,
+  providerSessionMappingPath,
+  providerSessionPaths,
+  readProviderSession,
+  removeProviderSessions,
+  resolveProviderSession,
+  retainProviderSessionIdentity,
+  useEmptyDirectory,
+  useProviderSessions,
+  WorkflowAgentSessionError,
+  workflowProviderSessions,
+  writeProviderSession,
+} from "./src/deno/provider-sessions.ts";
+export type {
+  ProviderSessionIdentity,
+  ProviderSessionPaths,
+  ProviderSessionProbe,
+  ProviderSessionRecord,
+  ProviderSessionResolution,
+  ProviderSessionState,
+} from "./src/deno/provider-sessions.ts";
 export {
   WORKSPACE_GIT_ADD,
   WORKSPACE_GIT_SWITCH,

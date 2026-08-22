@@ -15,7 +15,20 @@
  */
 
 export { createAcpxProvider } from "./src/provider.ts";
-export type { AcpxProviderDependencies, SessionRouteContext } from "./src/provider.ts";
+export type {
+  AcpMcpServer,
+  AcpxProviderDependencies,
+  AcpxSessionContext,
+  AcpxSessionIdentity,
+  AcpxSessionPlacement,
+  AcpxSessionPolicy,
+  SessionRouteContext,
+} from "./src/provider.ts";
+/**
+ * The refusal a native tool request becomes under a strict profile, and the
+ * fixed text it carries. Nothing of the request appears in it.
+ */
+export { AgentToolPermissionRefused, TOOL_PERMISSION_REFUSED } from "./src/permission-bridge.ts";
 /** The agent ACPX selects when nothing else is configured. */
 export { DEFAULT_AGENT_NAME } from "acpx/runtime";
 
@@ -34,6 +47,13 @@ export type {
   NativeAdapter,
   ProviderReturnedAdapter,
 } from "./src/native-launch.ts";
+
+/**
+ * ACPX's persistent session store, for a host arranging its own retention. The
+ * provider takes one; this is how a host builds and reads the one it takes.
+ */
+export { createAcpxSessionStore, retainedSession } from "./src/session-store.ts";
+export type { AcpxRetainedSession, AcpxSessionStore } from "./src/session-store.ts";
 
 export {
   AcpxPartitionError,
