@@ -61,8 +61,13 @@ import type {
   AcpRuntimeTurn,
   AcpSessionRecord,
   AcpSessionStore,
+  SessionAgentOptions,
 } from "acpx/runtime";
-import { createPermissionBridge } from "./permission-bridge.ts";
+import {
+  AgentToolPermissionRefused,
+  createPermissionBridge,
+  strictPermissions,
+} from "./permission-bridge.ts";
 import { consumeTurn } from "./events.ts";
 import { resolveSessionPlacement } from "./session-key.ts";
 import { useSerialQueues } from "./serial-queue.ts";
@@ -85,9 +90,62 @@ import {
 } from "./native-launch.ts";
 import type { NativeAdapter } from "./native-launch.ts";
 
+/**
+ * One MCP server as ACPX configures them.
+ *
+ * Derived from ACPX's own options rather than imported from the ACP SDK, which
+ * this package reaches only through ACPX.
+ */
+export type AcpMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+
 /** The runtime surface the provider needs — ACPX's runtime plus its probe. */
 export interface ProbeCapableRuntime extends AcpRuntime {
   doctor(): Promise<AcpRuntimeDoctorReport>;
+}
+
+/** What a host is asked when it, rather than a directory walk, places a session. */
+export interface AcpxSessionContext {
+  readonly agentName: string;
+  /** The resolved agent command, not the name a document wrote. */
+  readonly agentCommand: string;
+  /** The authored `<Session>` name, when the document named one. */
+  readonly session: string | undefined;
+}
+
+/** Where one logical session lives, as the host placing it decides. */
+export interface AcpxSessionPlacement {
+  readonly sessionKey: string;
+  readonly cwd: string;
+}
+
+/** What ACPX asserted about a session it established. */
+export interface AcpxSessionIdentity {
+  readonly agentSessionId?: string;
+  readonly acpxRecordId?: string;
+}
+
+/**
+ * Where sessions live, when the host owns that decision.
+ *
+ * Absent keeps the ordinary walk from the caller's directory toward the Git
+ * repository root. A host that keys a session by something other than a path —
+ * a workflow run, say — answers here instead, which is also where it refuses a
+ * retained session it cannot continue: before ACPX is contacted, and therefore
+ * before a turn could start against a replacement.
+ *
+ * Supplied directly by the host that built it, like the coordinator beside it:
+ * which conversation a prompt joins is not a decision a document composes.
+ */
+export interface AcpxSessionPolicy {
+  place(context: AcpxSessionContext): Operation<AcpxSessionPlacement>;
+  /**
+   * Retain what ACPX asserted, once it has established the session.
+   *
+   * Called after every `ensureSession()` this provider performs for a placed
+   * session, so a host retaining provider-native identity records it the first
+   * time the adapter asserts one.
+   */
+  established?(placement: AcpxSessionPlacement, identity: AcpxSessionIdentity): Operation<void>;
 }
 
 /** What `withSessionRoute` maps to a route: the registry-dependent inputs. */
@@ -137,6 +195,42 @@ export interface AcpxProviderDependencies {
    * acting while a native UI may be in the conversation.
    */
   coordinator?: AgentSessionCoordinator;
+  /**
+   * The directory an Agent runs in, when the host decides it rather than the
+   * document's working directory.
+   *
+   * The default answers with the contextual cwd, which is what `xmd run` wants:
+   * an agent inspects the tree its caller invoked it from. A host whose
+   * contextual cwd is a logical Workspace root has no such directory to offer —
+   * a Workspace is not a checkout — so it answers with one of its own.
+   */
+  agentCwd?: () => Operation<string>;
+  /**
+   * The MCP servers this runtime configures.
+   *
+   * Absent leaves the field off the runtime options entirely, which is ACPX's
+   * own default. An empty array is a different statement — this host configures
+   * none — and is passed as one.
+   */
+  mcpServers?: readonly AcpMcpServer[];
+  /**
+   * The options ACPX applies when it creates a fresh ACP session.
+   *
+   * ACPX fixes these when the session is created and ignores them when it reuses
+   * a persistent record, so a host that continues a session compares what that
+   * session was created under rather than assuming these took effect.
+   */
+  newSessionOptions?: SessionAgentOptions;
+  /**
+   * How a native permission request is answered.
+   *
+   * `"composable"` routes it through the public Agent permission chain, which is
+   * what an authored `<ApproveAll>` composes around. `"strict"` answers it in the
+   * provider: the request is denied and the turn it belongs to fails, and no
+   * public handler is consulted or can intervene.
+   */
+  permissions?: "composable" | "strict";
+  sessions?: AcpxSessionPolicy;
 }
 
 interface ManagedSession {
@@ -455,9 +549,30 @@ function* useAcpxProviderState(
     return nativeAdapterFor(agentName);
   };
   const coordinator = dependencies?.coordinator;
-  const bridge = createPermissionBridge();
+  const agentCwd = dependencies?.agentCwd ?? cwd;
+  const mcpServers = dependencies?.mcpServers;
+  const newSessionOptions = dependencies?.newSessionOptions;
+  const sessions = dependencies?.sessions;
+  const strict = dependencies?.permissions === "strict";
   const stateScope = yield* useScope();
   const turns = yield* useSerialQueues();
+
+  /**
+   * The turn each session currently has in flight, so a denial fails the turn
+   * that asked for it. One session has at most one, because `turns.slot()`
+   * serializes them.
+   */
+  const inFlight = new Map<string, { denied: boolean }>();
+  const bridge = createPermissionBridge(
+    strict
+      ? strictPermissions((session) => {
+          const turn = inFlight.get(session.sessionKey);
+          if (turn) {
+            turn.denied = true;
+          }
+        })
+      : undefined,
+  );
 
   let runtime: ProbeCapableRuntime | undefined;
   const validatedAgents = new Set<string>();
@@ -466,14 +581,18 @@ function* useAcpxProviderState(
   const cleanupErrors: Error[] = [];
 
   function* runtimeOptions(): Operation<AcpRuntimeOptions> {
-    const dir = yield* cwd();
-    return {
+    const dir = yield* agentCwd();
+    const options: AcpRuntimeOptions = {
       cwd: dir,
       sessionStore: store,
       agentRegistry: registry,
       permissionMode: providerOptions.permissionMode,
       nonInteractivePermissions: "deny",
     };
+    if (mcpServers !== undefined) {
+      options.mcpServers = [...mcpServers];
+    }
+    return options;
   }
 
   function* getRuntime(): Operation<ProbeCapableRuntime> {
@@ -544,6 +663,10 @@ function* useAcpxProviderState(
       return { kind: "existing", sessionKey: option.sessionKey, entry };
     }
     const agentCommand = registry.resolve(agentName);
+    if (sessions) {
+      const placed = yield* sessions.place({ agentName, agentCommand, session: option });
+      return { kind: "placement", sessionKey: placed.sessionKey, agentCommand, placement: placed };
+    }
     const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, option);
     return { kind: "placement", sessionKey: placement.sessionKey, agentCommand, placement };
   }
@@ -559,8 +682,16 @@ function* useAcpxProviderState(
         agent: agentName,
         mode: "persistent",
         cwd: prepared.placement.cwd,
+        ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
       }),
     );
+    if (sessions?.established) {
+      const identity: AcpxSessionIdentity = {
+        ...(handle.agentSessionId === undefined ? {} : { agentSessionId: handle.agentSessionId }),
+        ...(handle.acpxRecordId === undefined ? {} : { acpxRecordId: handle.acpxRecordId }),
+      };
+      yield* sessions.established(prepared.placement, identity);
+    }
     const session: Session = {
       sessionKey: prepared.placement.sessionKey,
       cwd: prepared.placement.cwd,
@@ -703,7 +834,7 @@ function* useAcpxProviderState(
     return {
       *[Symbol.iterator]() {
         const agentName = yield* Agent.operations.agent(options?.agent);
-        const callerCwd = resolve(yield* cwd());
+        const callerCwd = resolve(yield* agentCwd());
         const context: SessionRouteContext = {
           agentName,
           session: options?.session,
@@ -781,12 +912,32 @@ function* useAcpxProviderState(
             }
           });
 
+          // Registered after the turn exists and before its events are
+          // consumed, so a permission request arriving mid-turn reaches the
+          // turn it belongs to and nothing else.
+          const denials = { denied: false };
+          if (strict) {
+            const sessionKey = entry.session.sessionKey;
+            inFlight.set(sessionKey, denials);
+            yield* ensure(() => {
+              if (inFlight.get(sessionKey) === denials) {
+                inFlight.delete(sessionKey);
+              }
+            });
+          }
+
           const channel = createChannel<AgentPromptEvent, string>();
           const subscription = yield* channel;
           yield* spawn(() =>
-            consumeTurn(turn, { agent: agentName, session: entry.session }, channel, () => {
-              completed = true;
-            }),
+            consumeTurn(
+              turn,
+              { agent: agentName, session: entry.session },
+              channel,
+              () => {
+                completed = true;
+              },
+              () => (denials.denied ? new AgentToolPermissionRefused() : undefined),
+            ),
           );
           return subscription;
         });
@@ -1013,7 +1164,7 @@ function* useAcpxProviderState(
   function launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void> {
     return scoped(function* (): Operation<void> {
       const agentName = request.agent;
-      const callerCwd = resolve(yield* cwd());
+      const callerCwd = resolve(yield* agentCwd());
       const context: SessionRouteContext = {
         agentName,
         session: request.session,
@@ -1165,7 +1316,7 @@ function* useAcpxProviderState(
     },
     *session(option) {
       const agentName = yield* Agent.operations.agent();
-      const callerCwd = resolve(yield* cwd());
+      const callerCwd = resolve(yield* agentCwd());
       const context: SessionRouteContext = { agentName, session: option, cwd: callerCwd };
       const prepared = yield* withSessionRoute(context, () =>
         prepare(agentName, option, callerCwd),

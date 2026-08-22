@@ -15,6 +15,16 @@
  * prompt. The public `Session.agentSessionId` is updated from the
  * refreshed record.
  *
+ * ## Routing is not policy
+ *
+ * What a routed request is answered with is injected. The default asks the
+ * public, author-composable Agent chain, which is what `<ApproveAll>` composes
+ * around. A host with no native tool authority to grant installs
+ * `strictPermissions()` instead: it denies, tells the provider which turn asked,
+ * and reaches `Agent.requestPermission` at no point — so no public handler can
+ * widen a ceiling that has nothing in it. Routing, and every fail-closed answer
+ * below, is the same either way.
+ *
  * ## Fail closed
  *
  * The decision resolves `{ outcome: "cancel" }` — never `undefined`
@@ -32,6 +42,39 @@ import type { PermissionOption, PermissionRequest, Session } from "@executablemd
 import type { AcpPermissionDecision, AcpPermissionRequest } from "acpx/runtime";
 
 const CANCEL: AcpPermissionDecision = { outcome: "cancel" };
+
+/**
+ * What a native permission request is refused with under a profile that grants
+ * no native tool authority.
+ *
+ * Fixed, and naming nothing the request carried. A tool title, its raw input, a
+ * path or a command line are the agent's own text, and a host that denies a
+ * request has no reason to publish what was asked for.
+ */
+export const TOOL_PERMISSION_REFUSED =
+  "the agent asked for permission to use a native tool, which this host grants to no agent. " +
+  "The request was denied and the turn it belongs to failed.";
+
+/** A native tool request reached a profile that authorizes none. */
+export class AgentToolPermissionRefused extends Error {
+  override name = "AgentToolPermissionRefused";
+
+  constructor() {
+    super(TOOL_PERMISSION_REFUSED);
+  }
+}
+
+/**
+ * What decides one routed request, inside the registered turn's own scope.
+ *
+ * The seam a host installs a stricter profile through. Routing — which turn a
+ * request belongs to, and the fail-closed answers when that cannot be decided —
+ * stays here whatever policy is in force.
+ */
+export type PermissionPolicy = (
+  request: AcpPermissionRequest,
+  session: Session,
+) => Operation<AcpPermissionDecision>;
 
 /** Reloads a registration's record; undefined when the record is gone. */
 export type RefreshRecord = () => Operation<
@@ -67,7 +110,47 @@ export interface PermissionBridge {
   decision(request: AcpPermissionRequest, signal: AbortSignal): Operation<AcpPermissionDecision>;
 }
 
-export function createPermissionBridge(): PermissionBridge {
+/**
+ * The ordinary policy: the public, author-composable Agent permission chain.
+ *
+ * What `<ApproveAll>` and every other public permission handler compose around,
+ * and the only policy that reaches them.
+ */
+function* composablePermissions(
+  request: AcpPermissionRequest,
+  session: Session,
+): Operation<AcpPermissionDecision> {
+  const permissionRequest = toPermissionRequest(request, session);
+  const outcome = yield* Agent.operations.requestPermission(permissionRequest);
+  return toDecision(outcome, permissionRequest.options);
+}
+
+/**
+ * Deny every request, and tell the caller which turn asked.
+ *
+ * It reaches `Agent.requestPermission` at no point, so an authored `<ApproveAll>`
+ * composes around nothing: under this policy there is no native tool authority
+ * to widen. A reject option is selected where ACP offered one, because a
+ * rejection is what the adapter is being told; cancelling is the answer only
+ * when it offered no way to say no.
+ */
+export function strictPermissions(denied: (session: Session) => void): PermissionPolicy {
+  // deno-lint-ignore require-yield
+  return function* (request, session): Operation<AcpPermissionDecision> {
+    denied(session);
+    for (const option of request.raw.options) {
+      const kind = parseOptionKind(option.kind);
+      if (kind === "reject_once" || kind === "reject_always") {
+        return { outcome: kind };
+      }
+    }
+    return CANCEL;
+  };
+}
+
+export function createPermissionBridge(
+  policy: PermissionPolicy = composablePermissions,
+): PermissionBridge {
   const turns = new Map<string, RegisteredTurn>();
 
   function rekey(entry: RegisteredTurn, newId: string): void {
@@ -165,9 +248,7 @@ export function createPermissionBridge(): PermissionBridge {
         // Halts are unaffected — try/catch does not intercept them.
         const task = registered.scope.run(function* (): Operation<AcpPermissionDecision> {
           try {
-            const permissionRequest = toPermissionRequest(request, registered.session);
-            const outcome = yield* Agent.operations.requestPermission(permissionRequest);
-            return toDecision(outcome, permissionRequest.options);
+            return yield* policy(request, registered.session);
           } catch {
             return CANCEL;
           }
