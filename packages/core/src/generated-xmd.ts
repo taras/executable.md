@@ -100,6 +100,7 @@ type Construct =
   | "interpolation"
   | "binding"
   | "component"
+  | "content"
   | "construct"
   | "request";
 
@@ -116,6 +117,9 @@ const CONSTRUCT: Record<Construct, string> = {
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
   binding: "a generated fragment binds a result with `as`, which it may not.",
   component: "a generated fragment names a component this host did not admit.",
+  content:
+    "a generated fragment gives content to a component this host admitted only in its " +
+    "self-closing form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
   request: "a generated fragment asks for a request this host did not admit.",
 };
@@ -192,6 +196,17 @@ export interface GeneratedObservation {
    * reads at all. Present only on the pinned `<Fetch>` identity.
    */
   readonly requests?: readonly GeneratedRequest[];
+  /**
+   * Whether only the self-closing form of this name is admitted.
+   *
+   * A component whose two forms do different things has two identities, and a
+   * host admitting one of them is not admitting the other. `<File>` is the case
+   * that matters: `hasContent()` is exactly `!selfClosing`, so the paired form
+   * writes. The constraint therefore travels with the pinned identity and is
+   * decided in preflight, before the first effect — not checked inside the
+   * component after earlier elements have already run.
+   */
+  readonly selfClosing?: boolean;
 }
 
 /**
@@ -218,6 +233,33 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
     identity: `${CORE_ORIGIN}#Fetch`,
     definition,
     requests: [...requests],
+  };
+}
+
+/**
+ * The pinned core `<File>` identity, constrained to its read form.
+ *
+ * Core's own default definition, and only its self-closing spelling. `<File>`
+ * reads when it has no content and writes when it has some, so admitting the
+ * unconstrained definition would admit a write — which is why this constructor
+ * exists rather than a caller reaching for `CORE_REGISTRY` and hoping. The
+ * identity says so too, so a run that later admitted the unconstrained `File`
+ * would be stating a different policy and a retained admission would refuse it.
+ *
+ * An admitted read invokes the ordinary `<File>` component and therefore the
+ * installed Files provider, which under a workflow run is the transaction-bound
+ * one. There is no second filesystem path here.
+ */
+export function pinnedFileRead(): GeneratedObservation {
+  const definition = CORE_REGISTRY.get("File")?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new GeneratedXmdError("core supplies no File component to admit.");
+  }
+  return {
+    name: "File",
+    identity: `${CORE_ORIGIN}#File:read`,
+    definition,
+    selfClosing: true,
   };
 }
 
@@ -604,6 +646,9 @@ function* walk(
         }
         if ("as" in segment.props) {
           throw new Refusal("binding");
+        }
+        if (observation.selfClosing === true && !segment.selfClosing) {
+          throw new Refusal("content");
         }
         const ceiling = ceilings.get(segment.name);
         if (ceiling !== undefined) {

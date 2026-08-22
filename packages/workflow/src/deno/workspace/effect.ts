@@ -17,6 +17,7 @@ import {
 } from "../../workspace/effect.ts";
 import type { WorkflowRunConnections } from "../connections.ts";
 import { withEnlistedJournalRoute } from "../journal-route.ts";
+import { currentWorkspaceRoot, retainedWorkspaceRoots } from "./root.ts";
 import { savepoint } from "../transaction.ts";
 import { isJournaledEffectFailure } from "./errors.ts";
 import type { DenoWorkspaceFilesystem } from "./filesystem.ts";
@@ -228,6 +229,35 @@ export function withWorkspaceEffects<T>(
     connections.validateLease(database);
     return yield* withWorkspaceCoordinationProvider(coordinator(connections, database), operation);
   });
+}
+
+/**
+ * Which Workspace roots this run has, and which one it is on right now.
+ *
+ * Read through the same lease the run's Workspace effects are bound to, so what
+ * it answers is this run's authoritative storage rather than anything a scope
+ * could put in front of it. Deliberately the two facts and nothing else: a
+ * caller that needs a ceiling gets the ceiling, not a connection it could take
+ * the rest of the run apart with.
+ *
+ * Read outside a transaction on purpose. This is a ceiling stated before a
+ * fragment is admitted, and opening a transaction to state it would nest inside
+ * the ones the admitted observations go on to open.
+ */
+export function* workspaceRootSelection(
+  database: WorkflowRunDatabase,
+): Operation<{ roots: string[]; current: string }> {
+  const selection = yield* WorkspaceEffectProvider.operations.provider;
+  const connections = selection === undefined ? undefined : workspaceEffectProviders.get(selection);
+  if (connections === undefined) {
+    return unavailable();
+  }
+  const lease = connections.validateLease(database);
+  const { database: storage, path } = lease.connection;
+  return {
+    roots: retainedWorkspaceRoots(storage),
+    current: currentWorkspaceRoot(storage, path),
+  };
 }
 
 export function createWorkspaceEffect<T extends Json>(
