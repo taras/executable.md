@@ -34,11 +34,11 @@
  * visible instead of being absorbed by an attempt count.
  *
  * The deadline is per command, because the commands are not the same size. Most
- * clear `COMMAND_TIMEOUT_MILLISECONDS` by a wide margin; the complete Deno suite
- * does not, and under the concurrent load of the whole battery it finished with
- * zero failures and was killed anyway (#482). A ceiling that fires on a healthy
- * command reports a defect that is not there and hides the one that is, so that
- * command carries its own.
+ * clear `COMMAND_TIMEOUT_MILLISECONDS` by a wide margin; the three complete
+ * runtime suites do not, and under the concurrent load of the whole battery the
+ * Deno suite finished with zero failures and was killed anyway (#482). A ceiling
+ * that fires on a healthy command reports a defect that is not there and hides
+ * the one that is, so each suite carries its own.
  *
  * Every deadline is announced when the battery starts and named again in the
  * line that reports a command it settled, so it is never something a reader has
@@ -86,13 +86,25 @@ export const COMMAND_TIMEOUT_MILLISECONDS = 20 * 60 * 1000;
  * How long the complete Deno suite may run.
  *
  * It is the longest leg of the battery by a wide margin, and it runs beside ten
- * others competing for the same cores. At the shared ceiling it was killed on
- * `main` twice in a row having reported zero failed tests (#482) — a deadline
- * firing on a healthy command, which costs a real signal and supplies a false
- * one. This clears the observed duration rather than tracking it closely;
- * a ceiling exists to catch a wedge, not to police a slow afternoon.
+ * others competing for the same cores, which stretches it by about a third over
+ * what it takes on a runner of its own — and it grows with every test added. A
+ * ceiling exists to catch a wedge, not to police a slow afternoon: one that
+ * tracks the observed duration closely fires on a healthy suite as soon as the
+ * suite grows into it, which costs a real signal and supplies a false one
+ * (#482). This one clears the observed duration by a wide margin rather than by
+ * a little.
  */
-export const TEST_TIMEOUT_MILLISECONDS = 30 * 60 * 1000;
+export const TEST_TIMEOUT_MILLISECONDS = 45 * 60 * 1000;
+
+/**
+ * How long the complete Node and Bun suites may run.
+ *
+ * Each is the same suite under another runtime, and the same concurrent load
+ * stretches Bun's to more than twice what it takes on a runner of its own,
+ * within sight of the shared ceiling. The margin that keeps the Deno suite's
+ * ceiling from firing on a healthy run is the margin these need too.
+ */
+export const RUNTIME_SUITE_TIMEOUT_MILLISECONDS = 30 * 60 * 1000;
 
 /** The battery, in the order every report uses. */
 export const BATTERY: readonly CommandSpec[] = [
@@ -106,8 +118,18 @@ export const BATTERY: readonly CommandSpec[] = [
     program: "pnpm",
     args: ["exec", "tsc", "--project", "tsconfig.node.json", "--noEmit"],
   },
-  { id: "test:node", program: "pnpm", args: ["test:node"] },
-  { id: "test:bun", program: "bun", args: ["run", "test:bun"] },
+  {
+    id: "test:node",
+    program: "pnpm",
+    args: ["test:node"],
+    timeout: RUNTIME_SUITE_TIMEOUT_MILLISECONDS,
+  },
+  {
+    id: "test:bun",
+    program: "bun",
+    args: ["run", "test:bun"],
+    timeout: RUNTIME_SUITE_TIMEOUT_MILLISECONDS,
+  },
   {
     id: "docs",
     program: "deno",
@@ -232,8 +254,8 @@ function shared(deadlines: readonly number[]): number {
 /**
  * What the battery announces about its deadlines.
  *
- * "20m deadline each" while one command has thirty would be a plain untruth in
- * the first line of every report, so the commands that differ are named.
+ * "20m deadline each" while one command has forty-five would be a plain untruth
+ * in the first line of every report, so the commands that differ are named.
  */
 function announced(commands: readonly CommandSpec[], deadlines: readonly number[]): string {
   const common = shared(deadlines);

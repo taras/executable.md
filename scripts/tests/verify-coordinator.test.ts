@@ -280,10 +280,11 @@ describe("line", () => {
 /**
  * The battery's commands are not the same size, and #482 is what happens when
  * one ceiling pretends they are: the complete Deno suite reported zero failed
- * tests and was killed anyway, twice in a row on `main`.
+ * tests and was killed anyway, twice in a row on `main` — and a ceiling that
+ * tracks a growing suite closely does the same thing a little later.
  *
- * The race that fires cannot be exercised here — twenty and thirty minutes are
- * not durations a test waits out — so what these hold is the single function
+ * The race that fires cannot be exercised here — twenty to forty-five minutes
+ * are not durations a test waits out — so what these hold is the single function
  * both the race and the report read. A second source of truth is exactly the
  * defect: a report naming a deadline that is not the one that settles the
  * command is worse than no report.
@@ -291,13 +292,21 @@ describe("line", () => {
 describe("commandTimeout", () => {
   const command = (id: string): CommandSpec => BATTERY.find((entry) => entry.id === id)!;
 
-  it("gives the complete Deno suite thirty minutes", function* () {
-    expect(commandTimeout(command("test"), NO_SITE)).toEqual(30 * 60 * 1000);
-    expect(command("test").timeout).toEqual(30 * 60 * 1000);
+  it("gives the complete Deno suite forty-five minutes", function* () {
+    expect(commandTimeout(command("test"), NO_SITE)).toEqual(45 * 60 * 1000);
+    expect(command("test").timeout).toEqual(45 * 60 * 1000);
+  });
+
+  it("gives the complete Node and Bun suites thirty minutes", function* () {
+    for (const id of ["test:node", "test:bun"]) {
+      expect(commandTimeout(command(id), NO_SITE)).toEqual(30 * 60 * 1000);
+      expect(command(id).timeout).toEqual(30 * 60 * 1000);
+    }
   });
 
   it("leaves every other command at twenty minutes", function* () {
-    const others = BATTERY.filter((entry) => entry.id !== "test");
+    const suites = new Set(["test", "test:node", "test:bun"]);
+    const others = BATTERY.filter((entry) => !suites.has(entry.id));
     expect(others.length).toBeGreaterThan(5);
     for (const entry of others) {
       expect(commandTimeout(entry, NO_SITE)).toEqual(COMMAND_TIMEOUT_MILLISECONDS);
@@ -317,7 +326,7 @@ describe("deadline reporting", () => {
   it("names the commands whose deadline differs instead of claiming one", function* () {
     const { host, lines } = recorder({});
     yield* verify(host, NO_SITE);
-    expect(lines[0]).toContain("20m deadline each except test 30m");
+    expect(lines[0]).toContain("20m deadline each except test 45m, test:node 30m, test:bun 30m");
   });
 
   it("claims one deadline only when there is one", function* () {
@@ -339,7 +348,9 @@ describe("deadline reporting", () => {
     for (const entry of BATTERY.filter((command) => !command.site)) {
       const deadline = commandTimeout(entry, NO_SITE);
       const stated =
-        deadline === COMMAND_TIMEOUT_MILLISECONDS ? "20m deadline each" : `${entry.id} 30m`;
+        deadline === COMMAND_TIMEOUT_MILLISECONDS
+          ? "20m deadline each"
+          : `${entry.id} ${deadline / 60_000}m`;
       expect(announcement).toContain(stated);
     }
   });
