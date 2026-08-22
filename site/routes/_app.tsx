@@ -21,6 +21,11 @@ const META: Record<string, { title: string; desc: string }> = {
     desc:
       "Turn repeatable work into readable Markdown programs. Encode what you already know how to do, and use agents only where judgment remains.",
   },
+  "/designing-workflows": {
+    title: "Designing workflows · executable.md",
+    desc:
+      "Use the least autonomy that works: encode what you already know how to do, and reserve agents for the judgment that remains.",
+  },
   "/docs": {
     title: "Getting started · executable.md docs",
     desc:

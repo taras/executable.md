@@ -3,23 +3,31 @@ import type { ComponentChildren } from "preact";
 import { define } from "../utils.ts";
 import { Header } from "../components/Header.tsx";
 import { CodeBlock } from "../components/Code.tsx";
+import {
+  Chain,
+  CLAIM,
+  H3,
+  MONO,
+  P_MD,
+  P_MEASURED,
+  P_SM,
+  PageFooter,
+  Term,
+} from "../components/Prose.tsx";
+import {
+  bold,
+  dim,
+  key,
+  mod,
+  Source,
+  str,
+  type Tok,
+} from "../components/Source.tsx";
 
 const GITHUB = "https://github.com/taras/executable.md";
 const SPEC = `${GITHUB}/blob/main/specs/executable-mdx-spec.md`;
 const VERSION = "v0.8.1";
 
-const MONO = "font-family:var(--font-mono);";
-const H3 =
-  "margin:0;font-size:1.0625rem;font-weight:800;letter-spacing:-0.01em;line-height:1.25;";
-const P_SM = "margin:0;font-size:0.875rem;line-height:1.6;color:var(--body);";
-const P_MD =
-  "margin:0;max-width:74ch;font-size:0.9375rem;line-height:1.6;color:var(--body);";
-const P_MEASURED = `${P_SM}max-width:74ch;`;
-/** A panel's opening claim, set at the weight of a heading. */
-const PANEL_LEDE =
-  "margin:0;font-size:1.0625rem;line-height:1.45;color:var(--ink);font-weight:800;letter-spacing:-0.01em;";
-const CHAIN_ITEM =
-  `${MONO}font-size:0.8125rem;font-weight:700;color:var(--ink);`;
 const STEP_NUMBER =
   `${MONO}font-size:0.8125rem;font-weight:700;letter-spacing:0.1em;color:var(--green);`;
 const SPLIT = "display:flex;flex-direction:column;gap:0.5rem;min-width:0;";
@@ -33,50 +41,6 @@ const PAIR =
  */
 const PAGE_CSS = ".release-link{color:inherit;letter-spacing:inherit;}" +
   ".release-link:hover{color:var(--green);}";
-
-/* ------------------------------------------------------------------ *
- * Hand-tokenized document source
- * ------------------------------------------------------------------ */
-
-/**
- * One run of source text. A bare string is unstyled; a tuple carries the
- * token class the design system paints it with, and `bold` is the Markdown
- * structure (headings) that reads at full weight rather than as a token.
- */
-type Tok = string | ["key" | "str" | "mod" | "dim" | "bold", string];
-
-const key = (text: string): Tok => ["key", text];
-const str = (text: string): Tok => ["str", text];
-const mod = (text: string): Tok => ["mod", text];
-const dim = (text: string): Tok => ["dim", text];
-const bold = (text: string): Tok => ["bold", text];
-
-const TOK_CLASS = {
-  key: "tok-key",
-  str: "tok-str",
-  mod: "tok-mod",
-  dim: "tok-dim",
-} as const;
-
-/** Source lines, joined with newlines so `<pre>` lays them out. */
-function Source({ lines }: { lines: Tok[][] }) {
-  return (
-    <>
-      {lines.map((parts, line) => (
-        <Fragment key={line}>
-          {line > 0 ? "\n" : null}
-          {parts.map((part, i) =>
-            typeof part === "string"
-              ? part
-              : part[0] === "bold"
-              ? <span key={i} style="font-weight:700;">{part[1]}</span>
-              : <span key={i} class={TOK_CLASS[part[0]]}>{part[1]}</span>
-          )}
-        </Fragment>
-      ))}
-    </>
-  );
-}
 
 const RELEASE_MD: Tok[][] = [
   [bold("# Release")],
@@ -399,39 +363,10 @@ const HANDOFF_MD: Tok[][] = [
  * Page pieces
  * ------------------------------------------------------------------ */
 
-/** An inline identifier: monospace, at full contrast against body prose. */
-function Term({ children }: { children: ComponentChildren }) {
-  return (
-    <code style={`${MONO}font-weight:700;color:var(--ink);`}>{children}</code>
-  );
-}
-
 /** The shell prompt that opens each line of a terminal slab. */
 function Prompt() {
   return (
     <span style="color:var(--green);font-weight:700;user-select:none;">$</span>
-  );
-}
-
-/** A ruled arrow chain, e.g. `Repository → Worktree → Implementor`. */
-function Chain({ steps, boxed }: { steps: string[]; boxed?: boolean }) {
-  return (
-    <div
-      style={`display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;${
-        boxed
-          ? "border:var(--rule) solid var(--line);padding:0.75rem 0.875rem;"
-          : "padding-top:0.125rem;"
-      }`}
-    >
-      {steps.map((step, i) => (
-        <Fragment key={step}>
-          <span style={CHAIN_ITEM}>{step}</span>
-          {i < steps.length - 1
-            ? <span style="color:var(--dim);">→</span>
-            : null}
-        </Fragment>
-      ))}
-    </div>
   );
 }
 
@@ -573,7 +508,7 @@ export default define.page(function Home({ url }) {
             <div class="panel">
               <div class="panel-head">What you read is what runs</div>
               <div class="panel-body">
-                <p style={PANEL_LEDE}>
+                <p style={CLAIM}>
                   There is no workflow hidden behind the document. The document
                   is the workflow.
                 </p>
@@ -682,7 +617,7 @@ export default define.page(function Home({ url }) {
           <div class="panel">
             <div class="panel-head">The point</div>
             <div class="panel-body">
-              <p style={PANEL_LEDE}>
+              <p style={CLAIM}>
                 The goal isn't autonomous agents. It's to minimize how much work
                 needs to remain agentic.
               </p>
@@ -709,8 +644,12 @@ export default define.page(function Home({ url }) {
             can become an <Term>xmd</Term> workflow.
           </p>
 
-          <a class="link-rule" href="/docs" style="align-self:flex-start;">
-            Read the docs →
+          <a
+            class="link-rule"
+            href="/designing-workflows"
+            style="align-self:flex-start;"
+          >
+            Designing workflows →
           </a>
         </section>
 
@@ -1051,14 +990,7 @@ export default define.page(function Home({ url }) {
         </section>
       </div>
 
-      <footer style="border-top:var(--rule) solid var(--line);padding:1.5rem 0;margin-top:1rem;">
-        <div
-          class="container"
-          style={`${MONO}font-size:0.8125rem;color:var(--dim);`}
-        >
-          Made with ❤️ Effection.
-        </div>
-      </footer>
+      <PageFooter />
 
       <style dangerouslySetInnerHTML={{ __html: PAGE_CSS }} />
     </>
