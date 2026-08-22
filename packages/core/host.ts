@@ -71,6 +71,7 @@ export {
   GeneratedXmdError,
   pinnedComponent,
   pinnedFetch,
+  pinnedFileRead,
 } from "./src/generated-xmd.ts";
 export type {
   GeneratedObservation,

@@ -2662,6 +2662,17 @@ called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
 
+A host may register defaults of its own on the same terms. The workflow host
+registers `<Evaluate source={…} />` for a live or partial run: the operation an
+authored workflow document writes where an Agent's proposed fragment should be
+admitted and performed. Its schema is closed on one required string prop, paired
+content is refused, and it declares no `returns`, so its retained result renders
+where it is written and an ordinary `as` captures it. Registration is what makes
+the operation reachable; the ceilings it runs under come from values the host
+captured before any document existed, and no prop, binding or middleware return
+value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
+§8.4 is the contract.
+
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
 `<TempDir>` invocation creates fresh is the directory (§6.11); the component
@@ -9355,6 +9366,57 @@ against the production Deno adapter, on real run files.
 | WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
+
+### Tier WAP — The strict workflow Agent profile
+
+Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAP1 | Strict inputs | The runtime is created with the host's own directory and `mcpServers: []`, each session with `allowedTools: []`, under `deny-all` and non-interactive denial; no Workspace or caller path appears in any provider input |
+| WAP2 | Denial outranks approval | A native permission request under an authored approve-all scope is rejected, the public permission chain is consulted zero times, and the Prompt fails with the fixed diagnostic even though the adapter reported success |
+| WAP3 | Teardown | A completed, failed, cancelled and interrupted turn each finish their turn and close their handle |
+| WAP4 | `xmd run` unchanged | The ordinary provider keeps the caller cwd, omits `mcpServers` and `sessionOptions`, and honours the authored policy's `allow_once` |
+| WAP5 | Refusal precedes ACPX | A placement the host refuses establishes no session and starts no turn |
+| WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
+
+### Tier WSL — Retained workflow Agent sessions
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
+
+| # | Test | Verify |
+|---|------|--------|
+| WSL1 | First establishment | A run with no retained session creates one, retains what the provider asserted, and keeps no prompt text or transcript; a named `<Session>` is a different logical session |
+| WSL2 | Restart | A new process over the retained sidecar reattaches the same logical key and native identity |
+| WSL3 | Directories | Every attachment gets an empty directory, a second attachment over the same path starts empty again, and neither directory outlives the attachment while the retained half survives |
+| WSL4 | Incompatibility | A lost mapping over a session the provider still holds, an unreadable record, a record from an unknown version, a changed policy, a changed agent, a provider holding nothing, and an adapter answering with a different native session are each one refusal that starts no replacement |
+| WSL5 | Deletion | Deleting a run reports and removes both categories; a live run keeps both; a run that retained no session reports only its storage |
+
+### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
+
+| # | Test | Verify |
+|---|------|--------|
+| WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
+| WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
+| WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
+| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the registration even while it is live |
+| WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
+
+### Tier WAL — The workflow Agent observation loop
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAL1 | The loop | Two observations then a proposal across three turns in one provider session, each observation reaching the next turn, with no Workspace or caller path in provider setup |
+| WAL2 | Completed replay | The same document over its own journal restores identical output, journals nothing new, and never enters the provider |
+| WAL3 | Partial replay | An interrupted run resumes, asks only for the turn it never finished, repeats no committed observation or read, and reattaches the same session |
+| WAL4 | Exhaustion | Reaching the authored bound fails at the document's own final gate, with every completed turn and admission retained |
+| WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
+| WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
+| WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
 
 ### Tier WFX — A killed run resumes from its frontier
 
