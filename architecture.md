@@ -2583,15 +2583,15 @@ the file the document wrote a read for.
 
 The contextual operation stays exported and composable, and every other
 component still reads it. That is not a statement that the remaining readers are
-safe. Eleven of them branch on it today, and the branch decides more than how to
+safe. Eleven of them branch on it, and the branch decides more than how to
 render: `<Issue>` selects a read against an external upsert, `<Repository>`,
 `<Worktree>`, `<TempDir>` and `<IssueTracker>` decide whether a context or a
 working directory is installed for their descendants at all, `<Git.Add>`,
 `<Git.Push>`, `<Git.Switch>` and `<Json>` turn a content-bearing invocation into
 a refusal, and `<Git.Commit>` and `<PullRequest>` decide what body is committed
-or published. Each is reachable by the same middleware on the same terms.
-Moving them to the invocation is a follow-up rather than part of this boundary,
-and until it happens the rule they are held to is the weaker one.
+or published. Each reads the contextual answer, so middleware may alter the
+effect, the guard or the retained data each of those branches decides, and this
+invocation boundary makes no stronger guarantee for them.
 
 **Which domain an invocation is in is decided by what resolution selected, not
 by the name that was asked for.** An authored name is what a document wrote, and

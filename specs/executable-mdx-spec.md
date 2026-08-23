@@ -3740,9 +3740,12 @@ It is a **contextual** operation, so it composes like the rest of this Api: a
 handler installed anywhere outside the invocation answers ahead of the engine's
 own account, and may answer differently on each call. A caller that reads it and
 then invokes something which reads it again has therefore verified nothing —
-the two are separate dispatches. A component whose two forms select different
-*effects* reads the authored form from its invocation instead (§5.6), which no
-handler reaches. `<File>` (§6.13) and the workflow package's `<Dir>` do.
+the two are separate dispatches.
+
+Only the invocation's own `hasContent()` (§5.6) is authoritative about the
+authored form. `<File>` (§6.13) and the workflow package's `<Dir>` read it. A
+component that reads this contextual operation has no authored-form guarantee:
+what it receives is whatever the chain answered for that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
