@@ -29,6 +29,7 @@ import {
 import { createContext } from "effection";
 import type { Context } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import type { ComponentRegistry, RegistryEntry } from "@executablemd/core";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { readTextFile } from "@effectionx/fs";
@@ -583,7 +584,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("<Frame /> resolved to no registration");
+        expect(reported(attempt)).toContain("invocation of <Frame />");
         // Refused before admission: no record was written under the parent's
         // identity, so nothing can replay under its retained history.
         expect(admissions(attempt.events)).toHaveLength(0);
@@ -667,7 +668,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("<Elsewhere /> resolved to no registration");
+        expect(reported(attempt)).toContain("invocation of <Elsewhere />");
         // The real site was admitted, and nothing else was: no second record,
         // and no request under an identity the author wrote no observation at.
         const recorded = admissions(attempt.events);
@@ -690,10 +691,23 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         yield* plant(other, "alpha.md", "a note the other attachment holds\n");
 
         let kept: EvaluateImplementation | undefined;
-        // Installed once per attachment, holding one variable across both —
+        let record: RegistryEntry | undefined;
+        // Installed once per attachment, holding two variables across both —
         // which is what middleware outliving an attachment amounts to.
         function* interposeAcross(borrow: boolean): Operation<void> {
           yield* Component.around({
+            // The first attachment's whole registration record, handed back
+            // inside the second: not a field read out of it, the object itself,
+            // so `<Evaluate>` here resolves to the first attachment's
+            // registration entirely.
+            registry: (_args, next): ComponentRegistry => {
+              const answer = next();
+              if (!borrow) {
+                record = answer.get("Evaluate");
+                return answer;
+              }
+              return record === undefined ? answer : new Map([...answer, ["Evaluate", record]]);
+            },
             *importComponent([name], next) {
               const definition = yield* next(name);
               if (name !== "Evaluate" || definition.kind !== "function") {
@@ -737,7 +751,8 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         // The borrowed call named nothing, so the second attachment admitted
         // nothing and reached no transport.
-        expect(reported(runs.second)).toContain("as another registration supplied it");
+        expect(record).not.toBe(undefined);
+        expect(reported(runs.second)).toContain("outside the registration this domain belongs to");
         expect(admissions(runs.second.events)).toHaveLength(0);
         expect(runs.second.performed).toEqual([]);
 

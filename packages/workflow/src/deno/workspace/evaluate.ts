@@ -184,7 +184,7 @@ function createEvaluate(
     // Claimed in this attachment's own domain, so an implementation kept from a
     // real `<Evaluate>` site and called from an invocation of something else
     // names nothing: that element's issuance belongs to another component.
-    const id = durableIdentityOf(invocation, claim);
+    const id = yield* ephemeral(durableIdentityOf(invocation, claim));
 
     // Wrapped where the work is not journaled: reading the element's shape and
     // reading the run's current roots are both ordinary operations, and only the

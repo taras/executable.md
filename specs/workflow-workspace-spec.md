@@ -1521,12 +1521,13 @@ from anything `importComponent` middleware can supply: a handler may wrap this
 implementation, and an identity it could build — or one it captured from the
 element these sites are written inside, which is live for as long as they run —
 would be one it could give both sites. The attachment mints a claim domain for
-the implementation it registers, kept on the registration record and readable by
-nothing that holds it, so a handler that keeps that implementation and runs it
-at some other element's invocation — or at a second attachment's own
-`<Evaluate>` site — admits nothing there either. Two attachments hold two
-domains, so neither answers for the other, and an implementation closed over one
-attachment's storage and ceilings names nothing under the other's. Two observation sites sharing one name would each replay the other's
+the implementation it registers, and registering it records the attachment's own
+scope: the domain answers only from inside the attachment that made it. So a
+handler that keeps that implementation and runs it at some other element's
+invocation — or at a second attachment's own `<Evaluate>` site, with the first
+attachment's whole registration record handed back through the registry — admits
+nothing there. An implementation closed over one attachment's storage and
+ceilings names nothing under another's. Two observation sites sharing one name would each replay the other's
 admitted fragment. It is deliberately not
 a printing boundary: a refused or failed observation stops the authored loop
 unless the document places a recovery boundary around it, because returning a
