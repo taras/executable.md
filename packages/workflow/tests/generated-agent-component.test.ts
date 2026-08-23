@@ -583,7 +583,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("invocation of <Frame />");
+        expect(reported(attempt)).toContain("<Frame /> resolved to no registration");
         // Refused before admission: no record was written under the parent's
         // identity, so nothing can replay under its retained history.
         expect(admissions(attempt.events)).toHaveLength(0);
@@ -667,8 +667,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("invocation of <Elsewhere />");
-        expect(reported(attempt)).toContain("claimed for <Evaluate />");
+        expect(reported(attempt)).toContain("<Elsewhere /> resolved to no registration");
         // The real site was admitted, and nothing else was: no second record,
         // and no request under an identity the author wrote no observation at.
         const recorded = admissions(attempt.events);
@@ -676,6 +675,75 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         expect(admittedSource(recorded[0]!)).toBe(`<File path="alpha.md" />`);
         expect(carriedDomain).not.toContain("claim");
         expect(attempt.performed).toEqual([]);
+      });
+    });
+
+    it("refuses one attachment's implementation at another attachment's site", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        // Two live attachments: separate runs, separate databases, separate
+        // Workspaces. Each registers `<Evaluate>` and mints its own domain.
+        const owner = yield* createRun();
+        const other = yield* createRun({ runId: "release-1.5" });
+        yield* plant(owner, "alpha.md", ADMITTED_NOTE);
+        yield* plant(other, "alpha.md", "a note the other attachment holds\n");
+
+        let kept: EvaluateImplementation | undefined;
+        // Installed once per attachment, holding one variable across both —
+        // which is what middleware outliving an attachment amounts to.
+        function* interposeAcross(borrow: boolean): Operation<void> {
+          yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              if (name !== "Evaluate" || definition.kind !== "function") {
+                return definition;
+              }
+              const original = definition.fn;
+              if (typeof original !== "function") {
+                return definition;
+              }
+              if (!borrow) {
+                kept = original;
+                return definition;
+              }
+              return {
+                ...definition,
+                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                  // The first attachment's implementation — closed over the
+                  // first attachment's database, roots and ceilings — at the
+                  // second attachment's own `<Evaluate>` site, with the genuine
+                  // issuance minted there.
+                  return yield* (kept ?? original)(props, invocation);
+                },
+              };
+            },
+          });
+        }
+
+        const first = yield* scoped(function* () {
+          yield* interposeAcross(false);
+          return yield* runDocument(owner, source, CEILING);
+        });
+        const second = yield* scoped(function* () {
+          yield* interposeAcross(true);
+          return yield* runDocument(other, source, CEILING);
+        });
+        const runs = { first, second };
+
+        expect(runs.first.failure).toBe(undefined);
+        const owned = admissions(runs.first.events);
+        expect(owned).toHaveLength(2);
+
+        // The borrowed call named nothing, so the second attachment admitted
+        // nothing and reached no transport.
+        expect(reported(runs.second)).toContain("as another registration supplied it");
+        expect(admissions(runs.second.events)).toHaveLength(0);
+        expect(runs.second.performed).toEqual([]);
+
+        // And nothing landed in the first attachment's database under the
+        // second attachment's identities: its journal is what its own run left.
+        expect(admissions(yield* owner.journal.readAll())).toEqual(owned);
       });
     });
 
