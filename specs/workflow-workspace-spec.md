@@ -1486,9 +1486,21 @@ completed Prompt and observation records are the evidence for exhaustion.
 
 `<Evaluate>`'s schema is closed on one required string prop, and paired content
 is refused: a `source` the element rendered is not a fragment anybody handed it.
-It declares no `returns`, so its retained result renders where it is written and
-an ordinary `as` captures and suppresses it — which is how a document renders one
-observation into the next `<Prompt>` in the same Session. It is deliberately not
+It answers with each admitted observation's own returned value, in the order the
+fragment invoked them, with whatever the fragment rendered kept beside them —
+never instead of them. An admitted `<Fetch>` written without a binding renders
+nothing at all, so a result taken from the rendered fragment would answer the
+Agent's question with an empty string. It declares no `returns`: the answer is
+deterministic JSON text, it renders where it is written, and an ordinary `as`
+captures and suppresses it — which is how a document renders one observation into
+the next `<Prompt>` in the same Session.
+
+Its durable operation is named after the invocation the engine handed it, as an
+argument at the call site. A durable name never comes from an Effection Context
+or a contextual Api answer: a Context is addressed by name, so a loaded component
+may bind one for its descendants, and a handler installed outside an invocation
+answers ahead of the engine's own. Two observation sites sharing one name would
+each replay the other's admitted fragment. It is deliberately not
 a printing boundary: a refused or failed observation stops the authored loop
 unless the document places a recovery boundary around it, because returning a
 refusal as observation text would leave the Agent reasoning from a read that

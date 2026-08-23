@@ -360,6 +360,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
+    path: "packages/workflow/tests/generated-agent-component.test.ts",
+    reason:
+      "drives `<Evaluate>` against a real node:sqlite WorkflowRun database and the Deno DOFS Workspace adapter, because what is under test is that the stated ceiling is the run's own roots; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/workflow-agent.test.ts",
+    reason:
+      "runs the representative observation-loop document against a real node:sqlite WorkflowRun database with the run's Workspace attached, substituting only the agent process; the store and the DOFS Workspace under it are both the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/workflow/tests/workflow-suspension.test.ts",
     reason:
       "publishes and replays durable suspension requests against a real node:sqlite run database through the Deno lifecycle adapter; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",

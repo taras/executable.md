@@ -37,8 +37,9 @@
  *
  * ## It declares no `returns`
  *
- * The observation's retained result is a string, and it renders where it is
- * written. `as="observation"` captures and suppresses it exactly as it does for
+ * What it answers with is deterministic JSON text carrying each admitted
+ * observation's own value — not the fragment's rendered output, which for an
+ * uncaptured `<Fetch>` is empty. It renders where it is written. `as="observation"` captures and suppresses it exactly as it does for
  * any other component, which is how a document renders the result into the next
  * `<Prompt>` in the same session.
  *
@@ -49,9 +50,14 @@
  */
 
 import type { Operation } from "effection";
-import { getExpansion, hasContent, registerComponents } from "@executablemd/core";
+import { hasContent, registerComponents } from "@executablemd/core";
 import { pinnedFileRead } from "@executablemd/core/host";
-import type { GeneratedObservation, GeneratedRequest } from "@executablemd/core/host";
+import type {
+  GeneratedObservation,
+  GeneratedObservationResult,
+  GeneratedRequest,
+} from "@executablemd/core/host";
+import type { ComponentInvocation } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import {
@@ -71,6 +77,33 @@ export const props = {
   required: ["source"],
   additionalProperties: false,
 };
+
+/**
+ * What the document reads back, as text it can render into the next `<Prompt>`.
+ *
+ * The observations' own values, in the order the fragment invoked them, with
+ * whatever the fragment rendered kept beside them. An admitted `<Fetch>` written
+ * without a binding renders nothing — a component returning a non-string has
+ * nowhere to render — so a result taken from the rendered fragment would answer
+ * the Agent's question with an empty string.
+ *
+ * Deterministic JSON, because the next thing that happens to it is that a
+ * document interpolates it into a prompt, and an Agent reading its own previous
+ * observation should read the same shape every time.
+ */
+function observationText(result: GeneratedObservationResult): string {
+  return JSON.stringify(
+    {
+      observations: result.observations.map((observation) => ({
+        name: observation.name,
+        value: observation.value,
+      })),
+      rendered: result.rendered,
+    },
+    undefined,
+    2,
+  );
+}
 
 /** A generated fragment offered to this host in a form it does not take. */
 export class GeneratedEvaluationError extends Error {
@@ -105,7 +138,10 @@ export function useGeneratedEvaluation(
   const requests: GeneratedRequest[] = [...(options.requests ?? [])];
   const components: GeneratedObservation[] = [...(options.components ?? [])];
 
-  function* Evaluate(elementProps: Record<string, Json>): Operation<string> {
+  function* Evaluate(
+    elementProps: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<string> {
     if (yield* hasContent()) {
       throw new GeneratedEvaluationError(
         "<Evaluate> takes the generated source as its `source` prop and renders no content of " +
@@ -117,10 +153,18 @@ export function useGeneratedEvaluation(
       throw new GeneratedEvaluationError("<Evaluate> requires a `source` string to evaluate.");
     }
 
-    // The durable identity of this observation is this element's own expansion,
+    // The durable identity of this observation is this element's own invocation,
     // so a replay restores the fragment this position admitted rather than
     // whichever one a later turn happens to be holding.
-    const expansion = yield* getExpansion();
+    //
+    // Handed by the engine at the call site, not read from anywhere. Both
+    // other channels are composable: `getExpansion()` reads a Context, which is
+    // addressed by name and which a loaded component may bind for its
+    // descendants, and a contextual Api handler an ancestor installed answers
+    // ahead of the engine's own — measured, not assumed. Either would let two
+    // `<Evaluate>` sites share one durable name and each replay the other's
+    // admitted fragment.
+    const id = invocation.id;
     const selection = yield* workspaceRootSelection(database);
 
     const policy: GeneratedObservationPolicy = {
@@ -129,7 +173,8 @@ export function useGeneratedEvaluation(
       requests,
       components: [pinnedFileRead(), ...components],
     };
-    return yield* observeGeneratedXmd(expansion.id, source, policy);
+    const result = yield* observeGeneratedXmd(id, source, policy);
+    return observationText(result);
   }
 
   return registerComponents([{ name: "Evaluate", origin: ORIGIN, props, fn: Evaluate }]);

@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect, execute, retainedSource } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
+import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
@@ -89,6 +90,10 @@ function runFixture(
      * forgot rather than a process that restarted.
      */
     readonly sessionStore?: AgentProfileOptions["sessionStore"];
+    /** What this host admits a generated fragment under, beyond the read-only File. */
+    readonly evaluation?: { readonly requests?: readonly Record<string, Json>[] };
+    /** Answers one admitted HTTP read, and counts what was asked for. */
+    readonly transport?: { readonly performed: string[] };
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -102,6 +107,26 @@ function runFixture(
       { at: "min" },
     );
     yield* useHostFiles();
+    if (options.transport) {
+      const performed = options.transport.performed;
+      yield* API.Fetch.around(
+        {
+          // deno-lint-ignore require-yield
+          *fetch([url]): Operation<RuntimeFetchResponse> {
+            performed.push(url);
+            return {
+              status: 200,
+              headers: { get: () => null, entries: () => [] },
+              // deno-lint-ignore require-yield
+              *text(): Operation<string> {
+                return "the release notes are ready";
+              },
+            };
+          },
+        },
+        { at: "min" },
+      );
+    }
     let output: Json | undefined;
     let failure: string | undefined;
     try {
@@ -116,6 +141,7 @@ function runFixture(
           );
         }),
         {
+          ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
           agent: (attachment) =>
             useWorkflowAgentProfile({
               root,
@@ -335,6 +361,86 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(resumed.ensured.map((input) => input.sessionKey)).toEqual(
         interrupted.ensured.map((input) => input.sessionKey),
       );
+    });
+  });
+
+  it("WAL8: an admitted Fetch response reaches the next Prompt, values and all", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+    const url = "https://api.example.test/release";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const transport = { performed: [] as string[] };
+
+      const fake = createFakeAcp();
+      fake.script(observation(`<Fetch url="${url}" />`));
+      fake.script(proposal("The release notes are ready, so ship it."));
+
+      const attempt = yield* runFixture(root, database, source, {
+        createRuntime: fake.create,
+        evaluation: { requests: [{ url }] },
+        transport,
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      expect(transport.performed).toEqual([url]);
+
+      // `<Fetch>` written without a binding renders nothing at all — a
+      // component returning a non-string has nowhere to render. The retained
+      // response still has to reach the agent, so the second prompt carries the
+      // status and the body it never saw rendered.
+      expect(fake.prompts).toHaveLength(2);
+      const second = fake.prompts[1] ?? "";
+      expect(second).toContain('"status": 200');
+      expect(second).toContain("the release notes are ready");
+      // The first prompt had no observation yet, so the difference is the
+      // observation rather than the document's own prose.
+      expect(fake.prompts[0]).not.toContain("the release notes are ready");
+    });
+  });
+
+  it("WAL8: a completed replay restores that response without asking again", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+    const url = "https://api.example.test/release";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+      const live = createFakeAcp();
+      live.script(observation(`<Fetch url="${url}" />`));
+      live.script(proposal("The release notes are ready, so ship it."));
+      const performed: string[] = [];
+
+      const first = yield* runFixture(root, database, source, {
+        createRuntime: live.create,
+        sessionStore: store,
+        evaluation: { requests: [{ url }] },
+        transport: { performed },
+      });
+      expect(first.failure).toBe(undefined);
+      expect(performed).toEqual([url]);
+      const observed = live.prompts[1] ?? "";
+      expect(observed).toContain("the release notes are ready");
+
+      // The same document over its own journal: the response is restored from
+      // the retained `fetch` effect, and neither the agent nor the server is
+      // asked anything.
+      const replayed: string[] = [];
+      const reached: string[] = [];
+      const replay = yield* runFixture(root, database, source, {
+        createRuntime: tripwireAcp((what) => reached.push(what)),
+        sessionStore: store,
+        evaluation: { requests: [{ url }] },
+        transport: { performed: replayed },
+      });
+
+      expect(replay.failure).toBe(undefined);
+      expect(reported(replay)).toBe(reported(first));
+      expect(reached).toEqual([]);
+      expect(replayed).toEqual([]);
+      expect(replay.events.length).toBe(first.events.length);
     });
   });
 

@@ -17,7 +17,16 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { collect, execute, inlineSource } from "@executablemd/core";
+import {
+  collect,
+  Component,
+  content,
+  execute,
+  inlineSource,
+  registerComponents,
+} from "@executablemd/core";
+import { createContext } from "effection";
+import type { Context } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
@@ -27,6 +36,17 @@ import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
+
+/**
+ * The engine's expansion context, addressed by the name it publishes under.
+ *
+ * Reconstructed here on purpose: a context is identified by its name, so any
+ * loaded copy — a repository `.ts` component, a middleware package — can bind
+ * this one for its descendants. That is the reach this probe exercises.
+ */
+const CurrentExpansion: Context<{ id: string; name: string } | undefined> = createContext<
+  { id: string; name: string } | undefined
+>("expand.current", undefined);
 
 const URL_ADMITTED = "https://api.example.test/admitted";
 const URL_OTHER = "https://api.example.test/other";
@@ -266,6 +286,60 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // One admission, and it refused. No second one from a nested evaluation.
       expect(admissions(attempt.events)).toHaveLength(1);
       expect(reported(attempt)).not.toContain("the retained note");
+    });
+  });
+
+  it("WGAC6: two Evaluate sites stay distinct under a component that rebinds what it can", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "notes.md", "the retained note\n");
+
+      const attempt = yield* scoped(function* () {
+        // A loaded component that binds the expansion context for its
+        // descendants. An Effection context is addressed by name, so this is a
+        // thing any component or middleware package can do — which is exactly
+        // why a durable name may not be read from one.
+        yield* registerComponents([
+          {
+            name: "Forge",
+            origin: "test://forge",
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(): Operation<string> {
+              yield* CurrentExpansion.set({ id: "forged-identity", name: "Evaluate" });
+              // And the composable channel a component *does* have: content
+              // projection runs inside this frame, so anything reachable from a
+              // Context or a contextual Api handler installed here is reachable
+              // from the `<Evaluate>` sites below.
+              yield* Component.around({
+                // deno-lint-ignore require-yield
+                *hasContent(_args, _next) {
+                  return false;
+                },
+              });
+              return yield* content();
+            },
+          },
+        ]);
+        return yield* runDocument(
+          database,
+          `<Forge>\n<Evaluate source={'<File path="notes.md" />'} />\n\n` +
+            `<Evaluate source={'<File path="notes.md" />'} />\n</Forge>\n`,
+        );
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      const recorded = admissions(attempt.events);
+      expect(recorded).toHaveLength(2);
+
+      // Two sites, two durable names. One shared name would make the second
+      // site replay the first site's admitted fragment.
+      const names = recorded.map((event) => (event.type === "yield" ? event.description.name : ""));
+      expect(new Set(names).size).toBe(2);
+      // And neither of them is the identity the component published.
+      for (const name of names) {
+        expect(name).not.toContain("forged-identity");
+      }
     });
   });
 

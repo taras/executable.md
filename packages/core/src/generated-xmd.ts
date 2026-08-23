@@ -275,6 +275,35 @@ export function pinnedComponent(
   return { name, identity, definition };
 }
 
+/**
+ * What one admitted observation produced.
+ *
+ * The value is the component's own return, kept whatever the fragment rendered.
+ * An admitted `<Fetch>` written without `as` renders nothing at all — a
+ * component returning a non-string has nowhere to render — so a result taken
+ * from the rendered text would hand the Agent an empty answer to the question it
+ * asked.
+ */
+export interface GeneratedObservationValue {
+  readonly name: string;
+  readonly identity: string;
+  readonly value: Json;
+}
+
+/**
+ * What one admitted fragment produced, detached from its expansion.
+ *
+ * Deterministic: the observations appear in the order the fragment invoked them,
+ * each carrying the pinned identity that produced it. The rendered text is kept
+ * beside them rather than instead of them — a fragment whose elements render
+ * prose still has prose, and a fragment whose elements render nothing still has
+ * its values.
+ */
+export interface GeneratedObservationResult {
+  readonly observations: readonly GeneratedObservationValue[];
+  readonly rendered: string;
+}
+
 /** What a trusted host asks this evaluator to admit. */
 export interface GeneratedXmdRequest {
   /** Which fragment this is. It names the durable admission record. */
@@ -330,9 +359,15 @@ type RetainedAdmission =
 class GeneratedImportAuthority implements ImportAuthority {
   readonly #observations: ReadonlyMap<string, GeneratedObservation>;
   readonly #imports = new CanonicalImports();
+  readonly #values: GeneratedObservationValue[] = [];
 
   constructor(observations: ReadonlyMap<string, GeneratedObservation>) {
     this.#observations = observations;
+  }
+
+  /** What each admitted observation returned, in invocation order. */
+  get values(): GeneratedObservationValue[] {
+    return this.#values;
   }
 
   /** The answer canonical execution produces for this name. */
@@ -342,10 +377,31 @@ class GeneratedImportAuthority implements ImportAuthority {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
     const copy = retain(pinned.definition);
-    if (copy === undefined) {
+    if (copy === undefined || copy.kind !== "function" || typeof copy.fn !== "function") {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    return this.#imports.issue(name, copy);
+    const implementation = copy.fn;
+    // The value is taken where the component produced it. Reading it back from
+    // the rendered fragment would lose every observation that renders nothing,
+    // which is most of them.
+    const values = this.#values;
+    const observed: FunctionComponentDefinition = {
+      ...copy,
+      *fn(props, invocation) {
+        const value = yield* implementation(props, invocation);
+        values.push({
+          name: pinned.name,
+          identity: pinned.identity,
+          // Parsed rather than asserted: this value is retained and handed back
+          // to a trusted host, and a component that returned something with no
+          // JSON shape has broken the contract an observation runs under. A
+          // component that returned nothing observed nothing, which is `null`.
+          value: value === undefined ? null : parseJson(value),
+        });
+        return value;
+      },
+    };
+    return this.#imports.issue(name, observed);
   }
 
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
@@ -373,6 +429,14 @@ function admitted(
       throw new GeneratedXmdError(
         "a generated-XMD allowlist admitted a definition that is not a function component. " +
           "Slice 1 admits host and core observation components only.",
+      );
+    }
+    if (typeof observation.definition.fn !== "function") {
+      // The `<Test>` harness marker is a definition whose `fn` is data rather
+      // than an implementation. Nothing invokes it here, and an observation
+      // whose value cannot be produced is not one.
+      throw new GeneratedXmdError(
+        "a generated-XMD allowlist admitted a definition with no invocable implementation.",
       );
     }
     if (table.has(name)) {
@@ -775,7 +839,7 @@ function expand(
   id: string,
   segments: Segment[],
   table: ReadonlyMap<string, GeneratedObservation>,
-): Operation<string> {
+): Operation<GeneratedObservationResult> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
     const authority = new GeneratedImportAuthority(table);
@@ -802,7 +866,7 @@ function expand(
       // own, and what it may invoke is this table and nothing else.
       { imports: authority },
     );
-    return renderSegments(expanded);
+    return { observations: authority.values, rendered: renderSegments(expanded) };
   });
 }
 
@@ -814,7 +878,9 @@ function expand(
  * restores the admission and every observation that already committed rather
  * than performing them again.
  */
-export function* evaluateGeneratedXmd(request: GeneratedXmdRequest): Workflow<string> {
+export function* evaluateGeneratedXmd(
+  request: GeneratedXmdRequest,
+): Workflow<GeneratedObservationResult> {
   const table = admitted(request.observations);
   const ceilings = yield* ephemeral(normalizedCeilings(table));
   const policy = currentPolicy(request, table, ceilings);

@@ -22,6 +22,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
+import type {
+  GeneratedObservationResult,
+  GeneratedObservationValue,
+} from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
 import { observeGeneratedXmd } from "../src/generated-observations.ts";
 import type { GeneratedObservationPolicy } from "../src/generated-observations.ts";
@@ -63,6 +67,7 @@ function* useTransport(): Operation<Transport> {
 /** What one run under one policy produced. */
 interface Attempt {
   output?: string;
+  values?: readonly GeneratedObservationValue[];
   failure?: string;
   events: DurableEvent[];
 }
@@ -74,10 +79,10 @@ interface Attempt {
 function evaluate(source: string, policy: GeneratedObservationPolicy): Operation<Attempt> {
   return scoped(function* () {
     const stream = new InMemoryStream();
-    const captured: { output?: string } = {};
+    const captured: { result?: GeneratedObservationResult } = {};
     const installation: ExecutionInstallation = {
       *prepare() {
-        captured.output = yield* observeGeneratedXmd("turn-1", source, policy);
+        captured.result = yield* observeGeneratedXmd("turn-1", source, policy);
       },
     };
     const execution = yield* executeInstalled(
@@ -87,7 +92,11 @@ function evaluate(source: string, policy: GeneratedObservationPolicy): Operation
     const result = yield* execution;
     const events = yield* stream.readAll();
     if (result.ok) {
-      return { output: captured.output ?? "", events };
+      return {
+        output: captured.result?.rendered ?? "",
+        values: captured.result?.observations ?? [],
+        events,
+      };
     }
     return { failure: result.error.message, events };
   });

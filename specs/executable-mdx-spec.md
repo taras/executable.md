@@ -1856,7 +1856,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedComponent()`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam, including the read-only `<File>` identity a paired form is refused against (workflow-workspace-spec §8.4) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedComponent()`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam, including the read-only `<File>` identity a paired form is refused against, and answering with each admitted observation's own value rather than the fragment's rendering (workflow-workspace-spec §8.4) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -2685,6 +2685,15 @@ They are ordinary **defaults**, not reserved names: a repository component
 called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
+
+A function component is invoked with two arguments: its validated props, and
+what the engine says about the invocation it is in. Today that is one field, the
+invocation's durable identity — the same value `getExpansion()` reports, on a
+channel a document cannot substitute. A component naming a durable operation
+after itself uses this and not the Context: a Context is addressed by name, so a
+loaded component may bind one for its descendants, and a contextual Api handler
+installed outside an invocation answers ahead of the engine's own (Tier CIV). A
+component that does not need it declares one parameter and never sees it.
 
 A host may register defaults of its own on the same terms. The workflow host
 registers `<Evaluate source={…} />` for a live or partial run: the operation an
@@ -9476,6 +9485,14 @@ against the production Deno adapter, on real run files.
 | WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
+
+### Tier CIV — The invocation the engine hands a component
+
+| # | Test | Verify |
+|---|------|--------|
+| CIV1 | Distinct sites | Two invocations receive two identities, each the engine's own for that invocation |
+| CIV2 | The Api is replaceable | A handler installed outside an invocation replaces a Component Api answer the engine would have given, which is why a durable name may not come from one |
+| CIV3/CIV4 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it; the identity the engine hands is its own either way |
 
 ### Tier WAP — The strict workflow Agent profile
 

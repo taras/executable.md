@@ -2931,6 +2931,12 @@ function* expandFunctionComponent(
             *hasContent(_args, _next) {
               return !selfClosing;
             },
+            // The identity of the invocation the engine just entered, answered
+            // from the engine's own frame rather than read back out of a
+            // context a descendant could have rebound. This handler is
+            // installed for this invocation, so it is the innermost one and
+            // answers before any middleware an ancestor composed.
+
             // The engine's own answer about the engine's own prop: `as` was
             // validated and stripped above, and this reports whether it was
             // there. Nothing else about the binding crosses — not its name, not

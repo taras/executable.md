@@ -83,6 +83,8 @@ export {
 } from "./src/generated-xmd.ts";
 export type {
   GeneratedObservation,
+  GeneratedObservationResult,
+  GeneratedObservationValue,
   GeneratedRequest,
   GeneratedXmdRequest,
 } from "./src/generated-xmd.ts";

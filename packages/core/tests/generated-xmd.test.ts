@@ -45,7 +45,13 @@ import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
 import { evaluateGeneratedXmd, pinnedComponent, pinnedFetch, pinnedFileRead } from "../host.ts";
 import { executeInstalled } from "../host.ts";
-import type { ExecutionInstallation, GeneratedObservation, GeneratedXmdRequest } from "../host.ts";
+import type {
+  ExecutionInstallation,
+  GeneratedObservation,
+  GeneratedObservationResult,
+  GeneratedObservationValue,
+  GeneratedXmdRequest,
+} from "../host.ts";
 import type { FunctionComponentDefinition, Json } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
@@ -146,6 +152,8 @@ function request(
 interface Attempt {
   /** What the fragment rendered, when it was admitted. */
   output?: string;
+  /** What each admitted observation returned, in invocation order. */
+  values?: readonly GeneratedObservationValue[];
   /** What the root document execution settled to, when it settled. */
   rendered?: Json;
   /** Why it was refused, when it was not. */
@@ -171,10 +179,10 @@ function evaluate(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
-    const captured: { output?: string } = {};
+    const captured: { result?: GeneratedObservationResult } = {};
     const installation: ExecutionInstallation = {
       *prepare() {
-        captured.output = yield* evaluateGeneratedXmd(candidate);
+        captured.result = yield* evaluateGeneratedXmd(candidate);
       },
     };
     const execution = yield* executeInstalled(
@@ -188,7 +196,12 @@ function evaluate(
     const result = yield* execution;
     const events = yield* stream.readAll();
     if (result.ok) {
-      return { output: captured.output ?? "", rendered: result.value, events };
+      return {
+        output: captured.result?.rendered ?? "",
+        values: captured.result?.observations ?? [],
+        rendered: result.value,
+        events,
+      };
     }
     return { failure: result.error.message, events };
   });
