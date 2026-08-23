@@ -28,10 +28,15 @@
  * "Another" also includes another component. Middleware may keep the
  * implementation it was handed at a real `<Evaluate>` site and call it from an
  * invocation of something else, handing over that element's own genuine, live,
- * unspent issuance — so the issuance carries the claim domain of the component
- * the engine resolved, and an implementation states which domain it is naming
- * in. A domain is an opaque object core mints for whoever registers the
- * implementation; nothing about it is a name, and a look-alike is not one.
+ * unspent issuance — so an implementation that names durable work states the
+ * **claim domain** it names in, and a domain answers for one component.
+ *
+ * Which component is decided once, by core, where the implementation is
+ * registered: `registerComponents` binds the domain to that name, and a domain
+ * offered for a second name is refused there. Nothing carries it afterwards —
+ * it is on no definition, in no registry entry and in no context, so there is
+ * nothing for middleware to read, copy or plant. What the engine records on an
+ * invocation is the name it resolved, which is the authored element's own.
  *
  * As for nesting, what settles it is that a nested component is reachable
  * exactly one way — the enclosing invocation expanding its own content. So an invocation names
@@ -69,22 +74,40 @@ export interface ComponentInvocation {
  * identity is the whole of it: there is nothing to read, nothing to compare by
  * value, and nothing a look-alike can be built to match.
  */
-let isClaim: (value: unknown) => boolean;
+let boundComponent: (value: unknown) => { component: string | undefined } | undefined;
+let bind: (claim: ComponentClaim, component: string) => string | undefined;
 
 export class ComponentClaim {
-  readonly #minted: boolean;
-
-  constructor() {
-    this.#minted = true;
-    Object.freeze(this);
-  }
+  /** The component this domain answers for, once core has registered it. */
+  #component: string | undefined;
 
   static {
     // A private field is the test, as everywhere else here: it appears in no
     // key list and no copy, so an object this file did not construct has none.
-    isClaim = (value) =>
-      typeof value === "object" && value !== null && #minted in value && value.#minted;
+    boundComponent = (value) =>
+      typeof value === "object" && value !== null && #component in value
+        ? { component: value.#component }
+        : undefined;
+    bind = (claim, component) => {
+      const bound = claim.#component;
+      if (bound !== undefined && bound !== component) {
+        return bound;
+      }
+      claim.#component = component;
+      return undefined;
+    };
   }
+}
+
+/**
+ * Bind one domain to the component it answers for. Only registration calls it.
+ *
+ * Answers with the name it is already bound to when that is a different one,
+ * because a domain that answered for two components would be exactly the
+ * borrowed authority it exists to prevent.
+ */
+export function bindClaimComponent(claim: ComponentClaim, component: string): string | undefined {
+  return bind(claim, component);
 }
 
 /** Mint one claim domain. A trusted host does this once, where it registers. */
@@ -109,8 +132,8 @@ let stateOf: (value: unknown) => Issuance | undefined;
 
 interface Issuance {
   readonly id: string;
-  /** The claim domain of the component the engine resolved here, if any. */
-  readonly claim: ComponentClaim | undefined;
+  /** The component this is an invocation of, as the engine resolved it. */
+  readonly component: string;
   live: boolean;
   spent: boolean;
   /** How many projections of this invocation's own content are in flight. */
@@ -149,8 +172,8 @@ export interface IssuedInvocation {
 }
 
 /** Mint one invocation identity. Only the engine calls this. */
-export function issueInvocation(id: string, claim: ComponentClaim | undefined): IssuedInvocation {
-  const issuance: Issuance = { id, claim, live: true, spent: false, projecting: 0 };
+export function issueInvocation(id: string, component: string): IssuedInvocation {
+  const issuance: Issuance = { id, component, live: true, spent: false, projecting: 0 };
   return {
     invocation: new EngineInvocation(issuance),
     projecting(): () => void {
@@ -185,7 +208,8 @@ export function issueInvocation(id: string, claim: ComponentClaim | undefined): 
  * else's invocation admits and replays under their retained history.
  */
 export function durableIdentityOf(invocation: ComponentInvocation, claim: ComponentClaim): string {
-  if (!isClaim(claim)) {
+  const domain = boundComponent(claim);
+  if (domain === undefined) {
     throw new ComponentInvocationError(
       "a durable identity is claimed in a domain core minted, and this is not one",
     );
@@ -202,10 +226,16 @@ export function durableIdentityOf(invocation: ComponentInvocation, claim: Compon
         "identity here",
     );
   }
-  if (issuance.claim !== claim) {
+  if (domain.component === undefined) {
     throw new ComponentInvocationError(
-      "this invocation is an invocation of something else — an implementation kept from one " +
-        "component's site names no durable identity at another's",
+      "this claim domain is registered for no component, so it names nothing anywhere",
+    );
+  }
+  if (domain.component !== issuance.component) {
+    throw new ComponentInvocationError(
+      `this is an invocation of <${issuance.component} />, and this durable identity is ` +
+        `claimed for <${domain.component} /> — an implementation kept from one component's ` +
+        "site names no durable identity at another's",
     );
   }
   if (issuance.projecting > 0) {

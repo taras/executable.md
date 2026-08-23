@@ -2508,10 +2508,14 @@ where every projection funnels through, rather than anything global tracking who
 is current. It is bound to which component the engine resolved as well: middleware may keep
 the implementation it was handed at a real site and call it from an invocation
 of something else, and every other check passes. So an implementation that names
-durable work mints an opaque claim domain, closes over it, and attaches it to
-its registration; the engine records that domain on the invocations it resolves
-to it, and the implementation states the domain it names in. A domain is not a
-name, and nothing a caller supplies structurally is authoritative.
+durable work mints an opaque claim domain, closes over it, and states it where
+it claims. Registering the implementation is what binds the domain to that
+component, inside the domain itself; a domain offered for a second component is
+refused at the registration. Nothing carries one afterwards — not a definition,
+not a registry entry, not a context — so there is nothing for a handler to read
+or to attach elsewhere, and what the engine records on the invocation is the
+name it resolved. A domain is not a name, and nothing a caller supplies
+structurally is authoritative.
 
 Forwarding the genuine issuance is ordinary delegation and stays
 supported; minting one, keeping a finished one, spending one site's at another,

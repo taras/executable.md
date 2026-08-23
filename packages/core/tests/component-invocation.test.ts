@@ -72,21 +72,6 @@ function useProbe(): Operation<Seen> {
           },
         },
         {
-          // A content-bearing parent: its own invocation stays open — live and
-          // unspent — for as long as the content it projects is running.
-          name: "Around",
-          origin: "test://around",
-          // The same domain as `<Probe>`, deliberately: two components one host
-          // registered together. The claim domain therefore settles nothing
-          // here, and what refuses the nested claim is that this element is
-          // expanding its content.
-          claim: PROBE_CLAIM,
-          props: { type: "object", properties: {}, additionalProperties: false },
-          *fn(): Operation<string> {
-            return yield* content();
-          },
-        },
-        {
           name: "Probe",
           origin: "test://probe",
           claim: PROBE_CLAIM,
@@ -98,8 +83,12 @@ function useProbe(): Operation<Seen> {
               seen.refusals.push(error instanceof Error ? error.message : String(error));
             }
             seen.context.push((yield* getExpansion()).id);
-            seen.api.push(yield* Component.operations.hasContent());
-            return "";
+            const paired = yield* Component.operations.hasContent();
+            seen.api.push(paired);
+            // Content-bearing when it is written that way, which is what makes
+            // one `<Probe>` able to be another's live ancestor — in the same
+            // claim domain, since it is the same registration.
+            return paired ? yield* content() : "";
           },
         },
       ]);
@@ -119,6 +108,12 @@ function run(source: string, install: () => Operation<void>): Operation<Seen> {
 
 // deno-lint-ignore require-yield
 function* nothing(): Operation<void> {}
+
+/** A component body with nothing in it, for registrations under test. */
+// deno-lint-ignore require-yield
+function* silent(): Operation<string> {
+  return "";
+}
 
 describe("Tier CIV — the invocation the engine hands a component", () => {
   it("CIV1: two sites are handed two identities", function* () {
@@ -220,44 +215,39 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
 
   it("CIV6: a live ancestor's issuance cannot be spent inside its content", function* () {
     let parent: ComponentInvocation | undefined;
-    const seen = yield* run("<Around>\n<Probe />\n</Around>\n", function* () {
+    // One `<Probe>` inside another: the same registration, so the same claim
+    // domain, which is what leaves the projection as the only thing that can
+    // refuse the nested claim.
+    const seen = yield* run("<Probe>\n<Probe />\n</Probe>\n", function* () {
       yield* Component.around({
         *importComponent([name], next) {
           const definition = yield* next(name);
-          if (definition.kind !== "function") {
+          if (name !== "Probe" || definition.kind !== "function") {
             return definition;
           }
           const original = definition.fn;
           if (typeof original !== "function") {
             return definition;
           }
-          if (name === "Around") {
-            return {
-              ...definition,
-              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                // Captured here and still live below: the parent has not
-                // returned, so nothing about this issuance has expired.
-                parent = invocation;
-                return yield* original(props, invocation);
-              },
-            };
-          }
-          if (name !== "Probe") {
-            return definition;
-          }
           return {
             ...definition,
             *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-              return yield* original(props, parent ?? invocation);
+              if (parent === undefined) {
+                // Captured at the outer element, and still live below: it has
+                // not returned, and its content has not finished.
+                parent = invocation;
+                return yield* original(props, invocation);
+              }
+              return yield* original(props, parent);
             },
           };
         },
       });
     });
 
-    // The nested claim is refused, and the parent's identity is not handed out
-    // a second time under it.
-    expect(seen.taken).toEqual([]);
+    // The outer element named itself before it projected. The nested claim was
+    // refused rather than answered with the ancestor's identity.
+    expect(seen.taken).toHaveLength(1);
     expect(seen.refusals).toHaveLength(1);
     expect(seen.refusals[0]).toContain("expanding its own content");
   });
@@ -266,6 +256,9 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     // The definition `importComponent` handed out at the real `<Probe />` site,
     // kept and called from an invocation of something else.
     let kept: FunctionComponent | undefined;
+    // What the definition carries about its domain, which has to be nothing:
+    // a domain readable here is one a handler can put on another component.
+    const carried: string[][] = [];
     const seen = yield* run("<Probe />\n\n<Elsewhere />\n", function* () {
       yield* Component.around({
         *importComponent([name], next) {
@@ -279,6 +272,7 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
           }
           if (name === "Probe") {
             kept = original;
+            carried.push(Reflect.ownKeys(definition).map(String));
             return definition;
           }
           if (name !== "Elsewhere") {
@@ -300,7 +294,11 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     // `<Probe>`'s work under `<Elsewhere />`'s identity.
     expect(seen.taken).toHaveLength(1);
     expect(seen.refusals).toHaveLength(1);
-    expect(seen.refusals[0]).toContain("invocation of something else");
+    // Nothing on the definition names a domain, so there is nothing to copy.
+    expect(carried).toHaveLength(1);
+    expect(carried[0]).not.toContain("claim");
+    expect(seen.refusals[0]).toContain("invocation of <Elsewhere />");
+    expect(seen.refusals[0]).toContain("claimed for <Probe />");
   });
 
   it("CIV8: an issuance kept from the first site cannot be spent at the second", function* () {
@@ -336,5 +334,26 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(seen.taken).toHaveLength(1);
     expect(seen.refusals).toHaveLength(1);
     expect(seen.refusals[0]).toMatch(/already been taken|has finished/);
+  });
+
+  it("CIV9: a domain cannot be registered for a second component", function* () {
+    // The other half of the same rule, and the reason nothing needs to carry a
+    // domain around: registering is what binds one, and it binds once.
+    let refusal: string | undefined;
+    yield* scoped(function* () {
+      const claim = componentClaim();
+      const props = { type: "object", properties: {}, additionalProperties: false } as const;
+      yield* registerComponents([
+        { name: "First", origin: "test://first", claim, props, fn: silent },
+      ]);
+      try {
+        yield* registerComponents([
+          { name: "Second", origin: "test://second", claim, props, fn: silent },
+        ]);
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(refusal).toContain(`offers the claim domain of "First"`);
   });
 });

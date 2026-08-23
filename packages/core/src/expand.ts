@@ -2836,8 +2836,10 @@ function* expandFunctionComponent(
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
-        // that is the whole of how a nested component is reached.
-        const issued = issueInvocation(expansion.id, definition.claim);
+        // that is the whole of how a nested component is reached. The authored
+        // name travels with it, because a durable identity is claimed in the
+        // domain of one component and this is the component being invoked.
+        const issued = issueInvocation(expansion.id, name);
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,

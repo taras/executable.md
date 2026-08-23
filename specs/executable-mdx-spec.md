@@ -3836,16 +3836,21 @@ the implementation it was handed at a real site and call it from an invocation
 of something else, handing over that element's own genuine, live, unspent
 issuance — every other check passes. So a component that names durable work
 after its invocation mints a **claim domain** with `componentClaim()`, closes
-over it, and attaches it to the registration; the engine records that domain on
-the invocations it resolves to it, and the implementation states the domain it
-is naming in. The domain is an opaque object, never a name: a look-alike is not
-one, and middleware wrapping a definition keeps it, because it is wrapping that
-component.
+over it, and states it where it claims; a domain answers for one component, and
+a claim made at an invocation of another is refused.
+
+Which component a domain answers for is decided once, by core, where the
+implementation is registered: `registerComponents` binds the domain to that
+name, and a domain offered for a second component is refused there. Nothing
+carries a domain afterwards — it is on no definition, in no registry entry and
+in no context, so a handler that delegates an import finds nothing to read and
+nothing to put on a component of its own. What the engine records on an
+invocation is the name it resolved, which is the authored element's own.
 
 Forwarding the genuine issuance is ordinary delegation and stays supported.
 Everything else refuses rather than answering: a value the engine did not mint
 names no identity, an issuance belonging to an invocation of another component
-names none here, one whose invocation has finished names none here, one whose
+names none in this domain, one whose invocation has finished names none here, one whose
 invocation is busy expanding its content names none here, and a second
 authoritative read of one refuses. So a wrapper can neither keep the first
 site's issuance and spend it at the second, nor capture a live ancestor's and
@@ -9968,9 +9973,10 @@ Defined in §5.6.
 | CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
 | CIV4 | No minting | `importComponent` middleware that delegates and calls the original with an object of its own is refused at both sites, and takes no identity |
 | CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
-| CIV6 | No live ancestor | A content-bearing parent's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there, under a parent sharing the same claim domain so nothing else can be what refused it |
-| CIV7 | No borrowed implementation | An implementation kept from one component's real site, called from an invocation of another with that element's own genuine issuance, is refused |
+| CIV6 | No live ancestor | One element's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there. The two are the same component, so the claim domain settles nothing and the projection is what refuses it |
+| CIV7 | No borrowed implementation | An implementation kept from one component's real site, called from an invocation of another with that element's own genuine issuance, is refused — and the definition the handler was given carries no domain to move |
 | CIV8 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
+| CIV9 | One domain, one component | Registering a domain that already answers for another component is refused where the registration is made |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 
