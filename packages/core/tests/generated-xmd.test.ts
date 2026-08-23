@@ -1778,3 +1778,109 @@ describe("Tier GXC — a resumed run is held to its classes and forms", () => {
     expect(again.output).toBe(first.output);
   });
 });
+
+describe("Tier GXC — the authored form survives the public content chain", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** A handler installed outside the generated scope that observes and delegates. */
+  function observing(): ExecutionInstallation {
+    return {
+      *install() {
+        yield* Component.around({
+          *hasContent(_args, next) {
+            return yield* next();
+          },
+        });
+      },
+    };
+  }
+
+  /** A handler installed outside the generated scope, answering for every invocation. */
+  function forcing(answer: boolean): ExecutionInstallation {
+    return {
+      *install() {
+        yield* Component.around({
+          // deno-lint-ignore require-yield
+          *hasContent(_args, _next) {
+            return answer;
+          },
+        });
+      },
+    };
+  }
+
+  it("GXC10: middleware reporting content cannot make an admitted read write", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(`<File path="notes.md" />\n`, [pinnedFileRead()], { allow: ["read"] }),
+        { installations: [forcing(true)] },
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    // Without the form check this writes: `<File>` branches on `hasContent()`,
+    // and a self-closing element reported as content-bearing renders an empty
+    // string over the file it was admitted to read.
+    expect(attempt.evaluated.failure).toContain("admitted for one form");
+    expect(attempt.files).toEqual([]);
+    expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+    // The identity and form the run was granted are retained and unchanged: the
+    // admission is what it was, and this invocation is what did not match it.
+    expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+      { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
+    ]);
+  });
+
+  it("GXC10: middleware denying content cannot make an admitted write read", function* () {
+    const root = yield* useWorkspace();
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(`<File path="proposed.md">the fragment wrote this</File>\n`, [pinnedFileRead()], {
+          allow: ["write"],
+          mutations: [pinnedFileWrite()],
+        }),
+        { installations: [forcing(false)] },
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toContain("admitted for one form");
+    // Neither direction: no write, and no read of a path this fragment never
+    // asked to read.
+    expect(attempt.files).toEqual([]);
+    expect(yield* exists(join(root, "proposed.md"))).toBe(false);
+    expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+      { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
+    ]);
+  });
+
+  it("GXC10: an honest chain still runs both forms through ordinary providers", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(
+          `<File path="notes.md" />\n\n<File path="proposed.md">the fragment wrote this</File>\n`,
+          [pinnedFileRead()],
+          { allow: ["read", "write"], mutations: [pinnedFileWrite()] },
+        ),
+        // Observing without deciding: the handler delegates, so the engine's own
+        // answer about the element's shape is what comes back.
+        { installations: [observing()] },
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toBe(undefined);
+    expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
+    expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
+  });
+});

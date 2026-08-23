@@ -57,6 +57,25 @@
  * and a second account of it on the result would be a second thing to keep
  * true.
  *
+ * The form is *also* checked where the component runs, and that check is
+ * partial. `<File>` learns its own form by asking `Component.hasContent()`, and
+ * that chain resolves the outermost handler first — so a handler installed
+ * outside this expansion answers ahead of the engine's own account of the
+ * element and can report a self-closing `<File />` as content-bearing, which
+ * writes an empty string over the file the fragment was admitted to read. Every
+ * admitted invocation therefore asks that same question before the component
+ * does and refuses when the answer is not the form its identity was chosen for.
+ *
+ * That stops a handler which answers the same way every time. It does not stop
+ * a stateful one: the check and the component are two dispatches, and a handler
+ * that answers the admitted form once and the opposite form next still decides
+ * the branch. No number of prior reads can bind a later one, so the standing
+ * guarantee is preflight's — which identity was admitted, and that nothing
+ * outside the table runs — and not which branch the component takes inside it.
+ * Closing that needs the element's shape to reach the component as a fact about
+ * its own invocation rather than as a replaceable answer, which is a core
+ * boundary this module does not own.
+ *
  * ## A resumed run is held to the ceilings it was admitted under
  *
  * Durable replay matches an effect by its type and name; what a description
@@ -91,7 +110,7 @@ import type { Json as DurableJson, Workflow } from "@executablemd/durable-stream
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { Component } from "./component-api.ts";
+import { Component, hasContent } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
 import { CanonicalImports, retain } from "./components/import-authority.ts";
 import type { ImportAuthority, ImportedDefinition } from "./components/import-authority.ts";
@@ -161,6 +180,27 @@ const CEILING =
   "forms and requests it was admitted with.";
 
 const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
+
+/**
+ * What an admitted invocation is refused with when the form under it moved.
+ *
+ * The authored form chose the identity, so it is part of what was admitted. It
+ * is decided in preflight from the scan — which nothing can answer differently
+ * — but a component learns it by asking `Component.hasContent()`, and that is a
+ * composable chain a handler outside this expansion answers first. A handler
+ * that reports a self-closing `<File />` as content-bearing would have it write
+ * an empty string over the file it was admitted to read.
+ *
+ * So the form is checked against the chain once per invocation, before the
+ * component runs and therefore before any provider is reached. It is defense in
+ * depth rather than a guarantee: a handler that answers differently on the
+ * component's own call is not caught here, and cannot be. Fixed, and naming
+ * nothing the fragment carried.
+ */
+const SHAPE =
+  "a generated element was admitted for one form and invoked as another. An admitted identity " +
+  "runs the form it was admitted for, and Component.hasContent middleware may observe that " +
+  "form but may not decide it.";
 
 /** How an import that did not come from canonical execution is refused. */
 const WITNESS = {
@@ -498,6 +538,23 @@ type RetainedAdmission =
   | { readonly decision: "refused"; readonly construct: Construct };
 
 /**
+ * Refuse this invocation unless the content chain still reports the form it was
+ * admitted for.
+ *
+ * The check is a read of the same operation the component is about to make, in
+ * the same invocation scope and therefore through the same handlers, so what a
+ * handler answering consistently reports here is what the component gets. A
+ * handler that answers per call is a different matter: this read and the
+ * component's are two dispatches, and only the second one decides the branch.
+ */
+function* holdForm(form: AuthoredForm): Operation<void> {
+  const reported: AuthoredForm = (yield* hasContent()) ? "paired" : "self-closing";
+  if (reported !== form) {
+    throw new GeneratedXmdError(SHAPE);
+  }
+}
+
+/**
  * The authority a generated fragment imports through.
  *
  * Resolution is closed over what preflight decided and consults nothing else —
@@ -514,19 +571,19 @@ type RetainedAdmission =
  * entry preflight selected rather than of what the component returned.
  */
 class GeneratedImportAuthority implements ImportAuthority {
-  readonly #planned: Map<string, Entry[]>;
+  readonly #planned: Map<string, Planned[]>;
   readonly #imports = new CanonicalImports();
   readonly #values: GeneratedObservationValue[] = [];
 
   constructor(named: readonly Planned[]) {
-    const planned = new Map<string, Entry[]>();
+    const planned = new Map<string, Planned[]>();
     for (const invocation of named) {
       const queue = planned.get(invocation.name);
       if (queue === undefined) {
-        planned.set(invocation.name, [invocation.entry]);
+        planned.set(invocation.name, [invocation]);
         continue;
       }
-      queue.push(invocation.entry);
+      queue.push(invocation);
     }
     this.#planned = planned;
   }
@@ -542,27 +599,30 @@ class GeneratedImportAuthority implements ImportAuthority {
     // the head of this name's queue is the entry preflight selected for the
     // element being expanded. An import the plan does not account for is an
     // element preflight never saw, and it is refused rather than resolved.
-    const entry = this.#planned.get(name)?.shift();
-    if (entry === undefined) {
+    const planned = this.#planned.get(name)?.shift();
+    if (planned === undefined) {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
+    const { entry, form } = planned;
     const copy = retain(entry.definition);
     if (copy === undefined || copy.kind !== "function" || typeof copy.fn !== "function") {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    if (entry.effect !== "read") {
-      return this.#imports.issue(name, copy);
-    }
     const implementation = copy.fn;
     // The value is taken where the component produced it. Reading it back from
     // the rendered fragment would lose every observation that renders nothing,
-    // which is most of them.
-    const values = this.#values;
-    const observed: FunctionComponentDefinition = {
+    // which is most of them. A mutation collects nothing: its own durable
+    // record is the account of it.
+    const values = entry.effect === "read" ? this.#values : undefined;
+    const admitted: FunctionComponentDefinition = {
       ...copy,
       *fn(props, invocation) {
+        // Before the component runs, and therefore before it reaches a
+        // provider: the form that chose this identity must still be the form
+        // this invocation is being run as.
+        yield* holdForm(form);
         const value = yield* implementation(props, invocation);
-        values.push({
+        values?.push({
           name: entry.name,
           // Parsed rather than asserted: this value is retained and handed back
           // to a trusted host, and a component that returned something with no
@@ -573,7 +633,7 @@ class GeneratedImportAuthority implements ImportAuthority {
         return value;
       },
     };
-    return this.#imports.issue(name, observed);
+    return this.#imports.issue(name, admitted);
   }
 
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition {

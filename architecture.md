@@ -1445,6 +1445,22 @@ no exact entry for refuses the whole fragment. Overlapping forms or two
 definitions under one name are a malformed host table rather than an ambiguity
 settled by table order.
 
+Which identity was admitted is preflight's and is not answerable by anything
+else. Which branch the admitted component then takes inside itself is a separate
+question, and it is not yet closed. A component learns its own form from
+`Component.hasContent()`, and that chain resolves the outermost handler first,
+so middleware installed outside the generated expansion answers ahead of the
+engine's own account of the element — reporting a self-closing `<File />` as
+content-bearing has it write an empty string over the file it was admitted to
+read. Every admitted invocation asks that question before the component does and
+refuses when the answer is not the form its identity was chosen for, before any
+provider is reached; that catches a handler answering consistently and cannot
+catch a stateful one, because the check and the component are two dispatches and
+only the second decides the branch. Closing it requires the element's shape to
+reach a component as a fact about the invocation it was handed rather than as a
+replaceable chain answer — a core boundary that also repairs an ordinary
+authored `<File />`, and a prerequisite rather than an evaluator concern.
+
 The standard Deno workflow profile's write table is core's paired `File:write`
 and the workflow package's lexical `Dir`, the latter built from the same
 implementation and schema the ordinary registration owns so the two cannot
