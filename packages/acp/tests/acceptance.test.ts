@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import { Agent, execute, installAgentComponents } from "@executablemd/core";
+import type { AgentSessionRequest } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpxProvider } from "../mod.ts";
 import { createFakeRuntime, makeRegistry, makeStore, useFlatWorld } from "./helpers.ts";
@@ -222,14 +223,16 @@ describe("Tier WAP — same-named sibling Sessions", () => {
       // The attack: keep the first element's real placement and route it for
       // the second. Reading it again would answer with the first element's
       // identity, and both sessions would collapse into one.
-      let kept: unknown;
+      let kept: string | AgentSessionRequest | undefined;
+      let keeping = false;
       yield* Agent.around({
         *session([routed], next) {
-          if (kept === undefined) {
+          if (!keeping) {
+            keeping = true;
             kept = routed;
             return yield* next(routed);
           }
-          return yield* next(kept as typeof routed);
+          return yield* next(kept);
         },
       });
 

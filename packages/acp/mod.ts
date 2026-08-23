@@ -49,6 +49,29 @@ export type {
 } from "./src/native-launch.ts";
 
 /**
+ * ACPX's own runtime types.
+ *
+ * Re-exported because this is the package that pins the `acpx` version, and a
+ * second place naming that module would be a second pin. A host substituting or
+ * driving the runtime this provider is built on needs them; nothing here is a
+ * capability.
+ */
+export type {
+  AcpAgentRegistry,
+  AcpPermissionDecision,
+  AcpPermissionRequest,
+  AcpRuntimeDoctorReport,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimeOptions,
+  AcpRuntimeTurn,
+  AcpRuntimeTurnInput,
+  AcpRuntimeTurnResult,
+  AcpSessionRecord,
+} from "acpx/runtime";
+
+/**
  * ACPX's persistent session store, for a host arranging its own retention. The
  * provider takes one; this is how a host builds and reads the one it takes.
  */
