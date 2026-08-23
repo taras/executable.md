@@ -611,9 +611,11 @@ code {
 /* ------------------------------------------------------------------ *
  * prose (.doc)
  * ------------------------------------------------------------------ */
+/* Matches Term in components/Prose.tsx: mono, bold, --ink, no box. A ruled
+ * box reads fine on a button or a card; repeated dozens of times inside a
+ * paragraph it reads as a chain of boxes instead of a sentence. */
 .doc :not(pre) > code {
-  border: var(--rule) solid var(--line);
-  padding: 0.05em 0.3em;
+  font-weight: 700;
   font-size: 0.88em;
   color: var(--ink);
 }
