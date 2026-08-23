@@ -14,12 +14,24 @@
  * own. A structural identity is one a wrapper can mint, and two sites given the
  * same minted value collapse into one durable name.
  *
- * So this is a capability rather than a value. It is minted by the engine, alive
- * only while the invocation it belongs to is running, and its authoritative read
- * is one-use. Middleware may forward the genuine issuance it was handed — that
- * is ordinary delegation and stays supported — but it cannot build one, and it
- * cannot take one site's issuance and spend it at another: the first is already
- * used, and a finished site's is no longer live.
+ * So this is a capability rather than a value. It is minted by the engine for
+ * one invocation and answers only inside it. Middleware may forward the genuine
+ * issuance it was handed — that is ordinary delegation and stays supported — but
+ * it cannot build one, and it cannot supply one invocation's issuance to
+ * another.
+ *
+ * "Another" includes an ancestor that is still running. A component that
+ * projects content keeps its own invocation open while its descendants expand,
+ * so its issuance is live and unspent for the whole time a nested component
+ * runs: live and unspent is not the same as current.
+ *
+ * What settles it is that a nested component is reachable exactly one way — the
+ * enclosing invocation expanding its own content. So an invocation names
+ * nothing while it is doing that, and an ancestor's issuance routed into
+ * something inside its content is refused. The engine raises and lowers that
+ * around the one place every projection funnels through, and it is state on the
+ * issuance itself: nothing global tracks who is current, and two invocations
+ * running concurrently shadow only themselves.
  */
 
 /**
@@ -59,6 +71,8 @@ interface Issuance {
   readonly id: string;
   live: boolean;
   spent: boolean;
+  /** How many projections of this invocation's own content are in flight. */
+  projecting: number;
 }
 
 class EngineInvocation implements ComponentInvocation {
@@ -81,15 +95,35 @@ class EngineInvocation implements ComponentInvocation {
 /** What the engine holds for one invocation: the value, and the end of it. */
 export interface IssuedInvocation {
   readonly invocation: ComponentInvocation;
+  /**
+   * Enter one projection of this invocation's own content; the answer ends it.
+   *
+   * Nothing names this invocation in between, because everything running in
+   * there belongs to somebody else.
+   */
+  projecting(): () => void;
   /** End the issuance. Nothing it produced authorizes anything afterwards. */
   close(): void;
 }
 
 /** Mint one invocation identity. Only the engine calls this. */
 export function issueInvocation(id: string): IssuedInvocation {
-  const issuance: Issuance = { id, live: true, spent: false };
+  const issuance: Issuance = { id, live: true, spent: false, projecting: 0 };
   return {
     invocation: new EngineInvocation(issuance),
+    projecting(): () => void {
+      issuance.projecting += 1;
+      let released = false;
+      // Counted, because one invocation may have more than one projection in
+      // flight, and idempotent, because a release that ran twice would lower
+      // somebody else's.
+      return () => {
+        if (!released) {
+          released = true;
+          issuance.projecting -= 1;
+        }
+      };
+    },
     close(): void {
       issuance.live = false;
     },
@@ -97,11 +131,15 @@ export function issueInvocation(id: string): IssuedInvocation {
 }
 
 /**
- * The durable identity this invocation names, for a trusted host.
+ * The durable identity of the invocation this is being claimed inside, for a
+ * trusted host.
  *
- * One use. A second read, an issuance whose invocation has finished, and
- * anything this module did not mint are each refused rather than answered —
- * answering would hand a caller an identity that is not its own.
+ * One use, from that invocation and no other. Anything this module did not
+ * mint, an issuance whose invocation has finished, one belonging to an
+ * invocation that is busy expanding its own content, and a second read of a
+ * genuine one are each refused rather than answered — answering would hand a caller an
+ * identity that is not its own, and a durable operation named after somebody
+ * else's invocation admits and replays under their retained history.
  */
 export function durableIdentityOf(invocation: ComponentInvocation): string {
   const issuance = stateOf(invocation);
@@ -114,6 +152,12 @@ export function durableIdentityOf(invocation: ComponentInvocation): string {
     throw new ComponentInvocationError(
       "this invocation has finished — an issuance kept from another element names no durable " +
         "identity here",
+    );
+  }
+  if (issuance.projecting > 0) {
+    throw new ComponentInvocationError(
+      "this invocation is expanding its own content and names nothing while it does — an " +
+        "ancestor still running names no durable identity for what is inside it",
     );
   }
   if (issuance.spent) {

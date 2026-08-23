@@ -2497,10 +2497,17 @@ return a wrapper that calls the original with an object of its own. So what the
 engine hands over is opaque — a private field, nothing to read, and no shape to
 copy — and a trusted host takes the identity out of it through a delivered
 reader on the host entrypoint. The issuance is minted per invocation and ended
-when that invocation returns, and the authoritative read is single-use.
-Forwarding the genuine issuance is ordinary delegation and stays supported;
-minting one, keeping a finished one, and spending one site's at another are each
-refusals.
+when that invocation returns, and the authoritative read is single-use and
+answers only for the invocation doing the naming. That last part is not implied
+by the others: a component that projects content keeps its own invocation open
+while its descendants expand, so its issuance is live and unspent for exactly as
+long as a nested component is running. What settles it is that expanding its own
+content is the only way anything is nested inside an invocation, so an
+invocation names nothing while it is doing that — state on the issuance, raised
+where every projection funnels through, rather than anything global tracking who
+is current. Forwarding the genuine issuance is ordinary delegation and stays
+supported; minting one, keeping a finished one, spending one site's at another,
+and claiming a live ancestor's from inside its content are each refusals.
 
 ### Capability-backed nested execution
 

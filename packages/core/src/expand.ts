@@ -216,6 +216,15 @@ function expandChildrenScoped(
 
 interface ProjectionState {
   invocation: Invocation;
+  /**
+   * Raised for the whole of one projection of this invocation's own content.
+   *
+   * Everything nested is reached through here, so this is where an invocation
+   * stops naming itself: a durable identity claimed while it is raised is being
+   * claimed by something inside the content, not by the invocation that owns it
+   * (`component-invocation.ts`). A Markdown body has no issuance to raise.
+   */
+  projecting?: () => () => void;
   enclosing: ProjectionHandle | undefined;
   children: Segment[];
   caller: ProjectionFrame;
@@ -345,6 +354,19 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     path: string;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
+      // Every projection this invocation performs funnels through here —
+      // `content()`, `tryContent()`, an authored `<Content />`, a `render()`
+      // closure — so this is the whole of what "expanding its own content"
+      // means, and there is one place to raise it.
+      const projected = state.projecting?.();
+      try {
+        return yield* project();
+      } finally {
+        projected?.();
+      }
+    });
+
+    function* project(): Operation<Segment[]> {
       const contentScope = yield* state.invocation.useContentScope();
       // The projection's failure travels back to the caller rather than into
       // the content scope. Raising it there would poison the scope, and the
@@ -393,7 +415,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // A projection that wrote into the caller's region has nothing left to
       // hand back; one that kept its own returns what it rendered.
       return options.owner === undefined ? [...options.errors, ...result.segments] : options.errors;
-    });
+    }
   }
 
   function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
@@ -428,61 +450,73 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     // Dynamic markdown is the component's own, so it keeps this handle.
     const inner = request.kind === "markdown" ? handle : state.enclosing;
 
-    return yield* scoped(function* () {
-      // The projection's failure travels back to the caller rather than into
-      // the content scope (see runInContentScope): a throw-bound failure the
-      // caller catches is explicit recovery, and the invocation must not
-      // re-report it as a teardown error.
-      const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
-      // Shared with the expansion below, so a failure still leaves behind what it
-      // rendered before stopping.
-      const rendered: Segment[] = [];
-      // Slot errors are reported inside the mode-bound task, so an empty
-      // selection cannot settle them under the invocation's baseline. Held out
-      // here so a failure still reports them alongside what rendered.
-      const errors: Segment[] = [];
-      const task = contentScope.scope.run(function* () {
-        try {
-          yield* ErrorMode.set(mode);
-          if (!slotErrorsEmitted && slots.errors.length > 0) {
-            slotErrorsEmitted = true;
-            for (const slotError of slots.errors) {
-              errors.push(yield* raise(slotError));
+    // Raised for the whole projection, as in `runInContentScope`: everything
+    // expanded below belongs to the content, so the invocation that owns it
+    // names nothing until this returns.
+    const projected = state.projecting?.();
+    try {
+      return yield* runOutcome();
+    } finally {
+      projected?.();
+    }
+
+    function* runOutcome(): Operation<{ segments: Segment[]; failure?: unknown }> {
+      return yield* scoped(function* () {
+        // The projection's failure travels back to the caller rather than into
+        // the content scope (see runInContentScope): a throw-bound failure the
+        // caller catches is explicit recovery, and the invocation must not
+        // re-report it as a teardown error.
+        const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
+        // Shared with the expansion below, so a failure still leaves behind what it
+        // rendered before stopping.
+        const rendered: Segment[] = [];
+        // Slot errors are reported inside the mode-bound task, so an empty
+        // selection cannot settle them under the invocation's baseline. Held out
+        // here so a failure still reports them alongside what rendered.
+        const errors: Segment[] = [];
+        const task = contentScope.scope.run(function* () {
+          try {
+            yield* ErrorMode.set(mode);
+            if (!slotErrorsEmitted && slots.errors.length > 0) {
+              slotErrorsEmitted = true;
+              for (const slotError of slots.errors) {
+                errors.push(yield* raise(slotError));
+              }
             }
+            if (segments.length === 0) {
+              outcome.resolve({ segments: errors });
+              return;
+            }
+            yield* provideEvalScope(contentScope);
+            const projectionEnv = environmentFor(request);
+            if (projectionEnv) {
+              yield* provideEnv(projectionEnv);
+            }
+            yield* ActiveProjection.set(inner);
+            // Dynamic markdown is the component's own text, so it is not written
+            // where the caller's loop is and cannot break it.
+            yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
+            yield* expandSegments(
+              project(segments),
+              frame.meta,
+              frame.props,
+              frame.hideSet,
+              state.counter,
+              rendered,
+              path,
+              0,
+              state.checkedFailures,
+              state.authority,
+            );
+            outcome.resolve({ segments: [...errors, ...rendered] });
+          } catch (error) {
+            outcome.resolve({ segments: [...errors, ...rendered], failure: error });
           }
-          if (segments.length === 0) {
-            outcome.resolve({ segments: errors });
-            return;
-          }
-          yield* provideEvalScope(contentScope);
-          const projectionEnv = environmentFor(request);
-          if (projectionEnv) {
-            yield* provideEnv(projectionEnv);
-          }
-          yield* ActiveProjection.set(inner);
-          // Dynamic markdown is the component's own text, so it is not written
-          // where the caller's loop is and cannot break it.
-          yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
-          yield* expandSegments(
-            project(segments),
-            frame.meta,
-            frame.props,
-            frame.hideSet,
-            state.counter,
-            rendered,
-            path,
-            0,
-            state.checkedFailures,
-            state.authority,
-          );
-          outcome.resolve({ segments: [...errors, ...rendered] });
-        } catch (error) {
-          outcome.resolve({ segments: [...errors, ...rendered], failure: error });
-        }
+        });
+        yield* ensure(() => task.halt());
+        return yield* outcome.operation;
       });
-      yield* ensure(() => task.halt());
-      return yield* outcome.operation;
-    });
+    }
   }
 
   const handle: ProjectionHandle = {
@@ -2800,8 +2834,13 @@ function* expandFunctionComponent(
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
         const enclosing = yield* ActiveProjection.get();
+        // Minted before the handle, because the handle is what raises it: an
+        // invocation names nothing while it is expanding its own content, and
+        // that is the whole of how a nested component is reached.
+        const issued = issueInvocation(expansion.id);
         const handle = createProjectionHandle({
           invocation,
+          projecting: issued.projecting,
           enclosing,
           children,
           caller: {
@@ -2928,10 +2967,8 @@ function* expandFunctionComponent(
           if (TestHarnessComponentDefinition.own(definition.fn)) {
             return yield* definition.fn.invoke(validatedProps, binding);
           }
-          // Minted here and ended in the same breath: the capability is alive
-          // exactly while this invocation is, so an issuance a wrapper kept
-          // from another element authorizes nothing when it is routed here.
-          const issued = issueInvocation(expansion.id);
+          // Ended in the same breath the body is: an issuance a wrapper kept
+          // from a finished element authorizes nothing when it is routed here.
           try {
             return yield* definition.fn(validatedProps, issued.invocation);
           } finally {

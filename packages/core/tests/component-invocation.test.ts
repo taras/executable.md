@@ -12,14 +12,16 @@
  * two of these demonstrate one being replaced. What is not replaceable is the
  * capability the engine mints for the invocation it entered: `importComponent`
  * middleware may forward the genuine one it was handed, but it cannot build one,
- * and it cannot spend one site's at another.
+ * and it cannot supply one invocation's to another — including a live one it
+ * captured from a content-bearing ancestor, which is unspent and unfinished for
+ * as long as its descendants are running.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { createContext, scoped } from "effection";
 import type { Context, Operation } from "effection";
-import { collect, Component, execute, inlineSource, registerComponents } from "../mod.ts";
+import { collect, Component, content, execute, inlineSource, registerComponents } from "../mod.ts";
 import { durableIdentityOf } from "../host.ts";
 import { getExpansion } from "../src/expansion.ts";
 import type { ComponentInvocation, Json } from "../src/types.ts";
@@ -54,6 +56,16 @@ function useProbe(): Operation<Seen> {
   return {
     *[Symbol.iterator]() {
       yield* registerComponents([
+        {
+          // A content-bearing parent: its own invocation stays open — live and
+          // unspent — for as long as the content it projects is running.
+          name: "Around",
+          origin: "test://around",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          *fn(): Operation<string> {
+            return yield* content();
+          },
+        },
         {
           name: "Probe",
           origin: "test://probe",
@@ -185,7 +197,51 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(new Set(seen.taken).size).toBe(2);
   });
 
-  it("CIV6: an issuance kept from the first site cannot be spent at the second", function* () {
+  it("CIV6: a live ancestor's issuance cannot be spent inside its content", function* () {
+    let parent: ComponentInvocation | undefined;
+    const seen = yield* run("<Around>\n<Probe />\n</Around>\n", function* () {
+      yield* Component.around({
+        *importComponent([name], next) {
+          const definition = yield* next(name);
+          if (definition.kind !== "function") {
+            return definition;
+          }
+          const original = definition.fn;
+          if (typeof original !== "function") {
+            return definition;
+          }
+          if (name === "Around") {
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                // Captured here and still live below: the parent has not
+                // returned, so nothing about this issuance has expired.
+                parent = invocation;
+                return yield* original(props, invocation);
+              },
+            };
+          }
+          if (name !== "Probe") {
+            return definition;
+          }
+          return {
+            ...definition,
+            *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+              return yield* original(props, parent ?? invocation);
+            },
+          };
+        },
+      });
+    });
+
+    // The nested claim is refused, and the parent's identity is not handed out
+    // a second time under it.
+    expect(seen.taken).toEqual([]);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("expanding its own content");
+  });
+
+  it("CIV7: an issuance kept from the first site cannot be spent at the second", function* () {
     let kept: ComponentInvocation | undefined;
     const seen = yield* run("<Probe />\n\n<Probe />\n", function* () {
       yield* Component.around({

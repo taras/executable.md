@@ -1860,7 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
-| `src/component-invocation.ts` | `ComponentInvocation`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation, which is where a durable name comes from when a context would be replaceable (§5.6) |
+| `src/component-invocation.ts` | `ComponentInvocation`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -3825,11 +3825,19 @@ wrapper could mint, and two sites given one minted value collapse into one
 durable name.
 
 The engine mints one per invocation and ends it when that invocation returns,
-however it left. Forwarding the genuine issuance is ordinary delegation and
-stays supported. Everything else refuses rather than answering: a value the
-engine did not mint names no identity, an issuance whose invocation has finished
-names none here, and a second authoritative read of one refuses, so a wrapper
-cannot keep the first site's issuance and spend it at the second.
+however it left. Being alive is not enough to name anything: a component that
+projects content keeps its own invocation open while its descendants expand, so
+an ancestor's issuance is genuine, live and unspent for exactly as long as a
+nested component is running. An invocation therefore names nothing while it is
+expanding its own content, which is the one way anything is nested inside it.
+
+Forwarding the genuine issuance is ordinary delegation and stays supported.
+Everything else refuses rather than answering: a value the engine did not mint
+names no identity, an issuance whose invocation has finished names none here,
+one whose invocation is busy expanding its content names none here, and a second
+authoritative read of one refuses. So a wrapper can neither keep the first
+site's issuance and spend it at the second, nor capture a live ancestor's and
+spend it inside its content.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9947,7 +9955,8 @@ Defined in §5.6.
 | CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
 | CIV4 | No minting | `importComponent` middleware that delegates and calls the original with an object of its own is refused at both sites, and takes no identity |
 | CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
-| CIV6 | No substitution | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
+| CIV6 | No live ancestor | A content-bearing parent's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there |
+| CIV7 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 
