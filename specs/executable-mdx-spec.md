@@ -9402,6 +9402,45 @@ against the production Deno adapter, on real run files.
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
+### Tier WAP — The strict workflow Agent profile
+
+Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAP1 | Strict inputs | The runtime is created with the host's own directory and `mcpServers: []`, each session with `allowedTools: []`, under `deny-all` and non-interactive denial; no Workspace or caller path appears in any provider input |
+| WAP2 | Denial outranks approval | A native permission request under an authored approve-all scope is rejected, the public permission chain is consulted zero times, and the Prompt fails with the fixed diagnostic even though the adapter reported success |
+| WAP3 | Teardown | A completed, failed, cancelled and interrupted turn each finish their turn and close their handle |
+| WAP4 | `xmd run` unchanged | The ordinary provider keeps the caller cwd, omits `mcpServers` and `sessionOptions`, and honours the authored policy's `allow_once` |
+| WAP5 | Refusal precedes ACPX | A placement the host refuses establishes no session and starts no turn |
+| WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
+| WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a placement kept from the first site and routed for the second refuses before the provider places anything |
+
+### Tier WSL — Retained workflow Agent sessions
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
+
+| # | Test | Verify |
+|---|------|--------|
+| WSL1 | The key | The mapping key is the engine-derived Session expansion identity alone; provider and agent command change it not at all |
+| WSL2 | Creation | A session is created only when neither the mapping nor the provider holds anything |
+| WSL3 | The pre-commit window | Exactly one canonical assertion reconciles an interrupted creation; two are ambiguity and refuse |
+| WSL4 | Refusals | A missing assertion, a different value, a different kind, a changed agent, a changed provider, a changed policy and more than one assertion each refuse |
+| WSL5 | Reattachment | A matching assertion reattaches the retained mapping unchanged |
+| WSL6 | The run's transaction | The mapping commits in the run's own transaction and reads back per Session site; a transaction that fails commits none |
+| WSL7 | Directories | Owning the sidecar allocates none of it; every attachment gets an empty directory, and neither it nor the host directory outlives the attachment |
+| WSL8 | Deletion | Deletion reports and removes both categories, and a live run keeps them |
+
+### Tier WSR — A restart reattaches each Session site
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5. Runs a real
+document against a real run database.
+
+| # | Test | Verify |
+|---|------|--------|
+| WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
+| WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
+
 ### Tier WFX — A killed run resumes from its frontier
 
 | # | Test | Verify |

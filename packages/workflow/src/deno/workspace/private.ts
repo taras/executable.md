@@ -198,6 +198,22 @@ export function* transactWorkspaceRoots<T>(
   });
 }
 
+/**
+ * Run `body` with this run's Agent-session mappings, in one transaction.
+ *
+ * The narrow half of the transaction above, and the only half a host installing
+ * an Agent profile needs. The broad one hands out the authoritative filesystem,
+ * retained Repository identity, root capture, publication and restoration; a
+ * caller that only has to read and commit a session mapping should not be
+ * holding any of that, and this is what it holds instead.
+ */
+export function* transactAgentSessions<T>(
+  database: WorkflowRunDatabase,
+  body: (sessions: AgentSessions) => Operation<T>,
+): Operation<Result<T>> {
+  return yield* transactWorkspaceRoots(database, (workspace) => body(workspace.agentSessions));
+}
+
 export function withPrivateWorkspaceTransaction<T>(
   database: WorkflowRunDatabase,
   transaction: WorkflowRunTransaction,

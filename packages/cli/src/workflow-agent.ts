@@ -17,9 +17,13 @@
  *
  * A provider session outlives one execution, so continuing a run reattaches the
  * same provider-native session rather than replaying its transcript into a new
- * one. What makes that decidable is retained in the run's own provider-session
- * sidecar, which `@executablemd/workflow/deno` owns; this module is where that
- * sidecar meets ACPX, because this is the only side that names an agent client.
+ * one. What makes that decidable is a row in the run's own database, committed
+ * in the run's own transaction; this module is where that mapping meets ACPX,
+ * because this is the only side that names an agent client.
+ *
+ * What the sidecar beside the run still holds is arrangement rather than
+ * retention: the provider's own session store, and one empty working directory
+ * per session.
  *
  * The empty working directory is a deterministic subpath of that sidecar, so
  * ACPX sees the same cwd spelling on a restart and reuses its record rather than
@@ -51,7 +55,7 @@ import {
   agentSessionKey,
   providerSessionDirectory,
   resolveAgentSession,
-  transactWorkspaceRoots,
+  transactAgentSessions,
   useEmptyDirectory,
   useProviderSessions,
   WorkflowAgentSessionError,
@@ -215,8 +219,8 @@ function sessionPolicy(
       const placementKey = `${sessionKey}:${placementSuffix(context.agentCommand)}`;
       placed.set(placementKey, identity);
 
-      const read = yield* transactWorkspaceRoots(database, function* (workspace) {
-        return workspace.agentSessions.read(sessionKey);
+      const read = yield* transactAgentSessions(database, function* (sessions) {
+        return sessions.read(sessionKey);
       });
       if (!read.ok) {
         throw read.error;
@@ -254,13 +258,13 @@ function sessionPolicy(
       };
       const sessionKey = agentSessionKey(identity);
 
-      const committed = yield* transactWorkspaceRoots(database, function* (workspace) {
-        const retained = workspace.agentSessions.read(sessionKey);
+      const committed = yield* transactAgentSessions(database, function* (sessions) {
+        const retained = sessions.read(sessionKey);
         // Re-resolved inside the transaction that commits it, so a mapping
         // another attempt wrote in between is compared rather than overwritten.
         const resolution = resolveAgentSession(retained, policy, [asserted], identity);
         if (retained === undefined && resolution.kind === "reattach") {
-          workspace.agentSessions.commit(resolution.record);
+          sessions.commit(resolution.record);
         }
       });
       if (!committed.ok) {

@@ -3,9 +3,9 @@
  *
  * Two things, and neither is retained state: the provider's own persistent
  * session store, and one empty working directory per session. What a
- * continuation is decided from lives in the run's database
- * (`workspace/agent-sessions.ts`), because a mapping and the run it belongs to
- * are one fact.
+ * continuation is decided from is not here at all — it is a row in the run's own
+ * database (`workspace/agent-sessions.ts`), because a mapping and the run it
+ * belongs to are one fact.
  *
  * The paths sit under a name the run-discovery pattern — `<hash>.sqlite`
  * exactly — cannot match, so nothing discovers them and no run id resolves to
@@ -45,8 +45,6 @@ export interface ProviderSessionPaths {
   readonly store: string;
   /** The runtime's working directory: provider-owned, and empty. */
   readonly host: string;
-  /** The retained mapping records, one per logical key. */
-  readonly mappings: string;
   /** The provider-owned working directories, one per logical key. */
   readonly directories: string;
 }
@@ -57,7 +55,6 @@ export function providerSessionPaths(root: string, runId: string): ProviderSessi
     sidecar,
     store: join(sidecar, "store"),
     host: join(sidecar, "host"),
-    mappings: join(sidecar, "keys"),
     directories: join(sidecar, "cwd"),
   };
 }

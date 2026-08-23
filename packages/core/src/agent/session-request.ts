@@ -16,10 +16,12 @@
  * holds the request and can read the name; it cannot read, copy or forge the
  * identity, and a look-alike it builds carries none.
  *
- * Unlike a launch, a placement is a lookup rather than an authoritative action:
- * asking twice answers twice and settles nothing. So there is no one-use rule
- * here and no superseding leaf — `with({ name })` derives a sibling carrying the
- * same identity, which is exactly what "middleware may alter the descriptive
+ * A placement is bound to the element that opened it and is good for one use.
+ * Both matter: a handler that kept the first `<Session>` element's placement
+ * could otherwise route it for the second, and both sites would resolve to the
+ * first element's identity — the collision engine identity exists to prevent.
+ * `with({ name })` derives a sibling sharing that one issuance rather than
+ * opening another, which is exactly what "middleware may alter the descriptive
  * name" means.
  */
 

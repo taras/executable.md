@@ -26,7 +26,7 @@ import {
   agentSessionKey,
   providerSessionDirectory,
   resolveAgentSession,
-  transactWorkspaceRoots,
+  transactAgentSessions,
   useEmptyDirectory,
   useProviderSessions,
   useWorkflowLifecycle,
@@ -97,8 +97,8 @@ function readMapping(
   key: string,
 ): Operation<AgentSessionRecord | undefined> {
   return (function* () {
-    const result = yield* transactWorkspaceRoots(database, function* (workspace) {
-      return workspace.agentSessions.read(key);
+    const result = yield* transactAgentSessions(database, function* (sessions) {
+      return sessions.read(key);
     });
     if (!result.ok) {
       throw result.error;
@@ -110,8 +110,8 @@ function readMapping(
 /** One commit, in the run's own transaction. */
 function commitMapping(database: WorkflowRunDatabase, entry: AgentSessionRecord): Operation<void> {
   return (function* () {
-    const result = yield* transactWorkspaceRoots(database, function* (workspace) {
-      workspace.agentSessions.commit(entry);
+    const result = yield* transactAgentSessions(database, function* (sessions) {
+      sessions.commit(entry);
     });
     if (!result.ok) {
       throw result.error;
@@ -259,8 +259,8 @@ describe("Tier WSL — retained workflow Agent sessions", () => {
       const database = yield* createRun();
       const key = agentSessionKey(identity());
 
-      const result = yield* transactWorkspaceRoots(database, function* (workspace) {
-        workspace.agentSessions.commit(record());
+      const result = yield* transactAgentSessions(database, function* (sessions) {
+        sessions.commit(record());
         throw new Error("the attempt failed after writing the mapping");
       });
       expect(result.ok).toBe(false);

@@ -60,7 +60,9 @@ export interface AgentProviderAuthority {
    * this does not travel there at all. A provider asks the authority it was
    * installed with; a handler holding the same request reads only the name.
    *
-   * A lookup, not an action — asking twice answers twice and retains nothing.
+   * It retains nothing, but it is not repeatable: a placement is bound to the
+   * element that opened it and is read once, so a value kept from an earlier
+   * `<Session>` or already read refuses here.
    */
   sessionIdentity(request: AgentSessionRequest): string;
 }

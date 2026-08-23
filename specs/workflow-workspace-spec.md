@@ -2523,7 +2523,7 @@ fetch operation requires its own language and durability contract.
 | workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
 | history fork | built (§11); Deno provider only |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
-| workflow Agent session retention | built by #302: a provider-session sidecar keyed by run, provider, agent and Session name, with explicit incompatibility instead of a replacement session |
+| workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
 | generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
