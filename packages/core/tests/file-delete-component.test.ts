@@ -29,8 +29,10 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { Json } from "@executablemd/durable-streams";
 import { execute } from "../src/execute.ts";
 import { collect } from "../src/collect.ts";
-import { content } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
 import { registerComponents } from "../src/components/registration.ts";
+import { hasContent } from "../src/content-context.ts";
+import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import { mkdtemp, readdir, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -152,6 +154,38 @@ function useNested(directory: string): Operation<void> {
   ]);
 }
 
+/**
+ * A contextual `hasContent` handler outside every component invocation, plus a
+ * component that reports what it answers.
+ *
+ * The script is consumed one entry per call and the last entry repeats, so
+ * `[true, false]` is the exact toggle that defeats a caller which checks and
+ * then invokes. `<Says />` is what makes the handler *demonstrably* live and
+ * demonstrably lying: without it, a passing test would only mean nobody asked.
+ */
+function* useLyingContent(script: readonly boolean[], answered: boolean[]): Operation<void> {
+  let call = 0;
+  yield* registerComponents([
+    {
+      name: "Says",
+      origin: "tier-fd",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        return String(yield* hasContent());
+      },
+    },
+  ]);
+  yield* Component.around({
+    // deno-lint-ignore require-yield
+    *hasContent(_args, _next) {
+      const answer = script[Math.min(call, script.length - 1)] ?? false;
+      call += 1;
+      answered.push(answer);
+      return answer;
+    },
+  });
+}
+
 describe("Tier FD — File.Delete", () => {
   // FD1: the ordinary case, and the whole of what a success looks like from the
   // document: the file is gone, and nothing is rendered or bound in its place.
@@ -263,6 +297,139 @@ describe("Tier FD — File.Delete", () => {
     expect(yield* readTextFile(join(fixture.workspace, "target.md"))).toBe("outer");
     // And the element after the region resolved against the outer directory.
     expect(yield* exists(join(fixture.workspace, "keep.md"))).toBe(false);
+  });
+
+  // FD3b: the form is read from the invocation the engine issued, so a
+  // contextual handler answering "self-closing" for a paired element cannot
+  // turn a document that wrote children into one that deleted the path beside
+  // them. Both paired spellings are covered, because paired-*empty* is the one
+  // with no rendered content to blame.
+  //
+  // Every case proves both halves. `<Says />` renders whatever the chain
+  // reports, so the handler is live and lying; the files and the provider calls
+  // show `<File.Delete>` did the authored thing anyway. The self-closing
+  // control in the same document shows the handler does not block a genuine
+  // deletion either.
+  const DENYING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always denies content", [false]],
+    ["a handler that answers true then false", [true, false]],
+  ];
+
+  for (const [what, script] of DENYING) {
+    it(`FD3b: a paired File.Delete removes nothing under ${what}`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+      yield* writeTextFile(join(fixture.workspace, "kept-empty.md"), "also kept");
+      yield* writeTextFile(join(fixture.workspace, "gone.md"), "removed");
+      const reached: string[] = [];
+      const answered: boolean[] = [];
+
+      const output = yield* run(
+        fixture,
+        [
+          "<Says />",
+          "",
+          '<File.Delete path="kept.md">paired</File.Delete>',
+          "",
+          '<File.Delete path="kept-empty.md"></File.Delete>',
+          "",
+          '<File.Delete path="gone.md" />',
+          "",
+          "<Says />",
+        ].join("\n"),
+        function* () {
+          yield* useLyingContent(script, answered);
+          yield* API.Env.around({
+            *cwd(_args, next) {
+              reached.push("cwd");
+              return yield* next();
+            },
+          });
+          yield* Files.around({
+            *deleteFile([input], next) {
+              reached.push(`delete:${input.path}`);
+              return yield* next(input);
+            },
+          });
+        },
+      );
+
+      // The handler is live, and the lie is visible on a component that does
+      // read the chain.
+      expect(answered.length).toBeGreaterThanOrEqual(2);
+      expect(output).toContain("false");
+
+      // Both paired spellings refused, and both targets are byte-for-byte what
+      // they were.
+      expect(output).toContain("<File.Delete> is self-closing");
+      expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
+      expect(yield* readTextFile(join(fixture.workspace, "kept-empty.md"))).toBe("also kept");
+
+      // Neither of them reached the working directory or the provider: the only
+      // calls belong to the genuinely self-closing control, which still deleted.
+      expect(reached).toEqual(["cwd", "delete:gone.md"]);
+      expect(yield* exists(join(fixture.workspace, "gone.md"))).toBe(false);
+    });
+  }
+
+  // FD3c: there is no fallback to guess with. A call arriving without a genuine
+  // invocation is not one the engine made, and guessing "self-closing" there
+  // would be guessing *delete* — so it refuses before `cwd()` and therefore
+  // before any provider.
+  it("FD3c: the definition called without the engine's invocation reaches no provider", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
+    const reached: string[] = [];
+
+    // What a component compiled against a core that predates the form hands
+    // over. Read as data rather than asserted into the type, because that is
+    // exactly what it is: a value from outside this type system.
+    const mismatched: ComponentInvocation = JSON.parse("{}");
+
+    let failure: string | undefined;
+    try {
+      yield* run(fixture, '<File.Delete path="kept.md" />', function* () {
+        yield* API.Env.around({
+          *cwd(_args, next) {
+            reached.push("cwd");
+            return yield* next();
+          },
+        });
+        yield* Files.around({
+          *deleteFile([input], next) {
+            reached.push(`delete:${input.path}`);
+            return yield* next(input);
+          },
+        });
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const definition = yield* next(name, position);
+            if (name !== "File.Delete" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>) {
+                return yield* original(props, mismatched);
+              },
+            };
+          },
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+
+    // Fatal rather than printed, because the wrapper's own function is not the
+    // one core declared a printing boundary on — which is beside the point
+    // here. What matters is where it stopped.
+    expect(failure).toContain("without the invocation the engine issued");
+    expect(reached).toEqual([]);
+    expect(yield* readTextFile(join(fixture.workspace, "kept.md"))).toBe("kept");
   });
 
   // FD5: every refusal the component has its own sentence for, and the one rule

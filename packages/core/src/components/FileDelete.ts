@@ -38,6 +38,15 @@
  * `Env.cwd` is read and before the provider is reached, so a mistaken paired
  * spelling costs the document nothing.
  *
+ * The shape comes from the invocation the engine issued (§5.6), and from
+ * nowhere else. `Component.hasContent()` answers the same question through the
+ * composable chain, where a handler installed anywhere outside this invocation
+ * answers ahead of the engine and may answer differently on each call. This
+ * component is not choosing how to render — it is choosing whether to remove a
+ * file — so a handler that reported "no content" for a paired element would
+ * turn a document that wrote children into one that deleted the path they were
+ * written beside.
+ *
  * ## Failure
  *
  * The `printErrors` declaration is `<File>`'s: an ordinary filesystem condition
@@ -53,7 +62,7 @@ import { printErrors } from "../component-failures.ts";
 import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData } from "@executablemd/runtime";
-import { hasContent } from "../content-context.ts";
+import type { ComponentInvocation } from "../invocation-identity.ts";
 import { deleteFile } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
@@ -78,14 +87,17 @@ export class FileDeleteError extends Error {
 const PAIRED =
   '<File.Delete> is self-closing and has no content: write <File.Delete path="…" /> instead.';
 
-export default printErrors(function* (props: Record<string, Json>): Operation<string> {
+export default printErrors(function* (
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+): Operation<string> {
+  const requested = String(props.path);
   // Before the working directory and before the provider: the shape decides
   // this, and neither of them has anything to contribute to that decision.
-  if (yield* hasContent()) {
+  if (authoredContent(invocation, requested)) {
     throw new FileDeleteError(PAIRED);
   }
 
-  const requested = String(props.path);
   const directory = yield* cwd();
   const removed = yield* deleteFile({ cwd: directory, path: requested });
   if (!removed.ok) {
@@ -93,6 +105,25 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
   }
   return "";
 });
+
+/**
+ * How this element was written, from the invocation the engine issued.
+ *
+ * There is no fallback to the contextual answer, and none to a default. A call
+ * arriving without a genuine invocation is not one the engine made — a handler
+ * holding this implementation and calling it somewhere else is the case that
+ * matters — and guessing "self-closing" there would be guessing *delete*. So it
+ * refuses instead, before `cwd()` and therefore before any provider is reached.
+ */
+function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
+  if (typeof invocation?.hasContent !== "function") {
+    throw new FileDeleteError(
+      `<File.Delete path=${JSON.stringify(requested)} /> was called without the invocation the ` +
+        "engine issued, so which form it was written as cannot be established.",
+    );
+  }
+  return invocation.hasContent();
+}
 
 const EMPTY = "path is empty; give a path relative to the working directory.";
 const ABSOLUTE = "an absolute path is not accepted; give a path relative to the working directory.";

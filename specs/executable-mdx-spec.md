@@ -3745,9 +3745,10 @@ then invokes something which reads it again has therefore verified nothing —
 the two are separate dispatches.
 
 Only the invocation's own `hasContent()` (§5.6) is authoritative about the
-authored form. `<File>` (§6.13) and the workflow package's `<Dir>` read it. A
-component that reads this contextual operation has no authored-form guarantee:
-what it receives is whatever the chain answered for that call.
+authored form. `<File>` (§6.13), `<File.Delete>` (§6.13.1) and the workflow
+package's `<Dir>` read it. A component that reads this contextual operation has
+no authored-form guarantee: what it receives is whatever the chain answered for
+that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
@@ -6567,6 +6568,17 @@ alike, because what decides it is the **shape** the author wrote rather than
 what the content would render. Content that renders nothing is still content
 somebody wrote meaning something, and this component does not do it.
 
+That shape is read from the invocation the engine issued (§5.6) and from nowhere
+else. `Component.hasContent()` (§5.5) answers the same question through the
+composable chain, where a handler installed anywhere outside the invocation
+answers ahead of the engine and may answer differently on each call. This
+component selects an *effect* rather than a rendering, and the effect is
+irreversible in one direction: a handler reporting "self-closing" for a paired
+element would turn a document that wrote children into one that removed the path
+they were written beside. There is no fallback — a call arriving without a
+genuine invocation is refused rather than resolved to either form, because
+guessing self-closing there would be guessing deletion.
+
 That refusal happens before `Env.cwd` is read and before the provider is
 reached, so a mistaken paired spelling costs the document nothing.
 
@@ -8935,6 +8947,8 @@ absence is Tier FF's.
 | FD1 | The ordinary deletion | One regular file is removed, nothing is rendered in its place, and `as` captures the empty string |
 | FD2 | Absence is success | Deleting a path that names nothing succeeds, twice, with no printed error |
 | FD3 | Paired content | Paired-*empty* content is refused on shape, before `Env.cwd` is read and before the provider is reached; the same watchers on the self-closing form record both calls, so the empty list is a refusal rather than an unwired spy |
+| FD3b | The form is the invocation's | Under a contextual `hasContent` handler that always denies content, and under one that answers true then false, both paired spellings still refuse and both targets keep their bytes; a `<Says />` beside them renders the chain's answer, so the handler is demonstrably live and lying, and the self-closing control in the same document still deletes |
+| FD3c | No invocation, no guess | The definition called with an invocation the engine did not issue refuses before `Env.cwd` and before the provider, naming neither form |
 | FD4 | The contextual directory | A nested `Env.cwd` selects the inner file of a shared name, the outer one is untouched, and the element after the region resolves against the restored directory |
 | FD5 | Every refusal sentence | An absolute path, a lexical escape, an escaping parent link, and a directory each produce their own sentence, name no absolute path, and reach no low-level removal — proven against an admitted deletion that does |
 | FD6 | A provider refusal | A structural `Err` is this component's own printed error, the sibling after it runs, and the target is unchanged |
