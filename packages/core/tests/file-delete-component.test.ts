@@ -376,15 +376,21 @@ describe("Tier FD — File.Delete", () => {
   // invocation is not one the engine made, and guessing "self-closing" there
   // would be guessing *delete* — so it refuses before `cwd()` and therefore
   // before any provider.
-  it("FD3c: the definition called without the engine's invocation reaches no provider", function* () {
+  it("FD3c: a look-alike invocation removes nothing and reaches no provider", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "kept.md"), "kept");
     const reached: string[] = [];
 
-    // What a component compiled against a core that predates the form hands
-    // over. Read as data rather than asserted into the type, because that is
-    // exactly what it is: a value from outside this type system.
-    const mismatched: ComponentInvocation = JSON.parse("{}");
+    // Not an absence — a forgery. The whole public shape is here: a method of
+    // the right name, taking nothing, returning a boolean. Every check written
+    // against the shape passes, which is why the component authenticates the
+    // object instead. `false` is the dangerous answer for a paired element, and
+    // it is the one this reports.
+    const mismatched: ComponentInvocation = {
+      hasContent() {
+        return false;
+      },
+    };
 
     let failure: string | undefined;
     try {

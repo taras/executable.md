@@ -38,14 +38,16 @@
  * `Env.cwd` is read and before the provider is reached, so a mistaken paired
  * spelling costs the document nothing.
  *
- * The shape comes from the invocation the engine issued (§5.6), and from
- * nowhere else. `Component.hasContent()` answers the same question through the
- * composable chain, where a handler installed anywhere outside this invocation
- * answers ahead of the engine and may answer differently on each call. This
- * component is not choosing how to render — it is choosing whether to remove a
- * file — so a handler that reported "no content" for a paired element would
- * turn a document that wrote children into one that deleted the path they were
- * written beside.
+ * The shape comes from the invocation the engine issued (§5.6), authenticated
+ * before it is read, and from nowhere else. Two weaker answers exist and
+ * neither is used here. `Component.hasContent()` answers through the composable
+ * chain, where a handler installed anywhere outside this invocation answers
+ * ahead of the engine and may answer differently on each call; and
+ * `invocation.hasContent()` answers from an object this component was handed,
+ * which a caller can mint. This component is not choosing how to render — it is
+ * choosing whether to remove a file — so either answer, reporting "no content"
+ * for a paired element, would turn a document that wrote children into one that
+ * deleted the path they were written beside.
  *
  * ## Failure
  *
@@ -62,6 +64,7 @@ import { printErrors } from "../component-failures.ts";
 import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData } from "@executablemd/runtime";
+import { authoredForm } from "../invocation-identity.ts";
 import type { ComponentInvocation } from "../invocation-identity.ts";
 import { deleteFile } from "../files.ts";
 import type { Json } from "../types.ts";
@@ -109,20 +112,28 @@ export default printErrors(function* (
 /**
  * How this element was written, from the invocation the engine issued.
  *
- * There is no fallback to the contextual answer, and none to a default. A call
+ * Authenticated rather than asked. Calling `invocation.hasContent()` would take
+ * the caller's word for it: a component is handed whatever its caller passes,
+ * and an object literal carrying a method of that name satisfies the property
+ * check, the type check and the return check alike — a shape is what a forger
+ * copies. `authoredForm()` reads the private field durable identity is
+ * recognized by, so a look-alike answers nothing here.
+ *
+ * There is no fallback to the contextual answer either, and none to a default. A call
  * arriving without a genuine invocation is not one the engine made — a handler
  * holding this implementation and calling it somewhere else is the case that
  * matters — and guessing "self-closing" there would be guessing *delete*. So it
  * refuses instead, before `cwd()` and therefore before any provider is reached.
  */
 function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
-  if (typeof invocation?.hasContent !== "function") {
+  const form = authoredForm(invocation);
+  if (form === undefined) {
     throw new FileDeleteError(
       `<File.Delete path=${JSON.stringify(requested)} /> was called without the invocation the ` +
         "engine issued, so which form it was written as cannot be established.",
     );
   }
-  return invocation.hasContent();
+  return form.content;
 }
 
 const EMPTY = "path is empty; give a path relative to the working directory.";

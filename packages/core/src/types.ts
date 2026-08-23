@@ -237,7 +237,7 @@ export type ComponentExecution<T> = Operation<T>;
  * generator's return value is never used. `useContent(slot?)` is a
  * compatibility alias with the same behavior.
  */
-export type { ComponentInvocation } from "./invocation-identity.ts";
+export type { AuthoredForm, ComponentInvocation } from "./invocation-identity.ts";
 
 export interface FunctionComponent {
   (props: Record<string, Json>, invocation: ComponentInvocation): ComponentExecution<unknown>;

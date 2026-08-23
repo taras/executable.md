@@ -96,7 +96,8 @@ export { walkSchema } from "./src/schema-walk.ts";
 export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
 
 export { hasContent, useContent } from "./src/content-context.ts";
-export type { ComponentInvocation } from "./src/types.ts";
+export type { AuthoredForm, ComponentInvocation } from "./src/types.ts";
+export { authoredForm } from "./src/invocation-identity.ts";
 /**
  * The opaque session placement a `<Session>` element routes. A handler reads its
  * descriptive name; only provider authority reads the engine identity.

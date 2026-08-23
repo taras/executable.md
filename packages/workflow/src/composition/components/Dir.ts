@@ -21,7 +21,7 @@
  */
 
 import { API, cwd } from "@executablemd/runtime";
-import { content } from "@executablemd/core";
+import { authoredForm, content } from "@executablemd/core";
 import type { ComponentInvocation } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
@@ -48,18 +48,21 @@ export default function* Dir(
     throw new DirInvocationError("<Dir> needs a non-empty path.");
   }
 
-  // From the invocation the engine issued, not from the composable chain: which
-  // form this was written as decides whether a working directory is installed
-  // at all, and a handler answering that question could validate a self-closing
-  // `<Dir />` the document never wrote children for.
-  if (typeof invocation?.hasContent !== "function") {
+  // From the invocation the engine issued, not from the composable chain and not
+  // from a method the caller supplied: which form this was written as decides
+  // whether a working directory is installed at all, and both a handler
+  // answering that question and a wrapper minting an object that answers it
+  // could validate a self-closing `<Dir />` the document never wrote children
+  // for. `authoredForm()` authenticates before answering.
+  const form = authoredForm(invocation);
+  if (form === undefined) {
     throw new DirInvocationError(
       `<Dir path=${JSON.stringify(path)}> was called without the invocation the engine issued, ` +
         "so which form it was written as cannot be established.",
     );
   }
 
-  if (!invocation.hasContent()) {
+  if (!form.content) {
     throw new DirInvocationError(
       `<Dir path=${JSON.stringify(path)} /> is invalid: Dir installs a working directory for ` +
         `its content, and a self-closing invocation has none. Write it as <Dir path=` +

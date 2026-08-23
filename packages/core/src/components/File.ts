@@ -64,6 +64,7 @@ import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
 import { content } from "../component-api.ts";
+import { authoredForm } from "../invocation-identity.ts";
 import type { ComponentInvocation } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
@@ -128,21 +129,28 @@ export default printErrors(function* (
 /**
  * How this element was written, from the invocation the engine issued.
  *
- * There is no fallback to the contextual answer. A call arriving without a
- * genuine invocation is not one the engine made — a handler holding this
+ * Authenticated rather than asked. Calling `invocation.hasContent()` would take
+ * a caller's word for it: a component is handed whatever its caller passes, and
+ * an object literal carrying a method of that name satisfies every check a
+ * shape can express. `authoredForm()` reads the private field durable identity
+ * is recognized by, so a look-alike answers nothing here.
+ *
+ * There is no fallback to the contextual answer either. A call arriving without
+ * a genuine invocation is not one the engine made — a handler holding this
  * implementation and calling it somewhere else is the case that matters — and
  * this component chooses between reading a file and writing over it, so it
  * refuses rather than guessing. The refusal happens before `cwd()`, before the
  * children, and therefore before any provider is reached.
  */
 function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
-  if (typeof invocation?.hasContent !== "function") {
+  const form = authoredForm(invocation);
+  if (form === undefined) {
     throw new FileAccessError(
       `<File path=${JSON.stringify(requested)} /> was called without the invocation the engine ` +
         "issued, so which form it was written as cannot be established.",
     );
   }
-  return invocation.hasContent();
+  return form.content;
 }
 
 /**

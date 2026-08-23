@@ -1414,15 +1414,22 @@ describe("Tier FL — the authored form decides the effect", () => {
     expect(yield* readTextFile(join(fixture.workspace, "out.md"))).toBe("the authored bytes");
   });
 
-  it("FL37: the definition called without the engine's invocation reaches no provider", function* () {
+  it("FL37: a look-alike invocation selects no branch and reaches no provider", function* () {
     const fixture = yield* useFixture();
     yield* writeTextFile(join(fixture.workspace, "notes.md"), "the authored note\n");
     const calls: string[] = [];
 
-    // What a component compiled against a core that predates the form hands
-    // over. Read as data rather than asserted into the type, because that is
-    // exactly what it is: a value from outside this type system.
-    const mismatched: ComponentInvocation = JSON.parse("{}");
+    // Not an absence — a forgery. The whole public shape is here: a method of
+    // the right name, taking nothing, returning a boolean. Every check written
+    // against the shape passes, which is why the component authenticates the
+    // object instead. `true` is the dangerous answer for a self-closing
+    // element: it selects the write branch over a file the document wrote a
+    // read for.
+    const mismatched: ComponentInvocation = {
+      hasContent() {
+        return true;
+      },
+    };
 
     // The definition called with it. There is no contextual fallback to guess
     // with, so this refuses rather than choosing a branch.

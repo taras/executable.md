@@ -25,7 +25,7 @@ import { collect, Component, content, inlineSource, registerComponents } from ".
 import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation, IdentityClaimant, IdentityComponent } from "../host.ts";
 import { getExpansion } from "../src/expansion.ts";
-import { installIdentities, issueInvocation } from "../src/invocation-identity.ts";
+import { authoredForm, installIdentities, issueInvocation } from "../src/invocation-identity.ts";
 import type { IdentityDomain } from "../src/invocation-identity.ts";
 import type {
   ComponentDefinition,
@@ -938,5 +938,67 @@ describe("Tier CIV — the authored form on the invocation", () => {
     expect(seen.authored).toEqual([false]);
     expect(reachable).not.toContain("hasContent");
     expect(reachable).not.toContain("content");
+  });
+
+  // CIV22: calling the method is not authenticating the object. A component
+  // receives whatever its caller passed, and every check written against the
+  // shape — the property is there, it is a function, it returned a boolean —
+  // is a check a forger satisfies by construction, because a shape is what a
+  // forger copies.
+  //
+  // So a branch that selects an effect reads `authoredForm()`, which recognizes
+  // the same private field a claim does. CIV4 already proves the look-alike
+  // claims no durable identity; this is the other half of the same object.
+  it("CIV22: only the engine's own invocation reports the authored form", function* () {
+    const genuine: ComponentInvocation[] = [];
+    const probing: IdentityComponent = {
+      name: "Probing",
+      origin: "test://probing",
+      props: NO_PROPS,
+      factory: () =>
+        // deno-lint-ignore require-yield
+        function* (_props: Record<string, Json>, invocation: ComponentInvocation) {
+          genuine.push(invocation);
+          return "";
+        },
+    };
+
+    yield* run("<Probing>written</Probing>\n", [probing]);
+    const issued = genuine[0];
+    if (issued === undefined) {
+      throw new Error("the engine issued no invocation");
+    }
+
+    // The genuine object answers, and answers the form that was written.
+    expect(authoredForm(issued)).toEqual({ content: true });
+
+    // A look-alike implementing the whole public shape. This is the exact
+    // object CIV4 hands a component, and it answers `hasContent()` perfectly
+    // well — which is why reading the method rather than authenticating the
+    // object is what a consumer must not do.
+    const lookAlike: ComponentInvocation = {
+      hasContent() {
+        return false;
+      },
+    };
+    expect(lookAlike.hasContent()).toBe(false);
+    expect(authoredForm(lookAlike)).toBeUndefined();
+
+    // A descriptor-for-descriptor clone of the genuine one, and an object built
+    // on its prototype. Both carry the method; neither carries the field.
+    const clone: ComponentInvocation = Object.create(
+      Object.getPrototypeOf(issued),
+      Object.getOwnPropertyDescriptors(issued),
+    );
+    expect(typeof clone.hasContent).toBe("function");
+    expect(authoredForm(clone)).toBeUndefined();
+
+    const built: ComponentInvocation = Object.create(Object.getPrototypeOf(issued));
+    expect(typeof built.hasContent).toBe("function");
+    expect(authoredForm(built)).toBeUndefined();
+
+    // And a wrapper that forwards the genuine object still works, because
+    // authentication is about the object rather than about who passed it.
+    expect(authoredForm(issued)).toEqual({ content: true });
   });
 });

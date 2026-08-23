@@ -83,15 +83,22 @@ export interface ComponentInvocation {
    * The authored shape, immutable and synchronous. It projects nothing,
    * suspends on nothing, asks nothing of the middleware chain, and does not
    * spend this invocation's durable identity — reading it leaves the claimant
-   * exactly as it was.
+   * exactly as it was. On an invocation the engine issued this is the canonical
+   * fact, and a component that reaches nothing else — no import, no context, no
+   * helper of its own copy — reads it by calling what it received.
    *
-   * This is what an *effect-selecting* branch reads. `Component.hasContent()`
-   * answers the same question through the composable chain, where a handler
-   * installed anywhere outside the invocation answers ahead of the engine, and
-   * where a handler that answers per call can report one shape to a check and
-   * the other to the component. That is fine for a component choosing how to
-   * render; it is not fine for one choosing whether to read a file or write
-   * over it.
+   * **Calling it is not authentication.** A component receives whatever its
+   * caller passed, and a wrapper can pass an object literal with a method of
+   * this name; there is no shape a forger cannot copy, because a shape is what
+   * a forger copies. So a component whose branch merely decides *how to render*
+   * may call this, while one whose branch selects an irreversible **effect**
+   * reads {@link authoredForm} instead, which answers only for an invocation
+   * this engine issued.
+   *
+   * `Component.hasContent()` is weaker again: it answers through the composable
+   * chain, where a handler installed anywhere outside the invocation answers
+   * ahead of the engine, and where a handler that answers per call can report
+   * one shape to a check and the other to the component.
    */
   hasContent(): boolean;
 }
@@ -236,6 +243,40 @@ class EngineInvocation implements ComponentInvocation {
         ? value.#issuance
         : undefined;
   }
+}
+
+/** The authored shape of an element, as the engine scanned it. */
+export interface AuthoredForm {
+  /** `<C>…</C>` and `<C></C>` yes, `<C />` no. */
+  readonly content: boolean;
+}
+
+/**
+ * How this element was written, or `undefined` when this is not an invocation
+ * this engine issued.
+ *
+ * The authenticated read. `ComponentInvocation.hasContent()` is a method on an
+ * object a component was handed, and a component is handed whatever its caller
+ * passes: a wrapper that mints `{ hasContent: () => false }` satisfies the type,
+ * the name and the return type, and no check written against the shape can tell
+ * it apart from the real thing. This reads the same private field durable
+ * identity is recognized by, so a structural look-alike, a descriptor-for-
+ * descriptor clone and an object built on the prototype are each refused here
+ * exactly as they are refused a claim.
+ *
+ * `undefined` rather than `false`, and a record rather than a boolean, because
+ * this answer selects an effect. A caller that wrote `if (form)` on a bare
+ * boolean would read "not an invocation" as "self-closing" — which for
+ * `<File.Delete>` is *delete*, and for `<File>` is *write over it*. There is no
+ * boolean here to make that mistake with.
+ *
+ * Reading spends nothing: no projection, no suspension, no durable identity,
+ * and no liveness requirement. A finished invocation still reports the form of
+ * the element it was.
+ */
+export function authoredForm(invocation: ComponentInvocation): AuthoredForm | undefined {
+  const issuance = stateOf(invocation);
+  return issuance === undefined ? undefined : Object.freeze({ content: issuance.content });
 }
 
 /** Mint one invocation identity. Only the engine calls this. */

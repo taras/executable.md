@@ -3744,11 +3744,12 @@ own account, and may answer differently on each call. A caller that reads it and
 then invokes something which reads it again has therefore verified nothing —
 the two are separate dispatches.
 
-Only the invocation's own `hasContent()` (§5.6) is authoritative about the
-authored form. `<File>` (§6.13), `<File.Delete>` (§6.13.1) and the workflow
-package's `<Dir>` read it. A component that reads this contextual operation has
-no authored-form guarantee: what it receives is whatever the chain answered for
-that call.
+Only the invocation the engine issued is authoritative about the authored form,
+and a component that selects an effect from it reads `authoredForm()` (§5.6),
+which authenticates the invocation before answering. `<File>` (§6.13),
+`<File.Delete>` (§6.13.1) and the workflow package's `<Dir>` do. A component that
+reads this contextual operation has no authored-form guarantee: what it receives
+is whatever the chain answered for that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
@@ -3888,13 +3889,37 @@ state inside canonical core, reachable only through the object the engine minted
 and handed over — which is what makes it usable where the contextual
 `hasContent()` of §5.5 is not. Because the method travels on the genuine
 invocation, a component evaluated through a separately loaded copy calls what it
-received rather than a helper of its own copy, and a component compiled against
-a core that predates the method gets no fallback to the contextual answer: it
-refuses instead, before reaching a provider.
+received rather than a helper of its own copy.
+
+**Calling the method is not authenticating the object.** A component is handed
+whatever its caller passes it, so a wrapper can pass an object literal carrying
+a method of that name; the property is there, it is a function, and it returns a
+boolean. Every check expressible against the shape is one a forger satisfies by
+construction, because the shape is what a forger copies.
+
+So the form has two reads, and which one a component uses follows from what its
+branch decides:
+
+- A branch that decides **how to render** may call `invocation.hasContent()`.
+  A component that imports nothing at all has only that, and on a genuine
+  invocation it is the canonical fact.
+- A branch that selects an **irreversible effect** calls `authoredForm(invocation)`
+  instead. It answers `{ content }` for an invocation this engine issued and
+  `undefined` for anything else, recognizing the same private field a claimant
+  recognizes — so a structural look-alike, a descriptor-for-descriptor clone and
+  an object built on the prototype are each refused. `<File>` (§6.13),
+  `<File.Delete>` (§6.13.1) and the workflow package's `<Dir>` read it, and each
+  refuses rather than selecting a branch when it answers `undefined`, before
+  reaching a provider.
+
+`undefined` rather than `false`, and a record rather than a boolean, because a
+caller writing `if (form)` on a bare boolean would read "not an invocation" as
+"self-closing" — which for `<File.Delete>` is *delete* and for `<File>` is
+*write over it*. There is no boolean there to make that mistake with.
 
 Implementing the method does not make an object an invocation. Durable identity
 is still the private field a claimant recognizes, so a structural look-alike
-answering `hasContent()` claims nothing.
+answering `hasContent()` claims nothing and reports no form.
 
 The identity behind it is answered by a
 **claimant**, and a claimant reaches only one place: the factory a trusted host
@@ -6568,16 +6593,18 @@ alike, because what decides it is the **shape** the author wrote rather than
 what the content would render. Content that renders nothing is still content
 somebody wrote meaning something, and this component does not do it.
 
-That shape is read from the invocation the engine issued (§5.6) and from nowhere
-else. `Component.hasContent()` (§5.5) answers the same question through the
+That shape is read from the invocation the engine issued (§5.6), authenticated
+through `authoredForm()` before it is read, and from nowhere else. `Component.hasContent()` (§5.5) answers the same question through the
 composable chain, where a handler installed anywhere outside the invocation
 answers ahead of the engine and may answer differently on each call. This
 component selects an *effect* rather than a rendering, and the effect is
-irreversible in one direction: a handler reporting "self-closing" for a paired
-element would turn a document that wrote children into one that removed the path
-they were written beside. There is no fallback — a call arriving without a
-genuine invocation is refused rather than resolved to either form, because
-guessing self-closing there would be guessing deletion.
+irreversible in one direction: an answer of "self-closing" for a paired element
+would turn a document that wrote children into one that removed the path they
+were written beside. Neither weaker answer is used — not the contextual chain,
+and not `invocation.hasContent()`, which reports whatever object the caller
+handed over. There is no fallback either: a call arriving without a genuine
+invocation is refused rather than resolved to either form, because guessing
+self-closing there would be guessing deletion.
 
 That refusal happens before `Env.cwd` is read and before the provider is
 reached, so a mistaken paired spelling costs the document nothing.
@@ -8933,7 +8960,7 @@ visible warning blocks, gather into a separate error report).
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 | FL34–FL35 | The authored form decides the effect | A self-closing `<File />` reads and never writes, and a paired `<File>` writes and never reads, under a contextual `hasContent` handler installed outside the invocation that lies consistently *and* under one that answers `[false, true]` / `[true, false]`. A sibling reporting the contextual answer proves the handler live; the provider calls and the file bytes prove the element followed how it was written (§5.6) |
 | FL36 | An honest chain | With no handler interfering, both forms reach the same providers and produce the same bytes |
-| FL37 | No contextual fallback | The definition called without the invocation the engine issued refuses before reaching a provider, leaving the file unchanged |
+| FL37 | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select the write branch — refuses before reaching a provider, leaving the file unchanged; there is no contextual fallback either |
 
 ### Tier FD — `<File.Delete>`
 
@@ -8948,7 +8975,7 @@ absence is Tier FF's.
 | FD2 | Absence is success | Deleting a path that names nothing succeeds, twice, with no printed error |
 | FD3 | Paired content | Paired-*empty* content is refused on shape, before `Env.cwd` is read and before the provider is reached; the same watchers on the self-closing form record both calls, so the empty list is a refusal rather than an unwired spy |
 | FD3b | The form is the invocation's | Under a contextual `hasContent` handler that always denies content, and under one that answers true then false, both paired spellings still refuse and both targets keep their bytes; a `<Says />` beside them renders the chain's answer, so the handler is demonstrably live and lying, and the self-closing control in the same document still deletes |
-| FD3c | No invocation, no guess | The definition called with an invocation the engine did not issue refuses before `Env.cwd` and before the provider, naming neither form |
+| FD3c | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select deletion — refuses before `Env.cwd` and before the provider, and the target keeps its bytes |
 | FD4 | The contextual directory | A nested `Env.cwd` selects the inner file of a shared name, the outer one is untouched, and the element after the region resolves against the restored directory |
 | FD5 | Every refusal sentence | An absolute path, a lexical escape, an escaping parent link, and a directory each produce their own sentence, name no absolute path, and reach no low-level removal — proven against an admitted deletion that does |
 | FD6 | A provider refusal | A structural `Err` is this component's own printed error, the sibling after it runs, and the target is unchanged |
@@ -10303,6 +10330,7 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV19 | The authored form | The invocation reports `false` for `<C />` and `true` for `<C>…</C>` and `<C></C>`, agreeing with the contextual answer while nothing interferes; asking it twice expands no content and runs no child |
 | CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
 | CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
+| CIV22 | Only the engine's own invocation | `authoredForm()` answers for a genuine invocation and answers `undefined` for a structural look-alike implementing `hasContent()`, for a descriptor-for-descriptor clone, and for an object built on the prototype — each of which the method itself answers perfectly well |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

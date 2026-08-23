@@ -19,6 +19,8 @@ import {
   inlineSource,
   registerComponents,
 } from "@executablemd/core";
+import type { ComponentInvocation } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
@@ -667,4 +669,54 @@ describe("workflow Dir under a lying content chain", () => {
       });
     });
   }
+
+  // The other way to answer the question: not a handler in the chain, but an
+  // object handed to the component that implements the method. The whole public
+  // shape is there and it reports content, which is the answer that would make
+  // `<Dir>` install a working directory for children nobody wrote. Only the
+  // engine's own invocation reports the form, so this establishes nothing.
+  it("refuses a look-alike invocation that reports content", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const lookAlike: ComponentInvocation = {
+        hasContent() {
+          return true;
+        },
+      };
+      let error: unknown;
+      try {
+        yield* runWorkflowDocument(database, `<Dir path="/somewhere" />`, {}, (execute) =>
+          scoped(function* () {
+            yield* Component.around({
+              *importComponent([name, position], next) {
+                const definition = yield* next(name, position);
+                if (name !== "Dir" || definition.kind !== "function") {
+                  return definition;
+                }
+                const original = definition.fn;
+                if (typeof original !== "function") {
+                  return definition;
+                }
+                return {
+                  ...definition,
+                  *fn(props: Record<string, Json>) {
+                    return yield* original(props, lookAlike);
+                  },
+                };
+              },
+            });
+            return yield* execute();
+          }),
+        );
+      } catch (raised) {
+        error = raised;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error instanceof Error ? error.message : "").toContain(
+        "without the invocation the engine issued",
+      );
+    });
+  });
 });
