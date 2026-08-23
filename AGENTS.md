@@ -274,6 +274,31 @@ here:
   through the repository config, and an `ignorePatterns` entry there stops them
   seeing their own fixtures.
 
+### Measuring the corpus
+
+`deno task weights:measure` runs every applicable test file alone, under each
+runtime's own runner, and writes what each one took to `test-weights.json`. It
+writes only after every measured file passed, and it is the only command that
+writes that file — verification, the runtime suites, and every other check read
+it and leave it alone.
+
+Provenance is supplied, never inferred: the commit, the run URL, the attempt,
+the runner label, and the three runtime versions arrive in the environment
+(`WEIGHTS_COMMIT`, `WEIGHTS_RUN_URL`, `WEIGHTS_ATTEMPT`, `WEIGHTS_RUNNER`,
+`WEIGHTS_DENO`, `WEIGHTS_NODE`, `WEIGHTS_BUN`), and a missing one is a refusal
+rather than a default. A weight measured on a laptop describes a machine no CI
+job runs on, and without provenance the file would not say so.
+
+So the measurement belongs on the runner. **Measure test weights**
+(`.github/workflows/measure-test-weights.yml`) is dispatched against a ref from
+the Actions tab: it prepares the checkout in the usual order, measures all three
+runtimes on `ubuntu-latest`, and uploads `test-weights.json` as an artifact. It
+holds `contents: read` and pushes nothing, so downloading that artifact and
+committing it is a deliberate act — which is what keeps the provenance in the
+committed file true of the run that produced it. Remeasure after anything that
+moves the corpus, the exclusions, or a runner command; never hand-edit a
+millisecond.
+
 ## MUST READ
 
 - https://github.com/thefrontside/effection/blob/v4/AGENTS.md

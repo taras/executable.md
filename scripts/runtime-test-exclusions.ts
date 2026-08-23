@@ -14,6 +14,17 @@
  * by fixing the linked issue or by re-measuring the corpus.
  */
 
+/** The runtimes the repository's test corpus runs under. */
+export type Runtime = "deno" | "node" | "bun";
+
+/** Every supported runtime, in the order reports and measurements visit them. */
+export const RUNTIMES: readonly Runtime[] = ["deno", "node", "bun"];
+
+/** `value` as a supported runtime, or `undefined` when it names none. */
+export function parseRuntime(value: string): Runtime | undefined {
+  return RUNTIMES.find((runtime) => runtime === value);
+}
+
 export interface RuntimeExclusion {
   path: string;
   reason: string;
@@ -71,6 +82,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     reason:
       "drives the Deno half of `deno task verify` — spool handles through Deno.openSync, real child processes through Deno.execPath(), and a fingerprint built on Deno.lstatSync/readLinkSync; the coordinator it serves is covered portably by verify-coordinator.test.ts",
     issue: "https://github.com/taras/executable.md/issues/279",
+  },
+  {
+    path: "scripts/tests/measure-test-weights.test.ts",
+    reason:
+      "runs `deno task weights:measure` itself through Deno.execPath() with an environment of its own, to prove the command refuses incomplete provenance before it starts a test process; the portable half — the weights parser, the environment refusal and the measurement operation — is scripts/tests/test-weights.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/280",
   },
   {
     path: "scripts/tests/frozen-entry.test.ts",
@@ -395,8 +412,14 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
 /**
  * Node and Bun are keyed separately because they diverge — Bun imports a data:
  * URI that Node's tsx loader rejects, for one. They happen to agree today.
+ *
+ * Deno is keyed too, and its list is empty: every runtime now derives its
+ * corpus through the same subtraction, so the runtime that excludes nothing has
+ * to say so rather than be absent. An absent key reads as an unmeasured
+ * runtime, which is what the weights and the partition must never see.
  */
-export const exclusions: Record<string, RuntimeExclusion[]> = {
+export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
+  deno: [],
   node: DENO_ONLY_TOOLING,
   bun: DENO_ONLY_TOOLING,
 };

@@ -6,12 +6,15 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
-import { listTestFiles, relativeWithin } from "../lib/test-files.ts";
-import { exclusions } from "../runtime-test-exclusions.ts";
-import { exitCode } from "../lib/runtime-tests.ts";
+import { applicableTestFiles, listTestFiles, relativeWithin } from "../lib/test-files.ts";
+import { exclusions, parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
+import type { Runtime } from "../runtime-test-exclusions.ts";
+import { exitCode, oneFileCommand } from "../lib/runtime-tests.ts";
 
 const ROOT = new URL("../../", import.meta.url);
-const RUNTIMES = ["node", "bun"];
+
+/** The runtimes that record exclusions; Deno records none by design. */
+const EXCLUDING: Runtime[] = ["node", "bun"];
 
 describe("test discovery", () => {
   it("returns sorted repository-relative paths", function* () {
@@ -68,8 +71,9 @@ describe("path normalization", () => {
 });
 
 describe("runtime exclusions", () => {
-  it("names only runtimes the launcher runs", function* () {
+  it("keys every supported runtime, including the one that excludes nothing", function* () {
     expect(Object.keys(exclusions).sort()).toEqual([...RUNTIMES].sort());
+    expect(exclusions.deno).toEqual([]);
   });
 
   it("lists each path once per runtime", function* () {
@@ -90,12 +94,78 @@ describe("runtime exclusions", () => {
   });
 
   it("gives every exclusion a reason and an issue", function* () {
-    for (const runtime of RUNTIMES) {
+    for (const runtime of EXCLUDING) {
+      expect(exclusions[runtime].length).toBeGreaterThan(0);
       for (const entry of exclusions[runtime]) {
         expect(entry.reason.trim().length).toBeGreaterThan(0);
         expect(entry.issue).toMatch(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/);
       }
     }
+  });
+
+  it("names nothing that is not a supported runtime", function* () {
+    for (const runtime of Object.keys(exclusions)) {
+      expect(parseRuntime(runtime)).toEqual(runtime);
+    }
+    expect(parseRuntime("node22")).toBeUndefined();
+    expect(parseRuntime("")).toBeUndefined();
+  });
+});
+
+describe("the applicable corpus", () => {
+  it("is discovery minus exactly that runtime's manifest, still sorted", function* () {
+    const discovered = yield* listTestFiles(ROOT);
+
+    for (const runtime of RUNTIMES) {
+      const excluded = new Set(exclusions[runtime].map((entry) => entry.path));
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+
+      expect(applicable).toEqual(discovered.filter((file) => !excluded.has(file)));
+      expect(applicable).toEqual([...applicable].sort());
+      expect(applicable.filter((file) => excluded.has(file))).toEqual([]);
+    }
+  });
+
+  it("gives Deno the whole discovered corpus", function* () {
+    expect(yield* applicableTestFiles("deno", ROOT)).toEqual(yield* listTestFiles(ROOT));
+  });
+
+  /**
+   * Every runtime derives from one discovered set, so a file can only be missing
+   * from a runtime by being named in that runtime's manifest.
+   */
+  it("drops a file from a runtime only through the manifest", function* () {
+    const discovered = yield* listTestFiles(ROOT);
+
+    for (const runtime of RUNTIMES) {
+      const applicable = new Set(yield* applicableTestFiles(runtime, ROOT));
+      const dropped = discovered.filter((file) => !applicable.has(file));
+
+      expect(dropped).toEqual(exclusions[runtime].map((entry) => entry.path).sort());
+    }
+  });
+});
+
+describe("the one-file runner commands", () => {
+  it("runs a single file alone under each runtime", function* () {
+    expect(oneFileCommand("deno", "packages/core/tests/a.test.ts")).toEqual({
+      command: "deno",
+      arguments: ["test", "--allow-all", "--frozen", "packages/core/tests/a.test.ts"],
+    });
+    expect(oneFileCommand("node", "packages/core/tests/a.test.ts")).toEqual({
+      command: "tsx",
+      arguments: [
+        "--tsconfig",
+        "tsconfig.node.json",
+        "--test",
+        "--test-concurrency=1",
+        "packages/core/tests/a.test.ts",
+      ],
+    });
+    expect(oneFileCommand("bun", "packages/core/tests/a.test.ts")).toEqual({
+      command: "bun",
+      arguments: ["test", "--timeout=300000", "packages/core/tests/a.test.ts"],
+    });
   });
 });
 
