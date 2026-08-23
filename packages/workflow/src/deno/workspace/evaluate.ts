@@ -20,14 +20,28 @@
  *   from the captured run storage, read at invocation;
  * - the read-only `<File>` observation comes from core's pinned constructor;
  * - `<Fetch>` is admitted only when the captured request ceiling is non-empty;
- *   and
- * - any further observation comes from the captured host option.
+ * - the write table is core's paired `<File>` and workflow's own lexical
+ *   `<Dir>`, built from the same definition the ordinary registration owns; and
+ * - any further read or write comes from the captured host option.
  *
  * No prop, binding, context, contextual API answer, middleware return value or
- * generated name supplies or widens any of them. The schema is closed and holds
- * exactly one required string prop, and paired content is refused — a `source`
- * this element rendered rather than received would be a fragment nobody handed
- * it.
+ * generated name supplies or widens any of them. The schema is closed on one
+ * required string and one optional closed selection, and paired content is
+ * refused — a `source` this element rendered rather than received would be a
+ * fragment nobody handed it.
+ *
+ * ## `allow` narrows; it never grants
+ *
+ * `allow` names an effect *class*, and the class resolves to the table this
+ * host installed before any document existed. Omitting it asks for `read`,
+ * which is what this component has always done. Asking for `write` reaches
+ * core's paired `<File>` and workflow's `<Dir>` and nothing else — no Git, no
+ * Git host, no Issue, no process, no credential — and a host that installed no
+ * write table refuses the selection before the candidate is parsed.
+ *
+ * `allow` and `as` are independent. `as` grants nothing: it is the ordinary
+ * caller-owned binding for the value this component returns, and that value has
+ * the same shape for every selection. An admitted write puts nothing in it.
  *
  * A repository component named `Evaluate` shadows this default, exactly as it
  * shadows any other. That can change what a trusted workflow document does; it
@@ -53,8 +67,10 @@
 
 import type { Operation } from "effection";
 import { hasContent } from "@executablemd/core";
-import { pinnedFileRead } from "@executablemd/core/host";
+import { pinnedFileRead, pinnedFileWrite, pinnedMutation } from "@executablemd/core/host";
 import type {
+  GeneratedEffectClass,
+  GeneratedMutation,
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedRequest,
@@ -65,18 +81,36 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { FunctionComponent } from "@executablemd/core";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import {
-  observeGeneratedXmd,
-  type GeneratedObservationPolicy,
+  evaluateGeneratedFragment,
+  type GeneratedEvaluationPolicy,
 } from "../../generated-observations.ts";
+import { COMPOSITION_ORIGIN, dirDefinition } from "../../composition/definitions.ts";
 import { workspaceRootSelection } from "./effect.ts";
 
 const ORIGIN = "@executablemd/workflow/generated";
 
-/** The whole schema: one required string, and nothing else accepted. */
+/** The classes this component accepts, and the order a selection canonicalizes to. */
+const EFFECT_CLASSES: readonly GeneratedEffectClass[] = ["read", "write"];
+
+/**
+ * The whole schema: one required string, one optional closed selection, and
+ * nothing else accepted.
+ *
+ * `allow` narrows the host's already-installed policy and can do nothing else.
+ * It names no identity, no root, no destination and no request — it says which
+ * of the two tables this host captured before the document existed this
+ * fragment may draw on, and omitting it asks for `read`.
+ */
 export const props = {
   type: "object",
   properties: {
     source: { type: "string" },
+    allow: {
+      type: "array",
+      minItems: 1,
+      uniqueItems: true,
+      items: { enum: [...EFFECT_CLASSES] },
+    },
   },
   required: ["source"],
   additionalProperties: false,
@@ -115,8 +149,9 @@ export class GeneratedEvaluationError extends Error {
 /**
  * What a host may configure about generated evaluation.
  *
- * Adapter-private values, supplied before the document runs. Production may
- * supply neither, which admits exactly the read-only `<File>` identity.
+ * Adapter-private values, supplied before the document runs. Every one of them
+ * is additive: production may supply none, which is the standard profile below
+ * and nothing else. A document prop supplies none of them.
  */
 export interface GeneratedEvaluationOptions {
   /**
@@ -127,8 +162,44 @@ export interface GeneratedEvaluationOptions {
    * request.
    */
   readonly requests?: readonly GeneratedRequest[];
-  /** Further observation components this host admits beside core's pinned ones. */
-  readonly components?: readonly GeneratedObservation[];
+  /** Further read components this host admits beside core's pinned ones. */
+  readonly reads?: readonly GeneratedObservation[];
+  /** Further mutation components this host admits beside the standard profile's. */
+  readonly writes?: readonly GeneratedMutation[];
+}
+
+/**
+ * The classes this element asked for, canonicalized.
+ *
+ * Parsed rather than read. The schema above already refuses everything but a
+ * non-empty duplicate-free subset, and what this adds is the canonical order
+ * the admission retains: two documents asking for the same two classes are
+ * asking for the same thing, so authored order is not part of the policy a
+ * continuation is held to.
+ */
+function requestedClasses(value: Json | undefined): readonly GeneratedEffectClass[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new GeneratedEvaluationError(
+      "<Evaluate> takes `allow` as a non-empty array of effect classes.",
+    );
+  }
+  const selected = new Set<GeneratedEffectClass>();
+  for (const entry of value) {
+    const effect = EFFECT_CLASSES.find((known) => known === entry);
+    if (effect === undefined) {
+      throw new GeneratedEvaluationError(
+        "<Evaluate> admits the effect classes `read` and `write`, and nothing else.",
+      );
+    }
+    if (selected.has(effect)) {
+      throw new GeneratedEvaluationError("<Evaluate> takes each effect class in `allow` once.");
+    }
+    selected.add(effect);
+  }
+  return EFFECT_CLASSES.filter((effect) => selected.has(effect));
 }
 
 /**
@@ -147,7 +218,19 @@ function createEvaluate(
   // Copied at construction. What the host stated then is what every later
   // invocation is bounded by, whatever happens to the object it passed.
   const requests: GeneratedRequest[] = [...(options.requests ?? [])];
-  const components: GeneratedObservation[] = [...(options.components ?? [])];
+  // The standard profile, captured with them. Core's read-only `<File>` is the
+  // read table; core's paired `<File>` and workflow's own lexical `<Dir>` are
+  // the write table, and the Dir identity is built from the same definition the
+  // ordinary registration owns so the two cannot drift. Both tables are stated
+  // whether or not a document asks for the class — `allow` selects from what
+  // this host already installed, and can add nothing to it.
+  const dir = dirDefinition();
+  const reads: GeneratedObservation[] = [pinnedFileRead(), ...(options.reads ?? [])];
+  const writes: GeneratedMutation[] = [
+    pinnedFileWrite(),
+    pinnedMutation(dir.name, `${COMPOSITION_ORIGIN}#Dir`, dir, "paired"),
+    ...(options.writes ?? []),
+  ];
 
   return function* Evaluate(
     elementProps: Record<string, Json>,
@@ -163,6 +246,9 @@ function createEvaluate(
     if (typeof source !== "string") {
       throw new GeneratedEvaluationError("<Evaluate> requires a `source` string to evaluate.");
     }
+    // Before the durable name is claimed and before the candidate is read: a
+    // selection this host cannot state is not a fragment being refused.
+    const allow = requestedClasses(elementProps.allow);
 
     // The durable identity of this observation is this element's own invocation,
     // so a replay restores the fragment this position admitted rather than
@@ -182,19 +268,21 @@ function createEvaluate(
     // belongs in the run's history.
     const selection = yield* workspaceRootSelection(database);
 
-    const policy: GeneratedObservationPolicy = {
+    const policy: GeneratedEvaluationPolicy = {
       workspaceRoots: selection.roots,
       selectedRoot: selection.current,
       requests,
-      components: [pinnedFileRead(), ...components],
+      reads,
+      writes,
+      ...(allow === undefined ? {} : { allow }),
     };
     return yield* admit(id, source, policy);
   };
 }
 
 /** The admission itself, and the only part of this that is journaled. */
-function* admit(id: string, source: string, policy: GeneratedObservationPolicy): Workflow<Json> {
-  const result = yield* observeGeneratedXmd(id, source, policy);
+function* admit(id: string, source: string, policy: GeneratedEvaluationPolicy): Workflow<Json> {
+  const result = yield* evaluateGeneratedFragment(id, source, policy);
   return observationValue(result);
 }
 

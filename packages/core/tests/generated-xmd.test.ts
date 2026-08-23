@@ -27,7 +27,7 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
@@ -36,17 +36,27 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Component } from "../src/component-api.ts";
+import { Component, content } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
-import { evaluateGeneratedXmd, pinnedComponent, pinnedFetch, pinnedFileRead } from "../host.ts";
+import {
+  evaluateGeneratedXmd,
+  pinnedComponent,
+  pinnedFetch,
+  pinnedFileRead,
+  pinnedFileWrite,
+  pinnedMutation,
+} from "../host.ts";
 import { executeInstalled } from "../host.ts";
 import type {
   ExecutionInstallation,
+  GeneratedComponentForm,
+  GeneratedEffectClass,
+  GeneratedMutation,
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedObservationValue,
@@ -1257,5 +1267,514 @@ describe("Tier WGAC — the pinned read-only File", () => {
     expect(attempt.evaluated.failure).toContain("did not admit");
     expect(attempt.reads).toEqual([]);
     expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
+  });
+});
+
+/**
+ * Tier GXC — the effect classes a fragment draws on
+ * (specs/workflow-workspace-spec.md §8.4).
+ *
+ * The host states two tables and the caller selects between them. Three claims
+ * follow from that, and everything here is one of them.
+ *
+ * **A selection is not a grant.** `allow` chooses among identities the host
+ * already installed. An empty, repeated or unavailable selection is the host's
+ * own error, raised before the candidate is parsed and before any record of it
+ * exists.
+ *
+ * **A name is not a form.** `<File />` and `<File>…</File>` are two identities
+ * under one name, and which one an element gets is decided from how it was
+ * written. Selecting one class never admits the other's form.
+ *
+ * **A write is not an observation.** An admitted mutation performs its ordinary
+ * effect and contributes nothing to the value the host reads back; its own
+ * durable record is the account of it.
+ */
+
+/** A paired host mutation, so a form domain other than `<File>`'s is exercised. */
+const NEST: FunctionComponentDefinition = {
+  kind: "function",
+  name: "Nest",
+  props: { type: "object", properties: {}, additionalProperties: false },
+  *fn(): Operation<Json> {
+    return yield* content();
+  },
+};
+
+function nest(form: GeneratedComponentForm = "paired"): GeneratedMutation {
+  return pinnedMutation("Nest", "test://nest", NEST, form);
+}
+
+/** One candidate, with the classes and the write table a run states for it. */
+function selecting(
+  source: string,
+  observations: readonly GeneratedObservation[],
+  options: {
+    allow?: readonly GeneratedEffectClass[];
+    mutations?: readonly GeneratedMutation[];
+  } = {},
+): GeneratedXmdRequest {
+  return {
+    ...request(source, observations),
+    ...(options.allow === undefined ? {} : { allow: options.allow }),
+    ...(options.mutations === undefined ? {} : { mutations: options.mutations }),
+  };
+}
+
+/** The normalized policy one admission recorded, as the journal holds it. */
+function recordedPolicy(event: DurableEvent | undefined): Json | undefined {
+  if (event?.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  return isRecord(value) ? value.policy : undefined;
+}
+
+/** The identities one admission recorded the fragment naming, in order. */
+function recordedNames(event: DurableEvent | undefined): Json | undefined {
+  if (event?.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  const value = event.result.value;
+  return isRecord(value) ? value.named : undefined;
+}
+
+describe("Tier GXC — a selection is not a grant", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("GXC1: omitting `allow` and asking for `read` are one policy", function* () {
+    const omitted = yield* evaluate(request("<Probe />\n", [probe()]));
+    const explicit = yield* evaluate(selecting("<Probe />\n", [probe()], { allow: ["read"] }));
+
+    expect(omitted.failure).toBe(undefined);
+    expect(explicit.failure).toBe(undefined);
+    expect(explicit.output).toBe(omitted.output);
+    expect(explicit.values).toEqual(omitted.values);
+    // The same retained policy, down to the class it normalized to: a document
+    // that says nothing and one that says `read` are held to one grant.
+    expect(recordedPolicy(admittedFragments(explicit.events)[0])).toEqual(
+      recordedPolicy(admittedFragments(omitted.events)[0]),
+    );
+    expect(recordedPolicy(admittedFragments(omitted.events)[0])).toMatchObject({
+      allow: ["read"],
+    });
+  });
+
+  it("GXC1b: a mixed selection is retained in canonical order", function* () {
+    const attempt = yield* evaluate(
+      selecting("<Probe />\n", [probe()], {
+        allow: ["write", "read"],
+        mutations: [nest()],
+      }),
+    );
+
+    expect(attempt.failure).toBe(undefined);
+    // Authored order is not identity. A continuation compares this, so two
+    // hosts asking for the same two classes must compare equal.
+    expect(recordedPolicy(admittedFragments(attempt.events)[0])).toMatchObject({
+      allow: ["read", "write"],
+      // The read table first, the write table second, host order inside each.
+      allowed: [
+        { name: "Probe", identity: "test://probe", forms: ["self-closing", "paired"] },
+        { name: "Nest", identity: "test://nest", forms: ["paired"] },
+      ],
+    });
+  });
+
+  /**
+   * Every candidate below would be refused on its own terms if it were read.
+   * None of them is: the selection fails first, so the marker never reaches a
+   * diagnostic and no `generated_xmd` record exists to hold it.
+   */
+  const UNSTATEABLE: Array<
+    [string, readonly GeneratedObservation[], Parameters<typeof selecting>[2], string]
+  > = [
+    ["no class at all", [probe()], { allow: [] }, "selected no effect class"],
+    ["one class twice", [probe()], { allow: ["read", "read"] }, "one effect class twice"],
+    ["`write` of a host with no write table", [probe()], { allow: ["write"] }, "no write table"],
+    [
+      "`write` of a host with an empty write table",
+      [probe()],
+      { allow: ["write"], mutations: [] },
+      "no write table",
+    ],
+    ["`read` of a host with no read table", [], { allow: ["read"] }, "no read table"],
+  ];
+
+  for (const [what, observations, options, diagnostic] of UNSTATEABLE) {
+    it(`GXC2: a selection of ${what} costs no parse and no record`, function* () {
+      const transport = yield* useTransport(() => ({ status: 200 }));
+
+      const attempt = yield* evaluate(
+        selecting("```bash exec\nprintf gxc-unparsed-marker\n```\n", observations, options),
+      );
+
+      expect(attempt.failure).toContain(diagnostic);
+      // Not "refused before the effect" — refused before there was a fragment.
+      expect(admissions(attempt.events)).toHaveLength(0);
+      expect(transport.performed).toHaveLength(0);
+      expect(persisted(attempt.events)).not.toContain("gxc-unparsed-marker");
+    });
+  }
+
+  it("GXC2b: a host table with one name and two overlapping forms is refused", function* () {
+    const attempt = yield* evaluate(
+      selecting("<Nest>x</Nest>\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [nest("paired"), nest("either")],
+      }),
+    );
+
+    expect(attempt.failure).toContain("one name and form twice");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+
+  it("GXC2b: a host table with one name and two definitions is refused", function* () {
+    const attempt = yield* evaluate(
+      selecting("<Probe />\n", [probe()], {
+        allow: ["read", "write"],
+        mutations: [pinnedMutation("Probe", "test://probe-write", NEST, "paired")],
+      }),
+    );
+
+    // An import is asked for by name, so a name runs one implementation. Which
+    // identity it ran as is the form's decision; which code runs is not.
+    expect(attempt.failure).toContain("one name with two definitions");
+    expect(admissions(attempt.events)).toHaveLength(0);
+  });
+});
+
+describe("Tier GXC — a name is not a form", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("GXC3: each form resolves to its own pinned identity", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(
+          `<File path="notes.md" />\n\n<File path="proposed.md">the fragment wrote this</File>\n`,
+          [pinnedFileRead()],
+          { allow: ["read", "write"], mutations: [pinnedFileWrite()] },
+        ),
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toBe(undefined);
+    // One name, two identities, chosen by how each element was written.
+    expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+      { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
+      { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
+    ]);
+    expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
+    expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
+  });
+
+  const FORMS: Array<[string, string, readonly GeneratedEffectClass[], string]> = [
+    [
+      "a paired File under `read` alone",
+      `<File path="notes.md">rewritten</File>\n`,
+      ["read"],
+      "self-closing form",
+    ],
+    [
+      "a self-closing File under `write` alone",
+      `<File path="notes.md" />\n`,
+      ["write"],
+      "paired form",
+    ],
+    ["a self-closing Nest under `write`", `<Nest />\n`, ["write"], "paired form"],
+  ];
+
+  for (const [what, source, allow, diagnostic] of FORMS) {
+    it(`GXC4: ${what} is refused with no effect`, function* () {
+      const root = yield* useWorkspace();
+      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+      const attempt = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(
+          selecting(source, [pinnedFileRead()], {
+            allow,
+            mutations: [pinnedFileWrite(), nest()],
+          }),
+        );
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(attempt.evaluated.failure).toContain(diagnostic);
+      expect(attempt.files).toEqual([]);
+      expect(refusals(attempt.evaluated.events)).toHaveLength(1);
+      expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
+      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+    });
+  }
+
+  it("GXC5: neither form is answered by a same-name repository component", function* () {
+    const workspace = yield* useWorkspace();
+    yield* writeTextFile(join(workspace, "File.md"), "the repository File ran.\n");
+    yield* writeTextFile(join(workspace, "Nest.md"), "the repository Nest ran.\n");
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(
+          `<File path="notes.md" />\n\n<File path="proposed.md">written</File>\n\n<Nest>held</Nest>\n`,
+          [pinnedFileRead()],
+          { allow: ["read", "write"], mutations: [pinnedFileWrite(), nest()] },
+        ),
+        { componentDirs: [workspace] },
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toBe(undefined);
+    expect(attempt.evaluated.output).not.toContain("the repository File ran");
+    expect(attempt.evaluated.output).not.toContain("the repository Nest ran");
+    expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
+  });
+
+  const EXCLUDED: Array<[string, string]> = [
+    ["a local Git push", `<Git.Push remote="origin" />`],
+    ["a Git-host pull request", `<PullRequest title="t" body="b" />`],
+    ["an issue upsert", `<Issue title="t" body="b" />`],
+    ["a repository", `<Repository name="api" />`],
+    ["a file deletion", `<File.Delete path="notes.md" />`],
+    ["a glob", `<Glob pattern="**/*" />`],
+  ];
+
+  for (const [what, element] of EXCLUDED) {
+    it(`GXC6: ${what} is outside the write table`, function* () {
+      const root = yield* useWorkspace();
+      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+      const attempt = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(
+          selecting(`${element}\n`, [pinnedFileRead()], {
+            allow: ["read", "write"],
+            mutations: [pinnedFileWrite(), nest()],
+          }),
+        );
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(attempt.evaluated.failure).toContain("did not admit");
+      expect(attempt.files).toEqual([]);
+      expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
+    });
+  }
+
+  it("GXC6: an executable block is refused whatever the selection", function* () {
+    const attempt = yield* evaluate(
+      selecting("```bash exec\nprintf ran\n```\n", [pinnedFileRead()], {
+        allow: ["read", "write"],
+        mutations: [pinnedFileWrite(), nest()],
+      }),
+    );
+
+    expect(attempt.failure).toContain("executable code block");
+    expect(admittedFragments(attempt.events)).toHaveLength(0);
+  });
+});
+
+describe("Tier GXC — a write is not an observation", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  it("GXC7: a write-only fragment observes nothing and renders nothing", function* () {
+    const root = yield* useWorkspace();
+
+    const attempt = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(`<Nest><File path="proposed.md">written</File></Nest>\n`, [pinnedFileRead()], {
+          allow: ["write"],
+          mutations: [pinnedFileWrite(), nest()],
+        }),
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toBe(undefined);
+    expect(attempt.files).toEqual(["write:proposed.md"]);
+    // The exact shape a document binds: no synthetic receipt for the write, and
+    // no text, because neither of these components renders any. What is left is
+    // the fragment's own line break, which is what the source had in it.
+    expect(attempt.evaluated.values).toEqual([]);
+    expect(attempt.evaluated.output?.trim()).toBe("");
+  });
+
+  it("GXC7: a mixed fragment collects the read and not the write", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(
+        selecting(
+          `<File path="notes.md" />\n\n<File path="proposed.md">written</File>\n`,
+          [pinnedFileRead()],
+          { allow: ["read", "write"], mutations: [pinnedFileWrite()] },
+        ),
+      );
+    });
+
+    expect(attempt.failure).toBe(undefined);
+    // One entry, under the read identity's name, holding what the read returned.
+    expect(attempt.values).toEqual([{ name: "File", value: "the retained note\n" }]);
+  });
+
+  const PARTIAL: Array<[string, string]> = [
+    [
+      "an unadmitted sibling after an admitted write",
+      `<File path="proposed.md">written</File>\n\n<Glob pattern="**/*" />\n`,
+    ],
+    [
+      "an unadmitted child under an admitted parent",
+      `<Nest>\n\n<File path="proposed.md">written</File>\n\n<Glob pattern="**/*" />\n\n</Nest>\n`,
+    ],
+    [
+      "an unadmitted form after an admitted write",
+      `<File path="proposed.md">written</File>\n\n<Nest />\n`,
+    ],
+  ];
+
+  for (const [what, source] of PARTIAL) {
+    it(`GXC8: ${what} performs no write at all`, function* () {
+      const root = yield* useWorkspace();
+
+      const attempt = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(
+          selecting(source, [pinnedFileRead()], {
+            allow: ["write"],
+            mutations: [pinnedFileWrite(), nest()],
+          }),
+        );
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(attempt.files).toEqual([]);
+      expect(refusals(attempt.evaluated.events)).toHaveLength(1);
+      expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
+      // The whole fragment is decided inside the admission, so what a refusal
+      // retains is the class and nothing the candidate carried.
+      expect(persisted(attempt.evaluated.events)).not.toContain("proposed.md");
+      expect(yield* exists(join(root, "proposed.md"))).toBe(false);
+    });
+  }
+});
+
+describe("Tier GXC — a resumed run is held to its classes and forms", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const WRITE = `<File path="proposed.md">written</File>\n`;
+
+  /** A history holding the admission and nothing after it. */
+  function duringPreparation(events: DurableEvent[]): InMemoryStream {
+    const admitted = events.findIndex(
+      (event) => event.type === "yield" && event.description.type === "generated_xmd",
+    );
+    return new InMemoryStream(events.slice(0, admitted + 1));
+  }
+
+  function admitWrite(root: string): Operation<Attempt> {
+    return scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(
+        selecting(WRITE, [pinnedFileRead()], {
+          allow: ["write"],
+          mutations: [pinnedFileWrite()],
+        }),
+      );
+    });
+  }
+
+  const MOVED: Array<[string, Parameters<typeof selecting>[2]]> = [
+    ["a widened class selection", { allow: ["read", "write"], mutations: [pinnedFileWrite()] }],
+    [
+      "a widened admitted form",
+      {
+        allow: ["write"],
+        mutations: [pinnedMutation("File", pinnedFileWrite().identity, NEST, "either")],
+      },
+    ],
+    [
+      "a replaced write identity",
+      {
+        allow: ["write"],
+        mutations: [pinnedMutation("File", "test://other-write", NEST, "paired")],
+      },
+    ],
+    ["an added write identity", { allow: ["write"], mutations: [pinnedFileWrite(), nest()] }],
+  ];
+
+  for (const [what, options] of MOVED) {
+    it(`GXC9: ${what} refuses the continuation and writes nothing`, function* () {
+      const root = yield* useWorkspace();
+      const first = yield* admitWrite(root);
+      expect(first.failure).toBe(undefined);
+      yield* rm(join(root, "proposed.md"), { force: true });
+
+      const again = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(selecting(WRITE, [pinnedFileRead()], options), {
+          stream: duringPreparation(first.events),
+        });
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(again.evaluated.failure).toContain("admitted under");
+      expect(again.files).toEqual([]);
+      expect(yield* exists(join(root, "proposed.md"))).toBe(false);
+    });
+  }
+
+  it("GXC9b: the unchanged write policy resumes and performs the write", function* () {
+    const root = yield* useWorkspace();
+    const first = yield* admitWrite(root);
+    expect(first.failure).toBe(undefined);
+    yield* rm(join(root, "proposed.md"), { force: true });
+
+    const again = yield* scoped(function* () {
+      const files = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        selecting(WRITE, [pinnedFileRead()], {
+          allow: ["write"],
+          mutations: [pinnedFileWrite()],
+        }),
+        { stream: duringPreparation(first.events) },
+      );
+      return { evaluated, files: [...files.performed] };
+    });
+
+    expect(again.evaluated.failure).toBe(undefined);
+    expect(again.files).toEqual(["write:proposed.md"]);
+    expect(yield* readTextFile(join(root, "proposed.md"))).toBe("written");
+  });
+
+  it("GXC9c: a read-only admission survives a changed write table it never selected", function* () {
+    const first = yield* evaluate(
+      selecting("<Probe />\n", [probe()], { allow: ["read"], mutations: [nest()] }),
+    );
+    expect(first.failure).toBe(undefined);
+
+    // The write table moved and the selection never reached it, so nothing this
+    // admission was granted under has changed.
+    const again = yield* evaluate(
+      selecting("<Probe />\n", [probe()], {
+        allow: ["read"],
+        mutations: [pinnedMutation("Nest", "test://replaced", NEST, "paired")],
+      }),
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
   });
 });

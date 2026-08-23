@@ -12,9 +12,9 @@
 
 import type { Operation } from "effection";
 import { registerComponents } from "@executablemd/core";
+import { COMPOSITION_ORIGIN, dirDefinition } from "./definitions.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
-import Dir, { props as dirProps } from "./components/Dir.ts";
 import GitSwitch, { props as gitSwitchProps } from "./components/GitSwitch.ts";
 import GitAdd, { props as gitAddProps } from "./components/GitAdd.ts";
 import GitCommit, {
@@ -29,69 +29,70 @@ import PullRequest, {
 import Issue, { props as issueProps, returns as issueReturns } from "./components/Issue.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 
-const ORIGIN = "@executablemd/workflow/composition";
-
 export function useCompositionComponents(): Operation<void> {
+  // The same definition the generated-XMD write table pins, so the ordinary
+  // component and the pinned identity cannot drift apart.
+  const dir = dirDefinition();
   return registerComponents([
     {
       name: "Repository",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: repositoryProps,
       fn: Repository,
     },
     {
       name: "Worktree",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: worktreeProps,
       fn: Worktree,
     },
     {
-      name: "Dir",
-      origin: ORIGIN,
-      props: dirProps,
-      fn: Dir,
+      name: dir.name,
+      origin: COMPOSITION_ORIGIN,
+      props: dir.props,
+      fn: dir.fn,
     },
     {
       name: "Git.Switch",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: gitSwitchProps,
       fn: GitSwitch,
     },
     {
       name: "Git.Add",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: gitAddProps,
       fn: GitAdd,
     },
     {
       name: "Git.Commit",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: gitCommitProps,
       returns: gitCommitReturns,
       fn: GitCommit,
     },
     {
       name: "Git.Push",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: gitPushProps,
       fn: GitPush,
     },
     {
       name: "PullRequest",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: pullRequestProps,
       returns: pullRequestReturns,
       fn: PullRequest,
     },
     {
       name: "IssueTracker",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: issueTrackerProps,
       fn: IssueTracker,
     },
     {
       name: "Issue",
-      origin: ORIGIN,
+      origin: COMPOSITION_ORIGIN,
       props: issueProps,
       returns: issueReturns,
       fn: Issue,

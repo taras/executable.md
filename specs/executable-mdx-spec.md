@@ -1856,7 +1856,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedComponent()`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam, including the read-only `<File>` identity a paired form is refused against, and answering with each admitted observation's own value rather than the fragment's rendering (workflow-workspace-spec §8.4) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read and the paired `<File>` write among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none (workflow-workspace-spec §8.4) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -3700,12 +3700,14 @@ which calls the host's factory once with the claimant it minted and registers
 what comes back (§5.3, §5.6). The workflow host supplies
 `<Evaluate source={…} />` that way, for a live or partial run — the operation an
 authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. Its schema is closed on one required string prop and
-paired content is refused. It declares no `returns` and answers with a detached
-value — `{ observations: [{ name, value }], output }`, each observation's own
-returned value under the name the fragment invoked it by — so it renders nothing
-where it is written; an ordinary `as` captures it by reference, and an authored
-`<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+admitted and performed. Its schema is closed on one required string prop and one
+optional `allow` array selecting from the closed effect classes `read` and
+`write`, and paired content is refused. It declares no `returns` and answers
+with a detached value — `{ observations: [{ name, value }], output }`, each
+admitted read's own returned value under the name the fragment invoked it by,
+with an admitted mutation contributing none — so it renders nothing where it is
+written; an ordinary `as` captures it by reference for every selection, and an
+authored `<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
 the registration decides; the ceilings it runs under come from values the host
 captured before any document existed, and no prop, binding or middleware return
 value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
@@ -7185,7 +7187,8 @@ invocation closes; no detached promise, task, timer, response body or service
 survives it.
 
 Generated XMD may use `<Fetch>` only where the trusted host admitted core's own
-pinned identity together with the exact requests it may perform
+pinned identity in its `read` table together with the exact requests it may
+perform
 (workflow-workspace-spec §8.4). A candidate element is normalized by these same
 rules and must equal one admitted request — scheme, host, path, method,
 normalized headers and effective timeout alike — or it is refused before
@@ -8089,7 +8092,7 @@ trusted-host events may have no authored source.
 | Sample LLM call | `sample` | `sample:{command_preview}` | Only when `sample` modifier is used; Sample Api middleware determines behavior |
 | Resolve components (glob) | `glob` | `resolve:{dir}` | Only when `useDurableGlobResolver` middleware is installed |
 | Read over HTTP | `fetch` | `fetch:{expansion id}` | Normalized request in `description.input`; status, detached headers and text body in the result (§6.18) |
-| Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | Retained roots, selected root, pinned identities and exact request policy in `description.input`; the admitted source and the identities the fragment named in the result (workflow-workspace-spec §8.4) |
+| Admit generated XMD | `generated_xmd` | `generated:{fragment id}` | The canonical class selection, retained roots, selected root, every selected entry as a name, identity and admitted forms, and the exact request policy in `description.input`; the admitted source, that same policy, and the identity and form of each element the fragment named in the result (workflow-workspace-spec §8.4) |
 
 ### 10.2 Example journal for a multi-component document
 
@@ -9558,7 +9561,21 @@ document against a real run database.
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
 | WSR3 | Claude belongs to the run | A `<Session>` naming `claude` — the agent `xmd run` owns machine-wide — runs under this profile, commits its `acpx.agentSessionId` mapping, and a restart reattaches the same assertion and leaves the row unchanged. Removing the profile's explicit empty capability sets fails it before the agent is contacted |
 
-### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
+### Tier GXC — The effect classes a generated fragment draws on
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
+
+| # | Test | Verify |
+|---|------|--------|
+| GXC1 | The selection | Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with the read table's entries before the write table's and host order inside each |
+| GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and a host table holding one name with overlapping forms or two definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
+| GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
+| GXC5–GXC6 | Authority | Neither form is answered by a same-name repository component, and Git push, pull request, issue, repository, `<File.Delete>`, glob and an executable block are outside the tables whatever the selection |
+| GXC7 | The result | A write-only fragment observes nothing and renders nothing; a mixed one collects the read's value and not the write's |
+| GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
+| GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write table it never selected |
+
+### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 
@@ -9566,12 +9583,16 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 |---|------|--------|
 | WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
 | WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
-| WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
+| WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source` and `allow`, and refuses a missing `source` |
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
-| WGAC8 | The result shape | The result carries each observation's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
+| WGAC8 | The result shape | The result carries each admitted read's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
+| WGAC9 | The class selection | An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly `read`, and the write table is not in that policy at all |
+| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` lands in the run's own Workspace at the nested logical path, through the ordinary file effect, under core's `File:write` and the composition package's `Dir` identities; a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC11 | What a selection binds | A write-only evaluation binds `observations: []`, and a mixed one binds exactly the read's entry while the write lands in the Workspace |
+| WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 
 ### Tier WAL — The workflow Agent observation loop
 
@@ -9588,6 +9609,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
 | WAL8 | ACP-only Claude | The profile states both ordinary-run native capability sets empty, so an agent `xmd run` would own machine-wide is served here over ACP alone. A provider handed a coordinator, a route store and an executable observer under those empty sets reaches none of them for a Claude prompt |
 | WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
+| WAL9 | Authored approval | The same proposal under the production profile: the approved branch reaches `<Evaluate allow={["write"]}>`, records one admission naming both write identities and the class, and leaves the change where an ordinary read in the run's Workspace finds it; the refused branch never expands the element, so no admission and no file effect exist |
 
 ### Tier WFX — A killed run resumes from its frontier
 
@@ -10053,7 +10075,7 @@ perform, separately from the binding, the rendered output, and the journal.
 | FE18–FE20 | The binding seam | `hasBinding()` answers for the invocation that asked — siblings, a nested invocation inside its caller, and two invocations live at once |
 | FE21–FE24 | Failures | Transport, body read, timeout and cancellation bind nothing and commit no response; a halt tears the provider down in both phases with no late work |
 | FE25–FE28 | Authority | Middleware may observe and delegate but cannot widen; a synthetic answer performs no request; eval's own `fetch` and a same-name repository component cross the same ceiling |
-| GX11–GX14 | Generated admission | The pinned identity performs the exact admitted request once; a scheme, host, path, method, header or timeout mismatch performs none; admitting `<Fetch>` with no stated request is refused outright |
+| GX11–GX14 | Generated admission | The pinned identity in the host's `read` table performs the exact admitted request once; a scheme, host, path, method, header or timeout mismatch performs none; admitting `<Fetch>` with no stated request is refused outright |
 | FE29–FE31 | History | A partial replay restores the response with no second request; the event names the expansion and its source position; an interruption before the commit leaves no record and one continuation commits one |
 | FE32–FE34 | The secret gate | The scanner sees URL, request headers, status, response headers and body in one event; a canary in the request or the response refuses the append, binds nothing, and stops the document |
 | FE35 | Independence | Cancelling one invocation tears down only its own request |
