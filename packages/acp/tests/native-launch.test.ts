@@ -65,6 +65,58 @@ const AGENT_COMMAND = "claude-cmd";
 const SESSION_KEY = deriveSessionKey(AGENT_COMMAND, CWD);
 
 /**
+ * A barrier on the directory an Agent runs in.
+ *
+ * The provider asks for it twice per operation: once to place the session, and
+ * once while building the runtime that will ensure it. Parking each call and
+ * releasing them by hand is what lets a case hold two operations inside the
+ * same lookup suspension at once, deterministically, through a seam the
+ * production path already has rather than one invented for a test.
+ */
+interface CwdBarrier {
+  agentCwd: () => Operation<string>;
+  /** Wait until at least `count` calls are parked. */
+  waiting(count: number): Operation<void>;
+  /** Let the `index`-th parked call, in arrival order, proceed. */
+  release(index: number): void;
+}
+
+function createCwdBarrier(dir: string): CwdBarrier {
+  const held: { resolve: () => void }[] = [];
+  const watchers: { count: number; resolve: () => void }[] = [];
+
+  function announce(): void {
+    for (const watcher of [...watchers]) {
+      if (held.length >= watcher.count) {
+        watchers.splice(watchers.indexOf(watcher), 1);
+        watcher.resolve();
+      }
+    }
+  }
+
+  return {
+    agentCwd: () =>
+      (function* (): Operation<string> {
+        const gate = withResolvers<void>();
+        held.push({ resolve: gate.resolve });
+        announce();
+        yield* gate.operation;
+        return dir;
+      })(),
+    waiting: (count) =>
+      (function* (): Operation<void> {
+        if (held.length >= count) {
+          return;
+        }
+        const reached = withResolvers<void>();
+        watchers.push({ count, resolve: reached.resolve });
+        yield* reached.operation;
+      })(),
+    release: (index) => held[index]?.resolve(),
+  };
+}
+
+/**
  * The Claude-shaped build contract every controlled client-allocated adapter
  * here carries: which command to observe, what its version output means, and
  * what the ACP child needs in order to run that same build.
@@ -140,6 +192,13 @@ interface ProviderOptions {
   coordinator?: AgentSessionCoordinator;
   /** Host-owned session placement and retention, as a workflow host supplies. */
   sessions?: AcpxSessionPolicy;
+  /**
+   * The directory an Agent runs in.
+   *
+   * The provider resolves this while building a runtime, so an injected one is
+   * a real seam into that lookup rather than a hook added for a test.
+   */
+  agentCwd?: () => Operation<string>;
 }
 
 /**
@@ -249,6 +308,7 @@ function* installLaunchStack(
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     ...(options.sessions ? { sessions: options.sessions } : {}),
+    ...(options.agentCwd ? { agentCwd: options.agentCwd } : {}),
     nativeAdapters: options.adapters ?? { claude: PROVIDER_RETURNED_CLAUDE },
   });
   yield* factory(
@@ -1090,6 +1150,10 @@ describe("Tier NO — session ownership", () => {
           seen.ownership = trace.ownership.acquisitions.at(-1)?.outcome;
           seen.noFurtherAcp = harness.ensureCalls.length === ensured;
           seen.launches = trace.launches.length;
+          // The close failed, so it released nothing: the entry this scope
+          // holds is still the live one, still bound to the runtime that made
+          // it, and still the only close attempted so far.
+          seen.closesSoFar = harness.closeCalls.length;
 
           // Let teardown's own close succeed, so what it reports below is the
           // one release that actually failed.
@@ -1109,8 +1173,16 @@ describe("Tier NO — session ownership", () => {
           ownership: "recovery-required",
           noFurtherAcp: true,
           launches: 0,
+          closesSoFar: 1,
         },
       ]);
+      // And teardown found that exact handle again, through the same runtime
+      // that created it — the availability probe builds one of its own, so what
+      // matters is that both closes went through one and the same. A failed
+      // release that had detached the placement, or dropped the entry, would
+      // leave nothing here to close.
+      expect([site, harness.closeCalls.length]).toEqual([site, 2]);
+      expect([site, new Set(harness.closeRuntimeIndexes).size]).toEqual([site, 1]);
       // Preserved: the provider scope still reports the close it could not
       // complete, rather than swallowing it to keep the session looking clean.
       expect([site, reported?.message]).toEqual([site, "the agent connection would not close"]);
@@ -2724,6 +2796,51 @@ describe("Tier CA — client-native attachment", () => {
     ).toEqual([OBSERVED_PATH, "/moved/bin/claude"]);
   });
 
+  it("CA17: a released session keeps its name and nothing live", function* () {
+    // `<Session>` releases its handle as it returns, so what the returned value
+    // still resolves to is placement metadata — not the handle, and not the
+    // runtime that carries the transient child environment and therefore the
+    // canonical executable path. Reusing it re-ensures, and the observation
+    // that goes with it is a fresh one: a value that still named a runtime
+    // would answer from the path that runtime was built with.
+    const observer = createFakeObserver();
+    observer.queued = [
+      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
+      {
+        path: "/moved/bin/claude",
+        digest: "a".repeat(64),
+        versionOutput: "2.1.241 (Claude Code)\n",
+      },
+    ];
+    const space = yield* installAttachment(bound(), { observer: observer.observer });
+
+    const session = yield* Agent.operations.session();
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    // Released on the way out, and released successfully.
+    expect(space.harness.closeCalls).toHaveLength(1);
+    expect(space.trace.ownership.events).toContain("quiesced");
+
+    yield* scoped(function* () {
+      const stream = yield* Agent.operations.prompt("continue", { session });
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+    });
+
+    // The same conversation, reached again — by observing the build afresh and
+    // building a runtime around what that observation found.
+    expect(observer.observed).toEqual(["claude", "claude"]);
+    expect(space.harness.ensureCalls).toHaveLength(2);
+    expect(space.harness.ensureCalls[1]?.resumeSessionId).toBe(ALLOCATED);
+    expect(
+      space.harness.createdOptions.map(
+        (options) => options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE,
+      ),
+    ).toEqual([OBSERVED_PATH, "/moved/bin/claude"]);
+  });
+
   it("CA13: a host that cannot retain the session gives the handle back to its creator", function* () {
     // The ensure succeeded, so the handle is this provider's whatever happens
     // next. A host refusing to retain what the session is leaves it unusable,
@@ -2837,6 +2954,7 @@ describe("Tier RT — bound runtime partitions", () => {
   const FIRST = "aaaaaaaa-1111-2222-3333-444444444444";
   const SECOND = "bbbbbbbb-1111-2222-3333-444444444444";
   const THIRD = "cccccccc-1111-2222-3333-444444444444";
+  const FOURTH = "dddddddd-1111-2222-3333-444444444444";
 
   function adapter(): NativeAdapter {
     return {
@@ -3024,6 +3142,118 @@ describe("Tier RT — bound runtime partitions", () => {
     const settled = yield* first;
     expect(settled.agentSessionId).toBe(FIRST);
     expect(harness.createdOptions).toHaveLength(1);
+  });
+
+  it("RT6: two operations crossing the same lookup suspension converge on one runtime", function* () {
+    // Building a runtime resolves the directory an Agent runs in, and that
+    // suspends. Two operations electing the same partition can both be inside
+    // it, both having already missed the map — so the decision and the
+    // publication have to be one step, with the map read again after the
+    // suspension rather than before it.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const barrier = createCwdBarrier(CWD);
+    const alpha = deriveSessionKey(AGENT_COMMAND, CWD, "alpha");
+    const beta = deriveSessionKey(AGENT_COMMAND, CWD, "beta");
+    yield* routes.publish(route(alpha, FIRST));
+    yield* routes.publish(route(beta, SECOND));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+      agentCwd: barrier.agentCwd,
+    });
+
+    // Each operation asks twice: once to place its session, once while building
+    // the runtime that will ensure it. Releasing only the first of each leaves
+    // both parked in the second.
+    const first = yield* spawn(() => Agent.operations.session("alpha"));
+    yield* barrier.waiting(1);
+    barrier.release(0);
+    yield* barrier.waiting(2);
+
+    const second = yield* spawn(() => Agent.operations.session("beta"));
+    yield* barrier.waiting(3);
+    barrier.release(2);
+    yield* barrier.waiting(4);
+
+    // Both are inside the lookup, and neither has published anything.
+    expect(harness.createdOptions).toEqual([]);
+
+    barrier.release(1);
+    barrier.release(3);
+    const alphaSession = yield* first;
+    const betaSession = yield* second;
+
+    expect(alphaSession.agentSessionId).toBe(FIRST);
+    expect(betaSession.agentSessionId).toBe(SECOND);
+    // One binding, one child. The loser of that race adopts the winner rather
+    // than standing up a second one nothing could later evict.
+    expect(harness.createdOptions).toHaveLength(1);
+    expect(harness.ensureCalls).toHaveLength(2);
+  });
+
+  it("RT7: a sibling releasing cannot evict a partition another operation is standing on", function* () {
+    // Eviction is about what is standing on a partition, not about who finished
+    // last. While one operation holds a claim, a sibling completing and
+    // releasing its own handle takes the count to zero for itself and not for
+    // the partition.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const held = deriveSessionKey(AGENT_COMMAND, CWD, "held");
+    const beta = deriveSessionKey(AGENT_COMMAND, CWD, "beta");
+    const gamma = deriveSessionKey(AGENT_COMMAND, CWD, "gamma");
+    const delta = deriveSessionKey(AGENT_COMMAND, CWD, "delta");
+    yield* routes.publish(route(held, FIRST));
+    yield* routes.publish(route(beta, SECOND));
+    yield* routes.publish(route(gamma, THIRD));
+    yield* routes.publish(route(delta, FOURTH));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    const gate = withResolvers<void>();
+    const arrived = withResolvers<void>();
+    harness.ensureGate = (input) => {
+      if (input.sessionKey !== held) {
+        return undefined;
+      }
+      arrived.resolve();
+      return gate.operation;
+    };
+
+    const holding = yield* spawn(() => Agent.operations.session("held"));
+    yield* arrived.operation;
+    expect(harness.createdOptions).toHaveLength(1);
+
+    // A sibling runs to completion beside it, which releases its own handle on
+    // the way out. The partition survives that, because the first operation is
+    // still standing on it.
+    const betaSession = yield* Agent.operations.session("beta");
+    expect(betaSession.agentSessionId).toBe(SECOND);
+    expect(harness.createdOptions).toHaveLength(1);
+
+    // And a third reaches the same child rather than starting another.
+    const gammaSession = yield* Agent.operations.session("gamma");
+    expect(gammaSession.agentSessionId).toBe(THIRD);
+    expect(harness.createdOptions).toHaveLength(1);
+
+    // Only once the work that was standing on it finishes — and releases its
+    // own handle — is the partition gone, and only then does the next operation
+    // observe again and build one of its own.
+    gate.resolve();
+    const heldSession = yield* holding;
+    expect(heldSession.agentSessionId).toBe(FIRST);
+
+    const deltaSession = yield* Agent.operations.session("delta");
+    expect(deltaSession.agentSessionId).toBe(FOURTH);
+    expect(harness.createdOptions).toHaveLength(2);
   });
 
   it("RT4: provider teardown settles a partition still holding a handle", function* () {

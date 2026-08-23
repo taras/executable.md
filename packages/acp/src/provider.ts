@@ -332,7 +332,24 @@ interface RuntimeEntry {
   active: number;
 }
 
-interface ManagedSession {
+/**
+ * What a returned `Session` value still resolves to once its handle is gone.
+ *
+ * Placement and session metadata, and nothing else. The handle and the runtime
+ * that made it are deliberately absent: a runtime carries the transient child
+ * environment, and therefore the canonical executable path, so a released
+ * session that still named one would be that path outliving the single owned
+ * operation it was observed for. The next use of this value re-ensures, which
+ * is what reattaches ACP to whatever holds the session now — a native UI it was
+ * handed to, or nothing at all.
+ */
+interface DetachedSession {
+  agentCommand: string;
+  cwd: string;
+  session: Session;
+}
+
+interface ManagedSession extends DetachedSession {
   handle: AcpRuntimeHandle;
   /**
    * The runtime that created this handle.
@@ -342,16 +359,6 @@ interface ManagedSession {
    * close, detach and teardown goes through the one that made the handle.
    */
   runtime: RuntimeEntry;
-  agentCommand: string;
-  cwd: string;
-  session: Session;
-  /**
-   * True once a native UI took ownership of this session. The handle predates
-   * that handoff, so nothing may prompt through it again: the next use
-   * re-ensures the same session key, which reattaches ACP to the provider
-   * session the native UI was working in.
-   */
-  stale?: boolean;
   /**
    * True once a turn has started against this session.
    *
@@ -805,7 +812,7 @@ function* useAcpxProviderState(
    */
   const owned = new Set<ManagedSession>();
   const validatedAgents = new Set<string>();
-  const managed = new Map<string, ManagedSession>();
+  const managed = new Map<string, ManagedSession | DetachedSession>();
   const activeTurns = new Set<AcpRuntimeTurn>();
   const cleanupErrors: Error[] = [];
 
@@ -863,6 +870,16 @@ function* useAcpxProviderState(
       return held;
     }
     const base = yield* runtimeOptions();
+    // Read again, and decide and publish without yielding after it. Resolving
+    // the options is the one suspension in here, and another operation electing
+    // the same partition can pass through it too — two entries for one binding
+    // would be two children for a session the first already owns, and the loser
+    // would be evictable by nobody, because eviction only removes the entry the
+    // map currently holds.
+    const raced = partition === undefined ? unbound : runtimes.get(partition);
+    if (raced) {
+      return raced;
+    }
     const options: AcpRuntimeOptions = {
       ...base,
       // The acpx callback boundary: `scope.run` returns a Promise-compatible
@@ -891,6 +908,27 @@ function* useAcpxProviderState(
       runtimes.set(partition, entry);
     }
     return entry;
+  }
+
+  /** Whether this placement still names a handle this provider can act through. */
+  function isLive(placed: ManagedSession | DetachedSession): placed is ManagedSession {
+    return "handle" in placed;
+  }
+
+  /**
+   * Keep what a returned `Session` value needs, and drop everything else.
+   *
+   * Called only where a close actually settled. What is left names the session
+   * and where it is; the handle and its runtime are gone from every map this
+   * provider can reach, which is what stops a live executable path outliving
+   * the work it was observed for.
+   */
+  function detachPlacement(sessionKey: string, entry: ManagedSession): void {
+    managed.set(sessionKey, {
+      agentCommand: entry.agentCommand,
+      cwd: entry.cwd,
+      session: entry.session,
+    });
   }
 
   /** Claim this runtime for work about to start. Synchronous, deliberately. */
@@ -1112,10 +1150,11 @@ function* useAcpxProviderState(
             `"${option.sessionKey}" (${entry.agentCommand})`,
         );
       }
-      if (entry.stale) {
-        // The handle predates a native handoff. Reaching for the same key
-        // again re-ensures it, which is a reattach to the provider session the
-        // native UI left behind rather than a connection older than it.
+      if (!isLive(entry)) {
+        // Nothing of this provider's holds the session any more: the handle was
+        // released, or handed to a native UI. Reaching for the same key
+        // re-ensures it, which reattaches ACP to whatever holds it now rather
+        // than reusing a connection older than that.
         return {
           kind: "placement",
           sessionKey: entry.session.sessionKey,
@@ -2262,7 +2301,7 @@ function* useAcpxProviderState(
    */
   function* releaseHandle(sessionKey: string): Operation<void> {
     const entry = managed.get(sessionKey);
-    if (!entry || entry.stale) {
+    if (!entry || !isLive(entry)) {
       return;
     }
     try {
@@ -2280,8 +2319,8 @@ function* useAcpxProviderState(
       cleanupErrors.push(toError(error));
       return;
     }
-    entry.stale = true;
     releasedHandle(entry);
+    detachPlacement(sessionKey, entry);
   }
 
   /** Release ACP ownership. Nothing is spawned until this has completed. */
@@ -2312,7 +2351,7 @@ function* useAcpxProviderState(
     // what tells a resumed launch that native creation may not have begun.
     invocation.detachedLive.add(sessionKey);
     const entry = managed.get(sessionKey);
-    if (!entry || entry.stale) {
+    if (!entry || !isLive(entry)) {
       // Nothing of this provider's owns the session. A resumed launch reaches
       // here with no live ACP connection at all, which is the state detaching
       // exists to produce.
@@ -2330,8 +2369,8 @@ function* useAcpxProviderState(
         failure: { class: "detach-failed", message: toError(error).message },
       };
     }
-    entry.stale = true;
     releasedHandle(entry);
+    detachPlacement(sessionKey, entry);
     return { phase: "detached" };
   }
 

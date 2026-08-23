@@ -577,7 +577,9 @@ different things can be: a handle nobody has closed, and work that has claimed
 the runtime and not yet produced one. An ensure in flight is the second kind.
 Eviction requires both to be zero — a partition removed while either is nonzero
 is one a concurrent operation rebuilds, which is a second child for a build the
-first is still talking to.
+first is still talking to. Selecting a partition is one step: the decision and
+the publication have no suspension between them, so two operations electing the
+same one converge on it rather than standing up a runtime each.
 
 That, and what follows, is how items 8, 10 and 14 of the structural checklist
 are met rather than a further invariant beside them:
@@ -614,9 +616,16 @@ are met rather than a further invariant beside them:
   still a live thing this owner started. An operation acknowledges quiescence
   only when no unreleased handle for the session remains, whether or not it ever
   became usable.
+- **A settled close leaves only the session's name behind.** What a returned
+  `Session` value still resolves to is placement metadata; the handle and the
+  runtime that made it are gone from everything this provider can reach. A
+  runtime carries the transient child environment, and therefore the canonical
+  executable path, so a released session that still named one would be that path
+  outliving the operation it was observed for. The next use of that value
+  re-ensures, which reattaches to whatever holds the session now.
 - **A close that failed released nothing.** It does not decrement the
-  partition, evict it, forget the handle, mark it stale, or let the operation
-  acknowledge quiescence. The refusal is still raised; what differs is that this
+  partition, evict it, forget the handle, detach the placement, or let the
+  operation acknowledge quiescence. The refusal is still raised; what differs is that this
   scope still has something to answer for, and the handle stays reachable for
   teardown.
 - **Teardown attempts every owned close**, does the release bookkeeping only
