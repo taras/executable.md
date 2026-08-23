@@ -1180,10 +1180,16 @@ describe("Tier WGAC — the pinned read-only File", () => {
     const values = attempt.values ?? [];
     // Invocation order, and the exact field names a host reads.
     expect(values.map((observation) => observation.name)).toEqual(["File", "Fetch"]);
-    expect(values.map((observation) => observation.identity)).toEqual([
-      pinnedFileRead().identity,
-      pinnedFetch([ADMITTED_REQUEST]).identity,
-    ]);
+    // The identities live in the retained admission, which is where a run is
+    // held to them — not on the result, which would be a second copy of the
+    // same fact.
+    const admitted = admittedFragments(attempt.events)[0];
+    const named =
+      admitted?.type === "yield" && admitted.result.status === "ok"
+        ? admitted.result.value
+        : undefined;
+    expect(JSON.stringify(named)).toContain(pinnedFileRead().identity);
+    expect(JSON.stringify(named)).toContain(pinnedFetch([ADMITTED_REQUEST]).identity);
     expect(values[0]?.value).toBe("the retained note\n");
     const response = values[1]?.value;
     expect(isRecord(response)).toBe(true);

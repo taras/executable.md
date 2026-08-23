@@ -2698,9 +2698,11 @@ component that does not need it declares one parameter and never sees it.
 A host may register defaults of its own on the same terms. The workflow host
 registers `<Evaluate source={…} />` for a live or partial run: the operation an
 authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. Its schema is closed on one required string prop, paired
-content is refused, and it declares no `returns`, so its retained result renders
-where it is written and an ordinary `as` captures it. Registration is what makes
+admitted and performed. Its schema is closed on one required string prop and
+paired content is refused. It declares no `returns` and answers with a detached
+value — `{ observations: [{ name, value }], output }` — so it renders nothing
+where it is written; an ordinary `as` captures it by reference, and an authored
+`<Json>` turns it into the text a next `<Prompt>` carries. Registration is what makes
 the operation reachable; the ceilings it runs under come from values the host
 captured before any document existed, and no prop, binding or middleware return
 value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)

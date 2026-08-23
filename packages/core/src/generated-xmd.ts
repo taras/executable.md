@@ -279,6 +279,9 @@ export function pinnedComponent(
  * What one admitted observation produced.
  *
  * The value is the component's own return, kept whatever the fragment rendered.
+ * Which pinned identity produced it is not here: the admission record already
+ * retains the identities the fragment named, and a second copy on the result
+ * would be a second thing to keep true.
  * An admitted `<Fetch>` written without `as` renders nothing at all — a
  * component returning a non-string has nowhere to render — so a result taken
  * from the rendered text would hand the Agent an empty answer to the question it
@@ -286,7 +289,6 @@ export function pinnedComponent(
  */
 export interface GeneratedObservationValue {
   readonly name: string;
-  readonly identity: string;
   readonly value: Json;
 }
 
@@ -392,7 +394,6 @@ class GeneratedImportAuthority implements ImportAuthority {
         const value = yield* implementation(props, invocation);
         values.push({
           name: pinned.name,
-          identity: pinned.identity,
           // Parsed rather than asserted: this value is retained and handed back
           // to a trusted host, and a component that returned something with no
           // JSON shape has broken the contract an observation runs under. A
