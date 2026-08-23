@@ -79,12 +79,25 @@ function spoolPath(directory: string, id: string): string {
  * Node's is the prepared workspace's own `tsx`, not a global one: the proof is
  * about *this* tree's dependency layout, and reaching a `tsx` from anywhere
  * else would be consuming something the producer cannot disturb.
+ *
+ * Every `deno` process the proof starts carries `--node-modules-dir=manual`.
+ * Under the repository's `"auto"` mode, a bare `deno` invocation re-creates
+ * the workspace's `node_modules` links before it reaches its own code — an
+ * unlink followed by a symlink, which a participant resolving through the
+ * link in that instant observes as the package not existing. `manual`
+ * resolves through the tree exactly as it stands and manages nothing, which
+ * is also the only honest posture here: the proof is that the *prepared*
+ * layout holds, not that each participant can repair it on the way in.
  */
-function consumerCommand(runtime: Runtime, at: string, control: string): CommandSpec {
+export function consumerCommand(runtime: Runtime, at: string, control: string): CommandSpec {
   const entry = "scripts/verify-consumer.ts";
   const args = [runtime, at, control];
   if (runtime === "deno") {
-    return { id: runtime, program: "deno", args: ["run", "--allow-all", entry, ...args] };
+    return {
+      id: runtime,
+      program: "deno",
+      args: ["run", "--allow-all", "--node-modules-dir=manual", entry, ...args],
+    };
   }
   if (runtime === "node") {
     return { id: runtime, program: "tsx", args: [entry, ...args] };
@@ -92,9 +105,18 @@ function consumerCommand(runtime: Runtime, at: string, control: string): Command
   return { id: runtime, program: "bun", args: ["run", entry, ...args] };
 }
 
-/** The producer, exactly as a task or a workflow invokes it. */
-function producerCommand(): CommandSpec {
-  return { id: "build:web", program: "deno", args: ["task", "build:web"] };
+/**
+ * The producer. The inner `build:web` already runs under modes that cannot
+ * create, relink, or fetch; `--node-modules-dir=manual` extends that to the
+ * task runner itself, whose own startup would otherwise re-create the
+ * workspace links the consumers are resolving through.
+ */
+export function producerCommand(): CommandSpec {
+  return {
+    id: "build:web",
+    program: "deno",
+    args: ["task", "--node-modules-dir=manual", "build:web"],
+  };
 }
 
 /** A process this host starts. Named rather than resolved. */
