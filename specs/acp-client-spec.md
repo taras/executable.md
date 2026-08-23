@@ -521,13 +521,17 @@ none.
 - **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime. A
   bound attachment uses one runtime per `(resolved agent command, executable
   build binding)`, created with the observed path in `agentProcessEnv` and torn
-  down when its last handle closes. An `ensureSession()` that rejects discards
-  the partition it was about to use, so the next attempt observes again rather
-  than inheriting a live path nothing is holding. A handle that came back is
-  owned from that moment and survives every later refusal — identity mismatch
-  and a host that cannot retain the session both close it through its creator —
-  and a close that failed decrements nothing, evicts nothing and withholds
-  quiescence. A managed session retains the partition that
+  down when its last handle closes. Acquiring a runtime to ensure through claims
+  the partition, and an `ensureSession()` that rejects gives that claim up — so
+  the next attempt observes again rather than inheriting a live path nothing is
+  holding, while a sibling ensure still in flight keeps the partition alive.
+  Eviction requires no handles and no work in flight. A handle that came back is
+  owned from that moment, on a provider-returned launch as much as on an
+  attachment, and survives every later refusal — identity mismatch, a host that
+  cannot retain the session, and a status read that fails all close it through
+  its creator. A close that failed decrements nothing, evicts nothing, forgets
+  nothing and withholds quiescence, which an operation answers from that
+  ownership account rather than from the sessions a caller can reach. A managed session retains the partition that
   created its handle, and every turn, close, detach and teardown goes through
   that one — reaching for "the" runtime afterwards would open a second child for
   a session the first already owns. `agentProcessEnv` is a local patch to the

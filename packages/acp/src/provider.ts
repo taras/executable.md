@@ -320,6 +320,15 @@ interface RuntimeEntry {
   partition: string | undefined;
   /** Handles created through this runtime that have not been closed. */
   handles: number;
+  /**
+   * Work that has claimed this runtime and has not yet produced a handle.
+   *
+   * Counted apart from `handles` because the two are true at different times
+   * and both keep the partition alive. An ensure in flight owns no handle yet,
+   * and a partition evicted underneath it would let a concurrent operation
+   * build a second child for the same build while the first is still talking.
+   */
+  active: number;
 }
 
 interface ManagedSession {
@@ -839,10 +848,20 @@ function* useAcpxProviderState(
     };
   }
 
-  function* getRuntime(build?: BoundBuild): Operation<RuntimeEntry> {
+  /**
+   * Take the runtime for `build`, claimed for the work about to ensure through
+   * it.
+   *
+   * Every caller is about to call `ensureSession()`, so the claim is taken here
+   * rather than left to each of them. It is given up exactly one of two ways:
+   * `adoptHandle()` when a handle comes back, or `releaseReservation()` when
+   * nothing does.
+   */
+  function* acquireRuntime(build?: BoundBuild): Operation<RuntimeEntry> {
     const partition = build ? partitionOf(build) : undefined;
     const held = partition === undefined ? unbound : runtimes.get(partition);
     if (held) {
+      held.active++;
       return held;
     }
     const base = yield* runtimeOptions();
@@ -862,7 +881,12 @@ function* useAcpxProviderState(
         options.agentRegistry = pinnedRegistry(build.agentName, build.adapterCommand);
       }
     }
-    const entry: RuntimeEntry = { runtime: createRuntime(options), partition, handles: 0 };
+    const entry: RuntimeEntry = {
+      runtime: createRuntime(options),
+      partition,
+      handles: 0,
+      active: 1,
+    };
     if (partition === undefined) {
       unbound = entry;
     } else {
@@ -872,37 +896,17 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Give up one handle's claim on the runtime that created it.
+   * Remove a bound partition nothing is using any more.
    *
-   * A bound partition holds a live executable path for the work it owns, so
-   * when its last handle closes it is removed rather than kept: a later
-   * attachment reobserves the build and constructs another. The unbound runtime
-   * is ordinary ACP-first state and stays.
+   * A bound partition holds a live executable path for the work it owns, so it
+   * is kept exactly as long as something is standing on it — a handle nobody
+   * has closed, or work that has claimed the runtime and not yet produced one.
+   * Both have to be zero: evicting while either is nonzero is how a concurrent
+   * operation ends up building a second child for a build the first is still
+   * talking to. The unbound runtime is ordinary ACP-first state and stays.
    */
-  function releaseRuntime(entry: RuntimeEntry): void {
-    entry.handles = Math.max(0, entry.handles - 1);
-    if (entry.partition !== undefined && entry.handles === 0) {
-      if (runtimes.get(entry.partition) === entry) {
-        runtimes.delete(entry.partition);
-      }
-    }
-  }
-
-  /**
-   * Drop a bound partition nothing ever took a handle on.
-   *
-   * A runtime is built before the ensure that would use it, so an ensure that
-   * rejects leaves one behind holding a live executable path for work that
-   * never happened. Keeping it would hand the *next* attachment that path: a
-   * binding compares a version and a digest, so the same build found at a
-   * different place is the same partition key and a different file to run.
-   * Removing it is what makes the next attempt reobserve and build its own.
-   *
-   * Only when it is genuinely unused: a concurrent operation that took a handle
-   * on the same partition is still holding this runtime.
-   */
-  function discardUnusedRuntime(entry: RuntimeEntry): void {
-    if (entry.partition === undefined || entry.handles > 0) {
+  function evictIfIdle(entry: RuntimeEntry): void {
+    if (entry.partition === undefined || entry.handles > 0 || entry.active > 0) {
       return;
     }
     if (runtimes.get(entry.partition) === entry) {
@@ -910,10 +914,23 @@ function* useAcpxProviderState(
     }
   }
 
-  /** Record that a runtime created this handle, before anything can fail. */
-  function trackHandle(session: ManagedSession): void {
+  /**
+   * The claimed work produced this handle, so the claim becomes ownership of it.
+   *
+   * One step, because the two counts must never both be zero in between: that
+   * gap is a partition another operation could evict out from under a handle
+   * that had just been created.
+   */
+  function adoptHandle(session: ManagedSession): void {
     session.runtime.handles++;
+    session.runtime.active = Math.max(0, session.runtime.active - 1);
     owned.add(session);
+  }
+
+  /** The claimed work produced no handle. Nothing is standing on it here. */
+  function releaseReservation(entry: RuntimeEntry): void {
+    entry.active = Math.max(0, entry.active - 1);
+    evictIfIdle(entry);
   }
 
   /**
@@ -928,7 +945,26 @@ function* useAcpxProviderState(
     if (!owned.delete(session)) {
       return;
     }
-    releaseRuntime(session.runtime);
+    session.runtime.handles = Math.max(0, session.runtime.handles - 1);
+    evictIfIdle(session.runtime);
+  }
+
+  /**
+   * Give up a handle that may not be used, through the runtime that made it.
+   *
+   * A close that failed leaves the handle owned and its partition standing, so
+   * teardown reaches both again. Whatever the caller does next — raise, refuse,
+   * retain a failure — is unaffected by which of those happened; what differs
+   * is what this provider still has to answer for.
+   */
+  function* abandonHandle(session: ManagedSession, reason: string): Operation<void> {
+    try {
+      yield* until(session.runtime.runtime.close({ handle: session.handle, reason }));
+    } catch (error) {
+      cleanupErrors.push(toError(error));
+      return;
+    }
+    releasedHandle(session);
   }
 
   function* resolveAgent(name: string | undefined): Operation<string> {
@@ -1014,7 +1050,7 @@ function* useAcpxProviderState(
     if (prepared.kind === "existing") {
       return prepared.entry;
     }
-    const entry = yield* getRuntime(attachment?.build);
+    const entry = yield* acquireRuntime(attachment?.build);
     const acp = entry.runtime;
     // A client-native session was created by a native process under an identity
     // XMD chose, so ACP attaches to it by name and never creates under it. That
@@ -1033,9 +1069,9 @@ function* useAcpxProviderState(
         }),
       );
     } catch (error) {
-      // Nothing took a handle on this runtime, so nothing is holding the live
-      // path it was built with. It goes with the attempt that built it.
-      discardUnusedRuntime(entry);
+      // The claim this work took is given up: no handle came back, so nothing
+      // is standing on the runtime or the live path it was built with.
+      releaseReservation(entry);
       if (attachment === undefined) {
         throw error;
       }
@@ -1071,32 +1107,14 @@ function* useAcpxProviderState(
       cwd: prepared.placement.cwd,
       session,
     };
-    trackHandle(managedEntry);
-
-    /**
-     * Give this handle up because it may not be used, and say whether that
-     * actually happened.
-     *
-     * A close that failed leaves the handle owned and the partition holding it,
-     * so teardown reaches both again. The refusal is raised either way: what
-     * differs is what this provider still has to answer for.
-     */
-    function* abandon(reason: string): Operation<void> {
-      try {
-        yield* until(acp.close({ handle, reason }));
-      } catch (error) {
-        cleanupErrors.push(toError(error));
-        return;
-      }
-      releasedHandle(managedEntry);
-    }
+    adoptHandle(managedEntry);
 
     if (attachment !== undefined && handle.agentSessionId !== attachment.resumeSessionId) {
       // The attachment answers with a different conversation than the one this
       // session was constructed as — or with none at all. Nothing here
       // reconciles that, and a turn taken through this handle would land in
       // history that is not this session's, so it is given up before it is used.
-      yield* abandon("attachment identity mismatch");
+      yield* abandonHandle(managedEntry, "attachment identity mismatch");
       throw new AttachmentRefused({
         class: "identity-unavailable",
         message:
@@ -1116,7 +1134,7 @@ function* useAcpxProviderState(
         // anyone may prompt through, so the handle is given up through the
         // runtime that made it — and the host's own refusal is what the caller
         // is told.
-        yield* abandon("session retention refused");
+        yield* abandonHandle(managedEntry, "session retention refused");
         throw error;
       }
     }
@@ -1180,8 +1198,16 @@ function* useAcpxProviderState(
    * did not happen leaves the session owned rather than looking finished.
    */
   function holding(sessionKey: string): boolean {
-    const entry = managed.get(sessionKey);
-    return entry !== undefined && !entry.stale;
+    // The ledger, not the managed map. A handle whose validation failed never
+    // became a usable session, so it is in no map a caller can reach — and it
+    // is still a live thing this owner started. Membership here is the whole
+    // answer: a handle leaves only when its close actually settled.
+    for (const held of owned) {
+      if (held.session.sessionKey === sessionKey) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2019,7 +2045,7 @@ function* useAcpxProviderState(
       );
     }
 
-    const runtimeEntry = yield* getRuntime();
+    const runtimeEntry = yield* acquireRuntime();
     const acp = runtimeEntry.runtime;
     const existing = yield* until(store.load(sessionKey));
     let sessionState: "created" | "resumed" = existing ? "resumed" : "created";
@@ -2045,33 +2071,50 @@ function* useAcpxProviderState(
       );
     }
 
-    const handle = yield* until(
-      acp.ensureSession({
-        sessionKey,
-        agent: agentName,
-        mode: "persistent",
-        cwd: sessionCwd,
-        sessionOptions: { systemPrompt: instructions },
-      }),
-    );
+    let handle: AcpRuntimeHandle;
+    try {
+      handle = yield* until(
+        acp.ensureSession({
+          sessionKey,
+          agent: agentName,
+          mode: "persistent",
+          cwd: sessionCwd,
+          sessionOptions: { systemPrompt: instructions },
+        }),
+      );
+    } catch (error) {
+      // No handle came back, so the claim this work took is given up.
+      releaseReservation(runtimeEntry);
+      throw error;
+    }
 
     const session: Session = { sessionKey, cwd: sessionCwd };
     if (handle.agentSessionId !== undefined) {
       session.agentSessionId = handle.agentSessionId;
     }
-    runtimeEntry.handles++;
-    managed.set(sessionKey, {
+    // Into the ledger the moment the handle exists, and bound to the runtime
+    // that made it — the same account an attachment keeps. Everything below can
+    // refuse, and a handle only the managed map knew about is one teardown
+    // could not close through its creator.
+    const managedEntry: ManagedSession = {
       handle,
       runtime: runtimeEntry,
       agentCommand,
       cwd: sessionCwd,
       session,
-    });
+    };
+    adoptHandle(managedEntry);
+    managed.set(sessionKey, managedEntry);
 
     const nativeSessionId = handle.agentSessionId;
     if (nativeSessionId === undefined) {
       // An ACP session id and an ACPX record id are not native identities, and
       // neither is a string that merely looks like one.
+      //
+      // Nothing will detach this session, so the connection is given up here
+      // rather than held to teardown. A close that fails keeps the handle owned
+      // and the session unquiesced, which is the honest half of the same act.
+      yield* releaseHandle(sessionKey);
       return refusal(
         "identity-unavailable",
         `agent "${agentName}" created a session but asserted no provider-native ` +
@@ -2098,7 +2141,15 @@ function* useAcpxProviderState(
       permissionMode: providerOptions.permissionMode,
       launcher: adapter.launcher,
     };
-    const model = yield* effectiveModel(acp, handle);
+    let model: string | undefined;
+    try {
+      model = yield* effectiveModel(acp, handle);
+    } catch (error) {
+      // Asking for status is the last thing preparation does, and a provider
+      // that cannot answer leaves a handle this launch will never hand over.
+      yield* releaseHandle(sessionKey);
+      throw error;
+    }
     if (model !== undefined) {
       record.model = model;
     }

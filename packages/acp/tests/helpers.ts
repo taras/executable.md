@@ -125,6 +125,13 @@ export interface FakeRuntimeHarness {
    * built with — so this is what shows a close reached its own partition.
    */
   closeRuntimes: (string | undefined)[];
+  /**
+   * Which created runtime served each close, by its index in `createdOptions`.
+   *
+   * The transient environment tells two *bound* runtimes apart; this tells any
+   * two apart, including the unbound one a provider-returned launch uses.
+   */
+  closeRuntimeIndexes: number[];
   closeFailure?: Error;
   /** Fail every attempt to establish a session, as an unreachable agent does. */
   ensureFailure?: Error;
@@ -134,6 +141,14 @@ export interface FakeRuntimeHarness {
    * shape a client could mistake one of for a native id.
    */
   omitAgentSessionId?: boolean;
+  /**
+   * What to wait on, or raise, before an ensure for this input answers.
+   *
+   * Returning nothing lets it answer immediately, which is what every other
+   * case wants. Returning an operation is how a test holds one ensure open
+   * while another runs, or fails one of several without failing them all.
+   */
+  ensureGate?: (input: AcpRuntimeEnsureInput) => Operation<void> | undefined;
   /**
    * The conversation an attachment reports, whatever it was asked to resume.
    *
@@ -218,10 +233,12 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     closeCalls: [],
     closeInputs: [],
     closeRuntimes: [],
+    closeRuntimeIndexes: [],
     script(turn) {
       scripted.push(turn);
     },
     create(options) {
+      const runtimeIndex = harness.createdOptions.length;
       harness.createdOptions.push(options);
       return {
         doctor() {
@@ -265,8 +282,14 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             handle.agentSessionId = asserted;
             record.agentSessionId = asserted;
           }
-          void options.sessionStore.save(record);
-          return Promise.resolve(handle);
+          const answer = (): AcpRuntimeHandle => {
+            void options.sessionStore.save(record);
+            return handle;
+          };
+          // The gate runs on Effection and `run` bridges it to the acpx Promise
+          // boundary, the same way a manual turn's release does.
+          const gate = harness.ensureGate?.(input);
+          return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
           const script = scripted.shift() ?? {};
@@ -351,6 +374,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         close(input) {
           harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
+          harness.closeRuntimeIndexes.push(runtimeIndex);
           harness.closeCalls.push(input.handle);
           harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
           if (harness.closeFailure) {

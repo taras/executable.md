@@ -362,11 +362,20 @@ describe("Tier NL — native session launch", () => {
       expect(failure?.message).toContain("asserted no provider-native session identity");
       expect(failure?.class).toBe("identity-unavailable");
       // The session exists — creating it is how the identity was asked for —
-      // but ACP still owns it and nothing was spawned.
+      // and nothing was spawned. The ACP connection to it does not survive the
+      // refusal: nothing will detach this session, so holding one open until
+      // teardown would leave a child alive for the rest of the document.
       expect(harness.ensureCalls.length).toBe(1);
-      expect(harness.closeCalls.length).toBe(0);
+      expect(harness.closeCalls.length).toBe(1);
       expect(trace.launches.length).toBe(0);
     });
+
+    // And once, through the runtime that made it. A handle only the managed map
+    // knew about is one teardown closes a second time or not at all, and the
+    // index says which runtime each close actually went through.
+    expect(harness.closeCalls.length).toBe(1);
+    expect(harness.createdOptions.length).toBe(1);
+    expect(harness.closeRuntimeIndexes).toEqual([0]);
   });
 
   it("NL4: the prepared instructions install as the session instruction layer", function* () {
@@ -1027,9 +1036,20 @@ describe("Tier NO — session ownership", () => {
       const next = yield* attempt(trace, INSTRUCTIONS);
       expect(next?.class).toBe("session-recovery-required");
       expect(trace.ownership.acquisitions.at(-1)?.outcome).toBe("recovery-required");
+      // One ensure, one failed close, and nothing since.
+      expect(harness.ensureCalls.length).toBe(1);
+      expect(harness.closeCalls.length).toBe(1);
       // Let this provider's own teardown release what it is still holding.
       harness.closeFailure = undefined;
     });
+
+    // Teardown found it. A handle a detach could not release is still this
+    // provider's, whichever path created it — a provider-returned launch keeps
+    // the same ownership account an attachment does, or teardown closes through
+    // a runtime that did not make it, or does not reach it at all.
+    expect(harness.closeCalls.length).toBe(2);
+    expect(harness.createdOptions.length).toBe(1);
+    expect(harness.closeRuntimeIndexes).toEqual([0, 0]);
   });
 
   it("NO11: a release whose ACP close failed keeps the session owned", function* () {
@@ -2535,43 +2555,66 @@ describe("Tier CA — client-native attachment", () => {
     ).toEqual([OBSERVED_PATH, "/moved/bin/claude"]);
   });
 
-  it("CA12: a mismatch whose close failed withholds quiescence and keeps its handle", function* () {
-    // Two things happened: the attachment named another conversation, and
-    // giving up the handle did not work. The refusal is owed either way, but a
-    // close that failed released nothing — so this scope still holds a live
-    // handle, must not say the session is free, and has to leave that handle
-    // reachable through the runtime that made it.
+  it("CA12: a Prompt whose mismatch could not be closed acknowledges nothing", function* () {
+    // A subscribed Prompt acknowledges quiescence from a finalizer, so it runs
+    // on the way out of a refusal as readily as out of a turn. Two things had
+    // happened by then: the attachment named another conversation, and giving
+    // the handle up did not work. That handle never became a usable session, so
+    // nothing a caller can reach knows about it — and it is still a live thing
+    // this owner started, which is the whole of what quiescence is a claim
+    // about.
     let harness: FakeRuntimeHarness | undefined;
-    let events: string[] = [];
+    let trace: Trace | undefined;
     let teardown: Error | undefined;
 
     try {
       yield* scoped(function* () {
         const space = yield* installAttachment(bound());
         harness = space.harness;
+        trace = space.trace;
         space.harness.assertIdentity = "00000000-1111-2222-3333-444444444444";
         space.harness.closeFailure = new Error("the agent child did not answer the close");
 
-        const raised = yield* attach();
+        let refused: Error | undefined;
+        try {
+          yield* scoped(function* () {
+            const stream = yield* Agent.operations.prompt("continue", {});
+            const subscription = yield* stream;
+            yield* subscription.next();
+          });
+        } catch (error) {
+          refused = error as Error;
+        }
 
-        expect(raised?.message).toContain("did not report");
-        // Attempted in band, and it failed.
+        expect(refused?.message).toContain("did not report");
+        // Attempted in band, and it failed. No turn was ever started.
         expect(space.harness.closeCalls).toHaveLength(1);
         expect(space.harness.turns).toEqual([]);
-        events = [...space.trace.ownership.events];
+
+        // The next owner is told the session needs recovery, and is told it
+        // before contacting the agent: the ensure count has not moved.
+        const ensures = space.harness.ensureCalls.length;
+        let next: Error | undefined;
+        try {
+          yield* Agent.operations.session();
+        } catch (error) {
+          next = error as Error;
+        }
+        expect(next?.name).toBe("AgentSessionRecoveryRequired");
+        expect(space.harness.ensureCalls.length).toBe(ensures);
       });
     } catch (error) {
       // Teardown reports what it could not settle rather than swallowing it.
       teardown = error as Error;
     }
 
-    // The session stays owned: nothing acknowledged that this scope had
-    // finished with it.
-    expect(events).toContain("owned");
-    expect(events).not.toContain("quiesced");
+    // Nothing acknowledged that this owner had finished with the session.
+    expect(trace?.ownership.events).toContain("owned");
+    expect(trace?.ownership.events).not.toContain("quiesced");
     // And teardown found the handle again, through its creating partition.
     expect(harness?.closeCalls).toHaveLength(2);
     expect(harness?.closeRuntimes).toEqual([OBSERVED_PATH, OBSERVED_PATH]);
+    expect(harness?.closeRuntimeIndexes).toEqual([0, 0]);
     expect(teardown).toBeInstanceOf(Error);
   });
 
@@ -2687,6 +2730,7 @@ describe("Tier CA — client-native attachment", () => {
 describe("Tier RT — bound runtime partitions", () => {
   const FIRST = "aaaaaaaa-1111-2222-3333-444444444444";
   const SECOND = "bbbbbbbb-1111-2222-3333-444444444444";
+  const THIRD = "cccccccc-1111-2222-3333-444444444444";
 
   function adapter(): NativeAdapter {
     return {
@@ -2810,6 +2854,70 @@ describe("Tier RT — bound runtime partitions", () => {
 
     expect(environments(harness)).toEqual([OBSERVED_PATH, OTHER_PATH]);
     expect(harness.closeRuntimes).toEqual([OBSERVED_PATH, OTHER_PATH]);
+  });
+
+  it("RT5: work in flight keeps its partition, and a failure beside it releases only its own claim", function* () {
+    // A runtime is claimed before the ensure that would use it, so between
+    // those two moments the partition is standing on work rather than on a
+    // handle. A sibling ensure failing there must give up its own claim and
+    // nothing else: evicting while the first is still talking is how a second
+    // child gets built for a build the first has open.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const held = deriveSessionKey(AGENT_COMMAND, CWD, "held");
+    const failing = deriveSessionKey(AGENT_COMMAND, CWD, "failing");
+    const later = deriveSessionKey(AGENT_COMMAND, CWD, "later");
+    yield* routes.publish(route(held, FIRST));
+    yield* routes.publish(route(failing, SECOND));
+    yield* routes.publish(route(later, THIRD));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    const gate = withResolvers<void>();
+    const arrived = withResolvers<void>();
+    harness.ensureGate = (input) => {
+      if (input.sessionKey === held) {
+        arrived.resolve();
+        return gate.operation;
+      }
+      if (input.sessionKey === failing) {
+        return (function* (): Operation<void> {
+          throw new Error("No conversation found with that session ID");
+        })();
+      }
+      return undefined;
+    };
+
+    const first = yield* spawn(() => Agent.operations.session("held"));
+    yield* arrived.operation;
+
+    // One runtime, one ensure in flight, no handle on it yet.
+    expect(harness.createdOptions).toHaveLength(1);
+
+    let refused: Error | undefined;
+    try {
+      yield* Agent.operations.session("failing");
+    } catch (error) {
+      refused = error as Error;
+    }
+    expect(refused?.message).toContain("could not open");
+
+    // The sibling gave up its own claim. The partition is still standing on
+    // the work that has not finished, so a third session bound to the same
+    // build reaches the same child rather than starting another.
+    const third = yield* Agent.operations.session("later");
+    expect(third.agentSessionId).toBe(THIRD);
+    expect(harness.createdOptions).toHaveLength(1);
+
+    gate.resolve();
+    const settled = yield* first;
+    expect(settled.agentSessionId).toBe(FIRST);
+    expect(harness.createdOptions).toHaveLength(1);
   });
 
   it("RT4: provider teardown settles a partition still holding a handle", function* () {

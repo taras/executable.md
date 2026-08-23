@@ -572,19 +572,35 @@ detach, cancellation and stale-handle release goes through that same partition.
 When a bound partition's last handle closes it is removed and torn down; a later
 attachment reobserves and builds another.
 
-A failure anywhere in that sequence leaves the account honest rather than tidy:
+A partition is kept exactly as long as something is standing on it, and two
+different things can be: a handle nobody has closed, and work that has claimed
+the runtime and not yet produced one. An ensure in flight is the second kind.
+Eviction requires both to be zero — a partition removed while either is nonzero
+is one a concurrent operation rebuilds, which is a second child for a build the
+first is still talking to.
 
-- **An ensure that rejects leaves no partition.** The runtime is built before
-  the ensure that would use it, so a rejection would otherwise strand one
-  holding a live path for work that never happened — and a binding compares a
-  version and a digest, so the same build found somewhere else is the same
-  partition key and a different file to run. A partition no handle was taken on
-  is discarded, and the next attempt observes again and builds its own.
-- **A handle outlives every later check.** From the moment ensure returns, the
+That, and what follows, is how items 8, 10 and 14 of the structural checklist
+are met rather than a further invariant beside them:
+
+- **Claimed work that produced no handle releases its claim.** The runtime is
+  built before the ensure that would use it, so a rejection would otherwise
+  strand a partition holding a live path for work that never happened — and a
+  binding compares a version and a digest, so the same build found somewhere
+  else is the same partition key and a different file to run. Success transfers
+  the claim into ownership of the handle instead, in one step: a moment where
+  neither count is held is a moment another operation could evict.
+- **Every handle-producing path keeps one account.** From the moment ensure
+  returns — on an attachment and on a provider-returned launch alike — the
   handle belongs to this provider and is bound to its creating runtime, before
-  the identity comparison and before the host is asked to retain the session.
-  Each of those can fail, and a handle nothing holds a reference to is one
-  teardown cannot close through the runtime that made it.
+  the identity comparison, before the host is asked to retain the session, and
+  before status is read. Each of those can fail, and a handle only a caller-
+  facing map knows about is one teardown cannot close through the runtime that
+  made it.
+- **Quiescence consults that account.** A handle whose validation failed never
+  became a usable session, so nothing a caller can reach names it — and it is
+  still a live thing this owner started. An operation acknowledges quiescence
+  only when no unreleased handle for the session remains, whether or not it ever
+  became usable.
 - **A close that failed released nothing.** It does not decrement the
   partition, evict it, forget the handle, mark it stale, or let the operation
   acknowledge quiescence. The refusal is still raised; what differs is that this
@@ -1056,9 +1072,11 @@ Focused tests prove:
 21. ACP runtimes are partitioned by resolved agent command and binding, a handle
     is closed by the partition that created it, the last close evicts a bound
     partition, and provider teardown settles what remains;
-22. a rejected ensure strands no partition and no live path, a handle that came
-    back survives every later refusal bound to its creator, and a close that
-    failed releases nothing and withholds quiescence; and
+22. claimed runtime work that produced no handle releases its claim, a partition
+    is evicted only with no handles and no work in flight, a handle that came
+    back survives every later refusal bound to its creator whichever path
+    created it, and a close that failed releases nothing and withholds
+    quiescence; and
 23. a canonical version parse accepts exactly one matching line, and refuses
     zero or several without repeating the output.
 
@@ -1222,9 +1240,11 @@ Implementation review checks these frozen invariants:
     separate trusted-host choices, and neither is inferred from the other.
 22. A released V1 route and a completed legacy journal remain readable, and
     neither authorizes ACP attachment or incomplete live replay.
-23. A failed acquisition retains no partition and no live path; a handle that
-    exists is owned and bound to its creator until a close actually settles; and
-    a close that failed releases nothing and acknowledges no quiescence.
+23. A failed acquisition retains no partition and no live path; a partition is
+    evicted only when it holds no handle and no work in flight; every
+    handle-producing path enters one ownership account bound to its creator the
+    moment its handle exists; quiescence is answered from that account; and a
+    close that failed releases nothing and acknowledges none.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
