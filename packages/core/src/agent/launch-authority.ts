@@ -19,6 +19,8 @@ import type { Operation } from "effection";
 import type { SessionLaunchResult } from "./agent-api.ts";
 import { AgentLaunchProtocolError } from "./launch-request.ts";
 import type { AgentLaunchRequest, IssuedLaunch } from "./launch-request.ts";
+import { readPlacement } from "./session-request.ts";
+import type { AgentSessionRequest } from "./session-request.ts";
 import type { DetachedLaunchRecord, ExitedLaunchRecord, PreparedLaunchRecord } from "./launch.ts";
 
 /**
@@ -50,6 +52,19 @@ export interface AgentProviderAuthority {
    * never proved it stopped — says so here, and nothing later is retained.
    */
   refuse(request: AgentLaunchRequest, preparation: PreparedLaunchRecord): Operation<void>;
+  /**
+   * The engine identity a routed session placement carries.
+   *
+   * Delivered rather than published, for the same reason `perform` is: the
+   * authored name travels the public chain where a handler may change it, and
+   * this does not travel there at all. A provider asks the authority it was
+   * installed with; a handler holding the same request reads only the name.
+   *
+   * It retains nothing, but it is not repeatable: a placement is bound to the
+   * element that opened it and is read once, so a value kept from an earlier
+   * `<Session>` or already read refuses here.
+   */
+  sessionIdentity(request: AgentSessionRequest): string;
 }
 
 /** How one launch retains its phases, supplied by the invocation that issued it. */
@@ -137,6 +152,13 @@ export function createLaunchAuthority(
   }
 
   return {
+    // Resolved from the request itself, exactly as a launch is: the identity
+    // lives inside the value core issued, and a rebuilt or foreign look-alike
+    // reaches none of it. Nothing about it is retained here — a placement is a
+    // lookup, and the provider is the one that decides what to do with it.
+    sessionIdentity(request) {
+      return readPlacement(request).sessionIdentity;
+    },
     *perform(request, phases) {
       const launch = locate(request);
       launch.issued.admit(request, generation);

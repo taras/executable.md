@@ -6,11 +6,12 @@
  * existing journal, so replay cannot be exercised through it.
  */
 import { describe, it } from "@executablemd/test-support/bdd";
+import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation, Result } from "effection";
 import * as path from "node:path";
-import { execute, installAgentComponents } from "@executablemd/core";
+import { agentIdentityComponents, execute, installAgentComponents } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { useTesting } from "@executablemd/testing";
 import type { TestResult } from "@executablemd/testing";
@@ -36,7 +37,9 @@ function* runSmoke(
     yield* useCommand(xmd);
     yield* installTestAgentComponents();
     yield* installAgentComponents();
-    const execution = yield* execute({ path: DOC, stream });
+    const execution = yield* executeInstalled({ path: DOC, stream }, [
+      { components: agentIdentityComponents() },
+    ]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {

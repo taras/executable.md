@@ -16,6 +16,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
+import { executeInstalled } from "../host.ts";
+import { agentIdentityComponents } from "../src/agent/components.ts";
 import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
@@ -63,7 +65,12 @@ function createStubProvider(respond?: (content: string) => StubResponse): Stub {
             return resolved;
           },
           // deno-lint-ignore require-yield
-          *session([name]) {
+          *session([routed]) {
+            // A `<Session>` element routes a placement rather than a bare
+            // string: the descriptive name is on it, and the engine identity is
+            // reachable only through provider authority. A stub provider reads
+            // the name exactly as a real one does.
+            const name = typeof routed === "string" ? routed : routed?.name;
             return { sessionKey: `stub:${name ?? "default"}`, cwd: "/stub" };
           },
           // deno-lint-ignore require-yield
@@ -148,7 +155,11 @@ function* runDoc(
 
     const docPath = path.join(dir, "doc.md");
     yield* writeTextFile(docPath, doc);
-    const execution = yield* execute({ path: docPath, stream });
+    // `<Session>` names durable work after its own invocation, so the host
+    // declares it to the execution rather than registering it.
+    const execution = yield* executeInstalled({ path: docPath, stream }, [
+      { components: agentIdentityComponents() },
+    ]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {

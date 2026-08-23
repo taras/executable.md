@@ -8,6 +8,7 @@
 import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
+import type { ComponentInvocation } from "./invocation-identity.ts";
 
 export type Json = DurableJson;
 
@@ -236,8 +237,10 @@ export type ComponentExecution<T> = Operation<T>;
  * generator's return value is never used. `useContent(slot?)` is a
  * compatibility alias with the same behavior.
  */
+export type { ComponentInvocation } from "./invocation-identity.ts";
+
 export interface FunctionComponent {
-  (props: Record<string, Json>): ComponentExecution<unknown>;
+  (props: Record<string, Json>, invocation: ComponentInvocation): ComponentExecution<unknown>;
 }
 
 /**

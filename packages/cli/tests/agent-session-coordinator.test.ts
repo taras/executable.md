@@ -103,6 +103,12 @@ function probeRuntime(probe: RuntimeProbe) {
 /** What core does with each phase, minus the journal. */
 function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
   return {
+    // These suites route launches, never a `<Session>` placement. Throwing
+    // rather than answering means a placement that did reach here fails
+    // loudly instead of being handed an identity nobody derived.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
       records.push(prepared);
@@ -124,6 +130,10 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
  */
 function performingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
   return {
+    // As above: these suites route launches, never a `<Session>` placement.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
       records.push(prepared);

@@ -16,6 +16,7 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
@@ -25,6 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import {
+  agentIdentityComponents,
   collect,
   Component,
   execute,
@@ -46,7 +48,6 @@ import { installTestAgentComponents } from "../src/components.ts";
 const AGENT = [
   "AgentProvider",
   "Agent",
-  "Session",
   // The dotted name addresses a subdirectory, so a repository override for it
   // is components/Session/Launch.md.
   "Session.Launch",
@@ -54,6 +55,13 @@ const AGENT = [
   "ApproveAll",
   "AskPermission",
 ];
+/**
+ * `<Session>` is not on that list.
+ *
+ * Its implementation names durable work after its own invocation, so the
+ * execution is told about it rather than the installation registering it, and
+ * it exists only inside a document a host declared it to.
+ */
 const TESTING = [
   "Testing",
   "AssertThrows",
@@ -156,7 +164,9 @@ function runDocument(workspace: string, order: Order): Operation<string> {
     yield* useTempFileCompiler();
     yield* installAll(order);
     const output = yield* collect(
-      yield* execute({ path, stream: new InMemoryStream(), componentDirs: [workspace] }),
+      yield* executeInstalled({ path, stream: new InMemoryStream(), componentDirs: [workspace] }, [
+        { components: agentIdentityComponents() },
+      ]),
     );
     return String(output);
   });
@@ -273,7 +283,10 @@ describe("Tier XP — cross-package resolution", () => {
         info: yield* inspectComponent({ name: "Each", componentDirs: [workspace] }),
         output: String(
           yield* collect(
-            yield* execute({ path, stream: new InMemoryStream(), componentDirs: [workspace] }),
+            yield* executeInstalled(
+              { path, stream: new InMemoryStream(), componentDirs: [workspace] },
+              [{ components: agentIdentityComponents() }],
+            ),
           ),
         ),
       };

@@ -753,7 +753,9 @@ function expand(
       extendPath("", { f: "gen", id }),
       0,
       undefined,
-      authority,
+      // No identity domains: a generated fragment names no durable work of its
+      // own, and what it may invoke is this table and nothing else.
+      { imports: authority },
     );
     return renderSegments(expanded);
   });

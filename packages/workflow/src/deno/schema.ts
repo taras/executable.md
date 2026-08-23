@@ -297,6 +297,22 @@ const OBJECTS: ReadonlyMap<string, DeclaredObject> = new Map([
     },
   ],
   [
+    "agent_sessions",
+    {
+      type: "table",
+      sql: `CREATE TABLE agent_sessions (
+  session_key TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  agent_command TEXT NOT NULL,
+  session_identity TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  assertion_kind TEXT NOT NULL,
+  assertion_value TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT`,
+    },
+  ],
+  [
     "workspace_state",
     {
       type: "table",

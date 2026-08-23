@@ -58,12 +58,14 @@ import {
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ImportAuthority } from "./components/import-authority.ts";
+import type { ExpansionAuthority } from "./components/import-authority.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
+import { issueInvocation } from "./invocation-identity.ts";
+import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -186,7 +188,7 @@ function expandChildrenScoped(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -215,6 +217,15 @@ function expandChildrenScoped(
 
 interface ProjectionState {
   invocation: Invocation;
+  /**
+   * Raised for the whole of one projection of this invocation's own content.
+   *
+   * Everything nested is reached through here, so this is where an invocation
+   * stops naming itself: a durable identity claimed while it is raised is being
+   * claimed by something inside the content, not by the invocation that owns it
+   * (`component-invocation.ts`). A Markdown body has no issuance to raise.
+   */
+  projecting?: () => () => void;
   enclosing: ProjectionHandle | undefined;
   children: Segment[];
   caller: ProjectionFrame;
@@ -247,7 +258,7 @@ interface ProjectionState {
    * the invocation is (§3.6).
    */
   checkedFailures: CheckedFailures | undefined;
-  authority: ImportAuthority | undefined;
+  authority: ExpansionAuthority | undefined;
 }
 
 interface ProjectionFrame {
@@ -344,6 +355,19 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     path: string;
   }): Operation<Segment[]> {
     return yield* scoped(function* () {
+      // Every projection this invocation performs funnels through here —
+      // `content()`, `tryContent()`, an authored `<Content />`, a `render()`
+      // closure — so this is the whole of what "expanding its own content"
+      // means, and there is one place to raise it.
+      const projected = state.projecting?.();
+      try {
+        return yield* project();
+      } finally {
+        projected?.();
+      }
+    });
+
+    function* project(): Operation<Segment[]> {
       const contentScope = yield* state.invocation.useContentScope();
       // The projection's failure travels back to the caller rather than into
       // the content scope. Raising it there would poison the scope, and the
@@ -392,7 +416,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
       // A projection that wrote into the caller's region has nothing left to
       // hand back; one that kept its own returns what it rendered.
       return options.owner === undefined ? [...options.errors, ...result.segments] : options.errors;
-    });
+    }
   }
 
   function* runProjection(request: ProjectionRequest): Operation<Segment[]> {
@@ -427,61 +451,73 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
     // Dynamic markdown is the component's own, so it keeps this handle.
     const inner = request.kind === "markdown" ? handle : state.enclosing;
 
-    return yield* scoped(function* () {
-      // The projection's failure travels back to the caller rather than into
-      // the content scope (see runInContentScope): a throw-bound failure the
-      // caller catches is explicit recovery, and the invocation must not
-      // re-report it as a teardown error.
-      const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
-      // Shared with the expansion below, so a failure still leaves behind what it
-      // rendered before stopping.
-      const rendered: Segment[] = [];
-      // Slot errors are reported inside the mode-bound task, so an empty
-      // selection cannot settle them under the invocation's baseline. Held out
-      // here so a failure still reports them alongside what rendered.
-      const errors: Segment[] = [];
-      const task = contentScope.scope.run(function* () {
-        try {
-          yield* ErrorMode.set(mode);
-          if (!slotErrorsEmitted && slots.errors.length > 0) {
-            slotErrorsEmitted = true;
-            for (const slotError of slots.errors) {
-              errors.push(yield* raise(slotError));
+    // Raised for the whole projection, as in `runInContentScope`: everything
+    // expanded below belongs to the content, so the invocation that owns it
+    // names nothing until this returns.
+    const projected = state.projecting?.();
+    try {
+      return yield* runOutcome();
+    } finally {
+      projected?.();
+    }
+
+    function* runOutcome(): Operation<{ segments: Segment[]; failure?: unknown }> {
+      return yield* scoped(function* () {
+        // The projection's failure travels back to the caller rather than into
+        // the content scope (see runInContentScope): a throw-bound failure the
+        // caller catches is explicit recovery, and the invocation must not
+        // re-report it as a teardown error.
+        const outcome = withResolvers<{ segments: Segment[]; failure?: unknown }>();
+        // Shared with the expansion below, so a failure still leaves behind what it
+        // rendered before stopping.
+        const rendered: Segment[] = [];
+        // Slot errors are reported inside the mode-bound task, so an empty
+        // selection cannot settle them under the invocation's baseline. Held out
+        // here so a failure still reports them alongside what rendered.
+        const errors: Segment[] = [];
+        const task = contentScope.scope.run(function* () {
+          try {
+            yield* ErrorMode.set(mode);
+            if (!slotErrorsEmitted && slots.errors.length > 0) {
+              slotErrorsEmitted = true;
+              for (const slotError of slots.errors) {
+                errors.push(yield* raise(slotError));
+              }
             }
+            if (segments.length === 0) {
+              outcome.resolve({ segments: errors });
+              return;
+            }
+            yield* provideEvalScope(contentScope);
+            const projectionEnv = environmentFor(request);
+            if (projectionEnv) {
+              yield* provideEnv(projectionEnv);
+            }
+            yield* ActiveProjection.set(inner);
+            // Dynamic markdown is the component's own text, so it is not written
+            // where the caller's loop is and cannot break it.
+            yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
+            yield* expandSegments(
+              project(segments),
+              frame.meta,
+              frame.props,
+              frame.hideSet,
+              state.counter,
+              rendered,
+              path,
+              0,
+              state.checkedFailures,
+              state.authority,
+            );
+            outcome.resolve({ segments: [...errors, ...rendered] });
+          } catch (error) {
+            outcome.resolve({ segments: [...errors, ...rendered], failure: error });
           }
-          if (segments.length === 0) {
-            outcome.resolve({ segments: errors });
-            return;
-          }
-          yield* provideEvalScope(contentScope);
-          const projectionEnv = environmentFor(request);
-          if (projectionEnv) {
-            yield* provideEnv(projectionEnv);
-          }
-          yield* ActiveProjection.set(inner);
-          // Dynamic markdown is the component's own text, so it is not written
-          // where the caller's loop is and cannot break it.
-          yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
-          yield* expandSegments(
-            project(segments),
-            frame.meta,
-            frame.props,
-            frame.hideSet,
-            state.counter,
-            rendered,
-            path,
-            0,
-            state.checkedFailures,
-            state.authority,
-          );
-          outcome.resolve({ segments: [...errors, ...rendered] });
-        } catch (error) {
-          outcome.resolve({ segments: [...errors, ...rendered], failure: error });
-        }
+        });
+        yield* ensure(() => task.halt());
+        return yield* outcome.operation;
       });
-      yield* ensure(() => task.halt());
-      return yield* outcome.operation;
-    });
+    }
   }
 
   const handle: ProjectionHandle = {
@@ -617,7 +653,7 @@ export function* expandSegments(
    * root, all of which start from the default here and are outside it.
    */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -1089,7 +1125,7 @@ export function* expandSegments(
 function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1195,7 +1231,7 @@ function* expandLet(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<ErrorSegment[]> {
   const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (written.some((name) => !LET_PROPS.has(name))) {
@@ -1387,7 +1423,7 @@ function* expandEach(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1733,7 +1769,7 @@ function* expandIf(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1908,7 +1944,7 @@ function* expandLoop(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -2094,7 +2130,7 @@ function* expandPrintErrors(
   path: string,
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2159,7 +2195,7 @@ function* expandComponent(
    * block written there would be.
    */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2183,6 +2219,12 @@ function* expandComponent(
   }
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
+  // Opened before the ask and settled the moment it answers, however it
+  // answered: what canonical resolution selected here is what decides whether
+  // this invocation is in one of this execution's identity domains, and nothing
+  // on the answer or in the chain carries it (`invocation-identity.ts`).
+  const selection = authority?.identities?.beginImport(name);
+  let selected: IdentityDomain | undefined;
   try {
     // The public chain answers, and canonical execution decides whether the
     // answer is one it produced. In a closed execution — a workflow holding a
@@ -2191,8 +2233,11 @@ function* expandComponent(
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
-    imported = authority === undefined ? answered : authority.authorize(name, answered);
+    selected = selection?.settle();
+    const imports = authority?.imports;
+    imported = imports === undefined ? answered : imports.authorize(name, answered);
   } catch (error) {
+    selection?.settle();
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.
     const fatal = fatalCause(error);
@@ -2231,6 +2276,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      selected,
     );
   }
 
@@ -2644,7 +2690,15 @@ function* expandFunctionComponent(
   path: string = "",
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
+  /**
+   * The identity domain canonical resolution selected for this invocation.
+   *
+   * Absent unless this execution built the implementation that resolution
+   * chose, which is what puts an invocation in a domain at all
+   * (`invocation-identity.ts`).
+   */
+  selected?: IdentityDomain,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2799,8 +2853,21 @@ function* expandFunctionComponent(
     try {
       const output: unknown = yield* withInvocation(function* (invocation) {
         const enclosing = yield* ActiveProjection.get();
+        // Minted before the handle, because the handle is what raises it: an
+        // invocation names nothing while it is expanding its own content, and
+        // that is the whole of how a nested component is reached.
+        //
+        // The domain is this execution's own, for this authored name, from the
+        // state installation built before anything could observe it — never
+        // from a definition, a registry answer or a context, all of which a
+        // handler may keep from one attachment and hand back inside another.
+        // The frame is the one the body is about to run in, so an issuance
+        // routed into a concurrent invocation of the same component answers
+        // nothing there.
+        const issued = issueInvocation(expansion.id, name, selected, yield* useScope());
         const handle = createProjectionHandle({
           invocation,
+          projecting: issued.projecting,
           enclosing,
           children,
           caller: {
@@ -2927,7 +2994,13 @@ function* expandFunctionComponent(
           if (TestHarnessComponentDefinition.own(definition.fn)) {
             return yield* definition.fn.invoke(validatedProps, binding);
           }
-          return yield* definition.fn(validatedProps);
+          // Ended in the same breath the body is: an issuance a wrapper kept
+          // from a finished element authorizes nothing when it is routed here.
+          try {
+            return yield* definition.fn(validatedProps, issued.invocation);
+          } finally {
+            issued.close();
+          }
         } catch (error) {
           if (error instanceof Error) {
             throw error;
@@ -3818,7 +3891,7 @@ export function* expandBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -3912,7 +3985,7 @@ function runDocumentation(
   indexBase: number,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -3977,7 +4050,7 @@ function* expandValueBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };

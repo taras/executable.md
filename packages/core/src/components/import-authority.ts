@@ -19,6 +19,7 @@
  */
 
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
+import type { InvocationIdentities } from "../invocation-identity.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -32,6 +33,22 @@ export type ImportedDefinition = ComponentDefinition | FunctionComponentDefiniti
 export interface ImportAuthority {
   /** The definition this import may invoke, or the refusal saying why it may invoke none. */
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition;
+}
+
+/**
+ * What core's own expansion is given, beside the segments.
+ *
+ * Two things travel here, and both for the same reason: they decide what a
+ * document may invoke and what it may name, and a decision like that never
+ * reads replaceable state. This object is built by the execution, held by
+ * value, and passed into core's own expansion — no document, component or
+ * middleware can reach it, replace it, or add to it.
+ */
+export interface ExpansionAuthority {
+  /** What a closed execution may invoke for a name. Absent for an open one. */
+  readonly imports?: ImportAuthority;
+  /** The domains this execution minted, for the components it gave one. */
+  readonly identities?: InvocationIdentities;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */

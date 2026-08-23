@@ -5,6 +5,7 @@ import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { WorkflowRunConnections, WorkflowRunTransactionToken } from "../connections.ts";
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
 import { createWorkspaceMetadata, type WorkspaceMetadata } from "./repositories.ts";
+import { createAgentSessions, type AgentSessions } from "./agent-sessions.ts";
 import { type StoredWorkspaceRoot } from "./manifest.ts";
 import {
   captureWorkspaceRoot,
@@ -26,6 +27,14 @@ export interface PrivateWorkspaceTransaction {
    * does not have, or holds one it never recorded.
    */
   readonly metadata: WorkspaceMetadata;
+  /**
+   * The Agent sessions this run retains, inside this same transaction.
+   *
+   * Beside the filesystem for the same reason the metadata is: a conversation
+   * and the row naming it are one fact, and a mapping that could commit while
+   * the run did not would describe a session this run never had.
+   */
+  readonly agentSessions: AgentSessions;
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
@@ -126,6 +135,8 @@ export function usePrivateWorkspace(
 
           metadata: createWorkspaceMetadata(connection.database, authorize),
 
+          agentSessions: createAgentSessions(connection.database, authorize),
+
           // deno-lint-ignore require-yield
           *currentRoot(): Operation<string> {
             authorize();
@@ -185,6 +196,22 @@ export function* transactWorkspaceRoots<T>(
   return yield* database.transact(function* (transaction) {
     return yield* withPrivateWorkspaceTransaction(database, transaction, body);
   });
+}
+
+/**
+ * Run `body` with this run's Agent-session mappings, in one transaction.
+ *
+ * The narrow half of the transaction above, and the only half a host installing
+ * an Agent profile needs. The broad one hands out the authoritative filesystem,
+ * retained Repository identity, root capture, publication and restoration; a
+ * caller that only has to read and commit a session mapping should not be
+ * holding any of that, and this is what it holds instead.
+ */
+export function* transactAgentSessions<T>(
+  database: WorkflowRunDatabase,
+  body: (sessions: AgentSessions) => Operation<T>,
+): Operation<Result<T>> {
+  return yield* transactWorkspaceRoots(database, (workspace) => body(workspace.agentSessions));
 }
 
 export function withPrivateWorkspaceTransaction<T>(

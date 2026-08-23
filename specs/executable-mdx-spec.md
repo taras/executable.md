@@ -1860,6 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
+| `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -2614,6 +2615,29 @@ Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided
 by the tiers above however they were installed.
+
+**A declared component is registered by the execution, not by the host.** A
+trusted host may tell an execution that one of its components names durable work
+after its own invocation (§5.6). Such a component is not registered by the code
+that installs the rest of the host's words: the execution mints its domain,
+calls the host's factory with the claimant, and registers what comes back
+through this same path, on this same tier, once. It resolves and is overridden
+exactly as any other registered default — a repository file of that name still
+wins — and what changes is only where the implementation came from and what it
+may name. A host that declares none has no component that can name a durable
+operation after its invocation.
+
+**What resolution selected is recorded where it is selected.** An invocation is
+in a declared component's identity domain when *this* resolution selected the
+implementation that execution built for it — the exact function object, by
+identity, at the tier that answered. The engine opens a frame around one import
+before it asks, resolution records what it selected, and the engine settles the
+frame as soon as that import answers. Nothing about it travels on the answer or
+through the chain, so an import nobody delegated, one delegated for a different
+name, one delegated twice, and one answered with a definition of the handler's
+own each settle to nothing: what a handler decides is which implementation runs,
+and an implementation running where resolution did not select it names nothing
+(§5.6, Tier CIV).
 
 **Registration is scope-local.** `registerComponents()` makes names resolvable
 for the installing scope and its descendants. A child scope may register a name
@@ -3651,6 +3675,13 @@ What an element can learn about its own expansion is not a Component Api
 operation, because there is no legitimate reason to intercept it: durable
 identities are derived from it. See §5.6.
 
+**Nothing on this Api carries authority to name durable work.** `registry` is a
+composable answer like every other: a handler may observe it, merge into it, and
+return a registration record it kept from somewhere else. That is a supported
+way to decide what a name resolves to, and it decides nothing about what an
+invocation may name — an execution's identity domains are its own, delivered to
+the factories it built and never read back from an answer this Api gave (§5.6).
+
 **There is no operation for claiming a name.** A component name means what §5.3
 says it means — a structural construct, a reserved registration, a repository
 file, or a registered default — and nothing installed at runtime preempts that
@@ -3805,6 +3836,39 @@ Supplied text reports the stable root identity `<eval>` (§8.1), so two inline
 runs of the same text derive the same identifiers. That is what `<eval>` means
 everywhere else, and workflow-wide identity is a run identifier together with an
 expansion identifier, never the expansion identifier alone.
+
+**The invocation a component is handed.** A function component is invoked with
+two arguments: its validated props, and the invocation the engine entered. The
+second is where a component naming a *durable* operation gets the name, and it
+is deliberately not the context above: what a document can rebind it can
+rebind, and a contextual Api answer is composed by whoever installed a handler
+(Tier CIV). A component that needs nothing from it declares one parameter and
+never sees it.
+
+It carries nothing readable. The identity behind it is answered by a
+**claimant**, and a claimant reaches only one place: the factory a trusted host
+**declared** to this execution, called once with the claimant this execution
+minted for that component (§5.3, architecture.md *Trusted host orchestration*).
+The claimant is the argument of that call — not published, not named, not
+reachable from a document, and not derivable from anything a handler holds. A
+component nobody declared cannot name a durable operation after its invocation
+at all.
+
+A claimant answers only for the invocation the engine is running: one minted by
+the execution that minted the claimant, in the domain *resolution selected for
+that invocation*, still live, not expanding its own content, running in the
+frame the engine invoked it in, and not already answered.
+
+Which domain an invocation is in is never the authored name. It is the
+registration canonical resolution selected — recognized there by the identity of
+the implementation this execution built, carried to the issuance through the
+engine's own import frame (§5.3), and settled to nothing when resolution did not
+happen, happened twice, or answered for a name the engine did not ask.
+Forwarding the genuine issuance is ordinary delegation and stays supported;
+everything else refuses. None of it reads replaceable state, so middleware may
+short-circuit an import, redirect a name, replace a definition, shadow a
+registration, keep an implementation, and hand a whole registration record back
+inside another execution without moving what an invocation may name.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9402,6 +9466,45 @@ against the production Deno adapter, on real run files.
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
+### Tier WAP — The strict workflow Agent profile
+
+Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAP1 | Strict inputs | The runtime is created with the host's own directory and `mcpServers: []`, each session with `allowedTools: []`, under `deny-all` and non-interactive denial; no Workspace or caller path appears in any provider input |
+| WAP2 | Denial outranks approval | A native permission request under an authored approve-all scope is rejected, the public permission chain is consulted zero times, and the Prompt fails with the fixed diagnostic even though the adapter reported success |
+| WAP3 | Teardown | A completed, failed, cancelled and interrupted turn each finish their turn and close their handle |
+| WAP4 | `xmd run` unchanged | The ordinary provider keeps the caller cwd, omits `mcpServers` and `sessionOptions`, and honours the authored policy's `allow_once` |
+| WAP5 | Refusal precedes ACPX | A placement the host refuses establishes no session and starts no turn |
+| WAP6 | Nothing echoed | No tool title, raw input, path or command reaches the failure message or its stack |
+| WAP7 | Sibling Sessions | Two `<Session name="review">` sites in one document place two engine identities the middleware cannot touch while its rename reaches the provider; a placement kept from the first site and routed for the second refuses before the provider places anything |
+
+### Tier WSL — Retained workflow Agent sessions
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5.
+
+| # | Test | Verify |
+|---|------|--------|
+| WSL1 | The key | The mapping key is the engine-derived Session expansion identity alone; provider and agent command change it not at all |
+| WSL2 | Creation | A session is created only when neither the mapping nor the provider holds anything |
+| WSL3 | The pre-commit window | Exactly one canonical assertion reconciles an interrupted creation; two are ambiguity and refuse |
+| WSL4 | Refusals | A missing assertion, a different value, a different kind, a changed agent, a changed provider, a changed policy and more than one assertion each refuse |
+| WSL5 | Reattachment | A matching assertion reattaches the retained mapping unchanged |
+| WSL6 | The run's transaction | The mapping commits in the run's own transaction and reads back per Session site; a transaction that fails commits none |
+| WSL7 | Directories | Owning the sidecar allocates none of it; every attachment gets an empty directory, and neither it nor the host directory outlives the attachment |
+| WSL8 | Deletion | Deletion reports and removes both categories, and a live run keeps them |
+
+### Tier WSR — A restart reattaches each Session site
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.5. Runs a real
+document against a real run database.
+
+| # | Test | Verify |
+|---|------|--------|
+| WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
+| WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
+
 ### Tier WFX — A killed run resumes from its frontier
 
 | # | Test | Verify |
@@ -9871,6 +9974,31 @@ perform, separately from the binding, the rendered output, and the journal.
 | FE35 | Independence | Cancelling one invocation tears down only its own request |
 | FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
 | FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
+
+### Tier CIV — The identity a host's component names its work after
+
+Defined in §5.6, with the selection rule in §5.3.
+
+| # | Test | Verify |
+|---|------|--------|
+| CIV1 | Distinct sites | Two invocations are handed two identities, each the engine's own for that invocation |
+| CIV2 | The Api is replaceable | A handler installed outside an invocation replaces a Component Api answer the engine would have given, which is why a durable name may not come from one |
+| CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
+| CIV4 | No forgery | Middleware that delegates an import and calls the implementation with an object of its own is refused at every site, and takes no identity |
+| CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
+| CIV6 | No live ancestor | One element's issuance, captured while it is live and unspent and routed into a component inside its content, is refused there |
+| CIV7 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
+| CIV8 | No borrowed implementation | An implementation kept from one declared component, called at an invocation of another with that invocation's genuine issuance, is refused |
+| CIV9 | No borrowed execution | An implementation kept from one execution, called at another execution's own invocation of the same component, is refused |
+| CIV10 | No transplanted record | The same, with the first execution's whole registration record answered for that name inside the second: still refused |
+| CIV11 | No shadowed registration | With `<Nest><Probe /></Nest>` authored in a fixture, the declared implementation is retained at its own site and run at a site whose name a nested registration shadowed: refused, and the case fails if authority is restored by authored-name equality |
+| CIV12 | No concurrent frame | An issuance belonging to another live invocation of the same component, in a frame of its own, is refused in this one |
+| CIV13 | No refused registration | A declared component whose registration is refused leaves a claimant that answers for nothing |
+| CIV14 | Lifetime | An issuance the engine has ended names nothing, claimed in its own frame |
+| CIV15 | One use | A second claim of one issuance, in its own frame, is refused |
+| CIV16 | No short circuit | An import answered without delegating selects nothing, so the implementation running there names nothing |
+| CIV17 | No redirected name | An import delegated for a different name selects nothing for the name the engine asked, and what that name resolved to names nothing here |
+| CIV18 | One selection | An import delegated twice settles to nothing |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

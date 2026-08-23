@@ -1298,17 +1298,54 @@ current root and the first document execution together.
 
 ## Agent authority and generated XMD
 
-An Agent under the specified future `xmd workflow` command is read-only. The
-host enforces that ceiling in the permission bridge, the provider-native sandbox
-and the filesystem view; a document cannot raise it. A provider that cannot
-enforce the boundary fails before Prompt execution. `xmd run` keeps its
-caller-selected Agent permission behavior.
+A workflow Agent receives no Workspace, checkout, materialized root, host path
+or additional directory. Its process starts in a fresh empty directory the host
+owns, configured with no MCP servers. That directory is provider-owned, never
+enters logical or durable identity, and is removed with the attachment. The host
+requests an empty native tool allowlist and installs a permission path that
+denies every native request and fails the turn that asked, without reaching the
+public permission chain. This is the V1 authority ceiling; the portable proof
+that every provider exposes no ambient tool is tracked separately and does not
+widen it. `xmd run` keeps its caller-selected Agent permission behavior.
 
-Native Agent processes inspect disposable read-only materializations of the
-current logical Workspace root. Those views have no write-back path. An Agent
-proposes changes by returning XMD, and a constrained XMD evaluator performs the
-admitted components as ordinary durable effects against the authoritative
-Workspace.
+Within one run a logical Agent session is identified by the Agent/Session
+expansion identity the engine derived, and by nothing else. The authored
+`<Session name>` is descriptive, so two sibling `<Session name="review">`
+elements are two sessions. The name travels the compositional public chain,
+where a handler may observe or change it; the identity travels inside an opaque
+placement the element routes, readable only through the authority delivered to
+the installed provider. It reaches the placement from the invocation capability
+the engine minted, never from the expansion context. That placement is bound to the element that opened it
+and is good for one use, so a handler cannot keep the first element's placement
+and route it for the second — both would otherwise resolve to the first
+element's identity.
+
+The mapping is a row in the run's own database, committed in the run's own
+transaction: one that could commit while the run did not would describe a
+session the run never had. It records the provider, the resolved agent command
+and the fingerprint of the session policy the session was created under as
+compatibility attributes — changing any of them refuses reattachment rather than
+addressing a second mapping — together with the provider's asserted durable
+identity. Cwd and provider placement are never compatibility inputs. What stays
+beside the run on disk is the provider's own session store and one empty working
+directory per session; both are disposable.
+
+The order is provider creation, then the provider's canonical, tagged assertion
+of a durable identity, then the mapping commit, then the first Prompt. Occupancy
+of a key in the provider's own store is not an assertion: it says something is
+there, not what conversation it is.
+
+An interruption before the mapping commits is reconciled only from one canonical
+provider assertion — exactly one, for that identity. A missing assertion, an
+assertion conflicting with what is retained, one that replaced it, and more than
+one at once each refuse. Once the mapping has committed, a restart compares the
+provider's current assertion against it before continuing, and reattaches only
+when the kind and the value both still agree. No refusal substitutes a new
+session or a reconstructed transcript while claiming continuity.
+
+Cancellation owns both sides of a live step. It stops the Prompt stream,
+completes provider teardown, and removes the disposable directory before the
+attempt settles. Already committed session and Prompt records remain valid.
 
 Generated XMD is untrusted input. The evaluator preflights the complete fragment
 before its first effect and admits only explicitly allowed, already-resolved
@@ -2445,6 +2482,83 @@ A registry answers a name with whatever was registered under it, so admitting
 middleware a binding contract names. Ordinary blocks are unaffected: a document
 still reaches a registered modifier by name, a replaced `timeout` included.
 
+### Capability-backed invocation identity
+
+A component that names a durable operation after itself decides which retained
+record a replay restores, so two invocations arriving at one name each replay
+the other's work, and an implementation running under somebody else's identity
+commits against its own storage under their expansion. A decision like that
+never trusts replaceable state (*State across loaded copies*), and every channel
+a component could *read* one from is replaceable: a context is addressed by
+name, a contextual Api answer is composed by whoever installed a handler, and
+the registry is an answer a handler may keep from one attachment and hand back
+inside another, record and all.
+
+So nothing is read. A trusted host **declares** to the execution which of its
+components name durable work, on the terms every other trusted-host value
+travels: read once and copied before any installation runs, so what may name
+durable work is fixed before installed code, middleware or a document exists
+(*Trusted host orchestration*). The execution mints one domain per declared
+component, calls that component's factory with the domain's **claimant**, and
+registers what the factory returns through the ordinary path — validated like
+any registration, and activated only once that batch has committed, so a refused
+registration leaves a claimant that answers for nothing. The claimant exists as
+the argument of that one call: not published, not named, not reachable from a
+document, and not derivable from anything a handler holds.
+
+**Which domain an invocation is in is decided by what resolution selected, not
+by the name that was asked for.** An authored name is what a document wrote, and
+what it resolves to is decided by tiers, registrations and middleware, so a
+matching name says nothing about which registration answered. What settles it is
+the selection itself, recorded where it is made:
+
+- expansion opens an **execution-private import frame** before it asks the
+  public import chain anything;
+- canonical core resolution records, inside that frame, the exact name it was
+  asked for and the exact implementation it selected — the function object this
+  execution built from the host's factory, by identity;
+- the frame yields a domain only when exactly one canonical selection happened
+  in it, for the name expansion asked, and it selected that execution's own
+  trusted implementation;
+- an import nobody delegated, one delegated for a different name, one delegated
+  more than once, one whose name a registration shadowed, and one that selected
+  any other implementation each yield no domain.
+
+Nothing about this travels on the answer or through the chain. A public
+definition, a registry answer, a Context and a contextual Api carry no
+provenance and no authority: what a handler decides is which implementation
+runs, and an implementation running where canonical resolution did not select it
+names nothing. Nested and re-entrant frames stay contained, because a frame is
+opened per import and settled the moment that import answers, however it
+answered; concurrent interleaving leaves more than one selection in a frame and
+so yields no domain, which is the safe direction; and a replay decides the same
+way, against this execution's own factory-created implementation rather than
+against anything a previous run recorded.
+
+The engine then mints one issuance per invocation, carrying that domain — or
+none — the authored name for what a refusal says, and the frame the body is
+about to run in. A claimant answers only for an issuance that satisfies all of
+it:
+
+- **its own execution's**, still running — an implementation kept past teardown,
+  or built by another attachment, answers for nothing;
+- **in its own domain** — an implementation belonging to another component, or
+  running where resolution selected something else, names nothing here;
+- **live** — an issuance kept from an element that has finished names nothing;
+- **not projecting** — expanding its own content is the only way anything is
+  nested inside an invocation, so an invocation names nothing while it does,
+  which is what refuses a live ancestor's issuance routed into its content;
+- **in this frame** — an issuance belonging to another invocation of the same
+  component, running concurrently in a frame of its own, names nothing here;
+- **unspent** — one invocation names one durable operation.
+
+An import wrapper may forward the genuine invocation, which is ordinary
+delegation and stays supported. Everything else refuses, and none of the
+refusals depends on a value a handler can carry: middleware may replace what a
+name resolves to, keep an implementation, and hand a whole registration record
+back inside another execution, and what an invocation may name still comes from
+the execution that minted it and the resolution that selected it.
+
 ### Capability-backed nested execution
 
 A Markdown test may run another document as a real root — its own root import,
@@ -2532,7 +2646,9 @@ expands, and the middleware packages composed around it.
 
 A host attaches requirements to one execution through
 `@executablemd/core/host`: `executeInstalled(options, installations)`, where an
-installation carries `admissions` and an optional `install()`. Admissions are
+installation carries `admissions`, the components whose implementations name
+durable work after their own invocation, and an optional `install()`. Admissions
+and declared components are
 copied and frozen **before** any installation runs, so what ends up
 authoritative is fixed before any installed code, any middleware and any
 document code exists. Each runs inside the execution's own journal read, on the
@@ -2546,6 +2662,17 @@ passes — not through a context, an Api, a stable name, structural metadata or
 module-scoped state — which is why a separately loaded package composes here by
 handing over a closure rather than by agreeing on a name, and why no middleware
 can read, transport or remove the collection.
+
+A declared component travels the same way and for the same reason. What the host
+supplies is a factory, not an implementation: the execution calls it with the
+claimant it minted for that component, so the authority is delivered as the
+argument of one call the execution makes, and what a document, a component or
+middleware can reach afterwards is the implementation alone (*Capability-backed
+invocation identity*). A host that declares none has no component that can name
+a durable operation after its invocation, which is the safe direction: core's
+own `<Session>` is declared this way rather than registered with the other agent
+words, so a document run by a host that never mentioned it has no `<Session>` at
+all.
 
 ### Trusted durable preparation
 
@@ -2627,6 +2754,15 @@ its value has the expected structure. They derive from execution-owned state
 established before untrusted work begins or from parsed durable records. A
 contextual observation may describe an execution; it cannot authorize it or
 name its durable effects.
+
+A private context name is not an exception to this. A descriptor built under a
+name nobody else knows — a module-local one, a name carrying a fresh identifier
+— is still a context, and reaching authority through one is still reading
+replaceable state to decide it. The same holds for a public answer that carries
+an unreadable value: a registry record whose contents a handler cannot read is
+still a record that handler can keep and hand back somewhere else, so what
+cannot be read can still be transferred. Authority that must not move is held by
+the execution and delivered as an argument, never looked up.
 
 Metadata covered by State ownership's module-evaluation exception uses a
 stable, namespaced string property when another loaded copy must read it. A
@@ -2730,6 +2866,7 @@ Status is measured against main.
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
+| workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is provider creation, the provider's canonical tagged assertion, the mapping commit, then the first Prompt; occupancy of a provider key is not an assertion, the pre-commit window reconciles only from exactly one, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories | built on the #302 stack; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |

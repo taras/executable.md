@@ -14,7 +14,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { Component, execute, installAgentComponents } from "@executablemd/core";
+import { agentIdentityComponents, Component, installAgentComponents } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import { API } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { installTestingComponents, useTesting } from "@executablemd/testing";
@@ -86,13 +87,18 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
       yield* useCommand(WORKER);
       yield* installTestAgentComponents();
       yield* installAgentComponents();
-      const execution = yield* execute({
-        path: path.join(dir, "doc.md"),
-        stream: new InMemoryStream(),
-        ...(options?.componentDirs
-          ? { componentDirs: options.componentDirs.map((d) => path.join(dir, d)) }
-          : {}),
-      });
+      // `<Session>` names durable work after its own invocation, so the host
+      // declares it to the execution rather than registering it.
+      const execution = yield* executeInstalled(
+        {
+          path: path.join(dir, "doc.md"),
+          stream: new InMemoryStream(),
+          ...(options?.componentDirs
+            ? { componentDirs: options.componentDirs.map((d) => path.join(dir, d)) }
+            : {}),
+        },
+        [{ components: agentIdentityComponents() }],
+      );
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {

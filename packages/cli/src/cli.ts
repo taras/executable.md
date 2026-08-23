@@ -58,6 +58,7 @@ import {
   formatDocumentReference,
   inlineSource,
   inspectDocument,
+  agentIdentityComponents,
   installAgentComponents,
   installPermissionMode,
   registerAgentProvider,
@@ -749,7 +750,15 @@ function* runDocument(
     // The harness installer is this command's, not the document's: canonical
     // `<Test>` hands each invocation's authority to whoever the host attached,
     // and this is where `xmd` says that is the testing package.
-    [...(mode.installations ?? []), testHarnessInstallation(testingHost)],
+    //
+    // `<Session>` travels the same way: its implementation names durable work
+    // after its own invocation, so the execution is told about it here — before
+    // anything else is installed — and builds it from the claimant it mints.
+    [
+      ...(mode.installations ?? []),
+      { components: agentIdentityComponents() },
+      testHarnessInstallation(testingHost),
+    ],
   );
 
   // Consume the output stream with forEach.

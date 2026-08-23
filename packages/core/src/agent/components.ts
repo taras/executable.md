@@ -28,6 +28,8 @@ import { registerComponents } from "../components/registration.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
 import type { Json } from "../types.ts";
+import { sessionComponent } from "./function-components.ts";
+import type { IdentityComponent } from "../invocation-identity.ts";
 import type { PermissionMode } from "./agent-api.ts";
 import type { AgentProviderFactory, AgentProviderOptions } from "./provider-api.ts";
 import type { AgentProviderAuthority } from "./launch-authority.ts";
@@ -46,7 +48,6 @@ import {
   PROMPT_PROPS,
   SESSION_LAUNCH_PROPS,
   SESSION_PROPS,
-  SessionComponent,
   SessionLaunch,
 } from "./function-components.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
@@ -70,6 +71,26 @@ interface SequencedFailure {
   error: AgentPromptError;
 }
 
+/**
+ * What a host declares to an execution so `<Session>` can name its sessions.
+ *
+ * `<Session>` is not registered with the rest of the agent words: its
+ * implementation names durable work after its own invocation, and what may do
+ * that is fixed by the execution before any installation runs, from a claimant
+ * delivered straight to this factory. A document run by a host that declares
+ * none has no `<Session>` at all, which is the safe direction.
+ */
+export function agentIdentityComponents(): readonly IdentityComponent[] {
+  return [
+    {
+      name: "Session",
+      origin: CORE_ORIGIN,
+      props: SESSION_PROPS,
+      factory: (claim) => sessionComponent(claim),
+    },
+  ];
+}
+
 export function* installAgentComponents(options?: AgentComponentsOptions): Operation<void> {
   if (options?.defaultAgent !== undefined) {
     const defaultAgent = options.defaultAgent;
@@ -85,7 +106,6 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
   yield* registerComponents([
     { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
     { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
-    { name: "Session", origin: CORE_ORIGIN, fn: SessionComponent, props: SESSION_PROPS },
     {
       name: "Session.Launch",
       origin: CORE_ORIGIN,

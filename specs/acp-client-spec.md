@@ -138,8 +138,16 @@ components.
 
 ## Components
 
-`installAgentComponents()` registers seven components for the installing scope
-(§5.3). They are ordinary function components and non-reserved **defaults**: a
+`installAgentComponents()` registers six components for the installing scope
+(§5.3): `<AgentProvider>`, `<Agent>`, `<Session.Launch>`, `<Prompt>`,
+`<ApproveAll>` and `<AskPermission>`. `<Session>` is the seventh agent word and
+is supplied separately, because its implementation names durable work after its
+own invocation: a host declares it to the execution through the identity-bearing
+installation described in executable-mdx-spec §5.6, and the execution builds it
+from the claimant it minted. `agentIdentityComponents()` is what a host declares;
+a host that declares none has no `<Session>` at all.
+
+All seven are ordinary function components and non-reserved **defaults**: a
 repository component with one of these names is chosen ahead of them, and the
 engine owns their expression props, schema validation, `as` capture, content
 projection and invocation lifetime exactly as it does for any other `.ts`
@@ -174,7 +182,12 @@ boundary runs after the component has returned.
 - **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
   prompts. Self-closing validates only (no output).
 - **`<Session name>`** resolves a session and pins it onto nested prompts and
-  launches. Self-closing validates only.
+  launches. Self-closing validates only. It is the one agent word a host does
+  not register with the others: its implementation names durable work after its
+  own invocation, so the host **declares** it to the execution and the execution
+  builds it from the claimant it minted (executable-mdx-spec §5.6). A document
+  run by a host that declares none has no `<Session>` at all, which is why
+  `installAgentComponents()` alone leaves the name unresolved.
 - **`<Session.Launch>`** prepares one durable session from its rendered body and
   hands the provider's native UI the terminal for it, rendering nothing itself
   and returning only after that UI exits
@@ -274,6 +287,99 @@ denies with the base semantics rather than deferring outward, so a policy nested
 inside a more permissive one can never be overruled by it.
 
 Every permission request therefore receives a concrete decision.
+
+### The workflow Agent profile
+
+`xmd workflow` installs a stricter profile than `xmd run`, and installs it only
+while a live or partial run is attached. A completed replay restores its Prompt
+records without contacting a provider at all, so it starts nothing.
+
+Under that profile an Agent receives no Workspace, checkout, materialized root,
+caller path or ACP `additionalDirectories`. Its process runs in a directory the
+host owns: created empty before the session is established, never written to by
+this host, never read back, and removed when the attachment ends. The runtime is
+created with `mcpServers: []`, each session with `allowedTools: []`, and the
+permission mode is `deny-all` with non-interactive denial. A fixed session
+instruction layer states that boundary to the Agent in the same terms.
+
+`allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
+omission is ACPX's own default, and this host is making a different statement.
+
+A native permission request under this profile does not reach
+`Agent.requestPermission`. The provider answers it: a reject option when ACP
+offered one, otherwise cancellation — and the turn the request belonged to fails
+with a fixed diagnostic, whatever the adapter reports afterwards. An authored
+`<ApproveAll>`, or any other public permission handler, composes around nothing
+here, because there is no native tool authority to widen. The diagnostic names
+nothing the request carried: no tool title, raw input, path or command.
+
+This is what the host asks for and what it refuses. It is not a proof that every
+ACP adapter exposes no tool when asked for none; that portable proof is tracked
+separately and does not widen this ceiling.
+
+Nothing else changes. `<Prompt>` is still exactly one turn, the Agent Api gains
+no operation, and `xmd run` keeps its caller-selected cwd, its omitted MCP and
+session options, and its public permission routing.
+
+#### Retained sessions
+
+A provider session outlives one execution, so a continued run reattaches the
+conversation it was having rather than replaying its transcript into a new one.
+
+**Identity is the engine's.** Within one workflow run a session is identified by
+the Agent/Session expansion identity the engine derived, and by nothing else. The
+authored `<Session name>` is descriptive: two sibling `<Session name="review">`
+elements are two sessions, and a document that reuses a name cannot make them
+one. The name travels the public `Agent.session()` chain, where a handler may
+observe or change it; the identity travels inside an opaque placement the
+`<Session>` element routes and is readable only through the authority delivered
+to the installed provider. Middleware holding the placement reads the name and
+reaches no further.
+
+Where the element gets that identity is the other half. `<Session>` does not
+read it from anywhere: the execution mints it for that invocation and answers
+for it only through the claimant it delivered to this `<Session>` factory. So an
+implementation kept from one execution's `<Session>` names nothing at another's,
+one kept from a different component names nothing here, and an issuance
+belonging to another element — finished, still projecting, or live in a frame of
+its own — names nothing either. Two attachments running side by side hold two
+claimants, and neither answers for the other.
+
+The provider and the resolved agent command are stored beside that identity as
+compatibility attributes. Changing either refuses reattachment rather than
+addressing a second mapping. The key ACPX places a session under is a different
+thing and namespaces both, because ACPX's store is shared; that key is
+arrangement, not this run's session identity.
+
+**A canonical assertion comes before the mapping.** The order is: provider
+creation, then the provider's canonical, tagged assertion of a durable identity,
+then the mapping commit, then the first Prompt. Holding a key in ACPX's store is
+not an assertion — it says something is there, not what conversation it is — so a
+mapping is committed only from one canonical assertion, and an interruption
+before that commit is reconciled only the same way.
+
+Continuation is decided before a turn starts:
+
+- no mapping and no assertion means nothing was ever established here, and a
+  session may be created;
+- no mapping and exactly one canonical assertion is the pre-commit window, and
+  reconciles to that identity;
+- a mapping whose identity, compatibility attributes and policy fingerprint
+  agree, and whose assertion the provider still makes with the same kind and
+  value, reattaches;
+- a missing assertion, an assertion of a different kind or value, a changed
+  provider, agent or policy, and more than one assertion are each one explicit
+  refusal.
+
+No refusal starts a replacement session. ACPX fixes a session's creation-time
+options when the ACP session is created and ignores them when it reuses a
+persistent record, so continuing without comparing the retained policy would be
+continuing a session created under a wider one.
+
+The mapping is a row in the run's own database, committed in the run's own
+transaction: a mapping that could commit while the run did not would describe a
+session the run never had. What stays beside the run on disk is the provider's
+own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 
@@ -378,6 +484,14 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
+- **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
+  rather than a document, decides: `agentCwd` answers with the directory an Agent
+  runs in when the contextual one is not a directory an agent process could stand
+  in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
+  `ensureSession()` exactly as given; `permissions: "strict"` selects the
+  workflow profile's permission path; and `sessions` replaces directory-walk
+  placement with a host's own, and is where a retained session this host cannot
+  continue is refused. Every one of them defaults to the `xmd run` behavior above.
 - **Teardown.** Provider-scope teardown cancels active turns and closes each
   distinct runtime handle with an all-settled strategy, throwing a single error or
   an `AggregateError` from the provider scope.

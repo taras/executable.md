@@ -21,6 +21,13 @@ import {
   createPartitionedAcpxProvider,
   useAcpxProvider,
 } from "../src/provider.ts";
+import { TOOL_PERMISSION_REFUSED } from "../src/permission-bridge.ts";
+import type {
+  AcpxSessionContext,
+  AcpxSessionIdentity,
+  AcpxSessionPlacement,
+  AcpxSessionPolicy,
+} from "../src/provider.ts";
 import { useSerialQueues } from "../src/serial-queue.ts";
 import type { AcpxProvider } from "../src/provider.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
@@ -716,6 +723,12 @@ function stubAuthority(): AuthorityLog {
   const log: AuthorityLog = {
     performed: 0,
     refused: 0,
+    // These suites route launches, never a `<Session>` placement. Throwing
+    // rather than answering means a placement that did reach here fails
+    // loudly instead of being handed an identity nobody derived.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     // deno-lint-ignore require-yield
     *perform() {
       log.performed += 1;
@@ -977,6 +990,345 @@ describe("Tier PT — partitioned provider installation", () => {
 
       expect(selections()).toBe(1);
       expect(authority.performed).toBe(1);
+    });
+  });
+});
+
+/**
+ * Tier WAP — the strict workflow Agent profile
+ * (specs/acp-client-spec.md §Workflow Agent profile).
+ *
+ * The profile is the provider's own dependencies, so these drive it exactly as
+ * the Deno workflow host composes it: a host-decided working directory, no MCP
+ * servers, an empty requested tool set, and a permission path the public Agent
+ * chain does not reach. The contextual cwd is a Workspace root throughout,
+ * because "the Agent never sees it" is the claim.
+ */
+
+/** The logical Workspace root a workflow document's contextual cwd answers with. */
+const WORKSPACE = "/workspace";
+
+/** The runtime's own directory: provider-owned, and not a checkout. */
+const HOST_DIR = "/runs/sessions/host";
+
+/** One logical session's directory, as the host places it. */
+const SESSION_DIR = "/runs/sessions/cwd/8f2a";
+
+const WORKFLOW_SESSION_KEY = "xmd:workflow:v1:run:acpx:codex-cmd:default";
+
+const INSTRUCTIONS = "You have no native tool authority here.";
+
+/** The ACP session id a seeded record routes a permission request under. */
+const ACP_SESSION_ID = "acp-session-workflow";
+
+interface StrictHarness {
+  /** Every placement the profile was asked for, in order. */
+  places: AcpxSessionContext[];
+  /** Every identity the provider retained, in order. */
+  established: AcpxSessionIdentity[];
+  /** Public permission decisions the authored policy was asked for. */
+  consulted: number;
+  /** The ACPX store behind the provider, so a test can seed a record. */
+  store: ReturnType<typeof makeStore>;
+}
+
+function* installStrictProvider(
+  harness: FakeRuntimeHarness,
+  options: { place?: () => Operation<AcpxSessionPlacement> } = {},
+): Operation<StrictHarness> {
+  const store = makeStore();
+  const log: StrictHarness = { places: [], established: [], consulted: 0, store };
+  yield* useFlatWorld(WORKSPACE);
+  const sessions: AcpxSessionPolicy = {
+    *place(context) {
+      log.places.push(context);
+      if (options.place) {
+        return yield* options.place();
+      }
+      return { sessionKey: WORKFLOW_SESSION_KEY, cwd: SESSION_DIR };
+    },
+    // deno-lint-ignore require-yield
+    *established(_placement, identity) {
+      log.established.push(identity);
+    },
+  };
+  const factory = createAcpxProvider({
+    createRuntime: harness.create,
+    sessionStore: store,
+    agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+    // deno-lint-ignore require-yield
+    agentCwd: function* () {
+      return HOST_DIR;
+    },
+    mcpServers: [],
+    newSessionOptions: { allowedTools: [], systemPrompt: INSTRUCTIONS },
+    permissions: "strict",
+    sessions,
+  });
+  yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+  // An authored approve-all scope, installed the way `<ApproveAll>` installs
+  // one. Under this profile it must reach no decision at all.
+  yield* Agent.around({
+    // deno-lint-ignore require-yield
+    *requestPermission([request]) {
+      log.consulted += 1;
+      const allow = request.options.find((option) => option.kind === "allow_once");
+      return allow === undefined
+        ? { outcome: "cancelled" }
+        : { outcome: "selected", optionId: allow.optionId };
+    },
+  });
+  return log;
+}
+
+/**
+ * Route a permission request to the turn on `sessionKey`.
+ *
+ * The bridge routes by the ACP session id the run's persisted record carries, so
+ * a test that wants a request delivered seeds that record — exactly as ACPX
+ * checkpoints one before running a prompt.
+ */
+function seedRoutedRecord(store: ReturnType<typeof makeStore>, sessionKey: string, cwd: string) {
+  const record = makeRecord("codex-cmd", cwd);
+  record.acpxRecordId = `record:${sessionKey}`;
+  record.acpSessionId = ACP_SESSION_ID;
+  store.records.set(record.acpxRecordId, record);
+}
+
+/** One permission request an adapter makes, carrying material a refusal must not echo. */
+function toolRequest(sessionId: string, marker: string): AcpPermissionRequest {
+  return {
+    sessionId,
+    inferredKind: undefined,
+    raw: {
+      sessionId,
+      toolCall: {
+        toolCallId: "call-1",
+        title: `read ${marker}`,
+        rawInput: { command: `cat ${marker}`, path: marker },
+      },
+      options: [
+        { optionId: "opt-allow", name: "Allow", kind: "allow_once" },
+        { optionId: "opt-reject", name: "Reject", kind: "reject_once" },
+      ],
+    },
+  };
+}
+
+describe("Tier WAP — strict workflow Agent profile", () => {
+  it("WAP1: the runtime and every session are created with the host's own empty directory, no MCP and no tools", function* () {
+    const harness = createFakeRuntime();
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      yield* collectPrompt("summarize the retained work");
+
+      const created = harness.createdOptions.find((options) => options.onPermissionRequest);
+      expect(created?.cwd).toBe(HOST_DIR);
+      expect(created?.mcpServers).toEqual([]);
+      expect(created?.permissionMode).toBe("deny-all");
+      expect(created?.nonInteractivePermissions).toBe("deny");
+
+      expect(harness.ensureCalls).toHaveLength(1);
+      expect(harness.ensureCalls[0]).toMatchObject({
+        sessionKey: WORKFLOW_SESSION_KEY,
+        agent: "codex",
+        mode: "persistent",
+        cwd: SESSION_DIR,
+      });
+      // The empty array is the statement, so omission is not equivalent to it.
+      expect(harness.ensureCalls[0]!.sessionOptions?.allowedTools).toEqual([]);
+      expect(harness.ensureCalls[0]!.sessionOptions?.systemPrompt).toBe(INSTRUCTIONS);
+
+      // The host placed the session; nothing walked the contextual directory.
+      expect(log.places).toEqual([
+        { agentName: "codex", agentCommand: "codex-cmd", session: undefined },
+      ]);
+      expect(log.established).toEqual([
+        {
+          agentSessionId: `agent-session:${WORKFLOW_SESSION_KEY}`,
+          acpxRecordId: `record:${WORKFLOW_SESSION_KEY}`,
+        },
+      ]);
+
+      // No Workspace or caller path reaches the provider at all.
+      const inputs = JSON.stringify({
+        created: harness.createdOptions.map((options) => options.cwd),
+        ensured: harness.ensureCalls,
+        turns: harness.turns.map((turn) => turn.input),
+      });
+      expect(inputs).not.toContain(WORKSPACE);
+    });
+  });
+
+  it("WAP2: a native permission request is denied and fails the turn, whatever the document approved", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      seedRoutedRecord(log.store, WORKFLOW_SESSION_KEY, SESSION_DIR);
+      const prompt = yield* spawn(() => collectPrompt("inspect the repository"));
+      yield* sleep(20);
+
+      const created = harness.createdOptions.find((options) => options.onPermissionRequest);
+      const decision = yield* until(
+        created!.onPermissionRequest!(toolRequest(ACP_SESSION_ID, "SECRET_PATH"), {
+          signal: new AbortController().signal,
+        }),
+      );
+      // A rejection where ACP offered one, and never the allow the authored
+      // policy would have selected.
+      expect(decision).toEqual({ outcome: "reject_once" });
+      // The public chain is not consulted: there is no authority to widen.
+      expect(log.consulted).toBe(0);
+
+      // The adapter carries on regardless and reports success.
+      harness.turns[0]!.finish([{ type: "text_delta", text: "done", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      const { events } = yield* prompt;
+      const terminal = events.at(-1);
+      expect(terminal).toMatchObject({ type: "terminal", status: "failed" });
+      const failure = terminal?.type === "terminal" ? terminal.error : undefined;
+      expect(failure?.message).toBe(TOOL_PERMISSION_REFUSED);
+      expect(failure?.name).toBe("AgentToolPermissionRefused");
+    });
+  });
+
+  it("WAP3: a completed, failed or cancelled turn finishes its turn and its handle", function* () {
+    const exits = [
+      { name: "completed", result: { status: "completed", stopReason: "end_turn" } },
+      { name: "failed", result: { status: "completed", stopReason: "max_tokens" } },
+      { name: "cancelled", result: { status: "cancelled" } },
+    ] as const;
+    for (const exit of exits) {
+      const harness = createFakeRuntime();
+      harness.script({ result: exit.result });
+      yield* scoped(function* () {
+        yield* installStrictProvider(harness);
+        yield* collectPrompt(`turn that ends ${exit.name}`);
+        // The turn's own finalizers ran with the prompt's scope, before this.
+        expect(harness.turns).toHaveLength(1);
+      });
+      // Provider teardown closed the handle it opened, on every exit.
+      expect(harness.closeCalls.map((handle) => handle.sessionKey)).toEqual([WORKFLOW_SESSION_KEY]);
+    }
+  });
+
+  it("WAP3: an interrupted turn is cancelled and its handle still closes", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    yield* scoped(function* () {
+      yield* installStrictProvider(harness);
+      const prompt = yield* spawn(() => collectPrompt("a turn nobody waits for"));
+      yield* sleep(20);
+      yield* prompt.halt();
+      expect(harness.turns[0]!.cancelled).toBe(true);
+    });
+    expect(harness.closeCalls.map((handle) => handle.sessionKey)).toEqual([WORKFLOW_SESSION_KEY]);
+  });
+
+  it("WAP4: the ordinary provider keeps the caller's directory, omits MCP and session restrictions, and routes permissions publicly", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const store = makeStore();
+    let consulted = 0;
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      const factory = createAcpxProvider({
+        createRuntime: harness.create,
+        sessionStore: store,
+        agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      });
+      yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+      yield* Agent.around({
+        // deno-lint-ignore require-yield
+        *requestPermission([request]) {
+          consulted += 1;
+          const allow = request.options.find((option) => option.kind === "allow_once");
+          return allow === undefined
+            ? { outcome: "cancelled" }
+            : { outcome: "selected", optionId: allow.optionId };
+        },
+      });
+      const sessionKey = deriveSessionKey("codex-cmd", CWD);
+      seedRoutedRecord(store, sessionKey, CWD);
+      const prompt = yield* spawn(() => collectPrompt("ordinary run"));
+      yield* sleep(20);
+
+      const created = harness.createdOptions.find((options) => options.onPermissionRequest);
+      expect(created?.cwd).toBe(CWD);
+      expect(created?.mcpServers).toBe(undefined);
+      expect(harness.ensureCalls[0]!.cwd).toBe(CWD);
+      expect(harness.ensureCalls[0]!.sessionOptions).toBe(undefined);
+
+      const decision = yield* until(
+        created!.onPermissionRequest!(toolRequest(ACP_SESSION_ID, "MARKER"), {
+          signal: new AbortController().signal,
+        }),
+      );
+      // The authored policy decided, which is what `xmd run` has always done.
+      expect(consulted).toBe(1);
+      expect(decision).toEqual({ outcome: "allow_once" });
+
+      harness.turns[0]!.finish([{ type: "text_delta", text: "ok", stream: "output" }], {
+        status: "completed",
+        stopReason: "end_turn",
+      });
+      const { events } = yield* prompt;
+      expect(events.at(-1)).toMatchObject({ type: "terminal", status: "completed" });
+    });
+  });
+
+  it("WAP5: a retained session this host cannot continue refuses before ACPX is contacted", function* () {
+    const harness = createFakeRuntime();
+    const refusal = new Error("this run's Agent session was established under a different policy");
+    yield* scoped(function* () {
+      yield* installStrictProvider(harness, {
+        // deno-lint-ignore require-yield
+        *place() {
+          throw refusal;
+        },
+      });
+      // The refusal happens while the subscription is being established, so it
+      // reaches the subscriber rather than arriving as a turn's outcome — which
+      // is the point: there is no turn.
+      let raised: Error | undefined;
+      try {
+        yield* collectPrompt("continue where we left off");
+      } catch (error) {
+        raised = error instanceof Error ? error : new Error(String(error));
+      }
+      expect(raised).toBe(refusal);
+    });
+    // Nothing was established and no turn started against a replacement.
+    expect(harness.ensureCalls).toHaveLength(0);
+    expect(harness.turns).toHaveLength(0);
+  });
+
+  it("WAP6: nothing the permission request carried appears in the failure", function* () {
+    const harness = createFakeRuntime();
+    harness.script({ manual: true });
+    const marker = "/secrets/deploy-key";
+    yield* scoped(function* () {
+      const log = yield* installStrictProvider(harness);
+      seedRoutedRecord(log.store, WORKFLOW_SESSION_KEY, SESSION_DIR);
+      const prompt = yield* spawn(() => collectPrompt("look around"));
+      yield* sleep(20);
+      const created = harness.createdOptions.find((options) => options.onPermissionRequest);
+      yield* until(
+        created!.onPermissionRequest!(toolRequest(ACP_SESSION_ID, marker), {
+          signal: new AbortController().signal,
+        }),
+      );
+      harness.turns[0]!.finish([], { status: "completed", stopReason: "end_turn" });
+      const { events } = yield* prompt;
+      const terminal = events.at(-1);
+      const failure = terminal?.type === "terminal" ? terminal.error : undefined;
+      expect(failure?.message).toBe(TOOL_PERMISSION_REFUSED);
+      expect(failure?.message).not.toContain(marker);
+      expect(failure?.message).not.toContain("call-1");
+      expect(failure?.stack ?? "").not.toContain(marker);
     });
   });
 });

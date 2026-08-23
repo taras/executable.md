@@ -1318,63 +1318,46 @@ two Git repositories one atomic domain.
 
 ## 8. Agents inspect; XMD mutates
 
-### 8.1 Directory registration
+### 8.1 No directory registration
 
-`<Agent.AddDir>` explicitly adds a read-only path to its enclosing Agent
-session:
+A workflow Agent receives no Workspace, Repository, Worktree, checkout,
+materialized root, host path or additional directory. There is no
+directory-registration surface, and the workflow adapter sends no ACP
+`additionalDirectories`. What an Agent learns about the run is the text an
+authored `<Prompt>` renders, and nothing else.
 
-```md
-<Agent>
-  <Agent.AddDir path={repository_api} />
-  <Prompt>Review the API repository.</Prompt>
+### 8.2 Agent configuration is host-owned
 
-  <Agent.AddDir path={repository_sdk} />
-  <Prompt>Compare the API and SDK.</Prompt>
-</Agent>
-```
-
-It is invalid outside Agent. No first directory is special. Registrations are
-sequential and may occur between Prompts. A provider incapable of updating the
-same session with the complete ordered directory set fails; XMD neither starts
-a replacement session nor reconstructs one from transcript.
-
-ACP `additionalDirectories` is the complete ordered list on session lifecycle
-requests rather than an in-place add-directory RPC. An adapter accumulates the
-list before first Prompt and later loads or resumes the same provider session
-with the updated list only when the provider advertises that capability.
-
-### 8.2 Agent configuration is ordinary composition
-
-`workflow start` does not invisibly seed `.codex` or `.claude`. A reusable
-component writes defaults explicitly:
-
-```md
-<DefaultAgents />
-```
-
-Those files are ordinary durable Workspace effects. The provider maps the run
-root to its native configuration discovery boundary. Configuration required by
-a session exists before session creation; active sessions need not reload later
-changes. Configuration influences behavior but cannot raise host authority and
-must contain no retained credentials.
+`workflow start` materializes no `.codex`, `.claude` or other provider
+configuration, and there is nothing in the Workspace for a provider to discover:
+the directory the Agent runs in is empty. The workflow host supplies the fixed
+profile below, beneath the document surface. A document cannot replace it, add
+an MCP server, choose a host directory, or raise its authority.
 
 ### 8.3 Workflow Agent authority
 
-Workflow Agents are mandatorily read-only. Enforcement has three layers:
+Every live or partial workflow Agent attachment gets a working directory the
+host owns: created empty before the session is established, never written to by
+this host, never read back into the Workspace, and removed when the attachment
+ends. The runtime is created with no MCP servers, each session asks for an empty
+native tool set, and the permission mode is `deny-all` with non-interactive
+denial. A fixed session instruction layer states that boundary to the Agent in
+the same terms.
 
-1. the permission bridge allows only read/search operations and denies mutation;
-2. the provider runs with its native read-only sandbox; and
-3. registered Workspace paths are presented as read-only filesystem views.
+A native tool permission request is denied and fails the turn it belongs to,
+with a fixed diagnostic that names nothing the request carried. It does not
+reach the public permission chain, so an authored `<ApproveAll>` composes around
+nothing: there is no native tool authority for it to widen.
 
-`<ApproveAll>` and provider configuration cannot exceed that host ceiling. A
-provider that cannot enforce it fails before Prompt execution. Provider caches
-and session state may use separate writable storage that is never imported back
-into the Workspace.
+That directory is attachment arrangement rather than retained state. It does not
+identify a logical session, is never imported into the Workspace, and is
+recreated empty on the next attachment. Provider caches and provider-owned
+session state live in the run's own provider-session sidecar (§8.5), which the
+document cannot reach.
 
-The authoritative SQLite Workspace is materialized to disposable ordinary
-directories for native Agent inspection. A later Prompt receives a view of the
-current logical root. The derived view has no sync-back or conflict-resolution
-path and may be discarded and recreated.
+This is what the host asks for and what it refuses. It is not a claim that every
+ACP adapter exposes no tool when asked for none; that portable proof is tracked
+by #496 and does not widen this ceiling.
 
 ### 8.4 Generated XMD
 
@@ -1474,27 +1457,66 @@ grant itself Push, PullRequest, secrets or another external provider merely by
 naming a component. Trusted reusable Markdown components may be admitted
 explicitly; generated XMD admits none of them yet.
 
-The live Agent request/result loop, `<Agent.AddDir>`, ACP `additionalDirectories`
-and workflow-bundled Markdown component admission are also unbuilt.
+The live Agent request/result loop and workflow-bundled Markdown component
+admission are also unbuilt. Directory registration is not among them: §8.1 is
+the contract, and a workflow Agent is given no directory to register.
 
 ### 8.5 Agent session continuity
 
-The filtered workflow journal and provider-owned Agent session are separate
+The filtered workflow journal and the provider-owned Agent session are separate
 retained assets. The journal preserves observable prompts, responses, tool
 events and outcomes for replay and training. It does not claim to reconstruct
 provider-internal summaries, hidden context or tool state.
 
-Each logical Agent session is identified by WorkflowRun and Agent/Session
-expansion identity, independent of a materialized view's absolute path. The
-retained mapping records provider and agent identity, provider session ID,
-Workspace-relative primary directory and ordered registered-directory set.
+**Identity is the engine's.** Within one run a logical Agent session is
+identified by the Agent/Session expansion identity the engine derived, and by
+nothing else. The authored `<Session name>` is descriptive: two sibling
+`<Session name="review">` elements are two sessions. The name travels the
+compositional `Agent.session()` chain, where a handler may change it; the
+identity travels inside an opaque placement the element routes, readable only
+through the authority delivered to the installed provider.
+
+The provider and the resolved agent command are stored beside that identity as
+compatibility attributes. Changing either refuses reattachment rather than
+selecting or creating a second mapping. A working directory and any provider
+placement key are not identity at all.
+
+**The mapping lives in the run.** It is a row in the run's own database,
+committed in the run's own transaction — a mapping that could commit while the
+run did not would describe a session the run never had. The table is part of the
+schema the run is created with, so it appears with every other table or not at
+all. What stays beside the run on disk is the provider's own session store and
+one empty working directory per session; both are disposable, and neither is
+retained state.
+
+**A canonical assertion comes before the mapping.** The order is provider
+creation, then the provider's canonical, tagged assertion of a durable identity,
+then the mapping commit, then the first Prompt. Occupancy of a key in the
+provider's own store is not an assertion — it says something is there, not what
+conversation it is.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the
-provider. Before a later live Prompt, the adapter resumes the same provider
-session and maps its logical directories to the current read-only
-materialization. A missing, corrupt or unresumable provider session fails; XMD
-does not silently start another session or inject a transcript while claiming
-conversation continuity. Full replay never attaches the provider.
+provider, and full replay never attaches one. Before a later live Prompt, the
+host resolves the same identity under a new empty working directory:
+
+- no mapping and no assertion means nothing was ever established, and a session
+  may be created;
+- no mapping and exactly one canonical assertion is the pre-commit window — an
+  attempt interrupted between the provider asserting and this run recording it —
+  and reconciles to that identity;
+- a mapping whose identity, compatibility attributes and policy fingerprint
+  agree, and whose assertion the provider still makes with the same kind and
+  value, reattaches;
+- a missing assertion, an assertion of a different kind or value, a changed
+  provider, agent or policy, and more than one assertion are each one explicit
+  refusal.
+
+No refusal starts a replacement session, and none injects a transcript while
+claiming conversation continuity.
+
+Deleting a run removes its retained storage — the mapping with it, because the
+mapping is in it — and its provider-session directory, under the executor lock,
+and reports exactly the categories that went. A refused deletion removes neither.
 
 ## 9. Replay and continuation
 
@@ -1507,7 +1529,6 @@ durable observations and mutations restore.
 | bundled component import | restore the retained `{ kind: "workflow", path, sourceHash, content }` selection and reconstruct the component from that exact source, resolving no name and reading no file |
 | lexical Dir/Repository/Worktree | reinstall contextual cwd and live facade |
 | Agent provider/session | attach lazily before the first live Agent operation |
-| Agent.AddDir | re-register in document order |
 | Repository base/default resolution | restore pinned result |
 | Repository/Worktree creation | restore the retained creation record, then reattach and verify the retained Git state without recloning |
 | File read | restore historical content |
@@ -2501,7 +2522,8 @@ fetch operation requires its own language and durability contract.
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
 | workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
 | history fork | built (§11); Deno provider only |
-| read-only Agent materialization | defined here; proof required |
+| workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
+| workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
 | generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |

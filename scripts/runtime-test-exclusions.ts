@@ -348,6 +348,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/367",
   },
   {
+    path: "packages/workflow/tests/workflow-agent-sessions.test.ts",
+    reason:
+      "WSL5 deletes real node:sqlite run databases through the Deno lifecycle adapter, which takes the run's advisory lock through Deno.FsFile — a lock this host refuses to take under any other runtime. The sidecar primitives the rest of the tier covers are ordinary filesystem work and would run anywhere; they are not separable from the deletion case without splitting the retention contract across two files",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
+    path: "packages/cli/tests/workflow-agent-sessions.test.ts",
+    reason:
+      "runs a document with two same-named <Session> sites against a real node:sqlite WorkflowRun database, with the run's Workspace attached and the mapping table read back across attachments; the store and the DOFS Workspace under it are both the Deno adapter's",
+    issue: "https://github.com/taras/executable.md/issues/367",
+  },
+  {
     path: "packages/workflow/tests/workflow-suspension.test.ts",
     reason:
       "publishes and replays durable suspension requests against a real node:sqlite run database through the Deno lifecycle adapter; node:sqlite remains behind --experimental-sqlite on Node 22 and Bun has none",
