@@ -1841,9 +1841,11 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       });
 
       expect(attempt.evaluated.failure).toBe(undefined);
-      // The chain is live and reporting content, which is what would have sent
-      // the self-closing `<File />` down the write branch.
-      expect(answered.length).toBeGreaterThanOrEqual(1);
+      // Exactly one call, and it is `<Says />`'s: the handler is installed and
+      // reporting content, which is what would have sent the self-closing
+      // `<File />` down the write branch. A `<File>` that queried the chain
+      // would take the second scripted answer and truncate, failing below.
+      expect(answered).toEqual([script[0]]);
       expect(String(attempt.evaluated.output)).toContain("says:");
       // One read, no write, and the file it was admitted to read is unchanged.
       expect(attempt.files).toEqual(["notes.md"]);
@@ -1874,9 +1876,9 @@ describe("Tier GXC — the authored form survives the public content chain", () 
         const files = yield* useWorkspaceFiles(root);
         const evaluated = yield* evaluate(
           selecting(
-            `<File path="proposed.md">the fragment wrote this</File>\n`,
-            [pinnedFileRead()],
-            { allow: ["write"], mutations: [pinnedFileWrite()] },
+            `<Says />\n\n<File path="proposed.md">the fragment wrote this</File>\n`,
+            [pinnedFileRead(), says()],
+            { allow: ["read", "write"], mutations: [pinnedFileWrite()] },
           ),
           { installations: [scripted(script, answered)] },
         );
@@ -1884,12 +1886,18 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       });
 
       expect(attempt.evaluated.failure).toBe(undefined);
+      // Exactly one call, and it is `<Says />`'s: the handler is installed and
+      // answering, and the paired `<File>` consulted it not at all. A `<File>`
+      // that queried the chain would take the second scripted answer — which
+      // denies content — and read instead of writing, failing below.
+      expect(answered).toEqual([script[0]]);
+      expect(attempt.evaluated.values).toEqual([{ name: "Says", value: `says:${script[0]}` }]);
       // One write of the admitted bytes, and no read of a path the fragment
       // never asked to read.
       expect(attempt.files).toEqual(["write:proposed.md"]);
       expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
-      expect(attempt.evaluated.values).toEqual([]);
       expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+        { name: "Says", identity: "test://says", form: "self-closing" },
         { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
       ]);
     });
