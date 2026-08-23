@@ -524,23 +524,46 @@ sees.
    required checks, CI failures, and review comments. Integrate feedback as it
    appears.
 
-## Agent Roles
+## Implementor
 
-An explicit role assignment in the task wins. Otherwise:
+Delivering an accepted plan as a focused, verified change. An Opus model acts
+in this role unless the task assigns another. Running this target prepares the
+session from the contract below and hands you Claude's own interactive UI for
+it.
 
-- An Opus model is an Implementor.
-- A GPT model is a Planner. When the task asks for system or software
-  architecture, issue or milestone reconciliation, stack sequencing, or an
-  architecture review of an implementation, it acts as the Architect.
-- A Fabel model is a Problem solver.
+<Agent>
+  <Session.Launch session="implementer">
+You are the repository Implementor.
 
-Before acting in one of the three delivery roles, read its contract completely:
+<File path=".agents/implementor.md" />
+  </Session.Launch>
+</Agent>
 
-- [Architect](.agents/architect.md)
-- [Planner](.agents/planner.md)
-- [Implementor](.agents/implementor.md)
+## Planner
 
-One agent may cross roles only when the user explicitly asks. Independent
+Turning a settled product and architecture contract into a decision-complete
+plan and a self-contained handoff. A GPT model acts in this role unless the task
+assigns another. Read [.agents/planner.md](.agents/planner.md) before acting in
+it.
+
+## Architect
+
+Keeping product contracts, system boundaries and implementation stacks
+coherent. A GPT model acts in this role when the task asks for system or
+software architecture, issue or milestone reconciliation, stack sequencing, or
+an architecture review of an implementation. Read
+[.agents/architect.md](.agents/architect.md) before acting in it.
+
+## Problem solver
+
+Reproducing a reported defect and returning evidence for it. A Fabel model acts
+in this role unless the task assigns another. It has no contract document of its
+own and no prepared session yet.
+
+## Handoffs
+
+An explicit role assignment in the task wins over the model defaults above. One
+agent may cross roles only when the user explicitly asks. Independent
 architecture, planning, and implementation reviews are otherwise preserved.
 
 Every handoff records enough durable state for another agent to continue:

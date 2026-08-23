@@ -30,7 +30,12 @@ import type {
 import { flushOutput, installControlledLauncher, reserveTerminal } from "@executablemd/runtime";
 import type { AgentSessionCoordinator, NativeLaunchRequest } from "@executablemd/runtime";
 import { createAcpxProvider } from "../src/provider.ts";
-import { nativeAdapterFor } from "../src/native-launch.ts";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  allocatesIdentity,
+  knownNativeAdapters,
+  nativeAdapterFor,
+} from "../src/native-launch.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -653,6 +658,24 @@ describe("Tier NL — native session launch", () => {
     expect(codex?.launcher).toBe("codex");
     expect(codex?.resume("abc-123")).toEqual(["codex", "resume", "abc-123"]);
     expect(nativeAdapterFor("gemini")).toBe(undefined);
+  });
+
+  it("NL19: claude is the only advertised adapter, and it names its own sessions", function* () {
+    // Advertisement is a claim about what has been proven against an installed
+    // CLI, and the two documents beside this package's source are what proved
+    // it: `ClaudeNativeLaunch.test.md` and `ClaudeZeroTurnExit.test.md`, run
+    // through the built binary against Claude Code 2.1.241 on macOS arm64.
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+
+    const claude = nativeAdapterFor("claude");
+    expect(claude !== undefined && allocatesIdentity(claude)).toBe(true);
+    expect(claude?.identity).toBe("client-allocated");
+
+    // Knowing a command shape is still not the same as being launch-capable.
+    // Codex keeps its adapter and its contract tests, and nothing has run it
+    // against an installed Codex — so it stays off the list.
+    expect(knownNativeAdapters()).toEqual(["claude", "codex"]);
+    expect(ADVERTISED_NATIVE_LAUNCH).not.toContain("codex");
   });
 });
 

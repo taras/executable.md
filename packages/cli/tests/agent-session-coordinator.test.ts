@@ -26,8 +26,14 @@ import {
   installControlledLauncher,
 } from "@executablemd/runtime";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
-import { createAcpxProvider, createMemorySessionRouteStore } from "@executablemd/acp";
+import {
+  ADVERTISED_NATIVE_LAUNCH,
+  createAcpxProvider,
+  createDenoSessionRouteStore,
+  createMemorySessionRouteStore,
+} from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
+import type { NativeLaunchRequest } from "@executablemd/runtime";
 import {
   sessionCoordinatorRoot,
   useSessionCoordinator,
@@ -103,10 +109,40 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
   };
 }
 
-function launchRequest(): AgentLaunchRequest {
+/**
+ * The whole phase sequence, the way core drives it.
+ *
+ * `collectingAuthority` stops after preparation, which is all the ownership
+ * cases need. A case about what the host hands the launcher has to go the
+ * distance, and stops at the first phase that carries a failure — exactly as
+ * the real authority does before deriving a result.
+ */
+function performingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
+  return {
+    *perform(_request, phases) {
+      const prepared = yield* phases.prepare();
+      records.push(prepared);
+      if (prepared.failure) {
+        return;
+      }
+      const detached = yield* phases.detach(prepared);
+      records.push(detached);
+      if (detached.failure) {
+        return;
+      }
+      records.push(yield* phases.exit(prepared));
+    },
+    // deno-lint-ignore require-yield
+    *refuse(_request, preparation) {
+      records.push(preparation);
+    },
+  };
+}
+
+function launchRequest(agent = "claude"): AgentLaunchRequest {
   const request = {
     instructions: "You are the repository implementor.",
-    agent: "claude",
+    agent,
     cwd: "/work",
     additionalDirectories: [] as readonly string[],
     permissionMode: "deny-all" as const,
@@ -167,13 +203,29 @@ function countingRoutes(): { store: AgentSessionRouteStore; operations: string[]
   };
 }
 
-/** Run one launch against a provider built with or without a coordinator. */
+/**
+ * Run one launch against a provider built with or without a coordinator.
+ *
+ * `defaults: true` passes neither an advertisement nor an adapter, so what the
+ * provider serves is the package's own `ADVERTISED_NATIVE_LAUNCH` and the
+ * built-in Claude adapter — which is what an actual host assembles, and the
+ * only way these cases can say anything about the shipped default.
+ */
 function* launchUnder(
   coordinator: AgentSessionCoordinator | undefined,
   records: LaunchRecord[],
   probe: RuntimeProbe,
-  options: { adapter?: NativeAdapter; routeStore?: AgentSessionRouteStore } = {},
+  options: {
+    adapter?: NativeAdapter;
+    routeStore?: AgentSessionRouteStore;
+    defaults?: boolean;
+    launched?: NativeLaunchRequest[];
+    agent?: string;
+    /** Drive every phase, not only preparation. */
+    perform?: boolean;
+  } = {},
 ): Operation<void> {
+  const agent = options.agent ?? "claude";
   yield* scoped(function* () {
     yield* API.Env.around({
       // deno-lint-ignore require-yield
@@ -181,7 +233,9 @@ function* launchUnder(
         return "/work";
       },
     });
-    yield* installControlledLauncher();
+    yield* installControlledLauncher({
+      record: (request) => options.launched?.push(request),
+    });
     const factory = createAcpxProvider({
       createRuntime: probeRuntime(probe),
       sessionStore: {
@@ -192,17 +246,29 @@ function* launchUnder(
         resolve: () => "claude-cmd",
         list: () => ["claude"],
       },
-      advertiseNativeLaunch: ["claude"],
-      nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
+      ...(options.defaults
+        ? {}
+        : {
+            advertiseNativeLaunch: ["claude"],
+            nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
+          }),
       ...(coordinator ? { coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     });
     yield* factory(
-      { defaultAgent: "claude", permissionMode: "deny-all" },
-      collectingAuthority(records),
+      { defaultAgent: agent, permissionMode: "deny-all" },
+      options.perform ? performingAuthority(records) : collectingAuthority(records),
     );
-    yield* Agent.operations.launch(launchRequest());
+    yield* Agent.operations.launch(launchRequest(agent));
   });
+}
+
+/** A directory this test owns, removed with it. */
+function* useOwnedRoot(label: string): Operation<string> {
+  const root = join(tmpdir(), `xmd-${label}-${randomUUID()}`);
+  yield* ensureDir(root);
+  yield* ensure(() => rm(root, { recursive: true, force: true }));
+  return root;
 }
 
 describe("Tier HC — host session ownership", () => {
@@ -310,6 +376,78 @@ describe("Tier HC — host session ownership", () => {
 
     expect(probe.ensures).toBe(1);
     expect(counted.operations).toEqual([]);
+  });
+
+  it("HC8: the shipped default advertises claude, and Codex stays off it", function* () {
+    // What a host actually assembles. A case that injected an advertisement
+    // would prove the mechanism and say nothing about what ships.
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+    expect(ADVERTISED_NATIVE_LAUNCH).not.toContain("codex");
+  });
+
+  it("HC9: a default Claude launch reaches the launcher here, and refuses elsewhere", function* () {
+    const root = yield* useOwnedRoot("hc9");
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
+    const launched: NativeLaunchRequest[] = [];
+    // Only this host assembles both halves. Node and Bun build neither, which
+    // is what makes the same call refuse there.
+    const routeStore = onDeno() ? createDenoSessionRouteStore(root) : undefined;
+
+    yield* launchUnder(
+      onDeno() ? createDenoAgentSessionCoordinator(root) : undefined,
+      records,
+      probe,
+      { defaults: true, perform: true, launched, ...(routeStore ? { routeStore } : {}) },
+    );
+
+    if (!onDeno()) {
+      // Advertised and unservable is a refusal, and it costs nothing: no
+      // runtime was built, no availability probe spawned, no identity
+      // allocated and no child started.
+      const failure = records.find((record) => record.failure)?.failure;
+      expect(failure?.class).toBe("unsupported-capability");
+      expect(launched).toEqual([]);
+      expect(probe.runtimes).toBe(0);
+      expect(probe.doctors).toBe(0);
+      expect(probe.ensures).toBe(0);
+      expect(probe.closes).toBe(0);
+      return;
+    }
+
+    // The whole way to the launcher, and nothing was created through ACP on the
+    // way: a session Claude names is materialized by the native process.
+    expect(records.find((record) => record.failure)).toBe(undefined);
+    expect(probe.runtimes).toBe(0);
+    expect(probe.ensures).toBe(0);
+    expect(launched.length).toBe(1);
+    const command = launched[0]!.command;
+    expect(command[0]).toBe("claude");
+    expect(command[1]).toBe("--session-id");
+    expect(command[3]).toBe("--system-prompt-file");
+    // The prepared text crossed as a path, so it is in neither surface another
+    // process can read.
+    expect(command.some((argument) => argument.includes("repository implementor"))).toBe(false);
+
+    const prepared = records.find((record) => record.phase === "prepared");
+    expect(prepared).toMatchObject({
+      identityProvenance: "client-allocated",
+      launcher: "claude",
+      sessionState: "created",
+    });
+    expect(command[2]).toBe((prepared as { nativeSessionId?: string }).nativeSessionId);
+  });
+
+  it("HC10: an unadvertised agent keeps ordinary behavior on every runtime", function* () {
+    // Codex has a command shape and no advertisement, so nothing about session
+    // ownership applies to it — including on the host that could have owned it.
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
+    yield* launchUnder(undefined, records, probe, { defaults: true, agent: "codex" });
+
+    const failure = records.find((record) => record.failure)?.failure;
+    expect(failure?.class).toBe("unsupported-capability");
+    expect(failure?.message).toContain("not advertised");
   });
 
   it("HC5: the Deno and compiled entrypoints install one; Node and Bun do not", function* () {

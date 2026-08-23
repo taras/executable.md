@@ -288,7 +288,10 @@ or a value that merely looks like a UUID never supplies or replaces it.
 Where the provider returns the identity, XMD does not infer that an ACP session
 ID is accepted by a native CLI merely because both values are strings or UUIDs.
 
-A provider-returned native-launch-capable provider proves all of the following:
+What an adapter must prove before it is advertised follows its identity
+provenance, because the two constructions make different claims.
+
+A **provider-returned** adapter proves all seven of the following:
 
 1. session creation materializes durable state the native UI can resume;
 2. its returned native ID names that exact state;
@@ -300,9 +303,32 @@ A provider-returned native-launch-capable provider proves all of the following:
 7. ACP can later reattach to the same session if document execution uses it
    again.
 
-An adapter that names its own sessions proves less, because it asks less: no
-ACP session is created, so there is nothing for ACP and a native process to
-agree about. It creates the session directly and resumes it by the same name.
+A **client-allocated** adapter proves less, because it asks less: no ACP session
+is created, so there is nothing for ACP and a native process to agree about, and
+claims 1, 2, 5 and 7 are about a handoff it does not make. It creates the
+session directly and resumes it by the same name, and what it proves is exactly
+that:
+
+1. the adapter allocates the identity inside ownership, before any process
+   exists, and nothing else supplies or replaces it;
+2. the native process creates that exact conversation from a private
+   mode-`0600` instruction file, with the text in neither argv nor environment;
+3. those prepared instructions are effective on the first native user turn,
+   with no bootstrap model turn in front of them;
+4. a later independent invocation resumes the same identity and reaches the
+   history the first one made, allocating nothing and never falling back to
+   creating;
+5. a session left without a conversation turn behaves the same way — the same
+   identity comes back, or the provider refuses that exact identity and XMD
+   fails closed;
+6. every process, private file and durable record the launch created is gone
+   when it ends; and
+7. no path substitutes an identity, converts a construction route, or creates a
+   replacement conversation.
+
+Both lists are proven against an installed CLI and neither is proven by
+inspection. An adapter proves the list its provenance names, and nothing is
+advertised on the strength of the other one.
 
 For the built-in adapters, the native commands are:
 
@@ -324,11 +350,16 @@ values. A custom ACP agent without a declared native launcher fails with an
 unsupported-capability error before XMD releases its ACP session.
 
 Knowing a command shape is not the same as being launch-capable. Advertisement
-is separate, and empty by default: an adapter becomes launch-capable only once
-an opt-in integration test proves the seven claims above against the installed
-CLI. Until then `<Session.Launch>` refuses that agent before releasing its ACP
-session, which is the failure this contract asks for rather than a hopeful
-spawn. `claude` and `codex` are unadvertised on `main`.
+is separate: an adapter becomes launch-capable only once an opt-in proof runs
+the claims its provenance names against the installed CLI. Until then
+`<Session.Launch>` refuses that agent before releasing its ACP session, which is
+the failure this contract asks for rather than a hopeful spawn.
+
+`claude` is advertised. Its client-allocated claims were proven through the
+production CLI against **Claude Code 2.1.241 on macOS arm64**, which is the
+compatibility point the advertisement stands on. `codex` is unadvertised: its
+command shape and adapter contract tests exist, and nothing has run its
+provider-returned claims against an installed Codex.
 
 ## Runtime sequence
 
@@ -768,11 +799,26 @@ production launcher, so what they prove is the argument vector a native CLI
 receives, the status it propagates back, and that a cancelled launch leaves no
 process holding the terminal.
 
-Separate opt-in integration tests verify that each supported adapter's
-ACP-created session is actually visible to the installed native CLI and that
-prepared instructions affect its first native turn. A provider is not advertised
-as launch-capable until that compatibility test passes, and none is advertised
-on `main`.
+Separate opt-in proofs run the real production command against an installed
+CLI, and each proves the claims its adapter's provenance names under
+*Provider-native identity* — an ACP-created session the native CLI can see for a
+provider-returned adapter, direct creation and same-identity resume for one that
+names its own sessions. A provider is not advertised as launch-capable until its
+own list passes.
+
+Claude's are `packages/acp/src/ClaudeNativeLaunch.test.md` and
+`packages/acp/src/ClaudeZeroTurnExit.test.md`. They are authored documents, run
+whole and independently of each other, and what they run is
+`xmd run AGENTS.md#Implementor --default-agent claude` through the built binary
+in a byte-for-byte copy of the checked-in role document — never Markdown a test
+assembled. The first spends exactly two model turns; the second spends none and
+lives apart so that correcting it can never respend them. Both are opt-in and
+refuse before starting any provider process without it. TypeScript owns only the
+pseudo-terminal, the child lifecycle, the argument vector the CLI received, file
+modes, the structured route and journal reads, and exact-path cleanup; the
+documents own the schemas, the assertions and everything an operator reads, and
+no verdict may carry terminal output, argv, environment, prepared text, the
+history marker or a private path.
 
 ## What this contract covers
 
@@ -791,11 +837,12 @@ model.
 
 Two things it does not yet have, and both fail closed rather than degrading:
 
-- **No adapter is advertised.** `claude` and `codex` have command shapes and
-  contract tests, and neither is launch-capable until its opt-in integration
-  proves the seven claims under *Provider-native identity* against the
-  installed CLI. A launch naming an unadvertised agent is refused with
-  `unsupported-capability` before its ACP session is released.
+- **Only `claude` is advertised.** It is client-allocated, and its proofs ran
+  the applicable claims under *Provider-native identity* against Claude Code
+  2.1.241 on macOS arm64. `codex` has a command shape and contract tests and is
+  not launch-capable, because nothing has proven its provider-returned claims
+  against an installed Codex. A launch naming an unadvertised agent is refused
+  with `unsupported-capability` before its ACP session is released.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given.
