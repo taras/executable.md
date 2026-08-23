@@ -18,7 +18,7 @@ import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
-import { registration as registrationRecord } from "../component-invocation.ts";
+import { registerClaim } from "../component-invocation.ts";
 import type { ComponentClaim } from "../component-invocation.ts";
 import type {
   ComponentRegistry,
@@ -67,10 +67,10 @@ export interface ComponentRegistration {
    * The claim domain this implementation names durable work in.
    *
    * Only a component that takes a durable identity from its invocation needs
-   * one, and it mints its own with `componentClaim()`. It is kept on the record
-   * this call builds, behind a private field: the registry travels through a
-   * public handler, so what a handler may hold is the record, and what it may
-   * not do is read the domain out of it or put it on a record of its own.
+   * one, and it mints its own with `componentClaim()`. This call is what
+   * registers it: from here the domain answers for this component name, and
+   * only from inside this scope. Nothing about it travels in the registry,
+   * which is a public answer a handler may keep and hand back elsewhere.
    */
   claim?: ComponentClaim;
   /**
@@ -245,9 +245,14 @@ export function* registerComponents(
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
     };
-    // The record, not the definition, is what carries the domain: a definition
-    // is spread by any handler that wraps it, and this is not.
-    batch.set(name, { ...batch.get(name), [kind]: registrationRecord(definition, origin, claim) });
+    if (claim !== undefined && !(yield* registerClaim(claim, name))) {
+      throw new ComponentRegistrationError(
+        `the registration for "${name}" offers a claim domain that is already registered: a ` +
+          "domain belongs to the one registration that made it, and lending it is how one " +
+          "registration's work gets named under another's",
+      );
+    }
+    batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });
   }
 

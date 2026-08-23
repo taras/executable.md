@@ -20,8 +20,8 @@ import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
 import { sessionPlacement } from "./session-request.ts";
-import { componentClaim, durableIdentityOf } from "../component-invocation.ts";
-import type { ComponentClaim, ComponentInvocation } from "../types.ts";
+import { durableIdentityOf } from "../component-invocation.ts";
+import type { ComponentClaim, ComponentInvocation, FunctionComponent } from "../types.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
@@ -174,60 +174,58 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
 }
 
 /**
- * The domain `<Session>` names its placements in.
+ * `<Session>`, closed over the domain it names its placements in.
  *
- * Minted here beside the implementation and attached where it is registered, so
- * an implementation kept from a `<Session>` site names nothing at some other
- * element's invocation.
+ * Built per installation, because a domain belongs to the registration that
+ * made it: an implementation kept from one installation's `<Session>` site
+ * names nothing at another's, and nothing at some other element's invocation.
  */
-export const SESSION_CLAIM: ComponentClaim = componentClaim();
-
-export function* SessionComponent(
-  props: Record<string, Json>,
-  invocation: ComponentInvocation,
-): Operation<Json> {
-  // The name routes; the identity does not. `<Session name="review">` written
-  // twice is two sessions, and no handler on the public chain can make them one
-  // — it holds the placement, reads the name, and reaches no further.
-  //
-  // The issuance closes as soon as this element has placed its session, so a
-  // handler that kept the placement cannot route it for the next `<Session>`:
-  // both would otherwise resolve to this element's identity. `close()` is
-  // synchronous, so the guarantee holds however the call left.
-  const issuance = sessionPlacement(
-    durableIdentityOf(invocation, SESSION_CLAIM),
-    asString(props.name),
-  );
-  let session: Session;
-  try {
-    session = yield* Agent.operations.session(issuance.request);
-  } finally {
-    issuance.close();
-  }
-  if (!(yield* hasContent())) {
-    return "";
-  }
-  yield* Agent.around(
-    {
-      *session([name], next) {
-        if (name === undefined) {
-          return session;
-        }
-        return yield* next(name);
+export function sessionComponent(claim: ComponentClaim): FunctionComponent {
+  return function* SessionComponent(
+    props: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<Json> {
+    // The name routes; the identity does not. `<Session name="review">` written
+    // twice is two sessions, and no handler on the public chain can make them one
+    // — it holds the placement, reads the name, and reaches no further.
+    //
+    // The issuance closes as soon as this element has placed its session, so a
+    // handler that kept the placement cannot route it for the next `<Session>`:
+    // both would otherwise resolve to this element's identity. `close()` is
+    // synchronous, so the guarantee holds however the call left.
+    const identity = yield* durableIdentityOf(invocation, claim);
+    const issuance = sessionPlacement(identity, asString(props.name));
+    let session: Session;
+    try {
+      session = yield* Agent.operations.session(issuance.request);
+    } finally {
+      issuance.close();
+    }
+    if (!(yield* hasContent())) {
+      return "";
+    }
+    yield* Agent.around(
+      {
+        *session([name], next) {
+          if (name === undefined) {
+            return session;
+          }
+          return yield* next(name);
+        },
+        *prompt([text, options], next) {
+          return yield* next(text, { session, ...options });
+        },
+        *launch([request], next) {
+          // Pinned by deriving, which is the only way a handler may change what a
+          // launch asks for. An explicit `session` on the launch itself already
+          // named one, and lexical pinning does not override it.
+          return yield* next(request.session === undefined ? request.with({ session }) : request);
+        },
       },
-      *prompt([text, options], next) {
-        return yield* next(text, { session, ...options });
-      },
-      *launch([request], next) {
-        // Pinned by deriving, which is the only way a handler may change what a
-        // launch asks for. An explicit `session` on the launch itself already
-        // named one, and lexical pinning does not override it.
-        return yield* next(request.session === undefined ? request.with({ session }) : request);
-      },
-    },
-    { at: "min" },
-  );
-  return yield* content();
+      { at: "min" },
+    );
+    return yield* content();
+  };
 }
 
 export function* Prompt(props: Record<string, Json>): Operation<Json> {

@@ -52,7 +52,8 @@
  * running concurrently shadow only themselves.
  */
 
-import type { FunctionComponentDefinition, Registered } from "./types.ts";
+import { createContext, useScope } from "effection";
+import type { Context, Operation } from "effection";
 
 /**
  * What a function component receives beside its props.
@@ -76,78 +77,78 @@ export interface ComponentInvocation {
  * Which implementation an invocation's identity is for.
  *
  * Minted by core for whoever registers a component that names durable work
- * after itself, closed over by that implementation, and attached to the
- * registration so the engine records it on the invocation it resolves. Object
- * identity is the whole of it: there is nothing to read, nothing to compare by
- * value, and nothing a look-alike can be built to match.
+ * after itself and closed over by that implementation. Registering it records
+ * the component name and the registrant's own scope; from then on it answers
+ * only for that name, and only from inside that scope.
  */
-let isClaim: (value: unknown) => boolean;
+let registrationOf: (value: unknown) => { registration: Registration | undefined } | undefined;
+let bind: (claim: ComponentClaim, registration: Registration) => boolean;
 
 export class ComponentClaim {
-  readonly #minted: boolean;
-
-  constructor() {
-    this.#minted = true;
-    Object.freeze(this);
-  }
+  /** Set once, where the implementation is registered. */
+  #registration: Registration | undefined;
 
   static {
     // A private field is the test, as everywhere else here: it appears in no
     // key list and no copy, so an object this file did not construct has none.
-    isClaim = (value) =>
-      typeof value === "object" && value !== null && #minted in value && value.#minted;
+    registrationOf = (value) =>
+      typeof value === "object" && value !== null && #registration in value
+        ? { registration: value.#registration }
+        : undefined;
+    bind = (claim, registration) => {
+      if (claim.#registration !== undefined) {
+        return false;
+      }
+      claim.#registration = registration;
+      return true;
+    };
   }
 }
 
-/**
- * One registration, as core built it, carrying the domain it registered under.
- *
- * The record travels in the registry, which is a public answer: a handler may
- * hold this, merge it, and hand it back. What it cannot do is read the domain
- * off it or put that domain on a record of its own, because the field is
- * private and every record with one was constructed here.
- */
-let claimOf: (record: unknown) => ComponentClaim | undefined;
-
-class Registration implements Registered {
-  readonly definition: FunctionComponentDefinition;
-  readonly origin: string;
-  readonly #claim: ComponentClaim | undefined;
-
-  constructor(
-    definition: FunctionComponentDefinition,
-    origin: string,
-    claim: ComponentClaim | undefined,
-  ) {
-    this.definition = definition;
-    this.origin = origin;
-    this.#claim = claim;
-    Object.freeze(this);
-  }
-
-  static {
-    claimOf = (record) =>
-      typeof record === "object" && record !== null && #claim in record ? record.#claim : undefined;
-  }
-}
-
-/** Build one registration record. Only `registerComponents` calls this. */
-export function registration(
-  definition: FunctionComponentDefinition,
-  origin: string,
-  claim: ComponentClaim | undefined,
-): Registered {
-  return new Registration(definition, origin, claim);
-}
-
-/** The domain this registration registered under, for the engine. */
-export function claimOfRegistration(record: Registered | undefined): ComponentClaim | undefined {
-  return record === undefined ? undefined : claimOf(record);
+/** Where one registration happened, as core saw it. */
+interface Registration {
+  /** The component name it registered under. */
+  readonly component: string;
+  /**
+   * A context nothing else can address, set on the registrant's own scope.
+   *
+   * Built here under a name made for this registration alone and kept in the
+   * claim, so a scope answers it only when the registrant's scope is above it,
+   * and nobody who cannot name the context can plant an answer. Containment is
+   * the whole test, and containment is structure: no handler can move one
+   * attachment's invocation inside another attachment's registration.
+   */
+  readonly probe: Context<object | undefined>;
+  /** What that scope holds, so an absent answer is not an answer. */
+  readonly token: object;
 }
 
 /** Mint one claim domain. A trusted host does this once, where it registers. */
 export function componentClaim(): ComponentClaim {
   return new ComponentClaim();
+}
+
+/**
+ * Register one domain: this component name, and this scope.
+ *
+ * Called by `registerComponents` and nowhere else. The probe context is built
+ * here, under a name made for this registration alone and kept in the claim, so
+ * the only way to answer it is to be running inside the scope it was set on.
+ * Answers false for a domain that is already registered, because a domain
+ * belongs to one registration.
+ */
+export function* registerClaim(claim: ComponentClaim, component: string): Operation<boolean> {
+  const scope = yield* useScope();
+  const probe: Context<object | undefined> = createContext<object | undefined>(
+    `xmd.registration.${crypto.randomUUID()}`,
+    undefined,
+  );
+  const token = Object.freeze({});
+  if (!bind(claim, { component, probe, token })) {
+    return false;
+  }
+  scope.set(probe, token);
+  return true;
 }
 
 /** A durable identity that cannot be issued, or one spent twice. */
@@ -169,8 +170,6 @@ interface Issuance {
   readonly id: string;
   /** The component this is an invocation of, as the engine resolved it. */
   readonly component: string;
-  /** The domain of the registration that supplied it, when one did. */
-  readonly claim: ComponentClaim | undefined;
   live: boolean;
   spent: boolean;
   /** How many projections of this invocation's own content are in flight. */
@@ -209,12 +208,8 @@ export interface IssuedInvocation {
 }
 
 /** Mint one invocation identity. Only the engine calls this. */
-export function issueInvocation(
-  id: string,
-  component: string,
-  claim: ComponentClaim | undefined,
-): IssuedInvocation {
-  const issuance: Issuance = { id, component, claim, live: true, spent: false, projecting: 0 };
+export function issueInvocation(id: string, component: string): IssuedInvocation {
+  const issuance: Issuance = { id, component, live: true, spent: false, projecting: 0 };
   return {
     invocation: new EngineInvocation(issuance),
     projecting(): () => void {
@@ -248,10 +243,20 @@ export function issueInvocation(
  * identity that is not its own, and a durable operation named after somebody
  * else's invocation admits and replays under their retained history.
  */
-export function durableIdentityOf(invocation: ComponentInvocation, claim: ComponentClaim): string {
-  if (!isClaim(claim)) {
+export function* durableIdentityOf(
+  invocation: ComponentInvocation,
+  claim: ComponentClaim,
+): Operation<string> {
+  const domain = registrationOf(claim);
+  if (domain === undefined) {
     throw new ComponentInvocationError(
       "a durable identity is claimed in a domain core minted, and this is not one",
+    );
+  }
+  const registration = domain.registration;
+  if (registration === undefined) {
+    throw new ComponentInvocationError(
+      "this claim domain was never registered, so it names nothing anywhere",
     );
   }
   const issuance = stateOf(invocation);
@@ -266,17 +271,18 @@ export function durableIdentityOf(invocation: ComponentInvocation, claim: Compon
         "identity here",
     );
   }
-  if (issuance.claim === undefined) {
+  if (registration.component !== issuance.component) {
     throw new ComponentInvocationError(
-      `<${issuance.component} /> resolved to no registration holding a claim domain, so ` +
-        "nothing here names a durable identity",
+      `this is an invocation of <${issuance.component} />, and this domain was registered for ` +
+        `<${registration.component} /> — an implementation kept from one component's site names ` +
+        "no durable identity at another's",
     );
   }
-  if (issuance.claim !== claim) {
+  if ((yield* useScope()).get(registration.probe) !== registration.token) {
     throw new ComponentInvocationError(
-      `this is an invocation of <${issuance.component} /> as another registration supplied it — ` +
-        "an implementation kept from one registration names no durable identity at another's, " +
-        "even under the same component name",
+      `this <${issuance.component} /> is running outside the registration this domain belongs ` +
+        "to — an implementation kept from one registration names no durable identity under " +
+        "another's, whatever a registry answered here",
     );
   }
   if (issuance.projecting > 0) {

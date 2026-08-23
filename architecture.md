@@ -2509,15 +2509,17 @@ is current. It is bound to which component the engine resolved as well: middlewa
 the implementation it was handed at a real site and call it from an invocation
 of something else, and every other check passes. So an implementation that names
 durable work mints an opaque claim domain, closes over it, and states it where
-it claims. A domain belongs to the exact registration that supplied the
-implementation — two attachments registering the same component hold two, and
-neither answers for the other. It is carried by nothing a handler can copy:
-not the definition, which is spread by any wrapper; not a value in the registry,
-which travels through a public handler; not a context. It sits behind a private
-field on the registration record core builds, so a handler may pass that record
-on and read nothing out of it, and the engine records on each invocation the
-domain of the registration its own resolution consulted. A domain is not a name,
-and nothing a caller supplies structurally is authoritative.
+it claims. A domain belongs to the exact registration that made it — two
+attachments registering the same component hold two, and neither answers for the
+other. Nothing a handler can carry decides which: not the definition, which any
+wrapper spreads; not the registry answer, which a handler may keep from one
+attachment and hand back inside another, record and all; not a context, which
+one scope reads and another plants. Registering records the component name and
+the registrant's own scope inside the domain, and a claim is answered only from
+inside that scope — containment is structure, not state, so no handler can move
+one attachment's invocation inside another's registration. The engine consults
+no registry to mint an invocation. A domain is not a name, and nothing a caller
+supplies structurally is authoritative.
 
 Forwarding the genuine issuance is ordinary delegation and stays
 supported; minting one, keeping a finished one, spending one site's at another,

@@ -41,7 +41,6 @@ import {
   handleFailure,
   importComponent,
   raise,
-  registry,
 } from "./component-api.ts";
 import {
   attributeCause,
@@ -65,7 +64,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
-import { claimOfRegistration, issueInvocation } from "./component-invocation.ts";
+import { issueInvocation } from "./component-invocation.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -2839,16 +2838,12 @@ function* expandFunctionComponent(
         // invocation names nothing while it is expanding its own content, and
         // that is the whole of how a nested component is reached.
         //
-        // The domain comes from the registration this name resolves to here,
-        // read off the record rather than off the answer the import chain
-        // returned — a wrapper spreads a definition, and two attachments that
-        // registered the same name are two registrations with two domains.
-        const supplier = (yield* registry).get(name);
-        const issued = issueInvocation(
-          expansion.id,
-          name,
-          claimOfRegistration(supplier?.reserved ?? supplier?.default),
-        );
+        // The authored name travels with it, and nothing else does: which
+        // registration may name durable work here is decided by the claim
+        // domain the implementation holds and the scope it was registered in,
+        // never by an answer the registry gave — that answer is a value a
+        // handler can keep from one attachment and hand back inside another.
+        const issued = issueInvocation(expansion.id, name);
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,

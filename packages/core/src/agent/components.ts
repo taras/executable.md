@@ -34,6 +34,7 @@ import type { AgentProviderAuthority } from "./launch-authority.ts";
 import { useLaunchInstallation } from "./launch-install.ts";
 import { AgentInternal } from "./internal.ts";
 import { AgentPromptError } from "./errors.ts";
+import { componentClaim } from "../component-invocation.ts";
 import {
   AGENT_PROPS,
   AGENT_PROVIDER_PROPS,
@@ -46,8 +47,7 @@ import {
   PROMPT_PROPS,
   SESSION_LAUNCH_PROPS,
   SESSION_PROPS,
-  SESSION_CLAIM,
-  SessionComponent,
+  sessionComponent,
   SessionLaunch,
 } from "./function-components.ts";
 import { promptFailureFromRecord, readCompletedPrompts } from "./journal.ts";
@@ -81,6 +81,10 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     yield* AgentInternal.around({ permissionMode: () => permissionMode }, { at: "min" });
   }
 
+  // One domain per installation: `<Session>` names its placements in the domain
+  // this call registers, so an implementation kept from another installation's
+  // `<Session>` names nothing here.
+  const sessionClaim = componentClaim();
   // Non-reserved: a repository component with one of these names is chosen
   // ahead of them, as it would be ahead of any other package's default.
   yield* registerComponents([
@@ -89,9 +93,9 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     {
       name: "Session",
       origin: CORE_ORIGIN,
-      fn: SessionComponent,
+      fn: sessionComponent(sessionClaim),
       props: SESSION_PROPS,
-      claim: SESSION_CLAIM,
+      claim: sessionClaim,
     },
     {
       name: "Session.Launch",

@@ -24,7 +24,13 @@ import type { Context, Operation } from "effection";
 import { collect, Component, content, execute, inlineSource, registerComponents } from "../mod.ts";
 import { componentClaim, durableIdentityOf } from "../host.ts";
 import { getExpansion } from "../src/expansion.ts";
-import type { ComponentClaim, ComponentInvocation, FunctionComponent, Json } from "../src/types.ts";
+import type {
+  ComponentInvocation,
+  ComponentRegistry,
+  FunctionComponent,
+  Json,
+  RegistryEntry,
+} from "../src/types.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 
 /**
@@ -51,14 +57,12 @@ interface Seen {
   readonly refusals: string[];
 }
 
-/** What `<Probe>` names its identities in. One registration, one domain. */
-const PROBE_CLAIM: ComponentClaim = componentClaim();
-
-/** `<Elsewhere />`'s own domain, so a refusal there is a mismatch, not a gap. */
-const ELSEWHERE_CLAIM: ComponentClaim = componentClaim();
-
 function useProbe(): Operation<Seen> {
   const seen: Seen = { taken: [], context: [], api: [], refusals: [] };
+  // Minted per installation, because a domain belongs to the registration that
+  // makes it: these two register once, here.
+  const PROBE_CLAIM = componentClaim();
+  const ELSEWHERE_CLAIM = componentClaim();
   return {
     *[Symbol.iterator]() {
       yield* registerComponents([
@@ -82,7 +86,7 @@ function useProbe(): Operation<Seen> {
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn(_props: Record<string, Json>, invocation: ComponentInvocation): Operation<string> {
             try {
-              seen.taken.push(durableIdentityOf(invocation, PROBE_CLAIM));
+              seen.taken.push(yield* durableIdentityOf(invocation, PROBE_CLAIM));
             } catch (error) {
               seen.refusals.push(error instanceof Error ? error.message : String(error));
             }
@@ -296,7 +300,7 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(carried).toHaveLength(1);
     expect(carried[0]).not.toContain("claim");
     expect(seen.refusals[0]).toContain("invocation of <Elsewhere />");
-    expect(seen.refusals[0]).toContain("another registration supplied it");
+    expect(seen.refusals[0]).toContain("registered for <Probe />");
   });
 
   it("CIV8: an issuance kept from the first site cannot be spent at the second", function* () {
@@ -334,18 +338,19 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(seen.refusals[0]).toMatch(/already been taken|has finished/);
   });
 
-  it("CIV9: an implementation kept from one registration names nothing at another's", function* () {
-    // Two registrations of the same component name, in scopes of their own —
-    // what two live attachments are. Each mints its own domain and closes its
-    // implementation over it.
-    const first = componentClaim();
-    const second = componentClaim();
+  it("CIV9: a registration's whole record, transplanted, still names nothing", function* () {
+    // Two attachments: same component name, each minting and registering its
+    // own domain in a scope of its own. What crosses between them is a handler
+    // that outlives one — holding the first attachment's implementation and,
+    // for the second half, its entire registry record.
     const taken: string[] = [];
     const refusals: string[] = [];
     let kept: FunctionComponent | undefined;
+    let record: RegistryEntry | undefined;
 
-    function attachment(claim: ComponentClaim, borrow: boolean): Operation<void> {
+    function attachment(options: { keep?: boolean; borrow?: boolean }): Operation<void> {
       return scoped(function* () {
+        const claim = componentClaim();
         yield* registerComponents([
           {
             name: "Owned",
@@ -354,7 +359,7 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
             props: { type: "object", properties: {}, additionalProperties: false },
             *fn(_props: Record<string, Json>, invocation: ComponentInvocation) {
               try {
-                taken.push(durableIdentityOf(invocation, claim));
+                taken.push(yield* durableIdentityOf(invocation, claim));
               } catch (error) {
                 refusals.push(error instanceof Error ? error.message : String(error));
               }
@@ -362,8 +367,33 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
             },
           },
         ]);
-        if (borrow) {
+        if (options.keep === true) {
           yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              if (name === "Owned" && definition.kind === "function") {
+                const original = definition.fn;
+                if (typeof original === "function") {
+                  kept = original;
+                }
+              }
+              return definition;
+            },
+            registry: (_args, next): ComponentRegistry => {
+              const answer = next();
+              record = answer.get("Owned");
+              return answer;
+            },
+          });
+        }
+        if (options.borrow === true) {
+          yield* Component.around({
+            // The whole record, handed back inside this attachment: not a field
+            // read out of it, the object itself.
+            registry: (_args, next): ComponentRegistry => {
+              const answer = next();
+              return record === undefined ? answer : new Map([...answer, ["Owned", record]]);
+            },
             *importComponent([name], next) {
               const definition = yield* next(name);
               if (name !== "Owned" || definition.kind !== "function") {
@@ -373,15 +403,8 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
               if (typeof original !== "function") {
                 return definition;
               }
-              if (kept === undefined) {
-                kept = original;
-                return definition;
-              }
               return {
                 ...definition,
-                // The first attachment's implementation, at this attachment's
-                // own `<Owned />` — same name, same props, and the genuine
-                // issuance the engine minted here.
                 *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
                   return yield* (kept ?? original)(props, invocation);
                 },
@@ -395,18 +418,20 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
       });
     }
 
-    // Honest first: each attachment's own implementation names its own site.
-    yield* attachment(first, false);
-    yield* attachment(second, false);
+    // Honest, in both attachments, with the first one keeping what it is given.
+    yield* attachment({ keep: true });
+    yield* attachment({});
     expect(taken).toHaveLength(2);
+    expect(new Set(taken).size).toBe(1); // one authored site, so one identity
     expect(refusals).toEqual([]);
+    expect(kept).not.toBe(undefined);
+    expect(record).not.toBe(undefined);
 
-    // Then the borrow, in a third scope registered like the first two.
-    yield* attachment(first, true);
-    yield* attachment(second, true);
+    // Then the transplant: the first attachment's record answered for this
+    // name here, and its implementation ran with the issuance minted here.
+    yield* attachment({ borrow: true });
     expect(refusals).toHaveLength(1);
-    expect(refusals[0]).toContain("as another registration supplied it");
-    // Three honest invocations named themselves; the borrowed one named nothing.
-    expect(taken).toHaveLength(3);
+    expect(refusals[0]).toContain("outside the registration this domain belongs to");
+    expect(taken).toHaveLength(2);
   });
 });

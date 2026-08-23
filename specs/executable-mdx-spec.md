@@ -1860,7 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
-| `src/component-invocation.ts` | `ComponentInvocation`, `ComponentClaim`, `componentClaim()`, `registration()`, `claimOfRegistration()`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
+| `src/component-invocation.ts` | `ComponentInvocation`, `ComponentClaim`, `componentClaim()`, `registerClaim()`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -3839,19 +3839,25 @@ after its invocation mints a **claim domain** with `componentClaim()`, closes
 over it, and states it where it claims; a domain answers for one component, and
 a claim made at an invocation of another is refused.
 
-A domain belongs to the exact registration that supplied the implementation,
-never to a component name: two attachments registering `<Evaluate>` hold two
-domains, and neither answers for the other. It is on nothing anyone can carry —
-not the definition, which a handler is given and may spread; not a value in the
-registry, which travels through a public handler; not a context. It lives behind
-a private field on the registration record core builds, so a handler holding
-that record may pass it on and can read nothing out of it. The engine records on
-each invocation the domain of the registration its own resolution consulted.
+A domain belongs to the exact registration that made it, never to a component
+name: two attachments registering `<Evaluate>` hold two domains, and neither
+answers for the other. Nothing anyone can carry decides which — not the
+definition, which a handler is given and may spread; not the registry answer,
+which a handler may keep from one attachment and hand back inside another,
+record and all; not a context, which one scope reads and another plants.
+
+What decides it is where the registration happened. `registerComponents` records
+the component name and the registrant's own scope in the domain, and a claim is
+answered only from inside that scope. Containment is structure rather than
+state: no handler can move one attachment's invocation inside another
+attachment's registration, and there is nothing to copy or hand back. The engine
+consults no registry to mint an invocation; it records the authored name, and
+the domain the implementation states does the rest.
 
 Forwarding the genuine issuance is ordinary delegation and stays supported.
 Everything else refuses rather than answering: a value the engine did not mint
-names no identity, an issuance belonging to an invocation another registration
-supplied names none in this domain, one whose invocation has finished names none here, one whose
+names no identity, an invocation running outside the registration a domain
+belongs to names none in it, one whose invocation has finished names none here, one whose
 invocation is busy expanding its content names none here, and a second
 authoritative read of one refuses. So a wrapper can neither keep the first
 site's issuance and spend it at the second, nor capture a live ancestor's and
@@ -9977,7 +9983,7 @@ Defined in §5.6.
 | CIV6 | No live ancestor | One element's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there. The two are the same component, so the claim domain settles nothing and the projection is what refuses it |
 | CIV7 | No borrowed implementation | An implementation kept from one component's real site, called from an invocation of another with that element's own genuine issuance, is refused — and the definition the handler was given carries no domain to move |
 | CIV8 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
-| CIV9 | No borrowed registration | Two scoped registrations of one component name hold two domains: each names its own site, and the first's implementation called at the second's invocation, with that invocation's genuine issuance, is refused |
+| CIV9 | No borrowed registration | Two scoped registrations of one component name hold two domains: each names its own site, and the first's implementation called at the second's invocation is refused — including when registry middleware hands the first registration's whole record back inside the second |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 
