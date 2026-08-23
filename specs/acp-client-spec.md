@@ -35,13 +35,23 @@ interface AgentApi {
   performs no model turn, and a provider that answers `prompt()` does not
   thereby answer it: native session launch is its own capability, installed on
   its own.
+- Built-in **`claude` is advertised**, as a client-allocated adapter: its
+  sessions are named by XMD and created by the native process
+  (specs/native-agent-session-launch-spec.md). So the ownership and
+  construction-route requirements below apply to it on every host, and only the
+  hosts that assemble both a coordinator and a route store — Deno and the
+  compiled binary — can serve it. `codex` remains unadvertised.
 - Every operation that can act on an **advertised** session — `session()`, a
   subscribed `prompt()` stream, a launch, and an incomplete launch replay —
   takes exclusive ownership of it first, through the session coordinator its
   host passed into the provider. Coverage follows the agent's capability, not
   the operation. Resolving an agent and placing a session own nothing.
   Acquisition never waits: contention refuses, and a host that installs no
-  coordinator refuses every one of them before contacting an agent.
+  coordinator refuses every one of them before contacting an agent. Node and Bun
+  install none, so default Claude session work refuses there before any provider
+  effect — no availability probe, no runtime, no route read, no identity, no
+  child. An agent that is not advertised keeps ordinary ACP behavior on every
+  host, Codex included.
 - The host also passes in a **construction-route store**, directly and from the
   same trusted root as the coordinator. It is required only for an advertised
   agent whose adapter names its own sessions: a provider that returns the
@@ -62,7 +72,9 @@ interface AgentApi {
   raises `AgentSessionRouteError` before runtime creation, ensure, turn, close
   or accepted history. It manufactures no launch failure, because no launch was
   asked for, and this release does not attach ACP to a session a native process
-  created.
+  created. Advertising `claude` does not change that: `<Session>` and
+  `<Prompt>` still fail closed on a route it constructed, and continuing such a
+  conversation is `<Session.Launch>`'s to do.
 - `withSessionRoute` remains routing only: it selects which partition serves a
   call and carries no authority to construct, own or answer.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,

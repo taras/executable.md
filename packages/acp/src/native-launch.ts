@@ -9,13 +9,18 @@
  * id ever appears in a document.
  *
  * Knowing the command shape is not the same as being launch-capable.
- * Advertisement is separate and deliberately empty by default: an adapter is
- * advertised only once an integration test has proven, against the installed
- * CLI, that the session ACP created is the session the native UI resumes and
- * that the prepared instruction layer is in force on its first user turn.
- * Until then `<Session.Launch>` refuses that agent before releasing its ACP
- * session, which is the failure the contract asks for rather than a hopeful
- * spawn.
+ * Advertisement is separate, and what an adapter has to prove depends on who
+ * names its sessions. An adapter the provider names proves that the session
+ * ACP created is the session the native UI resumes; an adapter that names its
+ * own sessions creates one directly, so what it proves instead is that the
+ * native process makes that exact conversation, that the private instruction
+ * layer governs its first user turn without a bootstrap, and that a later
+ * invocation resumes the same identity rather than making a second one.
+ * Until an adapter has proven its own contract against the installed CLI,
+ * `<Session.Launch>` refuses that agent before anything of the session moves —
+ * before a provider-returned adapter's ACP session is released, and before a
+ * client-allocated one allocates an identity or writes a private file. That is
+ * the failure the contract asks for rather than a hopeful spawn.
  *
  * Adapters differ in one structural way, and it is discriminated rather than
  * inferred: who chooses the provider-native session identity. A
@@ -93,13 +98,24 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
 };
 
 /**
- * The adapters whose native resume and instruction contracts have been proven
- * against the installed CLI.
+ * The adapters whose native creation, instruction and resume contracts have
+ * been proven against the installed CLI.
  *
- * Empty on `main`. A host that has run the opt-in integration proof for an
- * adapter passes its name through `AcpxProviderDependencies.advertiseNativeLaunch`.
+ * `claude` is here because `packages/acp/src/ClaudeNativeLaunch.test.md` and
+ * `packages/acp/src/ClaudeZeroTurnExit.test.md` ran the production command
+ * through the built binary against Claude Code 2.1.241 on macOS arm64 and
+ * showed the whole applicable contract: the adapter allocated the identity, the
+ * native process created that exact conversation from a private mode-0600 file,
+ * the layer governed the first user turn with no bootstrap, and a second
+ * independent invocation resumed the same identity — including a session left
+ * without a word said in it.
+ *
+ * `codex` is absent. Its command shape is known and its adapter contract tests
+ * pass, and neither is the proof: nothing has run it against an installed
+ * Codex. A host may still advertise an adapter itself by passing its name
+ * through `AcpxProviderDependencies.advertiseNativeLaunch`.
  */
-export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = [];
+export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
 
 export function nativeAdapterFor(agentName: string): NativeAdapter | undefined {
   return Object.hasOwn(ADAPTERS, agentName) ? ADAPTERS[agentName] : undefined;
