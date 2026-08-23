@@ -17,8 +17,10 @@
  * layer governs its first user turn without a bootstrap, and that a later
  * invocation resumes the same identity rather than making a second one.
  * Until an adapter has proven its own contract against the installed CLI,
- * `<Session.Launch>` refuses that agent before releasing its ACP session,
- * which is the failure the contract asks for rather than a hopeful spawn.
+ * `<Session.Launch>` refuses that agent before anything of the session moves —
+ * before a provider-returned adapter's ACP session is released, and before a
+ * client-allocated one allocates an identity or writes a private file. That is
+ * the failure the contract asks for rather than a hopeful spawn.
  *
  * Adapters differ in one structural way, and it is discriminated rather than
  * inferred: who chooses the provider-native session identity. A

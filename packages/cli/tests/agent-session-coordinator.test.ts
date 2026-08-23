@@ -18,7 +18,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agent } from "@executablemd/core";
-import type { AgentLaunchRequest, AgentProviderAuthority, LaunchRecord } from "@executablemd/core";
+import type {
+  AgentLaunchRequest,
+  AgentProviderAuthority,
+  LaunchRecord,
+  PreparedLaunchRecord,
+} from "@executablemd/core";
 import {
   API,
   createDenoAgentSessionCoordinator,
@@ -429,13 +434,17 @@ describe("Tier HC — host session ownership", () => {
     // process can read.
     expect(command.some((argument) => argument.includes("repository implementor"))).toBe(false);
 
-    const prepared = records.find((record) => record.phase === "prepared");
+    // Narrowed by the discriminant the union already carries, so reading
+    // `nativeSessionId` is the type saying it is there rather than this test.
+    const prepared = records.find(
+      (record): record is PreparedLaunchRecord => record.phase === "prepared",
+    );
     expect(prepared).toMatchObject({
       identityProvenance: "client-allocated",
       launcher: "claude",
       sessionState: "created",
     });
-    expect(command[2]).toBe((prepared as { nativeSessionId?: string }).nativeSessionId);
+    expect(command[2]).toBe(prepared?.nativeSessionId);
   });
 
   it("HC10: an unadvertised agent keeps ordinary behavior on every runtime", function* () {

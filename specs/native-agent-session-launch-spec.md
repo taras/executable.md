@@ -321,10 +321,16 @@ that:
 5. a session left without a conversation turn behaves the same way — the same
    identity comes back, or the provider refuses that exact identity and XMD
    fails closed;
-6. every process, private file and durable record the launch created is gone
-   when it ends; and
+6. every process the launch started is gone when it ends, and so is the private
+   instruction file and the directory holding it; and
 7. no path substitutes an identity, converts a construction route, or creates a
    replacement conversation.
+
+Claim 6 is about what a launch is not allowed to outlive, and it is deliberately
+narrow. The construction route and the `agent_session_launch` records **stay**:
+they are how the next invocation knows which conversation this session is, and
+removing them is what claim 4 forbids. A proof that removes them is cleaning up
+after *itself*, which is a different act — see *Testing*.
 
 Both lists are proven against an installed CLI and neither is proven by
 inspection. An adapter proves the list its provenance names, and nothing is
@@ -352,7 +358,9 @@ unsupported-capability error before XMD releases its ACP session.
 Knowing a command shape is not the same as being launch-capable. Advertisement
 is separate: an adapter becomes launch-capable only once an opt-in proof runs
 the claims its provenance names against the installed CLI. Until then
-`<Session.Launch>` refuses that agent before releasing its ACP session, which is
+`<Session.Launch>` refuses that agent before anything of the session moves —
+before a provider-returned adapter's ACP session is released, and before a
+client-allocated adapter allocates an identity or writes a private file. That is
 the failure this contract asks for rather than a hopeful spawn.
 
 `claude` is advertised. Its client-allocated claims were proven through the
@@ -376,7 +384,13 @@ Given `xmd AGENTS.md#Implementor`:
 7. The host flushes what the document has produced, so the native UI does not
    open over half-written output.
 8. The provider resolves the logical Agent and Session against the contextual
-   cwd.
+   cwd, and takes exclusive ownership of that session.
+
+Steps 9 to 12 are where the two provenances part, because they are about a
+session one of them constructs through ACP and the other does not.
+
+**Provider-returned.** ACP owns the session first and has to hand it over:
+
 9. The provider creates or resumes the durable provider session and applies the
    prepared instruction layer and directory configuration.
 10. The provider verifies a native-resume capability and obtains the exact
@@ -384,14 +398,42 @@ Given `xmd AGENTS.md#Implementor`:
 11. XMD commits the prepared launch record before releasing ownership.
 12. The provider closes or detaches the ACP session and waits for that owner to
     terminate, and XMD commits that too.
-13. The provider spawns the native UI as a foreground child using the native
-    session ID, with the terminal inherited.
+
+**Client-allocated.** Nothing is created through ACP at all, so there is no
+owner to release — what has to be settled first is which conversation this is:
+
+9. The provider reads both durable accounts under ownership and refuses rather
+   than converting: a session ACP already established, or a route that
+   disagrees about the instruction layer or the launcher, ends the launch here.
+10. The adapter allocates the native session identity, before any process
+    exists. Nothing else supplies or replaces it.
+11. XMD publishes the `client-native` construction route create-once, adopting a
+    concurrent winner rather than replacing it, and commits the prepared launch
+    record describing exactly that route.
+12. The prepared instructions are written to a private mode-`0600` file. Detach
+    still happens as a phase — it is the point after which a spawn may happen —
+    and succeeds trivially, because no ACP session was ever open.
+
+From there both rejoin:
+
+13. The provider spawns the native UI as a foreground child with the terminal
+    inherited — resuming the native session ID for a provider-returned adapter,
+    and for a client-allocated one creating it under the allocated identity from
+    the private file, or resuming it by the same name when the route already
+    named it.
 14. `Session.Launch` suspends while the child runs.
 15. The child handles prompts, tools, permission dialogs, rendering, and native
     transcript persistence directly.
-16. When the child exits, XMD records its terminal outcome and releases the
-    terminal lease.
-17. Later Agent work lazily reattaches through ACP to the same provider session.
+16. When the child exits, XMD records its terminal outcome, removes the private
+    file and its directory while ownership is still held, and releases the
+    terminal lease. The route and the retained phases stay: they are what the
+    next invocation resumes from.
+17. Later Agent work depends on the route again. On an `acp-first` session it
+    lazily reattaches through ACP to the same provider session; on a
+    `client-native` one a `<Session>` or `<Prompt>` raises the provider's typed
+    route error instead, because this release does not attach ACP to a session a
+    native process created. Continuing such a conversation is
+    `<Session.Launch>`'s to do, and #561 is where attaching becomes possible.
 18. Document execution continues after `Session.Launch`.
 
 An enclosing `<Agent>` or `<Session>` resolves by its own contract, before
@@ -588,7 +630,9 @@ prepared -> detached -> launched -> exited
 ```
 
 Each phase the launch completes is one retained record under that identity,
-because the preparation has to be retained *before* ACP ownership is released.
+because the preparation has to be retained *before* anything of the session
+moves — before ACP ownership is released where ACP holds it, and before a
+native process exists where the adapter named the session itself.
 A single record written when the whole launch settles would describe nothing at
 all for the run that was interrupted between detach and spawn, which is exactly
 the run that must not create a replacement session.
@@ -820,6 +864,17 @@ documents own the schemas, the assertions and everything an operator reads, and
 no verdict may carry terminal output, argv, environment, prepared text, the
 history marker or a private path.
 
+A proof also removes what it created, and that is the harness's own act rather
+than anything the product does. Production keeps the construction route and the
+retained phases — a launch that deleted them would break the continuity claim 4
+asserts. A proof reads those exact records for its own natural key, reduces them
+to filtered evidence, and only then removes those exact paths, together with its
+temporary project through the provider's own path-scoped purge. It never sweeps
+the shared coordination namespace and never removes a record it did not create.
+It also runs the command with an operator's environment rather than its own: a
+proof nested inside another coding-agent session inherits markers that change
+what the provider does, and would then be reporting on itself.
+
 ## What this contract covers
 
 The feature is `Agent.launch()` and the `Session.Launch` component; the opaque
@@ -842,7 +897,7 @@ Two things it does not yet have, and both fail closed rather than degrading:
   2.1.241 on macOS arm64. `codex` has a command shape and contract tests and is
   not launch-capable, because nothing has proven its provider-returned claims
   against an installed Codex. A launch naming an unadvertised agent is refused
-  with `unsupported-capability` before its ACP session is released.
+  with `unsupported-capability` before anything of the session moves.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given.
