@@ -53,7 +53,7 @@
 
 import type { Operation } from "effection";
 import { hasContent, registerComponents } from "@executablemd/core";
-import { pinnedFileRead } from "@executablemd/core/host";
+import { durableIdentityOf, pinnedFileRead } from "@executablemd/core/host";
 import type {
   GeneratedObservation,
   GeneratedObservationResult,
@@ -133,18 +133,16 @@ export interface GeneratedEvaluationOptions {
 /**
  * The implementation, without the registration.
  *
- * Separated so a suite can invoke it the way the engine does — with an explicit
- * `ComponentInvocation` — and see which of the two identities it named its
- * durable operation after. Through the engine the two agree, because the engine
- * republishes the expansion context for each invocation it enters; handing them
- * apart is the only way to observe which one is load-bearing.
+ * Local: the identity it names its durable operation after is taken from the
+ * capability the engine mints, so there is no calling this outside an
+ * invocation, and no suite that would want to.
  */
-export type EvaluateComponent = (
+type EvaluateComponent = (
   props: Record<string, Json>,
   invocation: ComponentInvocation,
 ) => Workflow<Json>;
 
-export function createEvaluate(
+function createEvaluate(
   database: WorkflowRunDatabase,
   options: GeneratedEvaluationOptions = {},
 ): EvaluateComponent {
@@ -172,17 +170,19 @@ export function createEvaluate(
     // so a replay restores the fragment this position admitted rather than
     // whichever one a later turn happens to be holding.
     //
-    // Handed by the engine at the call site, not read from anywhere. Both
-    // other channels are composable: `getExpansion()` reads a Context, which is
-    // addressed by name and which a loaded component may bind for its
-    // descendants, and a contextual Api handler an ancestor installed answers
-    // ahead of the engine's own — measured, not assumed. Either would let two
-    // `<Evaluate>` sites share one durable name and each replay the other's
-    // admitted fragment.
+    // Taken from the capability the engine minted for this invocation, not read
+    // from anywhere. Every other channel is composable: `getExpansion()` reads a
+    // Context, which is addressed by name and which a loaded component may bind
+    // for its descendants; a contextual Api handler an ancestor installed
+    // answers ahead of the engine's own; and `importComponent` middleware may
+    // wrap this implementation and call it with an argument of its own —
+    // measured, not assumed. Any of them would let two `<Evaluate>` sites share
+    // one durable name and each replay the other's admitted fragment.
+    const id = durableIdentityOf(invocation);
+
     // Wrapped where the work is not journaled: reading the element's shape and
     // reading the run's current roots are both ordinary operations, and only the
     // admission below belongs in the run's history.
-    const id = invocation.id;
     const selection = yield* ephemeral(workspaceRootSelection(database));
 
     const policy: GeneratedObservationPolicy = {

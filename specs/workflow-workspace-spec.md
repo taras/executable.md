@@ -1512,12 +1512,15 @@ about it is rewritten on the way to the document. Turning it into text is the
 document's decision, made where the text is wanted: the representative flow binds
 it and renders it into the next `<Prompt>` with `<Json>`.
 
-Its durable operation is named after the invocation the engine handed it, as an
-argument at the call site. A durable name never comes from an Effection Context
-or a contextual Api answer: a Context is addressed by name, so a loaded component
-may bind one for its descendants, and a handler installed outside an invocation
-answers ahead of the engine's own. Two observation sites sharing one name would
-each replay the other's admitted fragment. It is deliberately not
+Its durable operation is named after the invocation the engine entered, taken
+from the capability handed to it — executable-mdx-spec §5.6. A durable name
+never comes from an Effection Context or a contextual Api answer: a Context is
+addressed by name, so a loaded component may bind one for its descendants, and a
+handler installed outside an invocation answers ahead of the engine's own. Nor
+from anything `importComponent` middleware can supply: a handler may wrap this
+implementation, and an identity it could build would be one it could give both
+sites. Two observation sites sharing one name would each replay the other's
+admitted fragment. It is deliberately not
 a printing boundary: a refused or failed observation stops the authored loop
 unless the document places a recovery boundary around it, because returning a
 refusal as observation text would leave the Agent reasoning from a read that
@@ -1526,7 +1529,7 @@ never happened.
 Registration makes the operation available to a trusted document. It carries
 none of its authority. The component closes over the exact run storage and the
 immutable host options supplied during attachment, derives its durable identity
-from its own expansion, reads the retained roots and the run's authoritative
+from its own invocation, reads the retained roots and the run's authoritative
 current root from that storage at invocation, and takes the read-only `File`
 identity from core. No prop, binding, Context, contextual API answer, component
 registration, generated name or middleware return value supplies or widens any of

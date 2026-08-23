@@ -15,8 +15,9 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped } from "effection";
+import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
+import type { ComponentInvocation } from "@executablemd/core";
 import {
   collect,
   Component,
@@ -24,20 +25,19 @@ import {
   execute,
   inlineSource,
   registerComponents,
-  retainedSource,
 } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
 import { createContext } from "effection";
 import type { Context } from "effection";
-import type { Json, Workflow } from "@executablemd/durable-streams";
+import type { Json } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { readTextFile } from "@effectionx/fs";
+import { fileURLToPath } from "node:url";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
-import { createEvaluate } from "../src/deno/workspace/evaluate.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 
 /**
@@ -51,11 +51,9 @@ const CurrentExpansion: Context<{ id: string; name: string } | undefined> = crea
   { id: string; name: string } | undefined
 >("expand.current", undefined);
 
-/** What a loaded component publishes, and what the engine hands. */
-const FORGED = "published-identity";
-const HANDED = "handed-identity";
-
 const URL_ADMITTED = "https://api.example.test/admitted";
+/** What the fixture's first site observes, and what its record must restore. */
+const ADMITTED_NOTE = "the alpha note as admitted\n";
 const URL_OTHER = "https://api.example.test/other";
 
 /** What the substituted transport was asked to perform. */
@@ -63,13 +61,15 @@ interface Transport {
   readonly performed: Array<{ url: string; init: FetchInit | undefined }>;
 }
 
-function* useTransport(): Operation<Transport> {
+function* useTransport(hold?: () => Operation<void>): Operation<Transport> {
   const performed: Transport["performed"] = [];
   yield* API.Fetch.around(
     {
-      // deno-lint-ignore require-yield
       *fetch([url, init]): Operation<RuntimeFetchResponse> {
         performed.push({ url, init });
+        if (hold !== undefined) {
+          yield* hold();
+        }
         return {
           status: 200,
           headers: { get: () => null, entries: () => [] },
@@ -104,6 +104,7 @@ function runDocument(
   database: WorkflowRunDatabase,
   source: string,
   options: WorkflowWorkspaceOptions = {},
+  hold?: () => Operation<void>,
 ): Operation<Attempt> {
   return scoped(function* () {
     yield* API.Env.around(
@@ -116,7 +117,7 @@ function runDocument(
       { at: "min" },
     );
     yield* useHostFiles();
-    const transport = yield* useTransport();
+    const transport = yield* useTransport(hold);
     let output: Json | undefined;
     let failure: string | undefined;
     try {
@@ -149,6 +150,23 @@ function admissions(events: DurableEvent[]): DurableEvent[] {
   );
 }
 
+/** Every request this run actually performed, as the journal holds it. */
+function performances(events: DurableEvent[]): DurableEvent[] {
+  return events.filter((event) => event.type === "yield" && event.description.type === "fetch");
+}
+
+/** Every Workspace read this run actually performed. */
+function reads(events: DurableEvent[]): DurableEvent[] {
+  return events.filter(
+    (event) => event.type === "yield" && event.description.type === "workspace_file",
+  );
+}
+
+/** The durable name one admission was recorded under. */
+function nameOf(event: DurableEvent): string {
+  return event.type === "yield" ? event.description.name : "";
+}
+
 /** The policy one admission was recorded under, as the journal holds it. */
 function policyOf(event: DurableEvent): Record<string, Json> | undefined {
   if (event.type !== "yield") {
@@ -175,6 +193,56 @@ function reported(attempt: Attempt): string {
   }
   return typeof attempt.output === "string" ? attempt.output : JSON.stringify(attempt.output);
 }
+
+/**
+ * The adversarial wrapper, installed the way a middleware package would.
+ *
+ * `Component.importComponent` is public: a handler may delegate the import,
+ * receive the definition the workflow host registered, and return one of its
+ * own that calls the original. `choose` is what it hands over in place of
+ * the invocation the engine entered.
+ */
+function* interpose(
+  choose: (invocation: ComponentInvocation, index: number) => ComponentInvocation,
+): Operation<void> {
+  let index = 0;
+  yield* Component.around({
+    *importComponent([name], next) {
+      const definition = yield* next(name);
+      if (name !== "Evaluate" || definition.kind !== "function") {
+        return definition;
+      }
+      const original = definition.fn;
+      if (typeof original !== "function") {
+        return definition;
+      }
+      return {
+        ...definition,
+        *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+          return yield* original(props, choose(invocation, index++));
+        },
+      };
+    },
+  });
+}
+
+function* fixture(): Operation<string> {
+  return yield* readTextFile(
+    fileURLToPath(new URL("./fixtures/two-observations.md", import.meta.url)),
+  );
+}
+
+/**
+ * What the second site is allowed to reach.
+ *
+ * The fixture's two sites observe different things on purpose — one reads
+ * the run's Workspace, one performs the single admitted request — so a
+ * replay that restored the wrong record would be visible as the wrong kind
+ * of observation, not merely as the wrong text.
+ */
+const CEILING: WorkflowWorkspaceOptions = {
+  evaluation: { requests: [{ url: URL_ADMITTED }] },
+};
 
 /** Put one file in the run's Workspace, the way an earlier step would have. */
 function* plant(database: WorkflowRunDatabase, path: string, content: string): Operation<void> {
@@ -354,68 +422,128 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     });
   });
 
-  it("WGAC7: the durable name is the invocation the engine handed, not the published context", function* () {
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      yield* plant(database, "notes.md", "the retained note\n");
+  describe("WGAC7: the durable name survives the import boundary", () => {
+    it("refuses an invocation the wrapper built", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
 
-      // The implementation, invoked the way the engine invokes it, with the two
-      // identities deliberately pulled apart: a forged expansion context saying
-      // one thing and the engine's own argument saying another. Through the
-      // engine they always agree, because it republishes the context for each
-      // invocation it enters — which is exactly why agreeing there proves
-      // nothing about which one is load-bearing.
-      const evaluate = createEvaluate(database, {});
-      const events = yield* scoped(function* () {
-        yield* useHostFiles();
-        yield* withWorkflowWorkspace(
-          database,
-          scoped(function* () {
-            // What the engine supplies at an invocation, supplied here because
-            // the call below stands in for one. Note which side of the seam it
-            // is on: `hasContent()` is the composable channel and a caller can
-            // answer it; the identity is the argument, which nothing composes.
-            yield* Component.around({
-              // deno-lint-ignore require-yield
-              *hasContent(_args, _next) {
-                return false;
-              },
-            });
-            yield* CurrentExpansion.set({ id: FORGED, name: "Evaluate" });
+        const attempt = yield* scoped(function* () {
+          // A structural stand-in — which is what the identity used to be, and
+          // what a wrapper would mint to give both sites one durable name.
+          yield* interpose(() => ({}) as ComponentInvocation);
+          return yield* runDocument(database, source, CEILING);
+        });
 
-            // The trusted-host seam: inside the durable execution, outside any
-            // component invocation, which is the only place the two identities
-            // can be handed apart.
-            const execution = yield* executeInstalled(
-              {
-                ...retainedSource("workflows/probe.md", "The host evaluated a fragment.\n"),
-                stream: database.journal,
-              },
-              [
-                {
-                  *prepare(): Workflow<void> {
-                    yield* evaluate({ source: `<File path="notes.md" />` }, { id: HANDED });
-                  },
-                },
-              ],
-            );
-            const result = yield* execution;
-            if (!result.ok) {
-              throw result.error;
-            }
-          }),
-        );
-        return yield* database.journal.readAll();
+        expect(reported(attempt)).toContain("not an invocation the engine issued");
+        // Refused before any admission: nothing was named, so nothing collapsed.
+        expect(admissions(attempt.events)).toHaveLength(0);
       });
-
-      const recorded = admissions(events);
-      expect(recorded).toHaveLength(1);
-      const name = recorded[0]?.type === "yield" ? recorded[0].description.name : "";
-      // Named after what the engine handed, and after nothing that was published.
-      expect(name).toContain(HANDED);
-      expect(name).not.toContain(FORGED);
     });
+
+    it("refuses the first site's invocation routed at the second", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const attempt = yield* scoped(function* () {
+          // Ordinary delegation at the first site, then the first site's own
+          // invocation handed to the second — the substitution that would make
+          // both sites replay one admitted fragment.
+          let kept: ComponentInvocation | undefined;
+          yield* interpose((invocation) => {
+            kept ??= invocation;
+            return kept;
+          });
+          return yield* runDocument(database, source, CEILING);
+        });
+
+        expect(reported(attempt)).toMatch(/already been taken|has finished/);
+        // The first site was admitted under its own name. The second was
+        // refused rather than admitted under the first site's.
+        expect(admissions(attempt.events)).toHaveLength(1);
+      });
+    });
+
+    it("admits each site under its own name when the wrapper delegates", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const attempt = yield* scoped(function* () {
+          // Forwarding the genuine issuance: ordinary delegation, and it stays
+          // supported.
+          yield* interpose((invocation) => invocation);
+          return yield* runDocument(database, source, CEILING);
+        });
+
+        expect(attempt.failure).toBe(undefined);
+        const recorded = admissions(attempt.events);
+        expect(recorded).toHaveLength(2);
+        expect(new Set(recorded.map(nameOf)).size).toBe(2);
+
+        // Each site rendered what it observed, and the two differ — one durable
+        // name between them would print one of these twice.
+        expect(reported(attempt)).toContain(ADMITTED_NOTE.trim());
+        expect(reported(attempt)).toContain("answered");
+      });
+    });
+
+    it("resumes an interrupted run into each site's own record", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        // Interrupted inside the second site's request, which is after the
+        // first site's admission committed and before the second's did. A
+        // barrier rather than a delay: the transport being called is the run
+        // telling us where it is.
+        const reached = withResolvers<void>();
+        const first = yield* spawn(() =>
+          runDocument(database, source, CEILING, function* () {
+            reached.resolve();
+            yield* suspend();
+          })
+        );
+        yield* reached.operation;
+        yield* first.halt();
+
+        // Both fragments were admitted — an admission is the decision, and the
+        // effects it authorized come after it. What the interruption caught is
+        // the second site's request, which never happened.
+        const interrupted = yield* database.journal.readAll();
+        const admitted = admissions(interrupted);
+        expect(admitted).toHaveLength(2);
+        expect(new Set(admitted.map(nameOf)).size).toBe(2);
+        expect(performances(interrupted)).toEqual([]);
+
+        const resumed = yield* runDocument(database, source, CEILING);
+        expect(resumed.failure).toBe(undefined);
+
+        // The first site came back from its own record: its retained read is
+        // the only one this run holds, so nothing re-observed the Workspace.
+        expect(reported(resumed)).toContain(ADMITTED_NOTE.trim());
+        expect(reads(resumed.events)).toEqual(reads(interrupted));
+        // The second site performed the request the interruption caught it in.
+        // Two sites sharing one durable name would have restored the first
+        // site's fragment here and reached no transport at all.
+        expect(resumed.performed.map((call) => call.url)).toEqual([URL_ADMITTED]);
+        expect(reported(resumed)).toContain("answered");
+
+        // The same two records the interrupted attempt wrote, unchanged: the
+        // resume restored them rather than admitting anything a second time.
+        expect(admissions(resumed.events)).toEqual(admitted);
+      });
+    });
+
   });
 
   it("WGAC5: the exact Fetch ceiling is the host's, and an empty one admits no request", function* () {

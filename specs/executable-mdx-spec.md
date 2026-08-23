@@ -2686,15 +2686,6 @@ called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
 
-A function component is invoked with two arguments: its validated props, and
-what the engine says about the invocation it is in. Today that is one field, the
-invocation's durable identity — the same value `getExpansion()` reports, on a
-channel a document cannot substitute. A component naming a durable operation
-after itself uses this and not the Context: a Context is addressed by name, so a
-loaded component may bind one for its descendants, and a contextual Api handler
-installed outside an invocation answers ahead of the engine's own (Tier CIV). A
-component that does not need it declares one parameter and never sees it.
-
 A host may register defaults of its own on the same terms. The workflow host
 registers `<Evaluate source={…} />` for a live or partial run: the operation an
 authored workflow document writes where an Agent's proposed fragment should be
@@ -9488,14 +9479,6 @@ against the production Deno adapter, on real run files.
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
 
-### Tier CIV — The invocation the engine hands a component
-
-| # | Test | Verify |
-|---|------|--------|
-| CIV1 | Distinct sites | Two invocations receive two identities, each the engine's own for that invocation |
-| CIV2 | The Api is replaceable | A handler installed outside an invocation replaces a Component Api answer the engine would have given, which is why a durable name may not come from one |
-| CIV3/CIV4 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it; the identity the engine hands is its own either way |
-
 ### Tier WAP — The strict workflow Agent profile
 
 Defined in [ACP client](./acp-client-spec.md) §The workflow Agent profile.
@@ -9546,7 +9529,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the registration even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
-| WGAC7 | The name is the invocation | Handed a durable identity and a conflicting published expansion context, the admission is named after the argument; reverting to the context fails it |
+| WGAC7 | The import boundary | `importComponent` middleware calling the implementation with an invocation it built, and with the first site's routed at the second, are each refused and admit nothing under a name that is not the site's own; delegating the genuine one admits each site under its own; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
 | WGAC8 | The result shape | The result carries each observation's name, pinned identity and value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway |
 
 ### Tier WAL — The workflow Agent observation loop
