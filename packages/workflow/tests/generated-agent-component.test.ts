@@ -291,29 +291,6 @@ function* useFrame(): Operation<void> {
 }
 
 /**
- * Give `<Frame>` the claim domain `<Evaluate>` was registered with.
- *
- * Middleware can read a definition's domain by delegating an import, and
- * attaching it here is deliberate: it takes the domain out of the argument, so
- * what refuses a claim from inside the content is that the parent is expanding
- * it, and nothing else.
- */
-function* borrowFrameDomain(): Operation<void> {
-  yield* Component.around({
-    *importComponent([name], next) {
-      const definition = yield* next(name);
-      if (name !== "Frame" || definition.kind !== "function") {
-        return definition;
-      }
-      const evaluate = yield* next("Evaluate");
-      return evaluate.kind === "function" && evaluate.claim !== undefined
-        ? { ...definition, claim: evaluate.claim }
-        : definition;
-    },
-  });
-}
-
-/**
  * What the second site is allowed to reach.
  *
  * The fixture's two sites observe different things on purpose — one reads
@@ -585,11 +562,13 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         const attempt = yield* scoped(function* () {
           yield* useFrame();
-          yield* borrowFrameDomain();
           // `<Frame>` is still running — it has not returned, and it never
           // claimed anything — so its issuance is genuine, live and unspent
           // while the sites in its content run. Routing it there is the
-          // substitution a spent or finished sibling's does not reach.
+          // substitution a spent or finished sibling's does not reach. Two
+          // things refuse it, and the first reached is that `<Frame>` is not
+          // `<Evaluate>`; Tier CIV nests one component inside itself to hold
+          // the projection on its own.
           let parent: ComponentInvocation | undefined;
           yield* interpose(
             (invocation, name) => {
@@ -604,7 +583,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("expanding its own content");
+        expect(reported(attempt)).toContain("invocation of <Frame />");
         // Refused before admission: no record was written under the parent's
         // identity, so nothing can replay under its retained history.
         expect(admissions(attempt.events)).toHaveLength(0);
@@ -643,6 +622,8 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         const database = yield* createRun();
         yield* plant(database, "alpha.md", ADMITTED_NOTE);
 
+        // What the definition a handler is given carries about its domain.
+        let carriedDomain: string[] = [];
         const attempt = yield* scoped(function* () {
           yield* useElsewhere();
           // The definition `importComponent` hands out at the real `<Evaluate>`
@@ -661,7 +642,9 @@ describe("Tier WGAC — the registered Evaluate component", () => {
                 return definition;
               }
               if (name === "Evaluate") {
-                kept = original as EvaluateImplementation;
+                kept = original;
+                // Nothing here to put on a component of its own.
+                carriedDomain = Reflect.ownKeys(definition).map(String);
                 return definition;
               }
               if (name !== "Elsewhere") {
@@ -684,12 +667,14 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           return yield* runDocument(database, source, CEILING);
         });
 
-        expect(reported(attempt)).toContain("invocation of something else");
+        expect(reported(attempt)).toContain("invocation of <Elsewhere />");
+        expect(reported(attempt)).toContain("claimed for <Evaluate />");
         // The real site was admitted, and nothing else was: no second record,
         // and no request under an identity the author wrote no observation at.
         const recorded = admissions(attempt.events);
         expect(recorded).toHaveLength(1);
         expect(admittedSource(recorded[0]!)).toBe(`<File path="alpha.md" />`);
+        expect(carriedDomain).not.toContain("claim");
         expect(attempt.performed).toEqual([]);
       });
     });
