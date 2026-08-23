@@ -1326,20 +1326,27 @@ it into prompt text stays the document's decision, made with `<Json>` where the
 text is wanted for the same logical Agent session.
 
 An observation names its durable operation after the invocation the engine
-handed it, delivered as an argument at the call site. Neither of the other
-channels carries authority: an Effection Context is addressed by name, so a
-loaded component may bind one for its descendants, and a contextual Api handler
-installed outside an invocation answers ahead of the engine's own. Two
-observation sites sharing one durable name would each replay the other's
-admitted fragment.
+handed it, through the claimant this attachment's execution delivered to the
+`<Evaluate>` factory it built (*Capability-backed invocation identity*). Nothing
+else carries authority: an Effection Context is addressed by name, a contextual
+Api handler installed outside an invocation answers ahead of the engine's own,
+and a definition or registry answer is a value a handler may keep from one
+attachment and hand back inside another. Two observation sites sharing one
+durable name would each replay the other's admitted fragment, and an
+implementation running under another attachment's identity would commit against
+its own run's storage under that attachment's expansion.
 
 `<Prompt>` is one Agent turn. The host hides no Agent loop inside it. Ordinary
 authored Markdown owns iteration with `<Loop max>`, branches on whether a reply
 is another observation proposal or a final proposal, and makes exhaustion an
-explicit document failure. `<Evaluate source={…} />` is the registered
-workflow-host component that invokes the evaluator. Registration is what makes
-the operation reachable from a trusted document; it carries none of the
-authority, which comes from values the host captured before any document existed.
+explicit document failure. `<Evaluate source={…} />` is the workflow host's
+component that invokes the evaluator, and the host does not register it: it
+**declares** it to the execution, which mints the domain, calls the host's
+factory once per attachment with that domain's claimant, and registers what
+comes back. Being reachable from a trusted document is all registration decides;
+every ceiling comes from values the host captured before any document existed,
+and what an invocation may name comes from the execution that minted the
+claimant and the resolution that selected the implementation it was built for.
 
 Within one run a logical Agent session is identified by the Agent/Session
 expansion identity the engine derived, and by nothing else. The authored

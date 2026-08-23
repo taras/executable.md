@@ -26,7 +26,13 @@ import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import { withWorkflowWorkspace, workflowProviderSessions } from "@executablemd/workflow/deno";
+import {
+  evaluationComponents,
+  withWorkflowWorkspace,
+  workflowProviderSessions,
+} from "@executablemd/workflow/deno";
+import { executeInstalled } from "@executablemd/core/host";
+import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
@@ -139,14 +145,26 @@ function runFixture(
         database,
         scoped(function* () {
           return yield* collect(
-            yield* execute({
-              ...retainedSource("workflows/observation-loop.md", source),
-              stream: database.journal,
-            }),
+            yield* executeInstalled(
+              {
+                ...retainedSource("workflows/observation-loop.md", source),
+                stream: database.journal,
+              },
+              // Both words this document writes name durable work after their
+              // own invocations, so the host declares them to the execution and
+              // canonical execution builds each from the claimant it minted.
+              [
+                {
+                  components: [
+                    ...evaluationComponents(database, options.evaluation ?? {}),
+                    ...agentIdentityComponents(),
+                  ],
+                },
+              ],
+            ),
           );
         }),
         {
-          ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
           agent: (attachment) =>
             useWorkflowAgentProfile({
               root,

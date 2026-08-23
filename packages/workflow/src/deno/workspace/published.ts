@@ -26,7 +26,6 @@ import type { GitHubIssuesOptions } from "../issue/github.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkflowWorkspace as withBroadWorkspace } from "./host.ts";
 import type { WorkflowAgentInstaller } from "./host.ts";
-import type { GeneratedEvaluationOptions } from "./evaluate.ts";
 
 /**
  * What a host may configure, and the whole of it.
@@ -46,14 +45,6 @@ export interface WorkflowWorkspaceOptions {
    * profile arrives from the runtime entrypoint that does.
    */
   readonly agent?: WorkflowAgentInstaller;
-  /**
-   * What this host admits a generated fragment under, beyond core's pinned
-   * read-only `<File>`.
-   *
-   * A host fact like the rest: the exact HTTP reads an admitted fragment may
-   * perform are decided before any document exists. Absent admits none.
-   */
-  readonly evaluation?: GeneratedEvaluationOptions;
 }
 
 /** Run `operation` with this run's Workspace attached, as a host installs it. */
@@ -69,6 +60,5 @@ export function withWorkflowWorkspace<T>(
     ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
     ...(options.helper === undefined ? {} : { helper: options.helper }),
     ...(options.agent === undefined ? {} : { agent: options.agent }),
-    ...(options.evaluation === undefined ? {} : { evaluation: options.evaluation }),
   });
 }

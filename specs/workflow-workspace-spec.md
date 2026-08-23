@@ -1512,40 +1512,54 @@ about it is rewritten on the way to the document. Turning it into text is the
 document's decision, made where the text is wanted: the representative flow binds
 it and renders it into the next `<Prompt>` with `<Json>`.
 
-Its durable operation is named after the invocation the engine entered, taken
-from the capability handed to it — executable-mdx-spec §5.6. A durable name
+**How it is supplied.** `<Evaluate>` is not registered by the attachment. It
+names durable work after its own invocation, so the host **declares** it to the
+execution — one entry in the installation, captured before anything else is
+installed — and canonical execution calls the host's factory once for this
+attachment with the claimant it minted, then registers what comes back
+(executable-mdx-spec §5.6). The claimant is the argument of that one call: the
+implementation closes over it, and it is published nowhere, so a document, a
+component and middleware reach the implementation and never the claimant. A run
+whose host declares none has no `<Evaluate>` at all.
+
+**How its durable operation is named.** The implementation claims on the exact
+invocation the engine handed it, in that invocation's own frame. A durable name
 never comes from an Effection Context or a contextual Api answer: a Context is
 addressed by name, so a loaded component may bind one for its descendants, and a
 handler installed outside an invocation answers ahead of the engine's own. Nor
 from anything `importComponent` middleware can supply: a handler may wrap this
 implementation, and an identity it could build — or one it captured from the
 element these sites are written inside, which is live for as long as they run —
-would be one it could give both sites. The attachment mints a claim domain for
-the implementation it registers, and registering it records the attachment's own
-scope: the domain answers only from inside the attachment that made it. So a
-handler that keeps that implementation and runs it at some other element's
-invocation — or at a second attachment's own `<Evaluate>` site, with the first
-attachment's whole registration record handed back through the registry — admits
-nothing there. An implementation closed over one attachment's storage and
-ceilings names nothing under another's. Two observation sites sharing one name would each replay the other's
-admitted fragment. It is deliberately not
-a printing boundary: a refused or failed observation stops the authored loop
-unless the document places a recovery boundary around it, because returning a
-refusal as observation text would leave the Agent reasoning from a read that
-never happened.
+would be one it could give both sites. Two observation sites sharing one name
+would each replay the other's admitted fragment.
 
-Registration makes the operation available to a trusted document. It carries
-none of its authority. The component closes over the exact run storage and the
-immutable host options supplied during attachment, derives its durable identity
-from its own invocation, reads the retained roots and the run's authoritative
-current root from that storage at invocation, and takes the read-only `File`
-identity from core. No prop, binding, Context, contextual API answer, component
-registration, generated name or middleware return value supplies or widens any of
-them.
+What the claimant answers for is fixed by the execution that minted it and by
+what canonical resolution selected: an implementation kept from this attachment
+and run at another element's invocation, at a second attachment's own
+`<Evaluate>` site, or under a registry answer carrying the first attachment's
+whole registration record, admits nothing there. An implementation closed over
+one attachment's storage and ceilings names nothing under another's, so no
+run's database receives a record another run's expansion named.
+
+`<Evaluate>` is deliberately not a printing boundary: a refused or failed
+observation stops the authored loop unless the document places a recovery
+boundary around it, because returning a refusal as observation text would leave
+the Agent reasoning from a read that never happened.
+
+Being reachable from a trusted document is all the registration decides. It
+carries none of the authority. The component closes over the exact run storage
+and the immutable host options the declaration supplied, takes its durable
+identity from its own invocation through the claimant, reads the retained roots
+and the run's authoritative current root from that storage at invocation, and
+takes the read-only `File` identity from core. No prop, binding, Context,
+contextual API answer, component registration, generated name or middleware
+return value supplies or widens any of them.
 
 A repository component named `Evaluate` shadows this default exactly as it
 shadows any other. That can change what a trusted document does; it cannot
-recover the captured closure. Agent-generated source never resolves through the
+recover the captured closure, and it cannot name durable work — canonical
+resolution selected it rather than the implementation this execution built, so
+an invocation of it is in no domain. Agent-generated source never resolves through the
 registration at all — the evaluator consults only its own closed table of pinned
 identities — so a fragment naming `<Evaluate>` is refused like any other
 unadmitted component, live registration or not.

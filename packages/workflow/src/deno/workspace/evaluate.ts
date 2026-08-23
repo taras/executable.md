@@ -52,17 +52,17 @@
  */
 
 import type { Operation } from "effection";
-import { hasContent, registerComponents } from "@executablemd/core";
-import { componentClaim, durableIdentityOf, pinnedFileRead } from "@executablemd/core/host";
+import { hasContent } from "@executablemd/core";
+import { pinnedFileRead } from "@executablemd/core/host";
 import type {
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { ComponentInvocation } from "@executablemd/core";
-import type { ComponentClaim } from "@executablemd/core/host";
-import { ephemeral } from "@executablemd/durable-streams";
+import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
 import type { Json, Workflow } from "@executablemd/durable-streams";
+import type { FunctionComponent } from "@executablemd/core";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import {
   observeGeneratedXmd,
@@ -132,22 +132,18 @@ export interface GeneratedEvaluationOptions {
 }
 
 /**
- * The implementation, without the registration.
+ * The implementation, built from the claimant the execution delivered.
  *
- * Local: the identity it names its durable operation after is taken from the
- * capability the engine mints, so there is no calling this outside an
- * invocation, and no suite that would want to.
+ * Called once per attachment, by canonical execution, with the claimant it
+ * minted for this component — and by nothing else. The claimant is the argument
+ * of that call: it is closed over here and reachable from nowhere, so an
+ * implementation kept from this attachment names nothing anywhere else.
  */
-type EvaluateComponent = (
-  props: Record<string, Json>,
-  invocation: ComponentInvocation,
-) => Workflow<Json>;
-
 function createEvaluate(
   database: WorkflowRunDatabase,
   options: GeneratedEvaluationOptions,
-  claim: ComponentClaim,
-): EvaluateComponent {
+  claim: IdentityClaimant,
+): FunctionComponent {
   // Copied at construction. What the host stated then is what every later
   // invocation is bounded by, whatever happens to the object it passed.
   const requests: GeneratedRequest[] = [...(options.requests ?? [])];
@@ -156,8 +152,8 @@ function createEvaluate(
   return function* Evaluate(
     elementProps: Record<string, Json>,
     invocation: ComponentInvocation,
-  ): Workflow<Json> {
-    if (yield* ephemeral(hasContent())) {
+  ): Operation<Json> {
+    if (yield* hasContent()) {
       throw new GeneratedEvaluationError(
         "<Evaluate> takes the generated source as its `source` prop and renders no content of " +
           "its own. Write it self-closing.",
@@ -172,24 +168,19 @@ function createEvaluate(
     // so a replay restores the fragment this position admitted rather than
     // whichever one a later turn happens to be holding.
     //
-    // Taken from the capability the engine minted for this invocation, not read
-    // from anywhere. Every other channel is composable: `getExpansion()` reads a
-    // Context, which is addressed by name and which a loaded component may bind
-    // for its descendants; a contextual Api handler an ancestor installed
-    // answers ahead of the engine's own; and `importComponent` middleware may
-    // wrap this implementation and call it with an argument of its own —
-    // measured, not assumed. Any of them would let two `<Evaluate>` sites share
-    // one durable name and each replay the other's admitted fragment.
-    //
-    // Claimed in this attachment's own domain, so an implementation kept from a
-    // real `<Evaluate>` site and called from an invocation of something else
-    // names nothing: that element's issuance belongs to another component.
-    const id = yield* ephemeral(durableIdentityOf(invocation, claim));
+    // Claimed here, in the frame the engine invoked this in and on the exact
+    // invocation it was handed: the claimant answers only for an invocation this
+    // execution minted where resolution selected this implementation, and for
+    // nothing a handler substituted. It is read from no Context, no contextual
+    // Api answer, no definition and no registry answer — every one of those is
+    // composable, and any of them would let two `<Evaluate>` sites share one
+    // durable name and each replay the other's admitted fragment.
+    const id = yield* claim(invocation);
 
-    // Wrapped where the work is not journaled: reading the element's shape and
-    // reading the run's current roots are both ordinary operations, and only the
-    // admission below belongs in the run's history.
-    const selection = yield* ephemeral(workspaceRootSelection(database));
+    // Read where the work is not journaled: the element's shape and the run's
+    // current roots are both ordinary operations, and only the admission below
+    // belongs in the run's history.
+    const selection = yield* workspaceRootSelection(database);
 
     const policy: GeneratedObservationPolicy = {
       workspaceRoots: selection.roots,
@@ -197,25 +188,34 @@ function createEvaluate(
       requests,
       components: [pinnedFileRead(), ...components],
     };
-    const result = yield* observeGeneratedXmd(id, source, policy);
-    return observationValue(result);
+    return yield* admit(id, source, policy);
   };
 }
 
-export function useGeneratedEvaluation(
+/** The admission itself, and the only part of this that is journaled. */
+function* admit(id: string, source: string, policy: GeneratedObservationPolicy): Workflow<Json> {
+  const result = yield* observeGeneratedXmd(id, source, policy);
+  return observationValue(result);
+}
+
+/**
+ * What a workflow host declares to the execution for one attachment.
+ *
+ * `<Evaluate>` is not registered with the rest of the workflow's components:
+ * its implementation names durable work after its own invocation, so canonical
+ * execution builds it from the claimant it minted (executable-mdx-spec §5.6). A
+ * run whose host declares none has no `<Evaluate>` at all.
+ */
+export function evaluationComponents(
   database: WorkflowRunDatabase,
   options: GeneratedEvaluationOptions = {},
-): Operation<void> {
-  // One domain per attachment, minted here, closed over by the implementation
-  // and attached to the registration the engine resolves.
-  const claim = componentClaim();
-  return registerComponents([
+): readonly IdentityComponent[] {
+  return [
     {
       name: "Evaluate",
       origin: ORIGIN,
       props,
-      claim,
-      fn: createEvaluate(database, options, claim),
+      factory: (claim: IdentityClaimant) => createEvaluate(database, options, claim),
     },
-  ]);
+  ];
 }

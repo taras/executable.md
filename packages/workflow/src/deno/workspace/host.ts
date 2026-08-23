@@ -51,7 +51,6 @@ import {
 import { useGitHubIssues, type GitHubIssuesOptions } from "../issue/github.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkspaceEffects } from "./effect.ts";
-import { useGeneratedEvaluation, type GeneratedEvaluationOptions } from "./evaluate.ts";
 import { useWorkflowFiles } from "./files.ts";
 import { WORKSPACE_ROOT } from "./logical-path.ts";
 
@@ -116,15 +115,6 @@ export interface WorkflowWorkspaceOptions {
    * never reaches this path, so it starts no agent process.
    */
   readonly agent?: WorkflowAgentInstaller;
-  /**
-   * What this host admits a generated fragment under, beyond core's pinned
-   * read-only `<File>`.
-   *
-   * Adapter-private, like everything else here. Production supplies nothing,
-   * which admits exactly that one identity; a suite injects the exact requests
-   * it wants `<Fetch>` bounded to.
-   */
-  readonly evaluation?: GeneratedEvaluationOptions;
 }
 
 /** What an Agent profile is told about the run it is being attached to. */
@@ -161,7 +151,6 @@ export function withWorkflowWorkspace<T>(
         yield* useGitHubIssues(options.gitHubIssues);
       }
       yield* useCompositionComponents();
-      yield* useGeneratedEvaluation(database, options.evaluation ?? {});
       if (options.agent !== undefined) {
         yield* options.agent({ runId: database.record.runId, database });
       }

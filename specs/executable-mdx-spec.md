@@ -2686,18 +2686,21 @@ called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
 
-A host may register defaults of its own on the same terms. The workflow host
-registers `<Evaluate source={…} />` for a live or partial run: the operation an
+A host may supply defaults of its own on the same terms. The workflow host
+supplies `<Evaluate source={…} />` for a live or partial run: the operation an
 authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. Its schema is closed on one required string prop and
-paired content is refused. It declares no `returns` and answers with a detached
-value — `{ observations: [{ name, value }], output }` — so it renders nothing
-where it is written; an ordinary `as` captures it by reference, and an authored
-`<Json>` turns it into the text a next `<Prompt>` carries. Registration is what makes
-the operation reachable; the ceilings it runs under come from values the host
-captured before any document existed, and no prop, binding or middleware return
-value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
-§8.4 is the contract.
+admitted and performed. It names durable work after its own invocation, so the
+host declares it to the execution rather than registering it (§5.3, §5.6): the
+execution calls the host's factory once per attachment with the claimant it
+minted, and registers what comes back. Its schema is closed on one required
+string prop and paired content is refused. It declares no `returns` and answers
+with a detached value — `{ observations: [{ name, value }], output }` — so it
+renders nothing where it is written; an ordinary `as` captures it by reference,
+and an authored `<Json>` turns it into the text a next `<Prompt>` carries. Being
+reachable from a trusted document is all the registration decides; the ceilings
+it runs under come from values the host captured before any document existed,
+and no prop, binding or middleware return value supplies or widens one.
+[Workflow workspaces](./workflow-workspace-spec.md) §8.4 is the contract.
 
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
@@ -9517,6 +9520,7 @@ document against a real run database.
 |---|------|--------|
 | WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
+
 ### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
@@ -9526,10 +9530,10 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
 | WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
 | WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
-| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the registration even while it is live |
+| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
-| WGAC7 | The import boundary | `importComponent` middleware calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the registered implementation and running it at another element's invocation, and by keeping one attachment's implementation — and its whole registration record, handed back through the registry inside the second attachment — and running it at a second attachment's own `<Evaluate>` site, are each refused: nothing is admitted and no request performed under an identity the author wrote no observation at, neither run's database receives a cross-owned record, and the definition the handler was given carries no claim domain to move. Delegating the genuine issuance admits each site under its own, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
+| WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
 | WGAC8 | The result shape | The result carries each observation's name, pinned identity and value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway |
 
 ### Tier WAL — The workflow Agent observation loop

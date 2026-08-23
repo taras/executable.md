@@ -84,6 +84,7 @@ import type {
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
+import { evaluationComponents } from "@executablemd/workflow/deno";
 import type {
   WorkflowExecutionBegun,
   WorkflowExecutionTransitions,
@@ -914,6 +915,12 @@ export function runWorkflow(
         ...(source.value.components.length === 0
           ? []
           : [workflowBundleInstallation(source.value.components)]),
+        // `<Evaluate>` names durable work after its own invocation, so this run
+        // declares it to the execution and canonical execution builds it from
+        // the claimant it minted for this attachment. Declared where the
+        // Workspace is attached — a completed replay restores its retained
+        // output and expands nothing, so it needs no component of its own.
+        ...(completed || replay ? [] : [{ components: evaluationComponents(database) }]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a

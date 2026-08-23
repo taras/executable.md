@@ -14,18 +14,12 @@
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
+import { executeInstalled } from "@executablemd/core/host";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import type { ComponentInvocation } from "@executablemd/core";
-import {
-  collect,
-  Component,
-  content,
-  execute,
-  inlineSource,
-  registerComponents,
-} from "@executablemd/core";
+import { collect, Component, content, inlineSource, registerComponents } from "@executablemd/core";
 import { createContext } from "effection";
 import type { Context } from "effection";
 import type { Json } from "@executablemd/durable-streams";
@@ -37,7 +31,8 @@ import { fileURLToPath } from "node:url";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
-import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
+import { evaluationComponents } from "../src/deno/workspace/evaluate.ts";
+import type { GeneratedEvaluationOptions } from "../src/deno/workspace/evaluate.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 
@@ -104,7 +99,7 @@ interface Attempt {
 function runDocument(
   database: WorkflowRunDatabase,
   source: string,
-  options: WorkflowWorkspaceOptions = {},
+  evaluation: GeneratedEvaluationOptions = {},
   hold?: () => Operation<void>,
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -126,10 +121,15 @@ function runDocument(
         database,
         scoped(function* () {
           return yield* collect(
-            yield* execute({ ...inlineSource(source), stream: database.journal }),
+            yield* executeInstalled(
+              { ...inlineSource(source), stream: database.journal },
+              // `<Evaluate>` names durable work after its own invocation, so
+              // this run declares it to the execution and canonical execution
+              // builds it from the claimant it minted for this attachment.
+              [{ components: evaluationComponents(database, evaluation) }],
+            ),
           );
         }),
-        options,
       );
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
@@ -299,9 +299,7 @@ function* useFrame(): Operation<void> {
  * replay that restored the wrong record would be visible as the wrong kind
  * of observation, not merely as the wrong text.
  */
-const CEILING: WorkflowWorkspaceOptions = {
-  evaluation: { requests: [{ url: URL_ADMITTED }] },
-};
+const CEILING: GeneratedEvaluationOptions = { requests: [{ url: URL_ADMITTED }] };
 
 /** Put one file in the run's Workspace, the way an earlier step would have. */
 function* plant(database: WorkflowRunDatabase, path: string, content: string): Operation<void> {
@@ -752,7 +750,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         // The borrowed call named nothing, so the second attachment admitted
         // nothing and reached no transport.
         expect(record).not.toBe(undefined);
-        expect(reported(runs.second)).toContain("outside the registration this domain belongs to");
+        expect(reported(runs.second)).toContain("is not running this");
         expect(admissions(runs.second.events)).toHaveLength(0);
         expect(runs.second.performed).toEqual([]);
 
@@ -832,7 +830,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const attempt = yield* runDocument(
         database,
         `<Evaluate source={'<Fetch url="${URL_ADMITTED}" />'} />\n`,
-        { evaluation: { requests: [{ url: URL_ADMITTED }] } },
+        { requests: [{ url: URL_ADMITTED }] },
       );
       expect(attempt.failure).toBe(undefined);
       expect(attempt.performed.map((call) => call.url)).toEqual([URL_ADMITTED]);
@@ -845,7 +843,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const outside = yield* runDocument(
         database,
         `<Evaluate source={'<Fetch url="${URL_OTHER}" />'} />\n`,
-        { evaluation: { requests: [{ url: URL_ADMITTED }] } },
+        { requests: [{ url: URL_ADMITTED }] },
       );
       expect(reported(outside)).toContain("did not admit");
       expect(outside.performed).toHaveLength(0);
