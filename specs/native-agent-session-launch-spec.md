@@ -309,8 +309,9 @@ claims 1, 2, 5 and 7 are about a handoff it does not make. It creates the
 session directly and resumes it by the same name, and what it proves is exactly
 that:
 
-1. the adapter allocates the identity inside ownership, before any process
-   exists, and nothing else supplies or replaces it;
+1. the launch that *creates* the session has its identity allocated by the
+   adapter, inside ownership and before any process exists, and nothing else
+   supplies or replaces it;
 2. the native process creates that exact conversation from a private
    mode-`0600` instruction file, with the text in neither argv nor environment;
 3. those prepared instructions are effective on the first native user turn,
@@ -405,11 +406,19 @@ owner to release — what has to be settled first is which conversation this is:
 9. The provider reads both durable accounts under ownership and refuses rather
    than converting: a session ACP already established, or a route that
    disagrees about the instruction layer or the launcher, ends the launch here.
-10. The adapter allocates the native session identity, before any process
-    exists. Nothing else supplies or replaces it.
-11. XMD publishes the `client-native` construction route create-once, adopting a
-    concurrent winner rather than replacing it, and commits the prepared launch
-    record describing exactly that route.
+10. Whether an identity is needed at all is decided before one is made. An
+    existing compatible `client-native` route already names this conversation,
+    so its retained identity is adopted and **nothing is allocated** — a second
+    candidate for a conversation that already exists is a value with nowhere to
+    go. Only where no route names it yet does the adapter allocate one, inside
+    ownership and before any process exists; nothing else supplies or replaces
+    it.
+11. A launch that allocated publishes the `client-native` route create-once, and
+    adopts a concurrent winner rather than replacing it — so losing that race is
+    a resume too, under the winner's identity. Either way XMD commits a prepared
+    launch record agreeing exactly with the route that governs: `created` where
+    this launch's own candidate won, `resumed` where an existing or winning
+    route named the session.
 12. The prepared instructions are written to a private mode-`0600` file. Detach
     still happens as a phase — it is the point after which a spawn may happen —
     and succeeds trivially, because no ACP session was ever open.
