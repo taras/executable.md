@@ -585,7 +585,7 @@ instead would pass on a base `main` had already left behind.
 restores a red `main` cannot satisfy the gate by construction: the base it would
 prove is the broken one. A maintainer applies `ci-main-red-fix` to one pull
 request, and it is excused the remote main-health lookup and nothing else — the
-labelled pull request runs `composability`, the clean-checkout battery a `main`
+labelled pull request runs `composability`, the clean-checkout proof a `main`
 push runs, and `green` fails if that job fails or is skipped. So the branch
 claiming to repair `main` is proven the way `main` itself is proven.
 
@@ -613,3 +613,68 @@ The gap is not contingent on `composability` moving to `main` only. That move is
 what would make `main` the *sole* place the concurrency and cache-purity
 invariants ever execute, and it is not in #313 as it stands — but a red `main`
 is already invisible today, and the notification is correct either way.
+
+## DEC-014: Composability proves ownership, not correctness a second time
+
+`deno task verify` was the whole applicable battery run at once, and
+`composability` ran that battery again after a clean clone. The load was the
+argument: eleven commands reading one `node_modules` was the closest available
+proof that nothing there was owned by a build.
+
+Measured, it was mostly not that. At `5542c92` the complete Deno, Node and Bun
+suites consumed about 26 of the job's 31 minutes — the same three suites
+`test-deno`, `test-node` and `test-bun` already run in parallel on runners of
+their own. Compressing them onto one four-core runner made each slower and
+produced the composability-only 45m/30m/30m deadlines, one of which killed a
+suite that had passed (#538).
+
+**Load is not evidence.** No arbitrary test file proves an ownership boundary by
+happening to run for a while; it would have to resolve at the wrong instant, and
+nothing arranged for it to. So the claim is narrowed to the one the job exists
+to protect:
+
+> After preparation, build and verification operations do not corrupt or replace
+> shared repository-owned state while supported runtimes consume it.
+
+and the conflict is staged directly. `deno task build:web` is the real producer
+— the one path that reads both `@rjsf/validator-ajv8` manifests, resolves
+through the installed tree, and republishes the generated browser module. Deno,
+Node and Bun each run the same portable consumer loop against it, resolving and
+*reading* a package from the pnpm store, the Deno store and the workspace and
+importing the generated module, continuously, for the producer's whole lifetime.
+An observer watches the manifests and the generated output from the coordinator.
+
+**Three checks, because no one of them can replace the others.** A build that
+replaced a manifest and put the original bytes back compares equal at the end
+and has still broken every runtime that resolved through it in between — so the
+manifests are held to byte *and* identity while the producer runs, and a final
+fingerprint is never accepted as proof that a temporary mutation did not happen.
+The generated module is held to a different rule, because replacing it is the
+producer's job: every reading must be a whole module, and it is published
+through `replaceThroughStaging()` so no reader can see a partial one. And the
+comparison of tracked files, `node_modules` and `deno.lock` still runs
+afterwards — including after a participant failed, which is exactly when a
+dirtied tree would go unnoticed.
+
+A consumer that exits zero without ever cycling beside the producer is a hole,
+not a pass, so each records how many cycles it completed before, during and
+after, and the report fails on a zero.
+
+**Correctness stays where it already was.** Every check composability stopped
+running is still required by `green`: each runtime's complete corpus across the
+`test-deno`, `test-node` and `test-bun` shard matrices; the Deno typecheck as a
+step of `test-deno` and the Node one as a step of `test-node`; `lint` and `jsr`
+as jobs of their own; the documentation check as a step of `smoke`; and the site
+check/build pair in `site`. Several of these are steps inside other jobs rather
+than jobs, and one runtime's corpus is a matrix rather than one invocation —
+which is the point: the requirement is what `green` enforces, not the shape of
+the workflow. Composability runs none of them, and `deno task verify` is not a
+correctness check; describing it as one is what made the duplication look
+free.
+
+The suite-specific deadlines disappear with the suites rather than transferring
+to the consumers: the consumers are bounded by the one producer lifetime, not by
+how long an application suite takes. What remains is the single 20-minute
+ceiling the historical `deno bundle` wedge (denoland/deno#36417) requires, which
+also bounds the wait for the consumers to reach their first cycle — a consumer
+that never gets there wedges the invocation the same silent way.

@@ -81,6 +81,7 @@
     "scripts/runtime-tests.ts",
     "scripts/runtime-test-exclusions.ts",
     "scripts/lib/changed-paths.ts",
+    "scripts/lib/consumer-cycle.ts",
     "scripts/lib/github.ts",
     "scripts/lib/main-green.ts",
     "scripts/lib/main-health.ts",
@@ -92,6 +93,7 @@
     "scripts/lib/test-weights.ts",
     "scripts/lib/tracked.ts",
     "scripts/lib/verify.ts",
+    "scripts/verify-consumer.ts",
     "scripts/lib/web-client-module.ts",
     "scripts/lib/workspace.ts"
   ],
