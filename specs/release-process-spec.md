@@ -409,8 +409,16 @@ external-asset paths under the fixed CSP policy, that a build leaves the
 installed dependency tree and its manifests exactly as it found them, and that
 the build script writes its module wherever `--out` names. The suite writes to
 scratch paths of its own rather than to the generated path: that path is read by
-every other check in the verification battery while the suite runs (AGENTS.md),
-and a test that took a turn at writing it would be a race rather than a check.
+whatever else is running while the suite runs (AGENTS.md), and a test that took
+a turn at writing it would be a race rather than a check.
+
+The generated module is published through `replaceThroughStaging()` — staged
+beside the target under a name carrying a UUID, then renamed over it. Deno, Node
+and Bun resolve through that path while a build republishes it, and a direct
+write exposes a truncated file for as long as the write takes. A reader
+therefore sees the complete old module or the complete new one, never absence or
+partial text; the staged file belongs to the invocation on every exit path, so a
+halted or failed build leaves nothing beside the module.
 
 A build installs nothing: `deno task build:web` runs under node-modules and
 cache modes that cannot create, relink, or fetch, and refuses on an unprepared
