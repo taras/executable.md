@@ -184,9 +184,11 @@ sessions and working directories have independent state.
 
 Each `<Test>` receives a fresh provider partition — its own ACPX runtime,
 session store, managed sessions, serial queues, availability cache, route slot,
-session coordinator, construction-route store, scenarios and teardown — even
-when it uses the same scenario declaration and keys as another test. A route one
-test published is not an account the next test has to live with. When `<TestAgent>` is used
+session coordinator, construction-route store, executable observer, scenarios
+and teardown — even when it uses the same scenario declaration and keys as
+another test. A route one test published is not an account the next test has to
+live with, and a build one test bound a session to is not a build the next test
+shares. When `<TestAgent>` is used
 without an enclosing `<Test>`, its own scope is the isolation boundary.
 
 One ACP provider is *installed*, and it is installed once: `<TestAgent>`
@@ -207,6 +209,13 @@ it refuses before any ACP work rather than falling back to another partition.
 Two sibling tests naming the same agent, session and directory therefore do not
 contend. They are not two owners of one session; they are two sessions, each
 owned by a coordinator of its own.
+
+The observer is the whole seam, replaced whole. It answers one stable canonical
+version and one stable digest for the life of a partition, and a harness that
+wants to watch a build drift changes what it answers rather than reaching for a
+control the production path also has. There is no author-facing binding or path
+prop: an authored document sees attachment and refusal, and nothing about which
+file was observed.
 
 `<TestAgent>` also installs a controlled native launcher for its body. The test
 agent's native UI is fictional in the way its agent is — the worker asserts a
@@ -232,7 +241,12 @@ The controller owns:
   and `test-agent-client-native`, a separate controlled adapter that allocates
   the identity itself so the client-allocated path can be authored in Markdown
   without a real coding agent. Two adapters rather than one reclassified — the
-  worker contract still has to hold;
+  worker contract still has to hold. The client-allocated adapter carries a
+  build binding: a command to observe, a canonical version parser and the
+  transient child environment that would bind the build, so a partition
+  publishes bound routes and can attach to them. It pins no ACP adapter command,
+  because this partition's registry answers with a scenario route and pinning
+  one would name a process that does not exist;
 - the scenarios and their journals;
 - a virtual filesystem containing each behavior document and its permitted
   dependencies;
@@ -410,11 +424,14 @@ The essential acceptance coverage is:
    `test-agent-client-native` that names its own session and is continued by the
    next launch of the same body, and an eager `<Session>` — which settles the
    route as ACP-first — refusing a launch that would name the same session
-   again. Each refusal asserts its failure class as well as its message, so a
-   launch that stopped for some other reason fails the journey rather than
-   passing it. There is no post-launch ACP prompt on the client-allocated path,
-   because this release does not attach ACP to a session a native process
-   created.
+   again. It also covers attachment: the same named `<Session>` opened after
+   those launches joins the conversation the native process made, and a
+   `<Prompt>` in it answers from that conversation. Each refusal asserts its
+   failure class as well as its message, so a launch that stopped for some other
+   reason fails the journey rather than passing it. Malformed route bytes,
+   journal bytes, observer drift, runtime partition counts, wire assertions and
+   ownership races stay in TypeScript: the Markdown states what an author sees,
+   which is that the session continued or that it refused.
 
 Unit tests use direct Context API and controller fixtures for edge cases that do
 not benefit from crossing the ACPX process boundary. CI does not start an

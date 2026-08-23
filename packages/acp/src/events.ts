@@ -12,7 +12,7 @@
 import { each, stream, until } from "effection";
 import type { Channel, Operation } from "effection";
 import type { AgentPromptEvent, Session } from "@executablemd/core";
-import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "acpx/runtime";
+import type { AcpRuntimeTurn, AcpRuntimeTurnResult } from "./acpx-runtime.ts";
 
 export interface TurnIdentity {
   agent: string;

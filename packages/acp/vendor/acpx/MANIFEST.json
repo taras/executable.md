@@ -1,0 +1,82 @@
+{
+  "format": 1,
+  "package": "acpx",
+  "version": "0.12.0",
+  "repository": "https://github.com/openclaw/acpx",
+  "commit": "6a24a546d2349cbe71ed032d52d07cab611e320c",
+  "behaviorallyPatched": [
+    "generated/runtime.js",
+    "generated/live-checkpoint-ClPCSdrW.js",
+    "generated/runtime.d.ts",
+    "generated/session-options-jkYbBxGE.d.ts"
+  ],
+  "packagingAdapted": [
+    "generated/runtime.js",
+    "generated/live-checkpoint-ClPCSdrW.js",
+    "generated/runtime.d.ts",
+    "generated/client-DwNyFauq.d.ts",
+    "generated/session-options-jkYbBxGE.d.ts"
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "kind": "license",
+      "sha256": "5c3dd08185d6d0a0045a45b9aea2fd9d85343f7ed5dbe23915e6f15e7b814f2d"
+    },
+    {
+      "path": "PROVENANCE.md",
+      "kind": "provenance",
+      "sha256": "396f24ddb265ab723a7fb07ceae5e46a5d14eac3fcba8106b4c2124cacaf1219"
+    },
+    {
+      "path": "generated/client-DwNyFauq.d.ts",
+      "kind": "generated",
+      "sha256": "840a65aab63c8c3f51cb47fc0edffb211c828ff772424dbb48c5fb9eb49fdd5b"
+    },
+    {
+      "path": "generated/live-checkpoint-ClPCSdrW.js",
+      "kind": "generated",
+      "sha256": "0642902ca96974a9b2c9313a869e08d691e00100cb8e2339c88fce5481ec8130"
+    },
+    {
+      "path": "generated/runtime.d.ts",
+      "kind": "generated",
+      "sha256": "261d2b0e7bad58a068466e5533590d1e62bc8e77ebb56ed0ae0e2fc538fdac98"
+    },
+    {
+      "path": "generated/runtime.js",
+      "kind": "generated",
+      "sha256": "62cfe6a0d64a5a876f73335e91ae7f259ca0834df07efd13571d2ad9d38f9462"
+    },
+    {
+      "path": "generated/session-options-jkYbBxGE.d.ts",
+      "kind": "generated",
+      "sha256": "0ab6953e3175dc7fe01ab94b3a779a565ec9597a6e37e551d0ecfa4bf5f7e6ab"
+    },
+    {
+      "path": "upstream/client-DwNyFauq.d.ts",
+      "kind": "pristine",
+      "sha256": "076d9c7cf80d07fe13cd9219a5b6dc6a299c475df1a8d5466567cc417632baad"
+    },
+    {
+      "path": "upstream/live-checkpoint-ClPCSdrW.js",
+      "kind": "pristine",
+      "sha256": "d92153086f058880623af7297a6867166068e27f9b2cc97a7b94c6a80e2b20da"
+    },
+    {
+      "path": "upstream/runtime.d.ts",
+      "kind": "pristine",
+      "sha256": "f91a14d8340da317e4809fb796ffce471cd621d4de86b0932ef4dc05dc91dfe4"
+    },
+    {
+      "path": "upstream/runtime.js",
+      "kind": "pristine",
+      "sha256": "9d0dd46d20e49b32fa805462b64778bbfbd58463ef9124938b831071fe24e0b2"
+    },
+    {
+      "path": "upstream/session-options-jkYbBxGE.d.ts",
+      "kind": "pristine",
+      "sha256": "1bb7459cf7f05038d43d7b4d810adc5d15462e926c2dcad038d966199b23b890"
+    }
+  ]
+}

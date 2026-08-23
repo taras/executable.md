@@ -17,6 +17,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileTempFile } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
+import { unassembledMachineSessions } from "./session-coordinator.ts";
 import { unsupportedWorkflowHost } from "./workflow.ts";
 import { useNodeService } from "./node-service.ts";
 
@@ -43,9 +44,12 @@ await main(function* (args) {
   // no host default: a run with no provider must fail rather than reach the
   // host by accident.
   yield* useHostFiles();
-  // No session coordinator: this runtime exposes no cross-process advisory
-  // lock, and V1 emulates none — a pid, heartbeat or stale-file timeout calls a
-  // paused process dead and admits two owners. Advertised provider-returned
-  // sessions therefore refuse here, while ordinary ACP work is unaffected.
-  yield* runXmd(args, useNodeService, unsupportedWorkflowHost);
+  // The same advertised agents, and none of the answers an advertised session
+  // needs. This runtime exposes no cross-process advisory lock, and V1 emulates
+  // none — a pid, heartbeat or stale-file timeout calls a paused process dead
+  // and admits two owners. It keeps no construction routes and observes no
+  // build either. Advertising the same names is what makes the refusal say so:
+  // every advertised operation stops before provider work, while ordinary ACP
+  // work is unaffected.
+  yield* runXmd(args, useNodeService, unsupportedWorkflowHost, unassembledMachineSessions());
 });

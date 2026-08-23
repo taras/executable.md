@@ -35,8 +35,8 @@ import { createRun, useStorageRoot, withStorage } from "./support/workflow-run.t
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "workflow-agent");
 
-function* documentSource(): Operation<string> {
-  return yield* readTextFile(join(FIXTURES, "sibling-sessions.md"));
+function* documentSource(name = "sibling-sessions.md"): Operation<string> {
+  return yield* readTextFile(join(FIXTURES, name));
 }
 
 interface Attempt {
@@ -58,6 +58,7 @@ function attach(
   options: {
     readonly createRuntime: WorkflowAgentProfileOptions["createRuntime"];
     readonly sessionStore: WorkflowAgentProfileOptions["sessionStore"];
+    readonly defaultAgent?: string;
   },
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -94,7 +95,7 @@ function attach(
             useWorkflowAgentProfile({
               root,
               attachment,
-              defaultAgent: "codex",
+              defaultAgent: options.defaultAgent ?? "codex",
               ...options,
             }),
         },
@@ -250,6 +251,78 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
       });
       expect(replay.failure).toBe(undefined);
       expect(reached).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Tier WSA — Claude is ACP-only here (specs/workflow-workspace-spec.md §8.5).
+ *
+ * Claude is the agent whose ordinary-`xmd run` sessions belong to a machine:
+ * owned across processes, with their construction written down and the build
+ * behind them observed. A workflow session belongs to a run instead, and this
+ * profile says so explicitly rather than inheriting the package's advertised
+ * sets by omission — which would make this document demand ownership and a
+ * route that a run has no way to give it.
+ *
+ * The proof is that it works: the real attachment, the real `agent_sessions`
+ * table, a restart onto the same assertion, and only the agent process
+ * substituted.
+ */
+describe("Tier WSA — the workflow profile serves Claude over ACP alone", () => {
+  it("WSR3: a Claude session is retained and reattached with no machine-wide account", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentSource("claude-session.md");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const store = makeStore();
+
+      // Interrupted while the second turn is in flight, exactly as WSR1 is:
+      // the session has been established and its mapping committed by then, so
+      // what the interruption leaves unfinished is the turn rather than the
+      // retention — which is what gives the restart something to resolve from.
+      const live = createFakeAcp();
+      live.script({ reply: "the reviewer saw the release notes" });
+      live.script({ reply: "", manual: true });
+
+      const first = yield* spawn(() =>
+        attach(root, database, source, {
+          createRuntime: live.create,
+          sessionStore: store,
+          defaultAgent: "claude",
+        }),
+      );
+      yield* live.startedTurns(2);
+      yield* first.halt();
+
+      // It ran at all. On a profile that had inherited the ordinary-run
+      // advertisement this would have refused before contacting the agent,
+      // because a workflow supplies no coordinator, no route store and no
+      // executable observer.
+      expect(established(live)).toHaveLength(1);
+
+      // One row in the run's own database, carrying the identity the provider
+      // asserted — the #549 mapping, unchanged.
+      const runPath = workflowRunPath(root, database.record.runId);
+      const rows = mappingRows(runPath);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.kind).toBe("acpx.agentSessionId");
+      expect(rows.map((row) => row.value)).toEqual(storeAssertions(store));
+
+      // The restart resolves from that row and continues the same conversation.
+      const resumed = createFakeAcp();
+      resumed.script({ reply: "and they recommended shipping it" });
+      const second = yield* attach(root, database, source, {
+        createRuntime: resumed.create,
+        sessionStore: store,
+        defaultAgent: "claude",
+      });
+
+      expect(second.failure).toBe(undefined);
+      expect(established(resumed)).toEqual(established(live));
+      // Compared and continued, never replaced.
+      expect(mappingRows(runPath)).toEqual(rows);
     });
   });
 });

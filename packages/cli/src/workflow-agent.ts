@@ -304,6 +304,16 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
+    // ACP-only, stated rather than inherited. A workflow session belongs to a
+    // run, not to this machine: it is named by a row in the run's own database,
+    // arranged in the run's own sidecar, and continued by reattaching that row.
+    // The ordinary-run capabilities are about a different account entirely —
+    // machine-wide ownership, construction routes, and one observed executable
+    // build — and this profile supplies none of them. Inheriting the package's
+    // advertised sets by omission would make a workflow Claude prompt demand
+    // ownership and a route that this profile has no way to give it.
+    advertiseNativeLaunch: [],
+    advertiseClientNativeAttachment: [],
     // The Workspace root is a logical path, not a directory an agent process
     // could stand in. This host answers with one it owns and empties, and
     // creates it the first time anything asks — a run whose document never

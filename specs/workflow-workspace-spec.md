@@ -1609,6 +1609,16 @@ compatibility attributes. Changing either refuses reattachment rather than
 selecting or creating a second mapping. A working directory and any provider
 placement key are not identity at all.
 
+**The account is the run's, and only the run's.** The workflow Agent profile
+states both ordinary-run native capability sets empty — no native-launch
+advertisement and no client-native ACP attachment advertisement — rather than
+inheriting the provider package's by omission. It supplies no machine session
+coordinator, no construction-route store and no executable observer, and
+consults none of their namespace. `xmd run` owns a machine-wide account of who
+owns a session, how it was constructed and which executable build accepted its
+identity; a workflow session is named by the row below instead, and an agent
+served here is served over ACP alone. Composing the two is a separate design.
+
 **The mapping lives in the run.** It is a row in the run's own database,
 committed in the run's own transaction — a mapping that could commit while the
 run did not would describe a session the run never had. The table is part of the

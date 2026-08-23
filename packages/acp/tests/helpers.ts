@@ -16,6 +16,7 @@ import {
   agentSessionKeyDigest,
   AgentSessionRecoveryRequired,
   API,
+  ExecutableObservationError,
 } from "@executablemd/runtime";
 import type {
   AgentSessionCoordinator,
@@ -23,6 +24,8 @@ import type {
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
+  ExecutableObserver,
+  ExecutableRefusal,
 } from "@executablemd/runtime";
 import type {
   AcpAgentRegistry,
@@ -36,7 +39,7 @@ import type {
   AcpRuntimeTurnResult,
   AcpSessionRecord,
   AcpSessionStore,
-} from "acpx/runtime";
+} from "../src/acpx-runtime.ts";
 import type { ProbeCapableRuntime } from "../src/provider.ts";
 
 export function makeRecord(agentCommand: string, cwd: string): AcpSessionRecord {
@@ -114,6 +117,21 @@ export interface FakeRuntimeHarness {
    * discards persistent state" is a claim about exactly that.
    */
   closeInputs: Record<string, unknown>[];
+  /**
+   * The bound executable each close went through, in order.
+   *
+   * A handle belongs to the runtime that made it, and the only thing that
+   * distinguishes two runtimes here is the transient environment they were
+   * built with — so this is what shows a close reached its own partition.
+   */
+  closeRuntimes: (string | undefined)[];
+  /**
+   * Which created runtime served each close, by its index in `createdOptions`.
+   *
+   * The transient environment tells two *bound* runtimes apart; this tells any
+   * two apart, including the unbound one a provider-returned launch uses.
+   */
+  closeRuntimeIndexes: number[];
   closeFailure?: Error;
   /** Fail every attempt to establish a session, as an unreachable agent does. */
   ensureFailure?: Error;
@@ -123,7 +141,79 @@ export interface FakeRuntimeHarness {
    * shape a client could mistake one of for a native id.
    */
   omitAgentSessionId?: boolean;
+  /**
+   * What to wait on, or raise, before an ensure for this input answers.
+   *
+   * Returning nothing lets it answer immediately, which is what every other
+   * case wants. Returning an operation is how a test holds one ensure open
+   * while another runs, or fails one of several without failing them all.
+   */
+  ensureGate?: (input: AcpRuntimeEnsureInput) => Operation<void> | undefined;
+  /**
+   * The conversation an attachment reports, whatever it was asked to resume.
+   *
+   * A real adapter answers with the session it loaded; this is how a test makes
+   * one answer with a different conversation than the one it was told to open.
+   */
+  assertIdentity?: string;
   script(turn: ScriptedTurn): void;
+}
+
+/** One controlled build, as an observer would report it. */
+export interface FakeObservation {
+  path: string;
+  digest: string;
+  versionOutput: string;
+}
+
+export interface FakeObserverHarness {
+  observer: ExecutableObserver;
+  /** Every command this observer was asked about, in order. */
+  observed: string[];
+  /** What the next observation answers, or the failure it raises. */
+  observation: FakeObservation;
+  /** Answers taken in order before `observation`, so a build can change. */
+  queued: FakeObservation[];
+  failure?: ExecutableRefusal;
+}
+
+/**
+ * A complete substitute for the host's executable observer.
+ *
+ * The whole seam is replaced, exactly as a trusted host supplies the whole
+ * thing: nothing inside the observer is made replaceable to be testable, so
+ * drift is expressed by answering differently rather than by a control the
+ * production path also has.
+ */
+export function createFakeObserver(observation?: Partial<FakeObservation>): FakeObserverHarness {
+  const harness: FakeObserverHarness = {
+    observed: [],
+    queued: [],
+    observation: {
+      path: "/opt/builds/claude",
+      digest: "a".repeat(64),
+      versionOutput: "2.1.241 (Claude Code)\n",
+      ...observation,
+    },
+    observer: {
+      // deno-lint-ignore require-yield
+      *observe(command) {
+        harness.observed.push(command);
+        if (harness.failure) {
+          throw new ExecutableObservationError(`${command} could not be observed`, {
+            refusal: harness.failure,
+          });
+        }
+        const answer = harness.queued.shift() ?? harness.observation;
+        return {
+          path: answer.path,
+          digest: { algorithm: "sha256", value: answer.digest },
+          versionOutput: answer.versionOutput,
+        };
+      },
+    },
+  };
+  return harness;
 }
 
 const DEFAULT_EVENTS: AcpRuntimeEvent[] = [
@@ -142,10 +232,13 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     turns: [],
     closeCalls: [],
     closeInputs: [],
+    closeRuntimes: [],
+    closeRuntimeIndexes: [],
     script(turn) {
       scripted.push(turn);
     },
     create(options) {
+      const runtimeIndex = harness.createdOptions.length;
       harness.createdOptions.push(options);
       return {
         doctor() {
@@ -169,10 +262,14 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             acpxRecordId: input.sessionKey,
             messages: [],
           };
+          // What the adapter says it opened. An exact resume answers with the
+          // conversation it was told to load, and `assertIdentity` is how a
+          // test makes it answer with another one.
+          const asserted =
+            harness.assertIdentity ?? input.resumeSessionId ?? `agent-session:${input.sessionKey}`;
           if (input.sessionOptions?.systemPrompt !== undefined) {
             record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
           }
-          void options.sessionStore.save(record);
           const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
@@ -182,9 +279,17 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             backendSessionId: `backend:${input.sessionKey}`,
           };
           if (!harness.omitAgentSessionId) {
-            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+            handle.agentSessionId = asserted;
+            record.agentSessionId = asserted;
           }
-          return Promise.resolve(handle);
+          const answer = (): AcpRuntimeHandle => {
+            void options.sessionStore.save(record);
+            return handle;
+          };
+          // The gate runs on Effection and `run` bridges it to the acpx Promise
+          // boundary, the same way a manual turn's release does.
+          const gate = harness.ensureGate?.(input);
+          return gate ? run(() => gate).then(answer) : Promise.resolve(answer());
         },
         startTurn(input) {
           const script = scripted.shift() ?? {};
@@ -268,6 +373,8 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return Promise.resolve();
         },
         close(input) {
+          harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
+          harness.closeRuntimeIndexes.push(runtimeIndex);
           harness.closeCalls.push(input.handle);
           harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
           if (harness.closeFailure) {

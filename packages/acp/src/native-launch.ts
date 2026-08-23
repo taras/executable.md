@@ -33,6 +33,77 @@
 import { randomUUID } from "node:crypto";
 import type { IdentityProvenance } from "@executablemd/core";
 
+/**
+ * What an adapter knows about the build behind its executable.
+ *
+ * A session whose identity XMD chose only means something while the build that
+ * accepted it can be recognized later: two builds of one provider accept the
+ * same identity and disagree silently about what it names. Everything here is
+ * that adapter's private dialect — which command to observe, what its version
+ * output looks like, and what the ACP adapter child needs in order to run the
+ * same build. None of it reaches a document.
+ */
+export interface NativeBinding {
+  /** The command whose build is observed, bound and retained. */
+  command: string;
+  /** The arguments that ask that exact file its version. */
+  versionArgs?: readonly string[];
+  /**
+   * The canonical version from that output, or `undefined` when the output is
+   * not something this adapter recognizes. An unrecognized version is a
+   * refusal, not a value to retain — a build XMD cannot name is one it cannot
+   * later confirm.
+   */
+  version(output: string): string | undefined;
+  /**
+   * The exact ACP adapter command this binding was proven against, when the
+   * proof is tied to one.
+   *
+   * ACPX resolves adapters through a semver range of its own, which is free to
+   * select a different adapter tomorrow than the one an integration proof ran
+   * against. A capability that depends on how an adapter handles resume
+   * identity cannot be left to that range.
+   *
+   * It pins which adapter process runs, and nothing else. It is live, like the
+   * executable path beside it: it enters no route, journal or natural key, so a
+   * session established before this pin existed is still found under the same
+   * key.
+   *
+   * Absent leaves ACPX's own resolution in place, which is what an adapter with
+   * no version-specific proof wants.
+   */
+  adapterCommand?: string;
+  /**
+   * The environment the ACP adapter child needs to run this exact build.
+   *
+   * Transient by construction: it is handed to the runtime for the children it
+   * spawns, and never persisted, exported, or written into a session record.
+   */
+  environment(livePath: string): Record<string, string>;
+}
+
+/**
+ * Claude reports `2.1.241 (Claude Code)`.
+ *
+ * The whole line is retained rather than the number alone, because the number
+ * alone is not a build: the same version string from a different product would
+ * compare equal. Anything that does not look like this is unrecognized, and an
+ * unrecognized build is refused rather than retained under a guess.
+ *
+ * Exactly one line may match. Zero is an output this adapter does not
+ * recognize; two or more is output it cannot read as one answer, and taking
+ * the first would be picking a build out of a list of them. Neither is
+ * repeated anywhere — the caller refuses with a stable class, and the output
+ * itself is provider-private.
+ */
+function claudeVersion(output: string): string | undefined {
+  const canonical = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line));
+  return canonical.length === 1 ? canonical[0] : undefined;
+}
+
 interface AdapterCommands {
   /** Stable adapter identity — `claude`, `codex`. Never an executable path. */
   launcher: string;
@@ -60,6 +131,15 @@ export interface ClientAllocatedAdapter extends AdapterCommands {
   allocate(): string;
   /** The argv that creates a session under `id` with that instruction layer. */
   create(nativeSessionId: string, instructionFile: string): string[];
+  /**
+   * Which build of this adapter's executable a session is bound to.
+   *
+   * Required, because an identity XMD chose is only meaningful beside the build
+   * that accepted it. The argv `create` and `resume` return still begins with
+   * the stable launcher name, which is what durable records carry; a run
+   * replaces that first member with the exact path it observed.
+   */
+  binding: NativeBinding;
 }
 
 export interface ProviderReturnedAdapter extends AdapterCommands {
@@ -81,6 +161,17 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
     identity: "client-allocated",
     // Claude takes a UUID it has never seen and makes it the session's name.
     allocate: () => randomUUID(),
+    binding: {
+      command: "claude",
+      version: claudeVersion,
+      // The version #561's gates are proven against. Raising it is a new proof,
+      // not a version bump.
+      adapterCommand: "npx -y @agentclientprotocol/claude-agent-acp@0.70.0",
+      // The first thing the Claude ACP adapter consults when deciding which
+      // Claude to run. Without it the adapter resolves the build shipped with
+      // the Agent SDK it pins, which is not the build that created the session.
+      environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
+    },
     create: (nativeSessionId, instructionFile) => [
       "claude",
       "--session-id",
@@ -116,6 +207,23 @@ const ADAPTERS: Readonly<Record<string, NativeAdapter>> = {
  * through `AcpxProviderDependencies.advertiseNativeLaunch`.
  */
 export const ADVERTISED_NATIVE_LAUNCH: readonly string[] = ["claude"];
+
+/**
+ * The adapters whose client-native ACP attachment has been proven against the
+ * installed CLI.
+ *
+ * A separate list from the one above, because they are separate capabilities:
+ * handing a session to a native UI and later joining that same conversation
+ * through ACP prove different things. An adapter may have the first without the
+ * second.
+ *
+ * `claude` is here because `packages/acp/src/ClaudeNativeToAcp.test.md` ran the
+ * production command through the built binary: a native turn carrying a random
+ * marker, then a marker-free ACP Prompt that recovered it under the same
+ * provider-native identity and the same observed build, and an independent
+ * absent identity that refused without taking a turn.
+ */
+export const ADVERTISED_CLIENT_NATIVE_ATTACHMENT: readonly string[] = ["claude"];
 
 export function nativeAdapterFor(agentName: string): NativeAdapter | undefined {
   return Object.hasOwn(ADAPTERS, agentName) ? ADAPTERS[agentName] : undefined;

@@ -24,7 +24,7 @@ import type { Operation } from "effection";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { stat } from "@executablemd/runtime";
-import type { AcpSessionStore } from "acpx/runtime";
+import type { AcpSessionStore } from "./acpx-runtime.ts";
 
 export interface SessionCandidate {
   sessionKey: string;

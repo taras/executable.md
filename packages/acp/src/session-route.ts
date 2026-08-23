@@ -27,6 +27,7 @@ import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import type { AgentSessionKey } from "@executablemd/runtime";
+import type { ExecutableBuildBindingV1 } from "@executablemd/core";
 
 /**
  * The exact V1 record.
@@ -59,6 +60,37 @@ export type AgentSessionRouteV1 =
       launcher: string;
     };
 
+/**
+ * The exact V2 record, which exists only for `client-native`.
+ *
+ * V2 adds the one fact V1 never had: which build of the provider executable
+ * accepted the identity XMD chose. That fact is what lets a later ACP
+ * attachment know it is talking to the same build the native UI is in, so it
+ * is required rather than optional here.
+ *
+ * There is no V2 `acp-first`. ACP-first construction gained no fact, so a
+ * second schema for it would be a version number with nothing behind it.
+ *
+ * V1 `client-native` is not upgraded into this. A build observed later says
+ * which build is installed now, not which one established the session, and
+ * writing it into an old record would claim knowledge XMD never had.
+ */
+export interface AgentSessionRouteV2 {
+  schema: "session-route.v2";
+  route: "client-native";
+  provider: string;
+  agent: string;
+  sessionKey: string;
+  nativeSessionId: string;
+  identityProvenance: "client-allocated";
+  instructionsDigest: string;
+  launcher: string;
+  executableBinding: ExecutableBuildBindingV1;
+}
+
+/** Every route form this build accepts. */
+export type AgentSessionRoute = AgentSessionRouteV1 | AgentSessionRouteV2;
+
 /** Why a route could not be used. Never carries a path or provider-private state. */
 export class AgentSessionRouteError extends Error {
   override name = "AgentSessionRouteError";
@@ -72,6 +104,9 @@ const CLIENT_NATIVE_MEMBERS = [
   "instructionsDigest",
   "launcher",
 ];
+const BOUND_CLIENT_NATIVE_MEMBERS = [...CLIENT_NATIVE_MEMBERS, "executableBinding"];
+const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
+const DIGEST_MEMBERS = ["algorithm", "value"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -91,8 +126,45 @@ function exactly(value: Record<string, unknown>, members: readonly string[]): bo
  * `native-session-mapping.v1` shape: it was never a released compatibility
  * boundary, so it is unknown state and fails closed like any other.
  */
-export function parseAgentSessionRoute(value: unknown): AgentSessionRouteV1 | undefined {
-  if (!isRecord(value) || value.schema !== "session-route.v1") {
+/**
+ * Read a retained build binding strictly.
+ *
+ * The member set is exact rather than minimal, because a binding is compared
+ * for equality: a member this build ignores is a fact the writer thought was
+ * part of the build's identity, and comparing without it would call two
+ * different builds the same one.
+ */
+function parseExecutableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
+  if (!isRecord(value) || !exactly(value, BINDING_MEMBERS)) {
+    return undefined;
+  }
+  const { schema, reportedVersion, executableDigest } = value;
+  if (schema !== "executable-build.v1") {
+    return undefined;
+  }
+  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+    return undefined;
+  }
+  if (!isRecord(executableDigest) || !exactly(executableDigest, DIGEST_MEMBERS)) {
+    return undefined;
+  }
+  const { algorithm, value: digest } = executableDigest;
+  if (algorithm !== "sha256" || typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+    return undefined;
+  }
+  return {
+    schema: "executable-build.v1",
+    reportedVersion,
+    executableDigest: { algorithm: "sha256", value: digest },
+  };
+}
+
+export function parseAgentSessionRoute(value: unknown): AgentSessionRoute | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const bound = value.schema === "session-route.v2";
+  if (!bound && value.schema !== "session-route.v1") {
     return undefined;
   }
   const { provider, agent, sessionKey } = value;
@@ -106,11 +178,14 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRouteV1 | un
     return undefined;
   }
   if (value.route === "acp-first") {
-    return exactly(value, ACP_FIRST_MEMBERS)
+    // There is no bound ACP-first form, so a V2 record claiming one is state
+    // this build cannot account for rather than a route with a spare member.
+    return !bound && exactly(value, ACP_FIRST_MEMBERS)
       ? { schema: "session-route.v1", route: "acp-first", provider, agent, sessionKey }
       : undefined;
   }
-  if (value.route !== "client-native" || !exactly(value, CLIENT_NATIVE_MEMBERS)) {
+  const members = bound ? BOUND_CLIENT_NATIVE_MEMBERS : CLIENT_NATIVE_MEMBERS;
+  if (value.route !== "client-native" || !exactly(value, members)) {
     return undefined;
   }
   const { nativeSessionId, instructionsDigest, launcher } = value;
@@ -126,8 +201,25 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRouteV1 | un
   if (value.identityProvenance !== "client-allocated") {
     return undefined;
   }
+  if (!bound) {
+    return {
+      schema: "session-route.v1",
+      route: "client-native",
+      provider,
+      agent,
+      sessionKey,
+      nativeSessionId,
+      identityProvenance: "client-allocated",
+      instructionsDigest,
+      launcher,
+    };
+  }
+  const executableBinding = parseExecutableBinding(value.executableBinding);
+  if (!executableBinding) {
+    return undefined;
+  }
   return {
-    schema: "session-route.v1",
+    schema: "session-route.v2",
     route: "client-native",
     provider,
     agent,
@@ -136,10 +228,12 @@ export function parseAgentSessionRoute(value: unknown): AgentSessionRouteV1 | un
     identityProvenance: "client-allocated",
     instructionsDigest,
     launcher,
+    executableBinding,
   };
 }
 
-export function serializeAgentSessionRoute(route: AgentSessionRouteV1): string {
+/** Serialize a route in the schema it carries; nothing here upgrades one. */
+export function serializeAgentSessionRoute(route: AgentSessionRoute): string {
   const payload: Record<string, unknown> = {
     schema: route.schema,
     route: route.route,
@@ -153,11 +247,21 @@ export function serializeAgentSessionRoute(route: AgentSessionRouteV1): string {
     payload.instructionsDigest = route.instructionsDigest;
     payload.launcher = route.launcher;
   }
+  if (route.schema === "session-route.v2") {
+    payload.executableBinding = {
+      schema: route.executableBinding.schema,
+      reportedVersion: route.executableBinding.reportedVersion,
+      executableDigest: {
+        algorithm: route.executableBinding.executableDigest.algorithm,
+        value: route.executableBinding.executableDigest.value,
+      },
+    };
+  }
   return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
 /** Whether a route names the key it was found under. */
-export function routeNamesKey(route: AgentSessionRouteV1, key: AgentSessionKey): boolean {
+export function routeNamesKey(route: AgentSessionRoute, key: AgentSessionKey): boolean {
   return (
     route.provider === key.provider &&
     route.agent === key.agent &&
@@ -166,13 +270,13 @@ export function routeNamesKey(route: AgentSessionRouteV1, key: AgentSessionKey):
 }
 
 /** The natural key a route names. */
-export function routeKey(route: AgentSessionRouteV1): AgentSessionKey {
+export function routeKey(route: AgentSessionRoute): AgentSessionKey {
   return { provider: route.provider, agent: route.agent, sessionKey: route.sessionKey };
 }
 
 export interface AgentSessionRouteStore {
   /** The published route for `key`, or nothing. */
-  read(key: AgentSessionKey): Operation<AgentSessionRouteV1 | undefined>;
+  read(key: AgentSessionKey): Operation<AgentSessionRoute | undefined>;
   /**
    * Publish `candidate` create-once, and answer with the winner.
    *
@@ -181,7 +285,7 @@ export interface AgentSessionRouteStore {
    * first described the session that exists, and a later caller either agrees
    * with that account or refuses.
    */
-  publish(candidate: AgentSessionRouteV1): Operation<AgentSessionRouteV1>;
+  publish(candidate: AgentSessionRoute): Operation<AgentSessionRoute>;
 }
 
 /**
@@ -330,7 +434,7 @@ export function createDenoSessionRouteStore(root: string): AgentSessionRouteStor
     return `${directory}/${agentSessionKeyDigest(key)}.json`;
   }
 
-  function* readAt(path: string): Operation<AgentSessionRouteV1 | undefined> {
+  function* readAt(path: string): Operation<AgentSessionRoute | undefined> {
     const text = yield* until(
       host.readTextFile(path).catch((cause: unknown) => {
         if (isMissing(cause)) {
@@ -396,7 +500,7 @@ export function createDenoSessionRouteStore(root: string): AgentSessionRouteStor
       // rather than when the caller's scope does. A finalizer registered in the
       // caller's scope would leave one staging file per publication lying in
       // the namespace for the life of the run.
-      return scoped(function* (): Operation<AgentSessionRouteV1> {
+      return scoped(function* (): Operation<AgentSessionRoute> {
         yield* prepared();
         const key = routeKey(candidate);
         const path = destination(key);

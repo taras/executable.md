@@ -119,6 +119,7 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "native-exit":
     case "session-busy":
     case "session-recovery-required":
+    case "executable-binding-refused":
       return value;
     default:
       return "unsupported-capability";

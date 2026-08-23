@@ -128,6 +128,14 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
       return "session";
     }
   }
+  // A provider that returns its own identity owns its own session lifetime and
+  // binds no build, so a binding beside one describes a check nothing performed.
+  // The parser refuses the same pairing on the way back in; this is the live
+  // half, before anything durable exists. The other direction stays open: the
+  // client-allocated path was released unbound, and legacy history is readable.
+  if (record.identityProvenance === "provider-returned" && record.executableBinding !== undefined) {
+    return "identity provenance";
+  }
   return undefined;
 }
 

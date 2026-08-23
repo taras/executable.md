@@ -78,8 +78,7 @@ import type {
 } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import type { AgentSessionCoordinator } from "@executablemd/runtime";
-import type { AgentSessionRouteStore } from "@executablemd/acp";
+import type { MachineSessionAssembly } from "./session-coordinator.ts";
 import {
   installTestingComponents,
   TestFailureError,
@@ -462,8 +461,7 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
  */
 function* installAgentStack(
   flags: AgentFlags,
-  coordinator: AgentSessionCoordinator | undefined,
-  routeStore?: AgentSessionRouteStore,
+  sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
   const config = resolveAgentConfig(flags);
   if ("error" in config) {
@@ -472,14 +470,28 @@ function* installAgentStack(
     return;
   }
 
-  // The coordinator this host built, if it built one. It reaches the provider
-  // directly rather than through a context: who owns a session is a security
-  // decision, and one a document could replace is not one.
-  // A host that answers who owns a session also answers how it was
-  // constructed, from the same trusted root — an agent that names its own
-  // sessions needs both, and refuses unless it has both.
+  // What this host built, if it built anything. Each piece reaches the provider
+  // directly rather than through a context: who owns a session and which build
+  // it belongs to are security decisions, and ones a document could replace are
+  // not ones. A host that answers who owns a session also answers how it was
+  // constructed and which build accepted its identity, all from the same
+  // trusted root — an agent that names its own sessions needs all three, and
+  // refuses unless it has all three.
+  //
+  // The two advertised sets are stated by the host, not inherited: this is the
+  // ordinary `xmd run` profile saying what it has proven.
   const acpx = createAcpxProvider(
-    coordinator === undefined ? undefined : { coordinator, ...(routeStore ? { routeStore } : {}) },
+    sessions === undefined
+      ? undefined
+      : {
+          ...(sessions.coordinator ? { coordinator: sessions.coordinator } : {}),
+          ...(sessions.routeStore ? { routeStore: sessions.routeStore } : {}),
+          ...(sessions.executableObserver
+            ? { executableObserver: sessions.executableObserver }
+            : {}),
+          advertiseNativeLaunch: sessions.advertiseNativeLaunch,
+          advertiseClientNativeAttachment: sessions.advertiseClientNativeAttachment,
+        },
   );
   yield* registerAgentProvider("acpx", acpx);
   const defaultAgent =
@@ -562,16 +574,17 @@ export interface DocumentMode {
   testing: boolean;
   agent?: AgentFlags;
   /**
-   * Who owns an agent session on this host, when this host can say.
+   * What this host states about machine-wide agent sessions: who owns one,
+   * how it was constructed, which build it belongs to, and which adapters this
+   * host has proven for native launch and for ACP attachment.
    *
    * Carried on the mode because the mode is what a trusted host states about
    * one run — and delivered from here straight into the provider's
-   * dependencies. It is deliberately not contextual: ownership is a security
-   * decision, and one a document could replace is not one.
+   * dependencies. It is deliberately not contextual: ownership and executable
+   * validation are security decisions, and ones a document could replace are
+   * not ones.
    */
-  sessionCoordinator?: AgentSessionCoordinator;
-  /** Where this host keeps construction routes, from the same trusted root. */
-  sessionRouteStore?: AgentSessionRouteStore;
+  machineSessions?: MachineSessionAssembly;
   props?: Record<string, Json>;
   /**
    * What a trusted host attaches to this one execution.
@@ -628,7 +641,7 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
   // through the deterministic TestAgent stack instead.
   if (mode.agent) {
-    yield* installAgentStack(mode.agent, mode.sessionCoordinator, mode.sessionRouteStore);
+    yield* installAgentStack(mode.agent, mode.machineSessions);
   }
 }
 
@@ -1612,8 +1625,7 @@ function* dispatch(
   helpRequest: { requested: boolean; args: string[] },
   installService: HostServiceInstaller,
   workflowHost: WorkflowHost | undefined,
-  coordinator: AgentSessionCoordinator | undefined,
-  session: { routeStore?: AgentSessionRouteStore } = {},
+  sessions: MachineSessionAssembly | undefined,
 ): Operation<void> {
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
@@ -1685,8 +1697,10 @@ function* dispatch(
         {
           testing: false,
           props: props.value,
-          ...(coordinator === undefined ? {} : { sessionCoordinator: coordinator }),
-          ...(session.routeStore ? { sessionRouteStore: session.routeStore } : {}),
+          // Only `xmd run` receives it. Every other command assembles none of
+          // it, which is what keeps a machine session from being acted on by a
+          // command that never said it could own one.
+          ...(sessions === undefined ? {} : { machineSessions: sessions }),
           agent: {
             agentProvider: config.agentProvider,
             defaultAgent: config.defaultAgent,
@@ -1840,13 +1854,12 @@ export function* runXmd(
   // failure mode the whole boundary exists to prevent — so the default is the
   // one that creates and executes nothing.
   installWorkflowHost: HostWorkflowInstaller = unsupportedWorkflowHost,
-  // Absent on a host that cannot own an agent session. Node and Bun pass none,
-  // and every advertised operation refuses there rather than
-  // acting without knowing who owns the session.
-  coordinator?: AgentSessionCoordinator,
-  // Built from the same trusted root as the coordinator. A host that keeps
-  // ownership records keeps construction routes beside them.
-  session: { routeStore?: AgentSessionRouteStore } = {},
+  // What this host states about machine-wide agent sessions. Node and Bun
+  // advertise the same agents and assemble none of the answers, so every
+  // advertised operation refuses there rather than acting without knowing who
+  // owns the session or which build it belongs to. A caller that names none
+  // gets no machine sessions at all, which is the ordinary ACP behaviour.
+  sessions?: MachineSessionAssembly,
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -1886,14 +1899,7 @@ export function* runXmd(
     !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
 
   if (!isRun) {
-    return yield* dispatch(
-      evalFlags,
-      helpRequest,
-      installService,
-      workflowHost,
-      coordinator,
-      session,
-    );
+    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost, sessions);
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -1904,6 +1910,6 @@ export function* runXmd(
   }
 
   yield* underRunDeadline(timeouts, () =>
-    dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator, session),
+    dispatch(evalFlags, helpRequest, installService, workflowHost, sessions),
   );
 }
