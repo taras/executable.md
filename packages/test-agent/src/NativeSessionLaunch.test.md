@@ -53,4 +53,70 @@ another owner holds — would carry a different class here and fail this test.
 
 <AssertEquals actual={refusal.cause.failureClass} expected={"instructions-refused"} />
 </Test>
+
+## A session XMD names itself
+
+The launches above let the provider name the session it created. An agent whose
+native UI is handed the session it is to make works the other way round: XMD
+names the session before the provider exists, and the native process creates it
+under that name.
+
+Nothing is created through ACP on that path. What makes it safe is that the
+session's construction is written down — durably, once — before any process
+exists, so the same session can never later be constructed the other way.
+
+<TestAgent.Scenario agent="test-agent-client-native" session="implementer" src="./NativeSessionLaunch.implementer.md" />
+
+<Test name="a launch names its own session, and the next one continues it">
+<Agent name="test-agent-client-native">
+<Session.Launch session="implementer">
+You are the repository implementor. Follow the approved plan.
+</Session.Launch>
+
+The first launch chose this session's name and handed it to the native process.
+Launching the same prepared body again continues that conversation rather than
+naming a second one — which is only possible because the first launch wrote down
+what it constructed.
+
+<Session.Launch session="implementer">
+You are the repository implementor. Follow the approved plan.
+</Session.Launch>
+
+A different body is a different instruction layer, and this provider replaces
+neither the layer nor the conversation that already carries it.
+
+<AssertThrows as="layer" message="already carries a different XMD instruction layer">
+<Session.Launch session="implementer">
+You are somebody else entirely.
+</Session.Launch>
+</AssertThrows>
+</Agent>
+
+<AssertEquals actual={layer.cause.failureClass} expected={"instructions-refused"} />
+</Test>
+
+An eager `<Session>` is the other order. Establishing one settles how that
+session was constructed — through ACP — and a launch that would name the same
+session is not asking to continue that conversation. It is asking to name a
+different one, so it refuses before an identity is allocated, before a private
+file is written, and before anything is started.
+
+<TestAgent.Scenario agent="test-agent-client-native" session="claimed" src="./NativeSessionLaunch.claimed.md" />
+
+<Test name="an ACP-first session refuses a launch that would name it again">
+<Agent name="test-agent-client-native">
+<Session name="claimed">
+<AssertThrows as="conversion" message="already has an identity">
+<Session.Launch>
+You are somebody else entirely.
+</Session.Launch>
+</AssertThrows>
+</Session>
+</Agent>
+
+A construction route never converts, and the class says which refusal this was
+rather than leaving it to the wording.
+
+<AssertEquals actual={conversion.cause.failureClass} expected={"identity-unavailable"} />
+</Test>
 </TestAgent>

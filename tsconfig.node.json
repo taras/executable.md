@@ -111,6 +111,11 @@
     // The runtime exclusions keep the same test out of the Node and Bun
     // execution suites.
     "packages/runtime/tests/agent-session-coordinator.test.ts",
-    "packages/runtime/tests/fixtures/agent-session-owner.ts"
+    "packages/runtime/tests/fixtures/agent-session-owner.ts",
+    // The durable construction-route store and the second process that races it
+    // for one winner both reach for `Deno` directly. The runtime exclusions keep
+    // the same test out of the Node and Bun execution suites.
+    "packages/acp/tests/session-route.test.ts",
+    "packages/acp/tests/fixtures/session-route-publisher.ts"
   ]
 }

@@ -26,8 +26,13 @@ import {
   installControlledLauncher,
 } from "@executablemd/runtime";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
-import { createAcpxProvider } from "@executablemd/acp";
-import { sessionCoordinatorRoot, useSessionCoordinator } from "../src/session-coordinator.ts";
+import { createAcpxProvider, createMemorySessionRouteStore } from "@executablemd/acp";
+import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
+import {
+  sessionCoordinatorRoot,
+  useSessionCoordinator,
+  useSessionRouteStore,
+} from "../src/session-coordinator.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
 
@@ -43,14 +48,24 @@ function entrypoint(name: string): Operation<string> {
 
 /** Enough of a runtime to prove the provider never reached one. */
 interface RuntimeProbe {
+  /**
+   * Every way this runtime could have been contacted at all.
+   *
+   * Asking whether an agent is available spawns a probe child, and that is
+   * provider work on a session whose construction nothing has settled yet.
+   */
+  doctors: number;
+  runtimes: number;
   ensures: number;
   closes: number;
 }
 
 function probeRuntime(probe: RuntimeProbe) {
-  return () =>
-    ({
+  return () => {
+    probe.runtimes += 1;
+    return {
       doctor() {
+        probe.doctors += 1;
         return Promise.resolve({ ok: true, agents: [] } as never);
       },
       ensureSession() {
@@ -70,7 +85,8 @@ function probeRuntime(probe: RuntimeProbe) {
         probe.closes += 1;
         return Promise.resolve();
       },
-    }) as never;
+    } as never;
+  };
 }
 
 /** What core does with each phase, minus the journal. */
@@ -99,11 +115,64 @@ function launchRequest(): AgentLaunchRequest {
   return request;
 }
 
+/**
+ * A Claude-shaped adapter whose provider returns the identity.
+ *
+ * The merged #518 shape, declared here because the real Claude adapter names
+ * its own sessions now. Keeping it is what lets these cases say that a
+ * provider-returned agent gained no new host requirement.
+ */
+const PROVIDER_RETURNED: NativeAdapter = {
+  launcher: "claude",
+  identity: "provider-returned",
+  resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+};
+
+/** A Claude-shaped adapter that names its own sessions. */
+const CLIENT_ALLOCATED: NativeAdapter = {
+  launcher: "claude",
+  identity: "client-allocated",
+  allocate: () => randomUUID(),
+  create: (nativeSessionId, instructionFile) => [
+    "claude",
+    "--session-id",
+    nativeSessionId,
+    "--system-prompt-file",
+    instructionFile,
+  ],
+  resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+};
+
+/**
+ * A route store that records every operation performed on it.
+ *
+ * "Performs no route work" is a claim about absence, and absence is only
+ * provable where something was watching.
+ */
+function countingRoutes(): { store: AgentSessionRouteStore; operations: string[] } {
+  const inner = createMemorySessionRouteStore();
+  const operations: string[] = [];
+  return {
+    operations,
+    store: {
+      *read(key) {
+        operations.push("read");
+        return yield* inner.read(key);
+      },
+      *publish(candidate) {
+        operations.push("publish");
+        return yield* inner.publish(candidate);
+      },
+    },
+  };
+}
+
 /** Run one launch against a provider built with or without a coordinator. */
 function* launchUnder(
   coordinator: AgentSessionCoordinator | undefined,
   records: LaunchRecord[],
   probe: RuntimeProbe,
+  options: { adapter?: NativeAdapter; routeStore?: AgentSessionRouteStore } = {},
 ): Operation<void> {
   yield* scoped(function* () {
     yield* API.Env.around({
@@ -124,7 +193,9 @@ function* launchUnder(
         list: () => ["claude"],
       },
       advertiseNativeLaunch: ["claude"],
+      nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
       ...(coordinator ? { coordinator } : {}),
+      ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     });
     yield* factory(
       { defaultAgent: "claude", permissionMode: "deny-all" },
@@ -149,7 +220,7 @@ describe("Tier HC — host session ownership", () => {
 
   it("HC3: a provider with no coordinator refuses before contacting the agent", function* () {
     const records: LaunchRecord[] = [];
-    const probe: RuntimeProbe = { ensures: 0, closes: 0 };
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
     yield* launchUnder(undefined, records, probe);
 
     const failure = records.find((record) => record.failure)?.failure;
@@ -172,7 +243,7 @@ describe("Tier HC — host session ownership", () => {
     yield* ensureDir(root);
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const records: LaunchRecord[] = [];
-    const probe: RuntimeProbe = { ensures: 0, closes: 0 };
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
     let reached = false;
     try {
       yield* launchUnder(createDenoAgentSessionCoordinator(root), records, probe);
@@ -185,6 +256,60 @@ describe("Tier HC — host session ownership", () => {
     expect(reached).toBe(true);
     expect(probe.ensures).toBe(1);
     expect(records.find((record) => record.failure)).toBe(undefined);
+  });
+
+  it("HC6: an agent that names its own sessions needs a route store too", function* () {
+    // Fail-closed means what this agent actually needs. A host that can say who
+    // owns the session but not how it was constructed cannot act on one a
+    // native UI may be in — and it says so before any provider effect.
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
+    yield* launchUnder(
+      onDeno()
+        ? createDenoAgentSessionCoordinator(join(tmpdir(), `xmd-hc6-${randomUUID()}`))
+        : undefined,
+      records,
+      probe,
+      { adapter: CLIENT_ALLOCATED },
+    );
+
+    const failure = records.find((record) => record.failure)?.failure;
+    expect(failure?.class).toBe("unsupported-capability");
+    if (onDeno()) {
+      expect(failure?.message).toContain("construction routes");
+    }
+    // Zero provider work: no runtime was built and no probe child was spawned.
+    expect(probe.runtimes).toBe(0);
+    expect(probe.doctors).toBe(0);
+    expect(probe.ensures).toBe(0);
+    expect(probe.closes).toBe(0);
+  });
+
+  it("HC7: a provider-returned agent performs no route work at all", function* () {
+    // #518's path is unchanged. It uses the coordinator and the existing ACP
+    // path, and gains no route requirement merely because the same provider
+    // package also serves an agent that names its own sessions.
+    if (!onDeno()) {
+      return;
+    }
+    const root = join(tmpdir(), `xmd-hc7-${randomUUID()}`);
+    yield* ensureDir(root);
+    yield* ensure(() => rm(root, { recursive: true, force: true }));
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
+    const counted = countingRoutes();
+
+    try {
+      yield* launchUnder(createDenoAgentSessionCoordinator(root), records, probe, {
+        routeStore: counted.store,
+      });
+    } catch {
+      // The probe runtime is deliberately unreachable; what matters is what was
+      // touched on the way there.
+    }
+
+    expect(probe.ensures).toBe(1);
+    expect(counted.operations).toEqual([]);
   });
 
   it("HC5: the Deno and compiled entrypoints install one; Node and Bun do not", function* () {

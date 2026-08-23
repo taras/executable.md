@@ -40,14 +40,14 @@ import {
   useProviderInstallation,
 } from "@executablemd/core";
 import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
-import { createPartitionedAcpxProvider } from "@executablemd/acp";
+import { createMemorySessionRouteStore, createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, installControlledLauncher, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
-import { TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
+import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
 
 /** One `<TestAgent.Scenario>` mapping, before any worker exists. */
@@ -272,13 +272,18 @@ export function* installTestAgentComponents(): Operation<void> {
         const workerCommand = yield* command(["test-agent"]);
         const provider = yield* useTestAgentProvider({
           defaultAgent,
-          agents: [defaultAgent],
+          // Two agents, because the two construction routes are two contracts:
+          // the default one's worker asserts its own identity, and the second
+          // is named by XMD before any process exists.
+          agents: [defaultAgent, TEST_AGENT_CLIENT_NATIVE],
           workerCommand,
           probeRoute: controller.probeRoute,
           routeFor,
           // This partition's own, so two tests owning "the same" session are
-          // owning two sessions and never exclude each other.
+          // owning two sessions and never exclude each other — and so a route
+          // one test published is not an account the next test has to live with.
           coordinator: createDeterministicSessionCoordinator(),
+          routeStore: createMemorySessionRouteStore(),
         });
         return { provider, boundaryScope, scenarios, pending, bySessionKey };
       }

@@ -396,6 +396,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/456",
   },
   {
+    path: "packages/acp/tests/session-route.test.ts",
+    reason:
+      "the subject is the durable construction-route store: create-once publication by hard link, mode 0700/0600, a flushed staging file, and one real two-process race through Deno child processes. The store is built only where `Deno.link`, `Deno.open().sync()` and those APIs exist, and the strict reader and memory-store parity it shares with every runtime are asserted in the same file's parser cases, which the Deno suite runs",
+    issue: "https://github.com/taras/executable.md/issues/519",
+  },
+  {
     path: "packages/runtime/tests/agent-session-coordinator.test.ts",
     reason:
       "the subject is the Deno agent-session coordinator: a non-blocking advisory lock through Deno.FsFile.tryLock, raced against real Deno child processes that are killed mid-ownership to leave a tombstone. Both the lock primitive and the children are Deno's; the provider-neutral half of the same contract — owner kinds, contention, quiescence and the record shape — runs on every runtime through packages/acp/tests/native-launch.test.ts and packages/cli/tests/agent-session-coordinator.test.ts",

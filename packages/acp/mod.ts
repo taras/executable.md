@@ -28,7 +28,12 @@ export {
   knownNativeAdapters,
   nativeAdapterFor,
 } from "./src/native-launch.ts";
-export type { NativeAdapter } from "./src/native-launch.ts";
+export { allocatesIdentity } from "./src/native-launch.ts";
+export type {
+  ClientAllocatedAdapter,
+  NativeAdapter,
+  ProviderReturnedAdapter,
+} from "./src/native-launch.ts";
 
 export {
   AcpxPartitionError,
@@ -37,3 +42,19 @@ export {
 } from "./src/provider.ts";
 export type { AcpxPartitionSelector } from "./src/provider.ts";
 export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";
+
+// The construction route: how a logical session was first constructed, kept
+// strictly and create-once beside the coordinator's own records. It is not an
+// Agent Api, a component, or a source of launch authority — the coordinator
+// remains the single live authority.
+export {
+  AgentSessionRouteError,
+  createDenoSessionRouteStore,
+  createMemorySessionRouteStore,
+  hasDenoSessionRouteStore,
+  parseAgentSessionRoute,
+  routeKey,
+  routeNamesKey,
+  serializeAgentSessionRoute,
+} from "./src/session-route.ts";
+export type { AgentSessionRouteStore, AgentSessionRouteV1 } from "./src/session-route.ts";

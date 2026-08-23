@@ -184,8 +184,9 @@ sessions and working directories have independent state.
 
 Each `<Test>` receives a fresh provider partition — its own ACPX runtime,
 session store, managed sessions, serial queues, availability cache, route slot,
-session coordinator, scenarios and teardown — even when it uses the same
-scenario declaration and keys as another test. When `<TestAgent>` is used
+session coordinator, construction-route store, scenarios and teardown — even
+when it uses the same scenario declaration and keys as another test. A route one
+test published is not an account the next test has to live with. When `<TestAgent>` is used
 without an enclosing `<Test>`, its own scope is the isolation boundary.
 
 One ACP provider is *installed*, and it is installed once: `<TestAgent>`
@@ -227,6 +228,11 @@ The controller owns:
 
 - scenario registration and resolution;
 - per-partition ACPX configuration and provider state;
+- two agents: the default one, whose worker asserts its own session identity,
+  and `test-agent-client-native`, a separate controlled adapter that allocates
+  the identity itself so the client-allocated path can be authored in Markdown
+  without a real coding agent. Two adapters rather than one reclassified — the
+  worker contract still has to hold;
 - the scenarios and their journals;
 - a virtual filesystem containing each behavior document and its permitted
   dependencies;
@@ -396,6 +402,19 @@ The essential acceptance coverage is:
    teardown.
 4. The smoke runner replays the completed main journal and verifies the same
    result without contacting ACPX or the worker.
+5. `packages/test-agent/src/NativeSessionLaunch.test.md` is the whole-file
+   Markdown journey for native session launch, run as an ordinary root document.
+   It covers both construction routes against the deterministic agent: a
+   provider-returned launch that prepares its own session and spends no turn, an
+   established session refusing a different instruction layer, a launch under
+   `test-agent-client-native` that names its own session and is continued by the
+   next launch of the same body, and an eager `<Session>` — which settles the
+   route as ACP-first — refusing a launch that would name the same session
+   again. Each refusal asserts its failure class as well as its message, so a
+   launch that stopped for some other reason fails the journey rather than
+   passing it. There is no post-launch ACP prompt on the client-allocated path,
+   because this release does not attach ACP to a session a native process
+   created.
 
 Unit tests use direct Context API and controller fixtures for edge cases that do
 not benefit from crossing the ACPX process boundary. CI does not start an

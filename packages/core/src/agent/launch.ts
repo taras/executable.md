@@ -76,6 +76,21 @@ export interface LaunchFailure {
 }
 
 /**
+ * Who chose the provider-native session identity.
+ *
+ * `provider-returned` — the provider created the session and told XMD what it
+ *   is called. Whatever it returns is the identity.
+ * `client-allocated` — XMD chose the identity before the provider existed and
+ *   supplied it unchanged. Nothing the provider says can replace it, which is
+ *   the property that lets a native UI be handed a session to create.
+ *
+ * Retained rather than inferred, because the two are indistinguishable after
+ * the fact: a returned identity and a supplied one are both just a string in
+ * the record.
+ */
+export type IdentityProvenance = "provider-returned" | "client-allocated";
+
+/**
  * What one provider retained about the session it prepared.
  *
  * `nativeSessionId` is asserted by the provider. An ACP session id, an ACPX
@@ -96,6 +111,12 @@ export interface PreparedLaunchRecord {
   sessionState: "created" | "resumed";
   instructionChannel: string;
   instructionReconciliation: InstructionReconciliation;
+  /**
+   * Retained rather than derived from the provider, because a client-allocated
+   * identity a reader cannot tell from a returned one is an identity a replay
+   * could silently replace.
+   */
+  identityProvenance: IdentityProvenance;
   instructionsDigest: string;
   instructions: string;
   cwd: string;

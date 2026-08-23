@@ -35,13 +35,36 @@ interface AgentApi {
   performs no model turn, and a provider that answers `prompt()` does not
   thereby answer it: native session launch is its own capability, installed on
   its own.
-- Every operation that can act on an **advertised** provider-returned session —
-  `session()`, a subscribed `prompt()` stream, a launch, and an incomplete
-  launch replay — takes exclusive ownership of it first, through the session
-  coordinator its host passed into the provider. Resolving an agent and placing
-  a session own nothing. Acquisition never waits: contention refuses, and a host
-  that installs no coordinator refuses every one of them before contacting an
-  agent.
+- Every operation that can act on an **advertised** session — `session()`, a
+  subscribed `prompt()` stream, a launch, and an incomplete launch replay —
+  takes exclusive ownership of it first, through the session coordinator its
+  host passed into the provider. Coverage follows the agent's capability, not
+  the operation. Resolving an agent and placing a session own nothing.
+  Acquisition never waits: contention refuses, and a host that installs no
+  coordinator refuses every one of them before contacting an agent.
+- The host also passes in a **construction-route store**, directly and from the
+  same trusted root as the coordinator. It is required only for an advertised
+  agent whose adapter names its own sessions: a provider that returns the
+  identity constructs nothing a route governs, and keeps its behavior unchanged
+  on a host that keeps no routes. A host missing it refuses that agent before
+  any provider effect, on the same terms as a missing coordinator.
+- While ownership is held and before any provider construction effect, the
+  provider reconciles the route. A first `session()` or subscribed `prompt()`
+  publishes or adopts `acp-first` before runtime creation, `ensureSession()` or
+  a turn, and an ensure that fails afterwards leaves that route standing. A
+  launch by an adapter that names its own sessions publishes `client-native`
+  under an identity that adapter allocated, unless existing durable ACPX state
+  or an existing route says the session was constructed through ACP — in which
+  case it publishes or adopts `acp-first` and retains `identity-unavailable`.
+  Publication is create-once, so the loser of either order adopts the winner,
+  and no route converts.
+- A `session()` or subscribed `prompt()` that meets a `client-native` route
+  raises `AgentSessionRouteError` before runtime creation, ensure, turn, close
+  or accepted history. It manufactures no launch failure, because no launch was
+  asked for, and this release does not attach ACP to a session a native process
+  created.
+- `withSessionRoute` remains routing only: it selects which partition serves a
+  call and carries no authority to construct, own or answer.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
   `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
   **coldly** — the

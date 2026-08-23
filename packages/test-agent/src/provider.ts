@@ -9,6 +9,7 @@
  * per-session queue and during turn consumption.
  */
 
+import { randomUUID } from "node:crypto";
 import type { Operation } from "effection";
 import { useAcpxProvider } from "@executablemd/acp";
 import type {
@@ -16,7 +17,7 @@ import type {
   AcpxProviderDependencies,
   SessionRouteContext,
 } from "@executablemd/acp";
-import type { NativeAdapter } from "@executablemd/acp";
+import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
@@ -67,6 +68,8 @@ export interface TestAgentProviderOptions {
   routeFor(context: SessionRouteContext): Operation<SessionRouting>;
   /** Who owns this partition's sessions. Absent refuses every advertised one. */
   coordinator?: AgentSessionCoordinator;
+  /** How this partition's sessions were constructed. Its own, like the rest. */
+  routeStore?: AgentSessionRouteStore;
   dependencies?: AcpxProviderDependencies;
 }
 
@@ -83,6 +86,35 @@ export const TEST_AGENT_LAUNCHER = "test-agent";
 
 export const TEST_AGENT_NATIVE_ADAPTER: NativeAdapter = {
   launcher: TEST_AGENT_LAUNCHER,
+  // The worker asserts its own session identity, which is the provider-returned
+  // contract. It stays that, so #518's path keeps being exercised.
+  identity: "provider-returned",
+  resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
+};
+
+/**
+ * The agent name whose sessions are constructed the way Claude's are.
+ *
+ * A second adapter rather than a reclassification: the ordinary test agent's
+ * worker asserts its own identity, and that contract still has to hold. This
+ * one exists so the client-allocated path — XMD choosing the identity and the
+ * native process creating the session under it, rather than ACP creating one —
+ * can be authored in Markdown without a real Claude.
+ */
+export const TEST_AGENT_CLIENT_NATIVE = "test-agent-client-native";
+
+/** A controlled adapter that names its own sessions, in the test agent's dialect. */
+export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
+  launcher: TEST_AGENT_LAUNCHER,
+  identity: "client-allocated",
+  allocate: () => randomUUID(),
+  create: (nativeSessionId, instructionFile) => [
+    "xmd-test-agent-ui",
+    "--session-id",
+    nativeSessionId,
+    "--system-prompt-file",
+    instructionFile,
+  ],
   resume: (nativeSessionId) => ["xmd-test-agent-ui", "--resume", nativeSessionId],
 };
 
@@ -109,8 +141,15 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
       sessionStore: createMemorySessionStore(),
       agentRegistry: registry,
       advertiseNativeLaunch: options.agents,
+      // Every agent this partition serves gets the provider-returned adapter,
+      // except the one name reserved for the client-allocated contract.
       nativeAdapters: Object.fromEntries(
-        options.agents.map((name) => [name, TEST_AGENT_NATIVE_ADAPTER]),
+        options.agents.map((name) => [
+          name,
+          name === TEST_AGENT_CLIENT_NATIVE
+            ? TEST_AGENT_CLIENT_NATIVE_ADAPTER
+            : TEST_AGENT_NATIVE_ADAPTER,
+        ]),
       ),
       // withSlot bounds the route mutex to the hook's op without a scope
       // of its own — op's acquisitions (turn resources) belong to the
@@ -130,6 +169,7 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
           }
         }),
       ...(options.coordinator ? { coordinator: options.coordinator } : {}),
+      ...(options.routeStore ? { routeStore: options.routeStore } : {}),
       ...(options.dependencies?.createRuntime
         ? { createRuntime: options.dependencies.createRuntime }
         : {}),
