@@ -8,12 +8,13 @@ import { expect } from "@executablemd/test-support/expect";
 import { exists } from "@effectionx/fs";
 import { applicableTestFiles, listTestFiles, relativeWithin } from "../lib/test-files.ts";
 import { exclusions, parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
+import type { Runtime } from "../runtime-test-exclusions.ts";
 import { exitCode, oneFileCommand } from "../lib/runtime-tests.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 
 /** The runtimes that record exclusions; Deno records none by design. */
-const EXCLUDING = ["node", "bun"] as const;
+const EXCLUDING: Runtime[] = ["node", "bun"];
 
 describe("test discovery", () => {
   it("returns sorted repository-relative paths", function* () {
