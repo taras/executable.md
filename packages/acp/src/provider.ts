@@ -65,6 +65,7 @@ import type {
   AcpAgentRegistry,
   AcpRuntime,
   AcpRuntimeDoctorReport,
+  AcpRuntimeEnsureInput,
   AcpRuntimeHandle,
   AcpRuntimeOptions,
   AcpRuntimeTurn,
@@ -849,19 +850,16 @@ function* useAcpxProviderState(
   }
 
   /**
-   * Take the runtime for `build`, claimed for the work about to ensure through
-   * it.
+   * The runtime for `build`, built if this is the first work to want one.
    *
-   * Every caller is about to call `ensureSession()`, so the claim is taken here
-   * rather than left to each of them. It is given up exactly one of two ways:
-   * `adoptHandle()` when a handle comes back, or `releaseReservation()` when
-   * nothing does.
+   * Claims nothing: taking a claim here would put a yield point between the
+   * claim and the cleanup that settles it, and `reserve()` is synchronous
+   * precisely so no such point exists.
    */
-  function* acquireRuntime(build?: BoundBuild): Operation<RuntimeEntry> {
+  function* runtimeFor(build?: BoundBuild): Operation<RuntimeEntry> {
     const partition = build ? partitionOf(build) : undefined;
     const held = partition === undefined ? unbound : runtimes.get(partition);
     if (held) {
-      held.active++;
       return held;
     }
     const base = yield* runtimeOptions();
@@ -885,7 +883,7 @@ function* useAcpxProviderState(
       runtime: createRuntime(options),
       partition,
       handles: 0,
-      active: 1,
+      active: 0,
     };
     if (partition === undefined) {
       unbound = entry;
@@ -893,6 +891,11 @@ function* useAcpxProviderState(
       runtimes.set(partition, entry);
     }
     return entry;
+  }
+
+  /** Claim this runtime for work about to start. Synchronous, deliberately. */
+  function reserve(entry: RuntimeEntry): void {
+    entry.active++;
   }
 
   /**
@@ -947,6 +950,100 @@ function* useAcpxProviderState(
     }
     session.runtime.handles = Math.max(0, session.runtime.handles - 1);
     evictIfIdle(session.runtime);
+  }
+
+  /**
+   * Ensure through the runtime for `build`, settling that work's claim exactly
+   * once however this operation ends.
+   *
+   * `ensureSession()` is a Promise, and starting one is not the same as owning
+   * it. Once called it runs whether or not anybody is still waiting: a scope
+   * halted at the `until()` below leaves it in flight, and the provider may
+   * still answer with a live handle — a child nobody would ever close, on a
+   * partition nobody would ever release.
+   *
+   * So the settlement is scope-owned rather than written into a `catch`, which
+   * a cancellation does not run at all. The cleanup is registered with the
+   * Promise already started and before anything yields, so there is no window
+   * in which this can end with the claim unsettled and the answer unobserved.
+   * The three ways out are the three branches below, and the flag is what keeps
+   * the normal continuation and the cleanup from both taking one: nothing
+   * yields between the handle arriving and that flag being set.
+   */
+  function ensureThrough(
+    build: BoundBuild | undefined,
+    input: AcpRuntimeEnsureInput,
+    toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
+  ): Operation<ManagedSession> {
+    return scoped(function* (): Operation<ManagedSession> {
+      const entry = yield* runtimeFor(build);
+      let pending: Promise<AcpRuntimeHandle> | undefined;
+      let claimed = false;
+      let settled = false;
+
+      // Registered before the claim is taken and before the ensure is started,
+      // because both of those are synchronous and this is not: an `ensure`
+      // registered after them could be cut off by a cancellation delivered
+      // while `ensureSession()` was still on the stack, which is exactly when
+      // there is a Promise in flight and nobody left to observe it.
+      yield* ensure(function* () {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (!claimed) {
+          // Cancelled before this work claimed anything. The runtime may have
+          // been built for it and never used, and `evictIfIdle` removes it only
+          // if nothing else has since stood on it.
+          evictIfIdle(entry);
+          return;
+        }
+        if (pending === undefined) {
+          releaseReservation(entry);
+          return;
+        }
+        // Cancelled with the ensure in flight. Waiting for the answer is the
+        // point: walking away from it is how a handle is created for a session
+        // this run has already stopped caring about, and never closed.
+        const answered = yield* until(
+          pending.then(
+            (handle: AcpRuntimeHandle) => handle,
+            () => undefined,
+          ),
+        );
+        if (answered === undefined) {
+          releaseReservation(entry);
+          return;
+        }
+        // It answered. The handle is this provider's, so it goes into the
+        // ledger before it is given up — a close that fails then leaves it
+        // owned, the session unquiesced and the partition standing, exactly as
+        // a close that fails anywhere else does.
+        const late = toSession(answered, entry);
+        adoptHandle(late);
+        yield* abandonHandle(late, "cancelled before the session was established");
+      });
+
+      claimed = true;
+      reserve(entry);
+      pending = entry.runtime.ensureSession(input);
+
+      let handle: AcpRuntimeHandle;
+      try {
+        handle = yield* until(pending);
+      } catch (error) {
+        // Eager, so a later attempt in this same scope does not meet a
+        // partition this one is no longer standing on. The cleanup above would
+        // reach the same answer; this reaches it now.
+        settled = true;
+        releaseReservation(entry);
+        throw error;
+      }
+      const session = toSession(handle, entry);
+      adoptHandle(session);
+      settled = true;
+      return session;
+    });
   }
 
   /**
@@ -1050,28 +1147,45 @@ function* useAcpxProviderState(
     if (prepared.kind === "existing") {
       return prepared.entry;
     }
-    const entry = yield* acquireRuntime(attachment?.build);
-    const acp = entry.runtime;
     // A client-native session was created by a native process under an identity
     // XMD chose, so ACP attaches to it by name and never creates under it. That
     // is what `resumeSessionId` says, and it is the whole reason the identity
     // was allocated before the provider existed.
-    let handle: AcpRuntimeHandle;
+    //
+    // The handle it answers with is this provider's from the moment it exists,
+    // bound to its creator, and every check below can still refuse it — which
+    // is why the ensure settles its own claim rather than leaving that to a
+    // `catch` a cancellation never reaches.
+    let managedEntry: ManagedSession;
     try {
-      handle = yield* until(
-        acp.ensureSession({
+      managedEntry = yield* ensureThrough(
+        attachment?.build,
+        {
           sessionKey: prepared.placement.sessionKey,
           agent: agentName,
           mode: "persistent",
           cwd: prepared.placement.cwd,
           ...(attachment === undefined ? {} : { resumeSessionId: attachment.resumeSessionId }),
           ...(newSessionOptions === undefined ? {} : { sessionOptions: newSessionOptions }),
-        }),
+        },
+        (handle, entry) => {
+          const session: Session = {
+            sessionKey: prepared.placement.sessionKey,
+            cwd: prepared.placement.cwd,
+          };
+          if (handle.agentSessionId !== undefined) {
+            session.agentSessionId = handle.agentSessionId;
+          }
+          return {
+            handle,
+            runtime: entry,
+            agentCommand: prepared.agentCommand,
+            cwd: prepared.placement.cwd,
+            session,
+          };
+        },
       );
     } catch (error) {
-      // The claim this work took is given up: no handle came back, so nothing
-      // is standing on the runtime or the live path it was built with.
-      releaseReservation(entry);
       if (attachment === undefined) {
         throw error;
       }
@@ -1087,27 +1201,7 @@ function* useAcpxProviderState(
           `could not open, so there is nothing here to continue`,
       });
     }
-
-    // The handle exists, so from here it is this provider's to close however
-    // the rest of this goes. Bound to its creator and tracked before any of the
-    // checks below, because each of them can fail — and a handle nothing is
-    // holding a reference to is one teardown cannot close through the runtime
-    // that made it.
-    const session: Session = {
-      sessionKey: prepared.placement.sessionKey,
-      cwd: prepared.placement.cwd,
-    };
-    if (handle.agentSessionId !== undefined) {
-      session.agentSessionId = handle.agentSessionId;
-    }
-    const managedEntry: ManagedSession = {
-      handle,
-      runtime: entry,
-      agentCommand: prepared.agentCommand,
-      cwd: prepared.placement.cwd,
-      session,
-    };
-    adoptHandle(managedEntry);
+    const handle = managedEntry.handle;
 
     if (attachment !== undefined && handle.agentSessionId !== attachment.resumeSessionId) {
       // The attachment answers with a different conversation than the one this
@@ -2045,8 +2139,10 @@ function* useAcpxProviderState(
       );
     }
 
-    const runtimeEntry = yield* acquireRuntime();
-    const acp = runtimeEntry.runtime;
+    // No runtime is claimed yet. Everything between here and the ensure can
+    // return — a store read that fails, an instruction layer this provider will
+    // not replace — and a claim taken before them is one those exits would have
+    // to remember to give back.
     const existing = yield* until(store.load(sessionKey));
     let sessionState: "created" | "resumed" = existing ? "resumed" : "created";
     let reconciliation: InstructionReconciliation = existing ? "resumed" : "installed";
@@ -2071,42 +2167,31 @@ function* useAcpxProviderState(
       );
     }
 
-    let handle: AcpRuntimeHandle;
-    try {
-      handle = yield* until(
-        acp.ensureSession({
-          sessionKey,
-          agent: agentName,
-          mode: "persistent",
-          cwd: sessionCwd,
-          sessionOptions: { systemPrompt: instructions },
-        }),
-      );
-    } catch (error) {
-      // No handle came back, so the claim this work took is given up.
-      releaseReservation(runtimeEntry);
-      throw error;
-    }
-
-    const session: Session = { sessionKey, cwd: sessionCwd };
-    if (handle.agentSessionId !== undefined) {
-      session.agentSessionId = handle.agentSessionId;
-    }
-    // Into the ledger the moment the handle exists, and bound to the runtime
-    // that made it — the same account an attachment keeps. Everything below can
-    // refuse, and a handle only the managed map knew about is one teardown
+    // Claimed here, one line before the ensure it is for, and settled by the
+    // same scope-owned cleanup an attachment uses. The handle enters the ledger
+    // the moment it exists, bound to the runtime that made it: everything below
+    // can refuse, and a handle only the managed map knew about is one teardown
     // could not close through its creator.
-    const managedEntry: ManagedSession = {
-      handle,
-      runtime: runtimeEntry,
-      agentCommand,
-      cwd: sessionCwd,
-      session,
-    };
-    adoptHandle(managedEntry);
+    const managedEntry = yield* ensureThrough(
+      undefined,
+      {
+        sessionKey,
+        agent: agentName,
+        mode: "persistent",
+        cwd: sessionCwd,
+        sessionOptions: { systemPrompt: instructions },
+      },
+      (handle, entry) => {
+        const session: Session = { sessionKey, cwd: sessionCwd };
+        if (handle.agentSessionId !== undefined) {
+          session.agentSessionId = handle.agentSessionId;
+        }
+        return { handle, runtime: entry, agentCommand, cwd: sessionCwd, session };
+      },
+    );
     managed.set(sessionKey, managedEntry);
 
-    const nativeSessionId = handle.agentSessionId;
+    const nativeSessionId = managedEntry.handle.agentSessionId;
     if (nativeSessionId === undefined) {
       // An ACP session id and an ACPX record id are not native identities, and
       // neither is a string that merely looks like one.
@@ -2143,7 +2228,7 @@ function* useAcpxProviderState(
     };
     let model: string | undefined;
     try {
-      model = yield* effectiveModel(acp, handle);
+      model = yield* effectiveModel(managedEntry.runtime.runtime, managedEntry.handle);
     } catch (error) {
       // Asking for status is the last thing preparation does, and a provider
       // that cannot answer leaves a handle this launch will never hand over.

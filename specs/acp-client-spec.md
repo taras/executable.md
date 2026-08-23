@@ -529,9 +529,13 @@ none.
   owned from that moment, on a provider-returned launch as much as on an
   attachment, and survives every later refusal — identity mismatch, a host that
   cannot retain the session, and a status read that fails all close it through
-  its creator. A close that failed decrements nothing, evicts nothing, forgets
-  nothing and withholds quiescence, which an operation answers from that
-  ownership account rather than from the sessions a caller can reach. A managed session retains the partition that
+  its creator. A cancellation with an ensure still in flight
+  waits for its answer rather than walking away from it — the call runs whether
+  or not anybody is waiting — releasing the claim on a rejection and closing a
+  returned handle through its creator before quiescence. A close that failed
+  decrements nothing, evicts nothing, forgets nothing and withholds quiescence,
+  which an operation answers from that ownership account rather than from the
+  sessions a caller can reach. A managed session retains the partition that
   created its handle, and every turn, close, detach and teardown goes through
   that one — reaching for "the" runtime afterwards would open a second child for
   a session the first already owns. `agentProcessEnv` is a local patch to the

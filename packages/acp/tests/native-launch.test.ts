@@ -2618,6 +2618,112 @@ describe("Tier CA — client-native attachment", () => {
     expect(teardown).toBeInstanceOf(Error);
   });
 
+  /**
+   * One subscribed Prompt, halted with its ensure still in flight.
+   *
+   * `ensureSession()` runs whether or not anybody is waiting, so a cancellation
+   * here is not the end of the story: the provider may still answer. These
+   * cases drive the gate to each of its two endings and watch what the halt did
+   * about them — in effects rather than in timing, because what matters is that
+   * the answer was observed and settled, not how long the halt took.
+   */
+  function* haltedMidEnsure(
+    space: Attached,
+    gate: { operation: Operation<void>; resolve: () => void; reject: (error: Error) => void },
+  ): Operation<void> {
+    const arrived = withResolvers<void>();
+    space.harness.ensureGate = (input) => {
+      if (input.sessionKey !== SESSION_KEY) {
+        return undefined;
+      }
+      arrived.resolve();
+      return gate.operation;
+    };
+
+    const prompt = yield* spawn(() =>
+      scoped(function* () {
+        const stream = yield* Agent.operations.prompt("continue", {});
+        const subscription = yield* stream;
+        yield* subscription.next();
+      }),
+    );
+    yield* arrived.operation;
+    yield* spawn(() => prompt.halt());
+    // Long enough for a halt that walked away from the ensure to have finished
+    // doing so, and for anything it wrongly settled to be visible.
+    yield* sleep(50);
+  }
+
+  it("CA15: a halt waits for the ensure it started, and closes what it answers with", function* () {
+    const space = yield* installAttachment(bound());
+    const gate = withResolvers<void>();
+
+    yield* haltedMidEnsure(space, gate);
+
+    // Nothing has been settled: the ensure has not answered, so there is no
+    // handle to close and nothing may yet tell the coordinator this owner is
+    // done with the session.
+    expect(space.harness.closeCalls).toEqual([]);
+    expect(space.trace.ownership.events).not.toContain("quiesced");
+
+    // It answers. The handle belongs to this provider whether or not anybody is
+    // still waiting for it, so it is closed — through the runtime that made it
+    // — and only then is this owner finished.
+    gate.resolve();
+    yield* sleep(50);
+
+    expect(space.harness.closeCalls).toHaveLength(1);
+    expect(space.harness.closeRuntimeIndexes).toEqual([0]);
+    expect(space.harness.closeRuntimes).toEqual([OBSERVED_PATH]);
+    // Nothing was ever said in it.
+    expect(space.harness.turns).toEqual([]);
+    expect(space.trace.ownership.events).toContain("quiesced");
+
+    // The close settled, so the next owner is granted rather than told to
+    // recover a session an unfinished cancellation may still be in.
+    space.harness.ensureGate = undefined;
+    const next = yield* Agent.operations.session();
+    expect(next.agentSessionId).toBe(ALLOCATED);
+  });
+
+  it("CA16: a halted ensure that then fails gives its claim back", function* () {
+    const observer = createFakeObserver();
+    observer.queued = [
+      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
+      {
+        path: "/moved/bin/claude",
+        digest: "a".repeat(64),
+        versionOutput: "2.1.241 (Claude Code)\n",
+      },
+    ];
+    const space = yield* installAttachment(bound(), { observer: observer.observer });
+    const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
+    yield* space.routes.publish(bound({ sessionKey: second, nativeSessionId: SECOND_ALLOCATED }));
+    const gate = withResolvers<void>();
+
+    yield* haltedMidEnsure(space, gate);
+
+    // It answers with nothing at all. There is no handle to close and no claim
+    // to keep, so the partition it was standing on goes with it.
+    gate.reject(new Error("No conversation found with that session ID"));
+    yield* sleep(50);
+
+    expect(space.harness.closeCalls).toEqual([]);
+    expect(space.harness.turns).toEqual([]);
+
+    // A later attachment observes again and builds its own runtime around what
+    // it finds, rather than inheriting a path nothing is holding.
+    space.harness.ensureGate = undefined;
+    const later = yield* Agent.operations.session("second");
+    expect(later.agentSessionId).toBe(SECOND_ALLOCATED);
+    expect(observer.observed).toEqual(["claude", "claude"]);
+    expect(
+      space.harness.createdOptions.map(
+        (options) => options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE,
+      ),
+    ).toEqual([OBSERVED_PATH, "/moved/bin/claude"]);
+  });
+
   it("CA13: a host that cannot retain the session gives the handle back to its creator", function* () {
     // The ensure succeeded, so the handle is this provider's whatever happens
     // next. A host refusing to retain what the session is leaves it unusable,

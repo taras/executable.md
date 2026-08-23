@@ -589,6 +589,19 @@ are met rather than a further invariant beside them:
   else is the same partition key and a different file to run. Success transfers
   the claim into ownership of the handle instead, in one step: a moment where
   neither count is held is a moment another operation could evict.
+- **Cancellation observes the ensure it started, and settles it before
+  quiescence.** Starting an ensure is not the same as owning it: the call runs
+  whether or not anybody is still waiting, so a cancellation is not the end of
+  the story. The claim and the answer are settled by scope-owned cleanup rather
+  than by a `catch`, which a cancellation does not run at all, and that cleanup
+  is registered before the claim is taken and before the call is made — a
+  cancellation delivered while the call is still on the stack is exactly the
+  case where something is in flight and nobody is left to observe it. A
+  cancelled operation therefore waits for the answer: a rejection releases the
+  claim, and a handle is adopted, closed through the runtime that made it, and
+  only then does the operation acknowledge quiescence. A close that fails there
+  keeps the handle, keeps the partition, withholds quiescence and leaves both
+  for teardown, exactly as a failed close does anywhere else.
 - **Every handle-producing path keeps one account.** From the moment ensure
   returns — on an attachment and on a provider-returned launch alike — the
   handle belongs to this provider and is bound to its creating runtime, before
@@ -1075,8 +1088,9 @@ Focused tests prove:
 22. claimed runtime work that produced no handle releases its claim, a partition
     is evicted only with no handles and no work in flight, a handle that came
     back survives every later refusal bound to its creator whichever path
-    created it, and a close that failed releases nothing and withholds
-    quiescence; and
+    created it, a cancellation waits for an ensure already in flight and closes
+    what it answers with before acknowledging quiescence, and a close that
+    failed releases nothing and withholds quiescence; and
 23. a canonical version parse accepts exactly one matching line, and refuses
     zero or several without repeating the output.
 
@@ -1243,8 +1257,9 @@ Implementation review checks these frozen invariants:
 23. A failed acquisition retains no partition and no live path; a partition is
     evicted only when it holds no handle and no work in flight; every
     handle-producing path enters one ownership account bound to its creator the
-    moment its handle exists; quiescence is answered from that account; and a
-    close that failed releases nothing and acknowledges none.
+    moment its handle exists; a cancellation observes and settles an ensure it
+    already started before quiescence; quiescence is answered from that account;
+    and a close that failed releases nothing and acknowledges none.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
