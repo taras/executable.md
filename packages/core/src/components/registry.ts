@@ -20,6 +20,7 @@ import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import Fetch, { props as fetchProps } from "./Fetch.ts";
 import File, { props as fileProps } from "./File.ts";
+import FileDelete, { props as fileDeleteProps } from "./FileDelete.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
@@ -75,6 +76,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   core("TempDir", TempDir, parseJsonObject(tempDirProps)),
   core("Fetch", Fetch, parseJsonObject(fetchProps)),
   core("File", File, parseJsonObject(fileProps)),
+  core("File.Delete", FileDelete, parseJsonObject(fileDeleteProps)),
   core("Glob", Glob, parseJsonObject(globProps), { returns: parseJsonObject(globReturns) }),
   core("Json", Json, parseJsonObject(jsonProps), { captures: ["value"] }),
   core("Parse", Parse, parseJsonObject(parseProps), { returns: parseJsonObject(parseReturns) }),

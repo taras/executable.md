@@ -530,6 +530,10 @@ describe("Tier HF — host Files provider", () => {
     seen.length = 0;
     yield* files.globFiles({ cwd: fixture.workspace, include: ["**/*"], exclude: [] });
     expect(seen).toEqual(["glob.read-dir"]);
+
+    seen.length = 0;
+    yield* files.deleteFile({ cwd: fixture.workspace, path: "a.txt" });
+    expect(seen).toEqual(["delete.target", "delete.access"]);
   });
 
   // HF10: where the host guarantee stops, made observable. The parent is
@@ -789,12 +793,21 @@ describe("Tier HF — host Files provider", () => {
           touched.push(path);
           return yield* next(path, content);
         },
+        *lstat([path], next) {
+          touched.push(path);
+          return yield* next(path);
+        },
+        *remove([path, options], next) {
+          touched.push(path);
+          return yield* next(path, options);
+        },
       });
 
       const calls: Array<Operation<unknown>> = [
         Files.operations.checkFilePath({ cwd: fixture.workspace, path: "a.md" }),
         Files.operations.readTextFile({ cwd: fixture.workspace, path: "a.md" }),
         Files.operations.writeTextFile({ cwd: fixture.workspace, path: "a.md", content: "x" }),
+        Files.operations.deleteFile({ cwd: fixture.workspace, path: "a.md" }),
         Files.operations.globFiles({ cwd: fixture.workspace, include: ["*"], exclude: [] }),
         Files.operations.temporaryDirectory(),
       ];
@@ -877,5 +890,214 @@ describe("Tier HF — host Files provider", () => {
       expect(yield* exists(acquired)).toBe(true);
     });
     expect(yield* exists(acquired)).toBe(false);
+  });
+
+  // HF18: the ordinary deletion, and the shape of its success. Nothing comes
+  // back — no receipt, no path, no word on whether anything was there — which is
+  // also why the second call is a success rather than a "missing".
+  it("HF18: a deletion removes one regular file, and absence is the same success", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+    const files = handler();
+
+    const removed = yield* files.deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+    expect(removed).toEqual({ ok: true, value: undefined });
+    expect(yield* entries(fixture.workspace)).toEqual([]);
+
+    const again = yield* files.deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+    expect(again).toEqual({ ok: true, value: undefined });
+    expect(yield* entries(fixture.workspace)).toEqual([]);
+  });
+
+  // HF19: a final link is the entry the document named, so it is what goes.
+  // Both directions matter: following an inward link would remove a file the
+  // document did not name, and following an outward one would reach outside the
+  // working directory entirely — which is why resolution stops at the parent.
+  it("HF19: a final symbolic link is removed as the link, and no target is", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "real.txt"), "inside");
+    yield* writeTextFile(join(fixture.outside, "secret.txt"), "SECRET");
+    yield* until(symlink(join(fixture.workspace, "real.txt"), join(fixture.workspace, "inward")));
+    yield* until(symlink(join(fixture.outside, "secret.txt"), join(fixture.workspace, "outward")));
+    yield* until(symlink(join(fixture.outside, "absent.txt"), join(fixture.workspace, "dangling")));
+    yield* linkDirectory(fixture.outside, join(fixture.workspace, "outward-dir"));
+    const files = handler();
+
+    for (const link of ["inward", "outward", "dangling", "outward-dir"]) {
+      expect(yield* files.deleteFile({ cwd: fixture.workspace, path: link })).toEqual({
+        ok: true,
+        value: undefined,
+      });
+    }
+
+    expect(yield* entries(fixture.workspace)).toEqual(["real.txt"]);
+    expect(yield* readTextFile(join(fixture.workspace, "real.txt"))).toBe("inside");
+    // Nothing on the far side of any of them moved.
+    expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
+    expect(yield* entries(fixture.outside)).toEqual(["secret.txt"]);
+  });
+
+  // HF20: every directory is refused, and the empty one is the case that says
+  // this is decided here rather than delegated. A nonrecursive removal of an
+  // empty directory is what the platforms disagree about — and what the pinned
+  // Workspace filesystem would simply carry out.
+  //
+  // The working directory naming itself is the other half. Its parent is
+  // outside it, so a destination resolved through the parent would report `.`
+  // as an escape; it is classified directly, and answers for what it is.
+  it("HF20: every directory is refused, empty ones and the working directory too", function* () {
+    const fixture = yield* useFixture();
+    yield* until(mkdir(join(fixture.workspace, "empty")));
+    yield* until(mkdir(join(fixture.workspace, "full")));
+    yield* writeTextFile(join(fixture.workspace, "full/inner.txt"), "kept");
+    const files = handler();
+
+    for (const path of ["empty", "full", ".", "full/.."]) {
+      const refused = yield* files.deleteFile({ cwd: fixture.workspace, path });
+      expect(parseFilesFailure(failed(refused))).toEqual({
+        type: FILES_ERROR,
+        operation: "delete",
+        phase: "target",
+        reason: "directory",
+      });
+    }
+
+    expect(yield* entries(fixture.workspace)).toEqual(["empty", "full"]);
+    expect(yield* readTextFile(join(fixture.workspace, "full/inner.txt"))).toBe("kept");
+
+    // And the same, from a working directory reached through a link — the case
+    // that separates "classify the working directory" from "resolve its
+    // parent". The link's own name is a final segment, so leaving it
+    // unresolved would compare an uncanonical path against a canonical one and
+    // report the working directory as an escape.
+    yield* linkDirectory(fixture.workspace, join(fixture.root, "ws-link"));
+    const throughLink = yield* files.deleteFile({
+      cwd: join(fixture.root, "ws-link"),
+      path: ".",
+    });
+    expect(parseFilesFailure(failed(throughLink))).toEqual({
+      type: FILES_ERROR,
+      operation: "delete",
+      phase: "target",
+      reason: "directory",
+    });
+  });
+
+  // HF21: the four paths that never reach a removal, and the proof that they
+  // did not. The spy watches the low-level call the provider would make, and an
+  // admitted deletion at the end is what makes an empty list evidence rather
+  // than a spy that was never wired up.
+  it("HF21: an inadmissible or escaping path is refused before any removal", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.outside, "secret.txt"), "SECRET");
+    yield* linkDirectory(fixture.outside, join(fixture.workspace, "escape"));
+    const attempted: string[] = [];
+
+    yield* scoped(function* () {
+      yield* API.Fs.around({
+        *remove([path, options], next) {
+          attempted.push(path);
+          return yield* next(path, options);
+        },
+      });
+      const files = handler();
+
+      const cases: Array<{ path: string; phase: string; reason: string }> = [
+        { path: "", phase: "lexical", reason: "empty-path" },
+        {
+          path: join(fixture.outside, "secret.txt"),
+          phase: "lexical",
+          reason: "absolute-path",
+        },
+        { path: "../outside/secret.txt", phase: "lexical", reason: "lexical-escape" },
+        { path: "escape/secret.txt", phase: "resolution", reason: "resolved-escape" },
+      ];
+
+      for (const refused of cases) {
+        const result = yield* files.deleteFile({ cwd: fixture.workspace, path: refused.path });
+        expect(parseFilesFailure(failed(result))).toEqual({
+          type: FILES_ERROR,
+          operation: "delete",
+          phase: refused.phase,
+          reason: refused.reason,
+        });
+        expect(inspected(failed(result))).not.toContain(fixture.outside);
+        expect(inspected(failed(result))).not.toContain("SECRET");
+      }
+
+      yield* writeTextFile(join(fixture.workspace, "ordinary.txt"), "gone soon");
+      expect(yield* files.deleteFile({ cwd: fixture.workspace, path: "ordinary.txt" })).toEqual({
+        ok: true,
+        value: undefined,
+      });
+    });
+
+    expect(attempted).toEqual([join(fixture.workspace, "ordinary.txt")]);
+    expect(yield* readTextFile(join(fixture.outside, "secret.txt"))).toBe("SECRET");
+    expect(yield* entries(fixture.outside)).toEqual(["secret.txt"]);
+  });
+
+  // HF22: a platform failure during the removal is an ordinary Err carrying a
+  // reason and nothing else, and a target that vanished between classification
+  // and removal is the same success absence already is.
+  it("HF22: a failed removal is a structured Err, and a vanished one is success", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+
+    const denied = yield* scoped(function* () {
+      yield* API.Fs.around({
+        // deno-lint-ignore require-yield
+        *remove() {
+          throw planted("EPERM");
+        },
+      });
+      return yield* handler().deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+    });
+    expect(parseFilesFailure(failed(denied))).toEqual({
+      type: FILES_ERROR,
+      operation: "delete",
+      phase: "access",
+      reason: "permission-denied",
+    });
+    expect(inspected(failed(denied))).not.toContain(PLANTED);
+    expect(inspected(failed(denied))).not.toContain("EPERM");
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("first");
+
+    const raced = yield* scoped(function* () {
+      yield* API.Fs.around({
+        // deno-lint-ignore require-yield
+        *remove() {
+          throw planted("ENOENT");
+        },
+      });
+      return yield* handler().deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+    });
+    expect(raced).toEqual({ ok: true, value: undefined });
+  });
+
+  // HF23: cancellation is not a Result here either. The removal is the single
+  // commit point, so a halt before it leaves the entry exactly as it was — and
+  // nothing is manufactured to describe what did not happen.
+  it("HF23: cancellation before the removal produces no Result and keeps the file", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "first");
+    let settled: unknown = "not settled";
+
+    yield* race([
+      scoped(function* () {
+        yield* API.Fs.around({
+          *remove() {
+            yield* suspend();
+          },
+        });
+        settled = yield* handler().deleteFile({ cwd: fixture.workspace, path: "notes.md" });
+      }),
+      sleep(250),
+    ]);
+
+    expect(settled).toBe("not settled");
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("first");
+    // Deletion acquires nothing, so a halt leaves no temporary and no leftover.
+    expect(yield* entries(fixture.workspace)).toEqual(["notes.md"]);
   });
 });

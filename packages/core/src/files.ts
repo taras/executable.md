@@ -258,24 +258,28 @@ function paths(value: unknown): { readonly value: string[] } | undefined {
 }
 
 /**
- * Whether this authored path is admissible, with nothing usable coming back.
+ * One operation whose success carries nothing, with its outcome rebuilt from
+ * validated parts.
  *
  * The success carries no payload, and Effection spells that as its shared
  * `Unit` — `{ ok: true }`, with no `value` member at all. So an **absent**
- * `value` is the ordinary successful answer here, and this is the one operation
- * where that is true. What is still refused is a `value` that cannot be read,
- * and one that is present but is something other than `undefined`: the first
- * means the container never described its outcome, and the second means it
- * described one this operation does not have.
+ * `value` is the ordinary successful answer for these two operations, and only
+ * for them. What is still refused is a `value` that cannot be read, and one
+ * that is present but is something other than `undefined`: the first means the
+ * container never described its outcome, and the second means it described one
+ * this operation does not have.
  */
-export function* checkFilePath(input: FilePathInput): Operation<Result<void>> {
-  const result = yield* invokeFiles(Files.operations.checkFilePath(input));
+function* unit(
+  call: Operation<unknown>,
+  contract: { operation: FilesOperation; phase: FilesPhase },
+): Operation<Result<void>> {
+  const result = yield* invokeFiles(call);
   const settled = settlement(result);
   if (settled === undefined) {
     throw new FilesInvariantError("protocol");
   }
   if (!settled) {
-    return failure(result, "check-file-path", "lexical");
+    return failure(result, contract.operation, contract.phase);
   }
   const carried = present(result, "value");
   if (carried === undefined) {
@@ -291,6 +295,30 @@ export function* checkFilePath(input: FilePathInput): Operation<Result<void>> {
     }
   }
   return Ok(undefined);
+}
+
+/** Whether this authored path is admissible, with nothing usable coming back. */
+export function checkFilePath(input: FilePathInput): Operation<Result<void>> {
+  return unit(Files.operations.checkFilePath(input), {
+    operation: "check-file-path",
+    phase: "lexical",
+  });
+}
+
+/**
+ * Remove what this authored path names, with nothing coming back.
+ *
+ * A deletion succeeds by leaving nothing to report: no receipt, no path, and no
+ * word on whether the entry was there to begin with. That is why the Unit
+ * outcome is the right one rather than a spelling convenience — a caller that
+ * received a record of what was removed could branch on it, and the operation
+ * deliberately does not answer that question.
+ *
+ * `access` is the phase a failure the vocabulary does not recognize falls back
+ * to, because the removal itself is the step this operation exists for.
+ */
+export function deleteFile(input: FilePathInput): Operation<Result<void>> {
+  return unit(Files.operations.deleteFile(input), { operation: "delete", phase: "access" });
 }
 
 export function readFileText(input: FilePathInput): Operation<Result<string>> {

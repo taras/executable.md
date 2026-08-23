@@ -1964,12 +1964,30 @@ answers a document's file operations; what a provider is allowed to do is
 decided by the provider, from identities the contextual layer cannot supply.
 
 The Api's operations are whole semantic acts — read this path, replace this
-path, list what these patterns select — rather than steps a caller sequences.
+path, remove this path, list what these patterns select — rather than steps a
+caller sequences.
 The one preliminary operation, `checkFilePath`, is deliberately weak: pure path
 arithmetic, no filesystem access, and it returns nothing usable. `<File>` calls
 it to decide whether a write's children may expand, and the later write repeats
 the same admission from the same authored path. Nothing is handed between them,
 so a check that was skipped or answered elsewhere authorizes nothing.
+
+Removal is one of those acts, and it is mandatory: a provider does not omit it
+and let a document reach the host instead. Its success is Effection's `Unit`,
+carrying no value at all, which is what makes "a deletion hands back no receipt"
+a property of the boundary rather than a convention of the component that calls
+it. Absence is that same success — a path that already names nothing is what the
+document asked for — while every directory is refused, an empty one included,
+because a nonrecursive removal of one means different things on the runtimes
+this project ships to and on the pinned Workspace filesystem, and classifying
+the entry first is what makes those differences invisible.
+
+A **final symbolic link** is removed as the link. Resolution therefore stops at
+the parent prefix and puts the authored last segment back unresolved: resolving
+it would follow the link and remove something the document never named, while
+not resolving the parent would miss a directory link leading out. A working
+directory that names itself is classified directly rather than through its
+parent, which is otherwise outside it.
 
 The two providers make different containment claims, and both are stated rather
 than implied:
@@ -1986,21 +2004,24 @@ than implied:
 
 Neither claim covers a native command a document runs.
 
-The workflow provider's operations are durable effects. A read, a write and a
-search each carry a description derived from the current expansion, the
-operation and the resolved logical path, so one authored element is the same
-effect across replays and a document edited to name another file is a different
-one. `checkFilePath` is not among them: it is lexical admission, it performs no
+The workflow provider's operations are durable effects. A read, a write, a
+deletion and a search each carry a description derived from the current
+expansion, the operation and the resolved logical path, so one authored element
+is the same effect across replays and a document edited to name another file is
+a different one. `checkFilePath` is not among them: it is lexical admission, it performs no
 effect, and it appends nothing.
 
-A write, the immutable root that results from it, and the filtered journal
+A mutation, the immutable root that results from it, and the filtered journal
 result share the one caller-owned transaction. An ordinary refusal rolls its
 mutation savepoint back before that result is published, so the retained
 outcome describes a Workspace that is exactly what it was, and the reason that
 crosses the boundary is selected from the shared vocabulary rather than derived
 from anything the filesystem said. Replay restores those recorded outcomes
 without performing the mutation, opening a transaction or consulting the current
-frontier, which is why a create/delete/create history replays in order. A
+frontier, which is why a create/delete/create history replays in order — and why
+a completed deletion does not remove a second time even where its path exists
+again. A cancellation between a removal and its commit publishes nothing, so the
+continuation performs that deletion once, against the retained frontier. A
 temporary directory is refused outright: the provider has no host directory to
 hand out, and falling through to the caller's would be the uncontained
 filesystem the boundary exists to prevent.
@@ -2987,6 +3008,7 @@ Status is measured against main.
 | native session launch (`<Session.Launch>` / `Agent.launch()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; the run's one foreground-terminal lease is taken before an agent is resolved, so a host with no terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other: an eager `<Session>` publishes ACP-first before it establishes anything and keeps that account even if establishing fails, a launch meeting it refuses before an identity exists, and a `<Session>` or `<Prompt>` meeting a client-allocated route raises the provider's own route error rather than manufacturing a launch failure. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |
 | `API.Files` | routes every document filesystem operation to the installed provider, with no host default and structural failure data | built on the #227 stack |
+| `<File.Delete path>` | removes one file the document names, inside the contextual working directory. An ordinary overridable core default with a closed schema of one required non-empty `path`, self-closing only — a paired spelling is refused on the authored shape rather than on what its content renders, before `Env.cwd` is read and before the provider is reached. It renders the empty string, declares no `returns` and hands back no receipt, so an ordinary `as` captures that empty string; absence is the same success, so deleting a path twice succeeds twice. One regular file or one final symbolic link goes — the link rather than its target, inside or outside — and every directory is refused, an empty one included. Empty, absolute, lexically escaping and parent-link-escaping paths are refused before any removal, and a printed error names only the path the document wrote. One semantic `API.Files.deleteFile` call and no filesystem access of its own; under a workflow run it is one `workspace_file` effect retaining `{ kind: "deleted" }`. Generated XMD does not receive it | built on the #567 stack |
 | host Files provider / `useHostFiles()` | resolves document paths in the caller's filesystem, containing them while the host namespace is stable; installed by all four CLI entrypoints | built on the #227 stack |
 | transaction-bound Files provider | resolves document paths in the run-owned logical Workspace inside the caller-owned transaction | built on the #366 stack |
 | `service=<binding>` | publishes the attachment's endpoint into the live binding overlay for its invocation | built on main |

@@ -80,6 +80,7 @@ import {
   ensureDir as fsEnsureDir,
   FsApi,
   globToRegExp,
+  lstat as fsLstat,
   readTextFile as fsReadTextFile,
   rm as fsRm,
   stat as fsStat,
@@ -102,6 +103,26 @@ export interface StatResult {
   exists: boolean;
   isFile: boolean;
   isDirectory: boolean;
+}
+
+/**
+ * Result of an `lstat` call: what the entry itself is, rather than what it
+ * leads to.
+ *
+ * A final symbolic link is the answer here instead of being followed, which is
+ * the whole reason this exists beside `stat`. `isSymbolicLink` is therefore its
+ * own member rather than an absence to infer: a link reports `isFile: false`
+ * and `isDirectory: false` whatever it points at, and "neither" is also what a
+ * socket or a device reports.
+ *
+ * Missing answers `{ exists: false, … }` rather than throwing, for the same
+ * reason `stat` does.
+ */
+export interface LinkStatResult {
+  exists: boolean;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
 }
 
 /**
@@ -442,6 +463,14 @@ interface FsHandler {
   readTextFile(path: string): Operation<string>;
   stat(path: string): Operation<StatResult>;
   /**
+   * What the entry at `path` is, without following a final symbolic link.
+   *
+   * A caller that has to decide whether to *remove* a path asks this rather
+   * than `stat`: `stat` answers about the file a link names, and removing the
+   * link is not removing that file. Missing is an answer here too.
+   */
+  lstat(path: string): Operation<LinkStatResult>;
+  /**
    * Files and symbolic links beneath `root` whose path relative to it matches
    * `patterns` and matches none of `exclude`. Paths come back relative and
    * POSIX-separated, which is what both pattern lists are matched against, so a
@@ -548,6 +577,23 @@ export const API: {
       } catch (err: unknown) {
         if (errorCode(err) === "ENOENT") {
           return { exists: false, isFile: false, isDirectory: false };
+        }
+        throw err;
+      }
+    },
+
+    *lstat(path: string): Operation<LinkStatResult> {
+      try {
+        const s = yield* fsLstat(path);
+        return {
+          exists: true,
+          isFile: s.isFile(),
+          isDirectory: s.isDirectory(),
+          isSymbolicLink: s.isSymbolicLink(),
+        };
+      } catch (err: unknown) {
+        if (errorCode(err) === "ENOENT") {
+          return { exists: false, isFile: false, isDirectory: false, isSymbolicLink: false };
         }
         throw err;
       }

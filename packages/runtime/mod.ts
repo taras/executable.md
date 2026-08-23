@@ -8,7 +8,7 @@
  * Seven domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — the low-level host filesystem (`readTextFile`, `writeTextFile`,
- *   `stat`, `glob`, `realpath`, `ensureDir`, `rename`, `remove`)
+ *   `stat`, `lstat`, `glob`, `realpath`, `ensureDir`, `rename`, `remove`)
  * - `API.Files` — document filesystem access as whole semantic operations,
  *   with no host default. `useHostFiles()` installs the host provider.
  * - `API.Fetch` — HTTP requests (`fetch`)
@@ -47,6 +47,7 @@ export type {
   EvalBlock,
   FetchInit,
   FetchOperation,
+  LinkStatResult,
   ResponseHeaders,
   RuntimeFetchResponse,
   StatResult,

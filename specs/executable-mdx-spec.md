@@ -123,8 +123,8 @@ what lets one document mean the same thing in two environments.
 
 **Document data** — the files a document names in its own text — goes through
 `API.Files`, a contextual Api of whole semantic operations. `<File>` (§6.13),
-`<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only that Api, hold no host
-path, and never learn which provider answered. `xmd run` installs a host
+`<File.Delete>` (§6.13.1), `<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only
+that Api, hold no host path, and never learn which provider answered. `xmd run` installs a host
 provider that resolves those paths in the caller's filesystem; a workflow run
 installs one whose paths name entries in a logical filesystem the run owns.
 The Api has **no host default**: with no provider installed, every operation
@@ -2675,8 +2675,8 @@ nothing. A non-string is not an error — it is a value with no destination.
 #### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
-`<SafeParse>` (§6.12), `<File>` (§6.13), `<Glob>` (§6.14), and `<Fetch>`
-(§6.18). Each is already
+`<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>` (§6.13.1), `<Glob>`
+(§6.14), and `<Fetch>` (§6.18). Each is already
 in the module graph, so it ships in the compiled binary and every published
 package without a search path or a bundling step, and a document invokes it with
 no `--component-dir`.
@@ -6545,6 +6545,153 @@ directory's replay refusal depends on (§6.11).
 
 ---
 
+### 6.13.1 Removing a file: `<File.Delete>`
+
+A document that wrote a file can also stop it existing. `<File.Delete>` is
+core's own component (§5.3), takes one required non-empty `path` resolved
+against the contextual `Env.cwd`, and is written self-closing:
+
+```md
+<File.Delete path="obsolete.md" />
+```
+
+It composes with `<TempDir>` (§6.11) and with any component that rebinds
+`Env.cwd` on exactly the terms `<File>` does, and it makes no filesystem call of
+its own: it reads `Env.cwd` and makes one `API.Files` call, `deleteFile`.
+
+#### One form, decided by shape
+
+There is only the self-closing form. Any paired spelling is refused —
+`<File.Delete path="x">…</File.Delete>` and `<File.Delete path="x"></File.Delete>`
+alike, because what decides it is the **shape** the author wrote rather than
+what the content would render. Content that renders nothing is still content
+somebody wrote meaning something, and this component does not do it.
+
+That refusal happens before `Env.cwd` is read and before the provider is
+reached, so a mistaken paired spelling costs the document nothing.
+
+#### What it renders, and what `as` captures
+
+Nothing, and the empty string. There is no output, no path, no receipt, and no
+`returns` declaration. The ordinary language rule for `as` stays in force: it
+captures the empty string this component returns and renders nothing, exactly
+as it does for any component that returns text.
+
+That is a contract rather than an omission. A document that also learned
+*whether something had been there* could branch on it, and that is a different
+question about the filesystem — one `<File>` and `<Glob>` already answer.
+
+#### What is removed
+
+One entry, and only these:
+
+- A **regular file** is removed.
+- A **final symbolic link** is removed as the link. Its target is neither
+  followed nor changed, whether that target is inside the working directory or
+  outside it, and whether or not it exists at all.
+- A path that **names nothing** is a successful no-op. Deleting the same path
+  twice succeeds twice: absence is what the document asked for, so arriving
+  there is not a condition to report.
+- Every **directory** is refused, including an empty one, and refused before
+  anything is attempted.
+- Anything else — a socket, a device, a named pipe — is refused as not a
+  regular file.
+
+There is no recursion, no glob, no multiple paths, no force, no trash, and no
+restore handle. Removing a directory tree is not a spelling of this component.
+
+#### Containment
+
+Everything `<File.Delete>` touches stays inside `Env.cwd`, on the same terms
+§6.13 states. An empty path, an absolute path, and a `..` escape are refused
+lexically, before any filesystem call; a path leading through a symlink out of
+the working directory is refused once resolution can see it.
+
+Resolution differs from a read's or a write's in exactly one way, and the
+difference is the whole reason a deletion is contained at all: only the
+**parent** prefix is resolved, and the authored final segment is put back onto
+it unresolved. Resolving the final segment would follow a link and remove
+whatever it named; not resolving the parent would miss a directory link leading
+out. A working directory that names itself — `.`, or a path normalizing onto it
+— is classified directly rather than through its parent, and fails as the
+directory it is.
+
+Under a **workflow run** the same rules hold against the run's logical
+Workspace, where there is no outside to reach: the path arithmetic is the
+provider's, the link is a logical one, and the entry removed is an entry in the
+run's own filesystem.
+
+#### The provider operation
+
+`deleteFile` is one semantic call, like `readTextFile` and `writeTextFile`. It
+owns admission, resolution, target classification, and the removal together,
+and it is **mandatory**: a provider does not omit it and let a document reach
+the host instead. Its success is Effection's `Unit` — `{ ok: true }`, carrying
+no value at all — which is what makes "there is no receipt" a property of the
+Api rather than a convention of the component.
+
+A success container that carries a value it should not, and a failure container
+that will not say what failed, are both provider-contract failures (§6.13's
+rules apply unchanged). A readable failure whose reason the vocabulary does not
+recognize is the generic printed sentence, as for every other non-write
+operation.
+
+The removal is the operation's **single commit point**. A failure or a
+cancellation before it changes nothing; once the platform call has begun it is
+not retrospectively undone, and cancellation produces no Result and no printed
+error. Under a workflow run the removal, the resulting Workspace root, and the
+filtered journal result publish in one transaction — a documented refusal rolls
+its mutation back and publishes the failed effect on the unchanged root, and an
+infrastructure failure or a cancellation rolls the whole transaction back and
+publishes nothing.
+
+Nothing is acquired, so there is nothing to clean up: deletion creates no
+temporary and registers no destructor.
+
+#### Printed errors
+
+A printed error names the path the document wrote and nothing else, selecting
+its phrase from the fixed vocabulary of §6.13. A rejected absolute path is not
+echoed — the reason it was rejected is that it named somewhere else — and the
+destination a link pointed at never crosses the provider boundary.
+
+```text
+cannot delete "reports": it is a directory, not a file.
+"escape/notes.md" leads through a symlink outside the working directory.
+```
+
+The component carries `<File>`'s failure declaration: an ordinary filesystem
+condition is a printed error owned by the component, and a provider that is
+absent, refuses an operation, or breaks its contract stays fatal (§6.13, *When
+the provider is the problem*).
+
+#### Replay
+
+Under `xmd run` nothing is journaled, so §6.13's replay rules apply unchanged:
+a completed journal restores the result without expanding the component, and a
+partial one reaches it and deletes again — which, absence being success, is the
+same answer.
+
+Under a workflow run the deletion is one durable effect. A completed replay
+restores its recorded outcome and removes nothing a second time, even where the
+path exists again; a partial replay continues live from the retained Workspace
+frontier and performs the first unrecorded deletion once.
+
+#### Runtime portability
+
+The component behaves identically under Deno, Node, Bun, and the compiled
+binary, and on every release target. Raw platform behavior is not the contract:
+a nonrecursive removal of an empty directory reports `ERR_FS_EISDIR` under Node
+and Deno and `EFAULT` under Bun, and the pinned Workspace filesystem removes one
+outright. Classifying the target before removing it is what makes those
+differences invisible.
+
+Generated XMD does not receive `<File.Delete>`: an Agent-generated fragment
+cannot invoke it, and no pinned identity names it (workflow-workspace-spec
+§8.4).
+
+---
+
 ### 6.14 Finding files: `<Glob>`
 
 A document decides what to work on by looking at what is there. `<Glob>` is
@@ -8776,6 +8923,22 @@ visible warning blocks, gather into a separate error report).
 | FL36 | An honest chain | With no handler interfering, both forms reach the same providers and produce the same bytes |
 | FL37 | No contextual fallback | The definition called without the invocation the engine issued refuses before reaching a provider, leaving the file unchanged |
 
+### Tier FD — `<File.Delete>`
+
+Driven through `execute()` against the real host provider, so what each row
+measures is the whole path from an authored string to a printed sentence. The
+structural failure data behind those sentences is Tier HF's, and provider
+absence is Tier FF's.
+
+| # | Test | Verify |
+|---|------|--------|
+| FD1 | The ordinary deletion | One regular file is removed, nothing is rendered in its place, and `as` captures the empty string |
+| FD2 | Absence is success | Deleting a path that names nothing succeeds, twice, with no printed error |
+| FD3 | Paired content | Paired-*empty* content is refused on shape, before `Env.cwd` is read and before the provider is reached; the same watchers on the self-closing form record both calls, so the empty list is a refusal rather than an unwired spy |
+| FD4 | The contextual directory | A nested `Env.cwd` selects the inner file of a shared name, the outer one is untouched, and the element after the region resolves against the restored directory |
+| FD5 | Every refusal sentence | An absolute path, a lexical escape, an escaping parent link, and a directory each produce their own sentence, name no absolute path, and reach no low-level removal — proven against an admitted deletion that does |
+| FD6 | A provider refusal | A structural `Err` is this component's own printed error, the sibling after it runs, and the target is unchanged |
+
 ### Tier FA — Fatal error discovery
 
 | # | Test | Verify |
@@ -8805,6 +8968,8 @@ visible warning blocks, gather into a separate error report).
 | FA26 | Cycles carrying a Files failure | A cyclic teardown graph and a self-caused content failure both terminate and still find it |
 | FA27 | A separately loaded runtime copy | A failure with no shared class identity is recognized by its structural tag; an object carrying a different tag is not |
 | FA28 | Decided by output | Only an output-mode `DocumentationError` is; a `throw` decision, every durability kind, and every Files kind are not |
+| LC1–LC2 | A bundled second copy | A failure built by a separately bundled `files.ts` is recognized and rethrown by identity, and recognition crosses in both directions |
+| LC3 | A payload-free outcome across copies | A delete failure built by the other copy is rebuilt from validated parts; its `Unit` success is accepted; a success carrying a value and a failure carrying none are each the fixed `protocol` invariant, with nothing planted escaping |
 
 ### Tier HF — The host Files provider
 
@@ -8823,7 +8988,7 @@ platform's.
 | HF6 | Escapes | A link out is refused at resolution for both forms, the destination is not named, and the outside file is unchanged |
 | HF7 | Internal links | Followed to the file they name; the link stays a link |
 | HF8 | Dangling links | Replaced rather than followed, and nothing is created where the link pointed |
-| HF9 | The observer contract | The private phases are announced in order, once each, for write, read, and search |
+| HF9 | The observer contract | The private phases are announced in order, once each, for write, read, search, and deletion |
 | HF10, HF10b | Where the guarantee stops | A parent replaced synchronously between resolution and use is written through, and a target replaced between resolution and access is read through — the documented weakness, with atomicity still holding |
 | HF11 | The commit is one event | A fault before and after `next()` report the same unknown outcome, and one of the two runs really did commit |
 | HF12 | Cancellation | No Result is produced and no temporary is left |
@@ -8832,14 +8997,20 @@ platform's.
 | HF14 | Absence | Every operation throws provider-unavailable with the fixed diagnostic and no cause, and no low-level call is made |
 | HF15 | Installation | `useHostFiles()` installs beneath ordinary middleware, which can still wrap it |
 | HF16 | Directory links on every platform | A junction on Windows and a directory symlink elsewhere are refused on the same terms |
-| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims and prints every one it checked |
+| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims — deletion's five among them — and prints every one it checked |
+| HF18 | Deletion's shape | A regular file is removed, the success carries no value at all, and a second deletion of the same path is the same success |
+| HF19 | Final links | An inward link, an outward file link, a dangling link, and an outward directory link are each removed as the link, and nothing on the far side of any of them moves |
+| HF20 | Directories | An empty directory, a full one, `.`, and a path normalizing onto the working directory are each refused at the target phase; so is `.` under a working directory reached through a link, which is what separates classifying the directory from resolving its parent |
+| HF21 | Containment before removal | Empty, absolute, lexically escaping, and parent-link-escaping paths are each refused with their own phase and reason and reach no low-level removal — proven against an admitted deletion that does |
+| HF22 | Platform failures | A refused removal is a structured `Err` carrying a reason and nothing else; one that reports the path already gone is the same success absence is |
+| HF23 | Cancellation | A halt before the removal produces no Result, leaves the entry as it was, and leaves nothing behind — deletion acquires nothing |
 
 ### Tier FF — Files infrastructure failure
 
 | # | Test | Verify |
 |---|------|--------|
 | FF1 | Absence before children | A write with no provider fails the execution, expands no children, renders nothing, reaches no `API.Fs` call, and stops the following sibling |
-| FF2 | Every other form | Read, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
+| FF2 | Every other form | Read, `<File.Delete>`, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
 | FF3 | A refused operation | Denial is fatal, carries its own fixed diagnostic, and renders no content |
 | FF4 | The check authorizes nothing | A refused check makes exactly one provider call; the children never run and the document carries on |
 | FF5 | Malformed write data | A phase and target that contradict each other, a reason outside the vocabulary, and an undescribable success are all fatal `protocol` invariants, and the category is not interpolated |

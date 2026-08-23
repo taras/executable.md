@@ -908,6 +908,10 @@ table (§8.4), built from this same implementation and schema. Being registered
 grants that nothing: a generated fragment reaches the pinned identity and never
 the registration, and a repository component named `Dir` satisfies neither.
 
+Everything the lexical directory covers reads and writes through it, including
+`<File.Delete>` (§10.1), which removes one file from the Workspace the same
+contextual way `<File>` writes one.
+
 ## 7. Git operations
 
 Git operations require a contextual Repository or Worktree checkout. They use
@@ -1758,7 +1762,7 @@ durable observations and mutations restore.
 | Repository base/default resolution | restore pinned result |
 | Repository/Worktree creation | restore the retained creation record, then reattach and verify the retained Git state without recloning |
 | File read | restore historical content |
-| File write/delete | restore completion without mutating again |
+| File write/delete | restore completion without mutating again; a deletion whose effect was never published is performed once by the continuation, against the retained frontier |
 | Glob | restore historical path set |
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
@@ -1839,6 +1843,32 @@ parent's effect transaction begins. Direct filesystem operations and
 declarative Git operations use this boundary, and so does a mutation an
 admitted generated fragment performs (§8.4) — it is the same component crossing
 the same provider, with no second path of the evaluator's own.
+
+**Document deletion** is one of them. `<File.Delete>` (executable-mdx-spec
+§6.13.1) removes one file from the run's Workspace, resolving its path inside
+the logical filesystem so no host path is ever produced. One regular file or one
+final logical symlink goes — the link rather than what it names — a path that
+already names nothing is a successful no-op, and every directory is refused
+before anything is attempted, including an empty one the pinned filesystem would
+otherwise remove. It renders nothing and returns nothing.
+
+Each deletion is one `workspace_file` effect, named by the expansion, the
+operation and the resolved logical target, and its retained outcome is exactly
+`{ kind: "deleted" }` — including the no-op. That is provider-facing protocol
+data rather than a value a document can read. A refusal retains the same
+`{ kind: "refused", phase, reason }` form every other file effect uses.
+
+The removal, the root that results — which is the root it started from when
+nothing changed — and the filtered result publish together. A documented refusal
+rolls its mutation savepoint back and publishes the failed effect against the
+unchanged root; an infrastructure failure or a cancellation between the removal
+and the commit rolls the outer transaction back and publishes no completion at
+all, leaving the file, the current root and the effect history the ones the run
+had. The removal is the operation's only commit point, and nothing is acquired
+for it to release.
+
+This is deletion *inside* a run. Removing the run itself is `xmd workflow
+delete` (§12), which no document can reach.
 
 ### 10.2 Git-host effects
 
@@ -2459,6 +2489,9 @@ state.
 xmd workflow delete release-42
 ```
 
+This is run deletion, not document deletion: `<File.Delete>` (§10.1) removes one
+file from a run's Workspace and is the only deletion a document can express.
+
 Delete targets one authorized run ID, accepts no wildcard and prompts for no
 additional confirmation. It first acquires the executor lock. A live workflow
 executor is refused; every status without one may be deleted, including a stale
@@ -2739,7 +2772,7 @@ fetch operation requires its own language and durability contract.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; process capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
