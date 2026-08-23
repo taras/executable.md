@@ -21,6 +21,7 @@ import type { Operation } from "effection";
 import type {
   DetachedLaunchRecord,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,
@@ -112,6 +113,23 @@ function reconciliation(value: unknown): InstructionReconciliation | undefined {
   return RECONCILIATIONS.find((candidate) => candidate === value);
 }
 
+/**
+ * Who chose the identity, as the record says — or, for a record written before
+ * anyone could choose, as the format itself says.
+ *
+ * A merged #518 record has no provenance member, and could not have been
+ * client-allocated because that path did not exist in the released format. So
+ * absence reads as `provider-returned`. That is the one inference this parser
+ * makes, and it only ever infers the weaker claim: client allocation must say
+ * so explicitly.
+ */
+function provenance(value: unknown): IdentityProvenance | undefined {
+  if (value === undefined) {
+    return "provider-returned";
+  }
+  return value === "provider-returned" || value === "client-allocated" ? value : undefined;
+}
+
 function permissionMode(value: unknown): PermissionMode | undefined {
   if (value === "approve-all" || value === "approve-reads" || value === "deny-all") {
     return value;
@@ -129,6 +147,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
     sessionState: record.sessionState,
     instructionChannel: record.instructionChannel,
     instructionReconciliation: record.instructionReconciliation,
+    identityProvenance: record.identityProvenance,
     instructionsDigest: record.instructionsDigest,
     instructions: record.instructions,
     cwd: record.cwd,
@@ -148,7 +167,14 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   return payload;
 }
 
-function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
+/**
+ * Read a retained preparation strictly.
+ *
+ * Exported from this internal module so the strictness can be asserted
+ * directly. It is not part of the package's public surface: `packages/core/mod.ts`
+ * exports the record types, not the reader.
+ */
+export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   if (!isRecord(value) || value.phase !== "prepared") {
     return undefined;
   }
@@ -189,7 +215,15 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   const directories = stringList(additionalDirectories);
   const mode = permissionMode(value.permissionMode);
   const reconciled = reconciliation(value.instructionReconciliation);
-  if (!directories || !mode || !reconciled) {
+  const provenanceValue = provenance(value.identityProvenance);
+  if (!directories || !mode || !reconciled || !provenanceValue) {
+    return undefined;
+  }
+  // A retained build binding is state this release cannot compare: nothing here
+  // observes an executable, so a record claiming its session was established by
+  // a particular build describes a check this build cannot perform. Resuming
+  // under it anyway would be answering a question by ignoring it.
+  if (value.executableBinding !== undefined) {
     return undefined;
   }
   const record: PreparedLaunchRecord = {
@@ -201,6 +235,7 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
     sessionState,
     instructionChannel,
     instructionReconciliation: reconciled,
+    identityProvenance: provenanceValue,
     instructionsDigest,
     instructions,
     cwd,

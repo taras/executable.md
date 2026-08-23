@@ -263,11 +263,32 @@ ACPX record/session identity
 provider-native session identity
 ```
 
-Only a provider-asserted native identity can cross the handoff boundary. XMD
-does not infer that an ACP session ID is accepted by a native CLI merely because
-both values are strings or UUIDs.
+An identity is chosen in one of two ways, and the prepared record says which.
 
-A native-launch-capable provider proves all of the following:
+```ts
+type IdentityProvenance = "provider-returned" | "client-allocated";
+```
+
+`provider-returned` means the provider created the session and reported what it
+is called; `client-allocated` means XMD chose the identity before the provider
+existed and supplied it unchanged. New records always write provenance. A
+released record without the member reads only as `provider-returned`, because
+client allocation did not exist in that format — the one compatibility
+inference this contract makes, and it infers only the weaker claim. Unknown
+provenance refuses.
+
+The identity itself comes from the adapter. What shape a provider-native
+identity takes and what that provider will accept is knowledge about that
+provider, so an adapter that names its own sessions allocates one, and the
+provider decides only whether a freshly allocated candidate wins publication.
+Allocation happens while coordinator ownership is held. An authored string, a
+logical XMD session key, an ACP session ID, an ACPX record ID, process output,
+or a value that merely looks like a UUID never supplies or replaces it.
+
+Where the provider returns the identity, XMD does not infer that an ACP session
+ID is accepted by a native CLI merely because both values are strings or UUIDs.
+
+A provider-returned native-launch-capable provider proves all of the following:
 
 1. session creation materializes durable state the native UI can resume;
 2. its returned native ID names that exact state;
@@ -279,12 +300,24 @@ A native-launch-capable provider proves all of the following:
 7. ACP can later reattach to the same session if document execution uses it
    again.
 
+An adapter that names its own sessions proves less, because it asks less: no
+ACP session is created, so there is nothing for ACP and a native process to
+agree about. It creates the session directly and resumes it by the same name.
+
 For the built-in adapters, the native commands are:
 
 ```text
+claude --session-id <native-session-id> --system-prompt-file <private-file>
 claude --resume <native-session-id>
 codex resume <native-session-id>
 ```
+
+This release retains no executable path, version or byte digest, and accepts
+that the installed native CLI may have changed between invocations. A CLI that
+cannot resume the retained identity fails normally; XMD creates no replacement
+history. Exact executable equality becomes necessary only before ACP and native
+processes may jointly accept one identity as one history, which is deferred with
+ACP reattachment.
 
 Those command shapes are adapter implementation details, not authored document
 values. A custom ACP agent without a declared native launcher fails with an
@@ -362,11 +395,12 @@ agent    = the resolved agent command
 sessionKey = the resolved xmd:v1 session key
 ```
 
-Every operation that could act on an advertised provider-returned session enters
-it first — establishing the session, subscribing a prompt stream, launching, and
-resuming an incomplete launch. Resolving an agent and placing a session own
-nothing, because there is no session yet to own. An agent no adapter is
-advertised for keeps ordinary ACP behavior on every host.
+Every operation that could act on an advertised session enters it first —
+establishing the session, subscribing a prompt stream, launching, and resuming
+an incomplete launch. Coverage follows the agent's capability, not the
+operation, and not which mechanism constructed the session. Resolving an agent
+and placing a session own nothing, because there is no session yet to own. An
+agent no adapter is advertised for keeps ordinary ACP behavior on every host.
 
 Acquisition never waits. A native UI may stay open for hours, and a caller that
 queued would hold the reader's terminal while offering no way to reach the owner
@@ -399,6 +433,7 @@ each hold "the" session:
 ~/.acpx/xmd-native-sessions/v1/
   leases/<sha256-of-canonical-key>.lease
   ownership/<same-digest>.json
+  routes/<same-digest>.json
 ```
 
 Directories are `0700` and files `0600`; lease sidecars are never unlinked. The
@@ -410,9 +445,88 @@ transcript, or temporary path — the digest is the only name in the namespace.
 Node and Bun build no coordinator. Neither runtime exposes a cross-process
 advisory lock, and V1 emulates none: a pid, heartbeat, or stale-file timeout
 calls a paused process dead and admits two owners. So every advertised
-provider-returned session, prompt, and launch refuses there with
+session, prompt, launch and incomplete replay refuses there with
 `unsupported-capability`, before contacting an agent, while read-only resolution
-and non-advertised ACP work are unaffected.
+and non-advertised ACP work are unaffected. A host missing only the route store
+refuses an advertised agent that names its own sessions, on the same terms and
+before any provider effect; an agent whose provider returns the identity is
+unaffected, because it constructs nothing a route governs.
+
+## Construction route
+
+Ownership and construction answer different questions, and this contract keeps
+them apart:
+
+```text
+construction route:  how this logical session was first constructed
+session coordinator: who may act on it now
+```
+
+The coordinator remains the single live authority and owns crash behavior. A
+route grants no right to ensure, prompt, detach, spawn or accept history. It
+says only which kind of thing this session is, so a later operation cannot
+quietly treat a conversation that already exists as one it may name.
+
+The exact V1 record is:
+
+```ts
+type AgentSessionRouteV1 =
+  | {
+      schema: "session-route.v1";
+      route: "acp-first";
+      provider: string;
+      agent: string;
+      sessionKey: string;
+    }
+  | {
+      schema: "session-route.v1";
+      route: "client-native";
+      provider: string;
+      agent: string;
+      sessionKey: string;
+      nativeSessionId: string;
+      identityProvenance: "client-allocated";
+      instructionsDigest: string;
+      launcher: string;
+    };
+```
+
+Every member is exact. A path, version, executable digest, adapter command,
+environment, argv, instruction text, credential, transcript, process fact or
+temporary path is not a member, and a record carrying one is refused rather than
+read partially. So are missing, malformed, unknown-schema, moved and
+natural-key-mismatched records. Only a file that is not there means the session
+has not been constructed yet.
+
+The route shares the coordinator's namespace, natural key and digest, so one
+session names one lease, one ownership record and one route. The route directory
+is `0700` and records are `0600`. Publication is durably flushed and atomically
+create-if-absent: the loser of a race reads and adopts the winner, and never
+overwrites, deletes, converts or partially reads it.
+
+Reconciliation happens while ownership is held, before any provider
+construction effect:
+
+1. a first `session()` or subscribed prompt publishes or adopts `acp-first`
+   before ACP runtime creation, `ensureSession()` or a turn;
+2. an ensure that fails or is interrupted afterwards leaves that route standing,
+   because it may have created provider state before the caller observed the
+   failure, and preserving the route is what stops that uncertainty from later
+   being reclassified;
+3. a launch by an adapter that names its own sessions reads both the route and
+   existing durable ACPX state; existing state publishes or adopts `acp-first`,
+   and otherwise the adapter allocates a candidate and publishes `client-native`;
+4. a launch that adopts `acp-first` retains `identity-unavailable` at `prepared`,
+   before allocation, private-file creation, detach or spawn;
+5. a `session()` or subscribed prompt that meets `client-native` raises the
+   provider's typed route error before runtime creation, ensure, turn, close or
+   accepted history. It retains no launch failure, because no launch was asked
+   for.
+
+The resolved agent command is carried from placement through the coordinator
+key, the route key and provider work. It is never resolved a second time inside
+ownership, because a registry free to answer differently would name a different
+session than the one this operation prepared.
 
 V1 also holds one foreground-terminal lease for the root CLI execution. Two
 native launches cannot concurrently own the same terminal, even when they name
@@ -452,6 +566,37 @@ the run that must not create a replacement session.
 deliberately not retained: an interrupted native process leaves `detached` as
 the last retained phase, and resuming reattaches the native UI to that same
 provider session.
+
+For a session XMD named, the retained phase is what decides the only safe
+continuation, because `detached` is retained before the exit phase is invoked:
+
+- **`prepared` only** — the handoff never began, so native creation may still be
+  owed. The replay creates under the same retained identity, from a new private
+  file holding the exact retained instructions. It allocates nothing and
+  publishes no route.
+- **`detached`** — a process may already have started under this identity, so
+  the replay resumes and never falls back to creating.
+- **a later independent launch meeting a compatible route** — resumes, and
+  allocates nothing at all.
+
+Every incomplete replay requires exact agreement between its journal and its
+route on identity, provenance, instruction digest and launcher before its first
+live effect. Neither account repairs or republishes the other: a replay that
+found a disagreement has discovered that the session it was going to continue is
+not the session it prepared, and retains `identity-unavailable` without starting
+a child. Equal instructions may resume the retained identity; different
+instructions retain `instructions-refused` and replace neither the layer, the
+route, the identity, nor any provider state.
+
+A session XMD named takes its instruction layer from one invocation-private
+file, mode `0600`, passed by path. The text appears in neither argv nor
+environment, and the file and its directory are removed on success, ordinary
+failure and cancellation alike, while coordinator ownership is still held.
+Every private setup or child-creation failure is normalized before it crosses a
+public or durable boundary: the retained class is `process-creation-failed` and
+the message is fixed provider-owned text carrying no executable path,
+instruction-file path, argv, environment, raw host message, credential or
+provider-private state.
 
 The provider does not write these records and cannot reach the thing that does.
 It offers each phase as live work to the authority core delivered it; the
@@ -637,7 +782,9 @@ installed provider receives; the `agent_session_launch` durable records with
 their replay and secret scanning; the host-owned session coordinator and its
 crash-conservative ownership record; an invocation-owned native-launch
 capability in the ACPX provider;
-provider-native identity taken from what an adapter asserts and never inferred;
+provider-native identity that is either asserted by the provider or allocated by
+the adapter before the provider exists, retained explicitly and never inferred;
+a strict create-once construction route beside the coordinator's own records;
 an inherited-terminal foreground child with cancellation and bounded reaping;
 and the controlled TestAgent fixture that proves all of it without starting a
 model.
@@ -652,6 +799,11 @@ Two things it does not yet have, and both fail closed rather than degrading:
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
   omitting the fact, and no adapter maps a root it was never given.
+- **ACP does not attach to a session XMD named.** A `<Session>` or `<Prompt>`
+  meeting a `client-native` route raises the provider's typed route error rather
+  than reattaching, because letting ACP and a native process jointly accept one
+  identity as one history requires proving they are running the same build —
+  which is deferred with #517 rather than approximated here.
 
 Additional provider adapters land independently against the same core contract.
 An adapter that cannot prove instruction injection before the first user turn
@@ -686,9 +838,17 @@ Implementation review checks these frozen invariants:
 13. Public launch routing is request-only: no return value, copy, superseded
     parent, foreign request, or repeated delegation authors a phase, and the
     authority reaches the installed provider directly.
-14. Every operation that can act on an advertised provider-returned session
-    takes ownership under one natural key first, contention refuses rather than
-    queues, and an owner that did not prove it stopped leaves the session owned.
+14. Every operation that can act on an advertised session takes ownership under
+    one natural key first, contention refuses rather than queues, and an owner
+    that did not prove it stopped leaves the session owned.
+15. A session is constructed once, by one mechanism, and its create-once route
+    says which. Routes never convert, and the loser of a race adopts the winner
+    rather than replacing it.
+16. A session XMD named is created by the native process under an identity the
+    adapter allocated inside ownership, from a private mode-0600 file whose text
+    reaches neither argv nor environment.
+17. Private setup and child-creation failures are normalized before they cross a
+    public or durable boundary.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached

@@ -240,6 +240,7 @@ export { AgentLaunchError } from "./src/agent/launch.ts";
 export type {
   DetachedLaunchRecord,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,

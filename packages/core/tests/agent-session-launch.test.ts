@@ -23,6 +23,7 @@ import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { Session, SessionLaunchResult } from "../src/agent/agent-api.ts";
 import type { ExitedLaunchRecord, PreparedLaunchRecord } from "../src/agent/launch.ts";
+import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
@@ -115,6 +116,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   sessionState: "created",
                   instructionChannel: "stub.systemPrompt",
                   instructionReconciliation: "installed",
+                  identityProvenance: "provider-returned",
                   instructionsDigest: digest(request.instructions),
                   instructions: request.instructions,
                   cwd: request.cwd,
@@ -967,5 +969,95 @@ describe("Tier FS — the final public launch surface", () => {
 
     expect(Object.keys(core)).not.toContain("AgentLaunchJournal");
     expect(Object.keys(core)).not.toContain("AgentLaunchJournalApi");
+  });
+});
+
+/**
+ * Tier PV — who chose the identity, read strictly
+ * (specs/native-agent-session-launch-spec.md §Provider-native identity).
+ *
+ * A returned identity and a supplied one are both just a string in the record,
+ * so nothing after the fact can tell them apart. The record has to say. This
+ * tier is where that becomes true, and where the one compatibility inference —
+ * a released format that could not have been client-allocated — is pinned to
+ * the weaker claim.
+ */
+describe("Tier PV — identity provenance", () => {
+  function record(overrides: Record<string, Json> = {}): Record<string, Json> {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: "xmd:v1:a",
+      provider: "acpx",
+      nativeSessionId: "11111111-2222-3333-4444-555555555555",
+      sessionState: "created",
+      instructionChannel: "claude.systemPromptFile",
+      instructionReconciliation: "installed",
+      instructionsDigest: "a".repeat(64),
+      instructions: "go",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "claude",
+      ...overrides,
+    };
+  }
+
+  it("PV1: a released #518 record has no provenance and reads as provider-returned", function* () {
+    // The one inference this parser makes, and it only ever infers the weaker
+    // claim: client allocation did not exist in that released format, so a
+    // record without the member cannot have been one.
+    expect(parsePrepared(record())?.identityProvenance).toBe("provider-returned");
+  });
+
+  it("PV2: client allocation is explicit and round-trips unchanged", function* () {
+    const parsed = parsePrepared(record({ identityProvenance: "client-allocated" }));
+    expect(parsed?.identityProvenance).toBe("client-allocated");
+    expect(parsed?.nativeSessionId).toBe("11111111-2222-3333-4444-555555555555");
+  });
+
+  it("PV3: an unknown provenance refuses rather than falling back", function* () {
+    for (const value of ["inferred", "", "client_allocated", 1, null]) {
+      expect([value, parsePrepared(record({ identityProvenance: value as Json }))]).toEqual([
+        value,
+        undefined,
+      ]);
+    }
+  });
+
+  it("PV4: state this build cannot account for refuses", function* () {
+    // An executable build binding belongs to the deferred ACP-reattachment
+    // work, not to this release. A record carrying one describes a session this
+    // build has no way to compare, so it refuses rather than reading past it.
+    expect(
+      parsePrepared(
+        record({
+          identityProvenance: "client-allocated",
+          executableBinding: {
+            schema: "executable-build.v1",
+            reportedVersion: "2.1.235 (Claude Code)",
+            executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+          },
+        }),
+      ),
+    ).toBe(undefined);
+  });
+
+  it("PV5: the settled failure classes round-trip, and no other does", function* () {
+    for (const failureClass of [
+      "identity-unavailable",
+      "instructions-refused",
+      "process-creation-failed",
+      "session-busy",
+      "session-recovery-required",
+    ]) {
+      const parsed = parsePrepared(record({ failure: { class: failureClass, message: "why" } }));
+      expect([failureClass, parsed?.failure?.class]).toEqual([failureClass, failureClass]);
+    }
+    // Not a class this release settles: the build question it names is not one
+    // anything here can ask.
+    expect(
+      parsePrepared(record({ failure: { class: "executable-binding-refused", message: "why" } })),
+    ).toBe(undefined);
   });
 });

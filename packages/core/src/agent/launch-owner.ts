@@ -136,6 +136,9 @@ function unaccepted(request: AgentLaunchRequest, site: LaunchSite): PreparedLaun
     sessionState: "created",
     instructionChannel: "",
     instructionReconciliation: "installed",
+    // Nobody prepared anything, so nobody chose an identity. The weaker of the
+    // two claims is the honest one to retain.
+    identityProvenance: "provider-returned",
     instructionsDigest: "",
     instructions: "",
     cwd: site.cwd,

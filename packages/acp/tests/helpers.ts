@@ -115,6 +115,8 @@ export interface FakeRuntimeHarness {
    */
   closeInputs: Record<string, unknown>[];
   closeFailure?: Error;
+  /** Fail every attempt to establish a session, as an unreachable agent does. */
+  ensureFailure?: Error;
   /**
    * Create sessions the way an adapter that asserts no provider-native
    * identity does. The handle still carries ACP and record ids, which is the
@@ -155,6 +157,9 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return Promise.resolve(report);
         },
         ensureSession(input) {
+          if (harness.ensureFailure) {
+            return Promise.reject(harness.ensureFailure);
+          }
           harness.ensureCalls.push(input);
           // ACPX persists a record as it establishes a session, including the
           // instruction layer the caller asked for; a fake that skipped that
@@ -328,15 +333,25 @@ export interface CoordinatorHarness {
   }[];
   /** Leave `key` looking like the work of an owner that never finished. */
   tombstone(key: AgentSessionKey): void;
+  /**
+   * Ownership's own ordered log — `owned`, `quiesced`, `released-idle` or
+   * `released-active`.
+   *
+   * Separate from a caller's own trace so a case can say what ownership was
+   * doing at the moment of some other observation.
+   */
+  events: string[];
 }
 
 export function makeCoordinator(): CoordinatorHarness {
   const occupied = new Set<string>();
   const retained = new Map<string, "active" | "idle">();
   const acquisitions: CoordinatorHarness["acquisitions"] = [];
+  const order: string[] = [];
 
   const harness: CoordinatorHarness = {
     acquisitions,
+    events: order,
     tombstone(key) {
       retained.set(agentSessionKeyDigest(key), "active");
     },
@@ -364,8 +379,12 @@ export function makeCoordinator(): CoordinatorHarness {
           }
           acquisitions.push({ kind: owner.kind, key, outcome: "granted" });
           retained.set(digest, "active");
+          order.push("owned");
           let quiesced = false;
           yield* ensure(() => {
+            // Last, by construction: registered before the body runs, so every
+            // finalizer the body registers unwinds ahead of it.
+            order.push(quiesced ? "released-idle" : "released-active");
             if (quiesced) {
               retained.set(digest, "idle");
             }
@@ -374,6 +393,7 @@ export function makeCoordinator(): CoordinatorHarness {
             yield* body({
               quiesced() {
                 quiesced = true;
+                order.push("quiesced");
               },
             }),
           );
