@@ -11,7 +11,14 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
-import { collect, execute, inlineSource } from "@executablemd/core";
+import {
+  collect,
+  Component,
+  execute,
+  hasContent,
+  inlineSource,
+  registerComponents,
+} from "@executablemd/core";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { useCompositionComponents } from "../src/composition/installation.ts";
 import { RepositoryCompositionProviderError } from "../src/composition/errors.ts";
@@ -27,6 +34,7 @@ import {
   raised,
   retainedRepositories,
   runDocument,
+  runWorkflowDocument,
 } from "./support/composition.ts";
 import { RepositoryCompositionError, WorktreeCompositionError } from "../src/composition/errors.ts";
 import { admitLocator, locatorFingerprint } from "../src/deno/composition/locator.ts";
@@ -537,4 +545,126 @@ describe("workflow composition failure policy", () => {
       expect(rendered).toContain(LATER);
     });
   });
+});
+
+/**
+ * Tier WF — `<Dir>`'s authored form under a lying content chain
+ * (specs/workflow-workspace-spec.md §6.3).
+ *
+ * `<Dir>` installs a lexical working directory for its content, and a
+ * self-closing invocation has none — so which form it was written as decides
+ * whether it does anything at all. That comes from the invocation the engine
+ * issued, not from `Component.hasContent()`, whose outermost handler answers
+ * first and may answer differently on each call.
+ *
+ * Each case installs the handler outside every component invocation and puts a
+ * `<Says />` beside the `<Dir>`, so the run proves the chain is live and lying
+ * before it proves `<Dir>` ignored it.
+ */
+function* useLyingContent(script: readonly boolean[]): Operation<void> {
+  let call = 0;
+  yield* registerComponents([
+    {
+      name: "Says",
+      origin: "test://says",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        return `says:${yield* hasContent()}`;
+      },
+    },
+  ]);
+  yield* Component.around({
+    // deno-lint-ignore require-yield
+    *hasContent(_args, _next) {
+      const answer = script[Math.min(call, script.length - 1)] ?? false;
+      call += 1;
+      return answer;
+    },
+  });
+}
+
+describe("workflow Dir under a lying content chain", () => {
+  // The probe is the chain's first caller, so what it renders is the script's
+  // first answer — which is what makes the handler's liveness observable.
+  const DENYING: Array<[string, readonly boolean[], string]> = [
+    ["a handler that always denies content", [false], "says:false"],
+    ["a handler that answers true then false", [true, false], "says:true"],
+  ];
+
+  for (const [what, script, probed] of DENYING) {
+    it(`keeps a paired Dir's lexical cwd under ${what}`, function* () {
+      const root = yield* useStorageRoot();
+
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        // No `<Repository>` around this on purpose: Repository chooses between
+        // binding a path and rendering its content from the same contextual
+        // answer, so a denying handler collapses it to its self-closing form
+        // and there is no document left to observe. What is under test is
+        // `<Dir>`, so the fixture is the Workspace root and two ordinary files.
+        const output = yield* runWorkflowDocument(
+          database,
+          [
+            "<Says />",
+            "",
+            '<Dir path="nested">',
+            `<File path="deep.md">the inner bytes</File>`,
+            "</Dir>",
+            "",
+            `<File path="nested/deep.md" as="back" />`,
+            "",
+            "back: {back}",
+          ].join("\n"),
+          {},
+          (execute) =>
+            scoped(function* () {
+              yield* useLyingContent(script);
+              return yield* execute();
+            }),
+        );
+
+        const rendered = String(output);
+        // The chain is live and answering from the script, and the answer
+        // `<Dir>` would have taken denies content — which would have made it
+        // refuse itself as a self-closing invocation.
+        expect(rendered).toContain(probed);
+        // And the working directory it installed is where the write landed: the
+        // read is written against the Workspace root and finds it one level in.
+        expect(rendered).toContain("back: the inner bytes");
+      });
+    });
+  }
+
+  const REPORTING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always reports content", [true]],
+    ["a handler that answers false then true", [false, true]],
+  ];
+
+  for (const [what, script] of REPORTING) {
+    it(`still refuses a self-closing Dir under ${what}`, function* () {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        let error: unknown;
+        try {
+          yield* runWorkflowDocument(
+            database,
+            ["<Says />", "", `<Dir path="/somewhere" />`].join("\n"),
+            {},
+            (execute) =>
+              scoped(function* () {
+                yield* useLyingContent(script);
+                return yield* execute();
+              }),
+          );
+        } catch (raised) {
+          error = raised;
+        }
+
+        // A working directory installed for content nobody wrote is a directory
+        // nothing runs in, and no contextual answer makes it one.
+        expect(error).toBeInstanceOf(DirInvocationError);
+      });
+    });
+  }
 });

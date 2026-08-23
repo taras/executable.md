@@ -59,10 +59,15 @@ import type {
 /**
  * What a function component receives beside its props.
  *
- * Deliberately opaque: there is nothing on it to read. A component that merely
- * passes it along needs nothing from it, and one that wants to build one finds
- * no shape to copy. What it names is answered by a claimant, and only for the
- * execution that minted both.
+ * Almost opaque. What it names is answered by a claimant, and only for the
+ * execution that minted both; there is no shape here to copy and nothing to
+ * read about the caller, the binding, the children, the environment or the
+ * scope.
+ *
+ * The one thing it reports is how the element that caused this invocation was
+ * written, because that is a fact about *this invocation* rather than about the
+ * surroundings it runs in — and a component whose two spellings do different
+ * things is choosing an effect with it.
  *
  * The brand is declared and never exported, so it names a type and nothing a
  * value can carry — the runtime test is the private field below, not this.
@@ -71,6 +76,24 @@ declare const Invocation: unique symbol;
 
 export interface ComponentInvocation {
   readonly [Invocation]?: never;
+  /**
+   * Whether the element was written with content: `<C>…</C>` and `<C></C>`
+   * yes, `<C />` no.
+   *
+   * The authored shape, immutable and synchronous. It projects nothing,
+   * suspends on nothing, asks nothing of the middleware chain, and does not
+   * spend this invocation's durable identity — reading it leaves the claimant
+   * exactly as it was.
+   *
+   * This is what an *effect-selecting* branch reads. `Component.hasContent()`
+   * answers the same question through the composable chain, where a handler
+   * installed anywhere outside the invocation answers ahead of the engine, and
+   * where a handler that answers per call can report one shape to a check and
+   * the other to the component. That is fine for a component choosing how to
+   * render; it is not fine for one choosing whether to read a file or write
+   * over it.
+   */
+  hasContent(): boolean;
 }
 
 /** A durable identity that cannot be claimed here. */
@@ -164,6 +187,8 @@ interface Issuance {
   readonly id: string;
   /** The component this is an invocation of, as the engine resolved it. */
   readonly component: string;
+  /** How the element was written, as the engine scanned it. */
+  readonly content: boolean;
   /** The domain this execution gave that component, when it gave one. */
   readonly domain: IdentityDomain | undefined;
   /** The frame the engine invoked the implementation in. */
@@ -191,6 +216,20 @@ class EngineInvocation implements ComponentInvocation {
     Object.freeze(this);
   }
 
+  /**
+   * The authored shape, read straight off the owner-kept issuance.
+   *
+   * Not a Context, not a contextual Api answer, not a registry entry, not a
+   * property anything could redefine on a copy, and not a lookup exported for
+   * somebody to reach: the state is private to this module and the only way to
+   * it is an object the engine minted and handed over. A component evaluated
+   * through a second loaded copy of core still calls this object, so what it
+   * gets is the fact its own copy's helpers could not answer.
+   */
+  hasContent(): boolean {
+    return this.#issuance.content;
+  }
+
   static {
     stateOf = (value) =>
       typeof value === "object" && value !== null && #issuance in value
@@ -205,10 +244,12 @@ export function issueInvocation(
   component: string,
   domain: IdentityDomain | undefined,
   frame: Scope,
+  content: boolean,
 ): IssuedInvocation {
   const issuance: Issuance = {
     id,
     component,
+    content,
     domain,
     frame,
     live: true,

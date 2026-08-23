@@ -898,7 +898,11 @@ checkout path while also rendering them.
 ```
 
 It restores the previous cwd after its children finish. Self-closing `<Dir />`
-is invalid. A Prompt sent to an already-established Agent does not acquire a new
+is invalid, and which form it was written as comes from the invocation the
+engine issued rather than from the contextual `hasContent()` chain — a handler
+installed outside the invocation answers that chain first, and could otherwise
+validate a self-closing `<Dir />` the document wrote no children for, or refuse
+a paired one that has them (executable-mdx-spec §5.6). A Prompt sent to an already-established Agent does not acquire a new
 cwd merely because its invocation appears inside a later Dir.
 
 ## 7. Git operations

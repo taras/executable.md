@@ -63,12 +63,14 @@ interface Seen {
   readonly context: string[];
   /** What the composable Component Api reported, in order. */
   readonly api: boolean[];
+  /** What the engine's own invocation reported about the authored form. */
+  readonly authored: boolean[];
   /** Why a take was refused, when one was. */
   readonly refusals: string[];
 }
 
 function record(): Seen {
-  return { taken: [], context: [], api: [], refusals: [] };
+  return { taken: [], context: [], api: [], authored: [], refusals: [] };
 }
 
 /**
@@ -92,6 +94,7 @@ function probe(seen: Seen, name = "Probe"): IdentityComponent {
           seen.refusals.push(error instanceof Error ? error.message : String(error));
         }
         seen.context.push((yield* getExpansion()).id);
+        seen.authored.push(invocation.hasContent());
         const paired = yield* Component.operations.hasContent();
         seen.api.push(paired);
         return paired ? yield* content() : "";
@@ -104,6 +107,7 @@ function run(
   source: string,
   components: readonly IdentityComponent[],
   install?: () => Operation<void>,
+  componentDirs: readonly string[] = [],
 ): Operation<void> {
   return scoped(function* () {
     const installation: ExecutionInstallation = {
@@ -111,10 +115,36 @@ function run(
       ...(install === undefined ? {} : { install }),
     };
     yield* collect(
-      yield* executeInstalled({ ...inlineSource(source), stream: new InMemoryStream() }, [
-        installation,
-      ]),
+      yield* executeInstalled(
+        {
+          ...inlineSource(source),
+          stream: new InMemoryStream(),
+          componentDirs: [...componentDirs],
+        },
+        [installation],
+      ),
     );
+  });
+}
+
+/** The same, kept for what it rendered. */
+function rendered(
+  source: string,
+  components: readonly IdentityComponent[],
+  componentDirs: readonly string[] = [],
+): Operation<string> {
+  return scoped(function* () {
+    const settled = yield* collect(
+      yield* executeInstalled(
+        {
+          ...inlineSource(source),
+          stream: new InMemoryStream(),
+          componentDirs: [...componentDirs],
+        },
+        [{ components }],
+      ),
+    );
+    return String(settled);
   });
 }
 
@@ -221,8 +251,11 @@ describe("Tier CIV — the identity a host's component names its work after", ()
             ...definition,
             *fn(props: Record<string, Json>, _invocation: ComponentInvocation) {
               // A structural stand-in, which is what a wrapper would mint to
-              // give both sites one durable name.
-              return yield* original(props, {});
+              // give both sites one durable name. It answers the authored form
+              // too — implementing the whole public shape is exactly what a
+              // forger would do, and identity is the private field rather than
+              // the shape.
+              return yield* original(props, { hasContent: () => false });
             },
           };
         },
@@ -597,10 +630,10 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     const taken: string[] = [];
     yield* scoped(function* () {
       // One invocation's frame, and its issuance.
-      const first = issueInvocation("first", "Both", domain, yield* useScope());
+      const first = issueInvocation("first", "Both", domain, yield* useScope(), false);
       yield* scoped(function* () {
         // A second, live at the same moment, in a frame of its own.
-        const second = issueInvocation("second", "Both", domain, yield* useScope());
+        const second = issueInvocation("second", "Both", domain, yield* useScope(), false);
         try {
           taken.push(yield* claim(second.invocation));
         } catch (error) {
@@ -627,7 +660,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     const { claim, domain } = yield* seam();
     let refusal: string | undefined;
     yield* scoped(function* () {
-      const issued = issueInvocation("done", "Both", domain, yield* useScope());
+      const issued = issueInvocation("done", "Both", domain, yield* useScope(), true);
       // The engine ends an issuance when the body returns, however it left.
       issued.close();
       try {
@@ -644,7 +677,7 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     const taken: string[] = [];
     let refusal: string | undefined;
     yield* scoped(function* () {
-      const issued = issueInvocation("once", "Both", domain, yield* useScope());
+      const issued = issueInvocation("once", "Both", domain, yield* useScope(), true);
       taken.push(yield* claim(issued.invocation));
       try {
         // The same issuance, in the same frame, a second time.
@@ -759,5 +792,151 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     }
     expect(refusal).toContain("as");
     expect(seen.taken).toEqual([]);
+  });
+});
+
+/**
+ * Tier CIV — the authored form the engine issues with an invocation
+ * (specs/executable-mdx-spec.md §5.6).
+ *
+ * How the element was written is a fact about the invocation, not about the
+ * surroundings it runs in. It travels on the object the engine minted, so a
+ * component choosing an effect from it — read a file or write over it — is not
+ * choosing from an answer the composable chain produced.
+ *
+ * These prove the fact itself: what it reports for each authored form, that
+ * reading it costs nothing, and that it cannot be recovered from anywhere else.
+ */
+describe("Tier CIV — the authored form on the invocation", () => {
+  const FORMS: Array<[string, string, boolean]> = [
+    ["self-closing", "<Probe />\n", false],
+    ["paired", "<Probe>written</Probe>\n", true],
+    ["paired and empty", "<Probe></Probe>\n", true],
+  ];
+
+  for (const [what, source, expected] of FORMS) {
+    it(`CIV19: a ${what} element reports its own form`, function* () {
+      const seen = record();
+      yield* run(source, [probe(seen)]);
+
+      expect(seen.authored).toEqual([expected]);
+      // The engine's two accounts of the same element agree while nothing is
+      // interfering, which is what makes the difference elsewhere a lie rather
+      // than a disagreement.
+      expect(seen.api).toEqual([expected]);
+    });
+  }
+
+  it("CIV19: asking the form projects nothing and suspends on nothing", function* () {
+    const ran: string[] = [];
+    const seen = record();
+    // A component that reads the form and returns without projecting. The
+    // canary is its content, so anything the query expanded would be visible.
+    const asking: IdentityComponent = {
+      name: "Asking",
+      origin: "test://asking",
+      props: NO_PROPS,
+      factory: (_claim: IdentityClaimant) =>
+        // deno-lint-ignore require-yield
+        function* Asking(
+          _props: Record<string, Json>,
+          invocation: ComponentInvocation,
+        ): Operation<string> {
+          seen.authored.push(invocation.hasContent());
+          seen.authored.push(invocation.hasContent());
+          return "";
+        },
+    };
+
+    yield* run("<Asking>\n<Canary />\n</Asking>\n", [asking], function* () {
+      yield* registerComponents([
+        {
+          name: "Canary",
+          origin: "test://canary",
+          props: NO_PROPS,
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            ran.push("canary");
+            return "";
+          },
+        },
+      ]);
+    });
+
+    // Read twice, answered twice, and the content it was written with never
+    // expanded: the query is a fact about the element, not a projection of it.
+    expect(seen.authored).toEqual([true, true]);
+    expect(ran).toEqual([]);
+  });
+
+  it("CIV20: reading the form leaves the durable identity unspent", function* () {
+    const seen = record();
+    const taking: IdentityComponent = {
+      name: "Taking",
+      origin: "test://taking",
+      props: NO_PROPS,
+      factory: (claim: IdentityClaimant) =>
+        function* Taking(
+          _props: Record<string, Json>,
+          invocation: ComponentInvocation,
+        ): Operation<string> {
+          // Read first, and more than once: if the read spent anything, the
+          // claim below would be the second take of one identity.
+          seen.authored.push(invocation.hasContent());
+          seen.authored.push(invocation.hasContent());
+          try {
+            seen.taken.push(yield* claim(invocation));
+          } catch (error) {
+            seen.refusals.push(error instanceof Error ? error.message : String(error));
+          }
+          return "";
+        },
+    };
+
+    yield* run("<Taking />\n", [taking]);
+
+    expect(seen.authored).toEqual([false, false]);
+    expect(seen.refusals).toEqual([]);
+    expect(seen.taken).toHaveLength(1);
+  });
+
+  it("CIV21: a component that imports nothing still reads the canonical form", function* () {
+    const directory = fileURLToPath(new URL("./fixtures/invocation-identity/", import.meta.url));
+
+    // A repository `.ts` component with no imports at all: no helper of its own
+    // copy to ask, no context of its own copy to read, only the object the
+    // engine handed it.
+    const both = yield* rendered(
+      "<LoadedForm />\n\n<LoadedForm>written</LoadedForm>\n",
+      [],
+      [directory],
+    );
+
+    expect(both).toContain("loaded:false");
+    expect(both).toContain("loaded:true");
+  });
+
+  it("CIV21: the form is on the invocation and nowhere a name reaches", function* () {
+    const seen = record();
+    let reachable: string[] = [];
+
+    yield* run("<Probe />\n", [probe(seen)], function* () {
+      yield* Component.around({
+        *importComponent([name, position], next) {
+          const definition = yield* next(name, position);
+          if (name === "Probe") {
+            // What a handler holding the definition can see of the fact: the
+            // definition carries none of it, because it is not a property of
+            // the component.
+            reachable = Reflect.ownKeys(definition).map(String);
+          }
+          return definition;
+        },
+      });
+    });
+
+    expect(seen.authored).toEqual([false]);
+    expect(reachable).not.toContain("hasContent");
+    expect(reachable).not.toContain("content");
   });
 });

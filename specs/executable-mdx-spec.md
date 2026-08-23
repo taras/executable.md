@@ -3733,9 +3733,19 @@ invocation rather than becoming an engine prop error.
 
 `hasContent()` reports the shape of the invocation, not a prediction about what
 it renders: `<C>…</C>` and `<C></C>` both have content — content that renders
-an empty string is still content — and only `<C />` does not. A component whose
-two forms mean different things branches on it without projecting, so asking
-the question never expands the invocation content.
+an empty string is still content — and only `<C />` does not. Asking the
+question never expands the invocation content.
+
+It is a **contextual** operation, so it composes like the rest of this Api: a
+handler installed anywhere outside the invocation answers ahead of the engine's
+own account, and may answer differently on each call. A caller that reads it and
+then invokes something which reads it again has therefore verified nothing —
+the two are separate dispatches.
+
+Only the invocation's own `hasContent()` (§5.6) is authoritative about the
+authored form. `<File>` (§6.13) and the workflow package's `<Dir>` read it. A
+component that reads this contextual operation has no authored-form guarantee:
+what it receives is whatever the chain answered for that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
@@ -3863,7 +3873,27 @@ rebind, and a contextual Api answer is composed by whoever installed a handler
 (Tier CIV). A component that needs nothing from it declares one parameter and
 never sees it.
 
-It carries nothing readable. The identity behind it is answered by a
+It carries one readable fact: `hasContent(): boolean`, the authored form of the
+element this invocation is of. `<C />` reports `false`; `<C>…</C>` and `<C></C>`
+report `true`. It is synchronous and immutable, it projects no content and
+suspends on nothing, and reading it neither spends the invocation's durable
+identity nor changes its lifetime, frame, projection or domain.
+
+Nothing else is readable: no shape object, binding name, children, environment,
+definition or scope, and no exported lookup beside it. The fact is owner-kept
+state inside canonical core, reachable only through the object the engine minted
+and handed over — which is what makes it usable where the contextual
+`hasContent()` of §5.5 is not. Because the method travels on the genuine
+invocation, a component evaluated through a separately loaded copy calls what it
+received rather than a helper of its own copy, and a component compiled against
+a core that predates the method gets no fallback to the contextual answer: it
+refuses instead, before reaching a provider.
+
+Implementing the method does not make an object an invocation. Durable identity
+is still the private field a claimant recognizes, so a structural look-alike
+answering `hasContent()` claims nothing.
+
+The identity behind it is answered by a
 **claimant**, and a claimant reaches only one place: the factory a trusted host
 **declared** to this execution, called once with the claimant this execution
 minted for that component (§5.3, architecture.md *Trusted host orchestration*).
@@ -8739,6 +8769,9 @@ visible warning blocks, gather into a separate error report).
 | FL32 | Malformed provider data | A write failure or success whose data does not validate is a provider-contract failure that ends the execution; a malformed non-write failure is the generic printed error and the document carries on |
 | FL33 | A handler that throws | An arbitrary throw becomes a fixed `protocol` invariant with no cause, message, errno text, or host value; an existing durability or Files failure beneath it is rethrown by identity instead |
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
+| FL34–FL35 | The authored form decides the effect | A self-closing `<File />` reads and never writes, and a paired `<File>` writes and never reads, under a contextual `hasContent` handler installed outside the invocation that lies consistently *and* under one that answers `[false, true]` / `[true, false]`. A sibling reporting the contextual answer proves the handler live; the provider calls and the file bytes prove the element followed how it was written (§5.6) |
+| FL36 | An honest chain | With no handler interfering, both forms reach the same providers and produce the same bytes |
+| FL37 | No contextual fallback | The definition called without the invocation the engine issued refuses before reaching a provider, leaving the file unchanged |
 
 ### Tier FA — Fatal error discovery
 
@@ -9580,6 +9613,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | IS3 | Self-closing has none | `<C />` reports none |
 | IS4 | Asking does not project | A component that only calls `hasContent()` never expands the invocation content it reports on |
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
+| IS6 | Contextual, and composable | The operation stays exported, delegable and overridable; what it may not decide is an effect-selecting branch, which reads `invocation.hasContent()` instead (§5.6) |
 
 ### Tier RT — Retained resources
 
@@ -10050,6 +10084,9 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV16 | No short circuit | An import answered without delegating selects nothing, so the implementation running there names nothing |
 | CIV17 | No redirected name | An import delegated for a different name selects nothing for the name the engine asked, and what that name resolved to names nothing here |
 | CIV18 | One selection | An import delegated twice settles to nothing |
+| CIV19 | The authored form | The invocation reports `false` for `<C />` and `true` for `<C>…</C>` and `<C></C>`, agreeing with the contextual answer while nothing interferes; asking it twice expands no content and runs no child |
+| CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
+| CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

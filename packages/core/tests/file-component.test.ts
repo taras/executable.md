@@ -25,6 +25,9 @@ import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
+import { registerComponents } from "../src/components/registration.ts";
+import { hasContent } from "../src/content-context.ts";
+import type { ComponentInvocation } from "../src/invocation-identity.ts";
 import { Component } from "../src/component-api.ts";
 import { printErrors } from "../src/component-failures.ts";
 import { expandSegments } from "../src/expand.ts";
@@ -1258,5 +1261,203 @@ describe("Tier FL — File", () => {
     const normalized = text(yield* run(fixture, '<File path="sub/.." />'));
     expect(normalized).toContain("it is a directory, not a text file.");
     expect(normalized).not.toContain("outside the working directory");
+  });
+});
+
+/**
+ * Tier FL — the authored form decides the effect (spec §6.13).
+ *
+ * `<File>` chooses between reading a file and writing over it. That choice
+ * follows how the element was written, and it is read from the invocation the
+ * engine issued rather than from `Component.hasContent()` — a composable chain
+ * whose outermost handler answers first, and whose answer can differ from one
+ * call to the next.
+ *
+ * Every case here proves both halves. A `<Says />` beside the `<File>` renders
+ * whatever the contextual chain reports, so the handler is demonstrably live
+ * and demonstrably lying; the file and the provider calls show that `<File>`
+ * did the authored thing anyway. Without the second half a passing test would
+ * only mean nobody asked.
+ */
+
+/** What the substituted Files provider was asked to do, in order. */
+interface Calls {
+  readonly performed: string[];
+}
+
+/**
+ * A contextual `hasContent` handler outside every component invocation, plus a
+ * component that reports what it answers.
+ *
+ * The script is consumed one entry per call and the last entry repeats, so
+ * `[false, true]` is the exact toggle that defeats a caller which checks and
+ * then invokes.
+ */
+function* useLyingContent(script: readonly boolean[], answered: boolean[]): Operation<void> {
+  let call = 0;
+  yield* registerComponents([
+    {
+      name: "Says",
+      origin: "test://says",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        return String(yield* hasContent());
+      },
+    },
+  ]);
+  yield* Component.around({
+    // deno-lint-ignore require-yield
+    *hasContent(_args, _next) {
+      const answer = script[Math.min(call, script.length - 1)] ?? false;
+      call += 1;
+      answered.push(answer);
+      return answer;
+    },
+  });
+}
+
+function* useFileCalls(calls: string[]): Operation<void> {
+  yield* API.Files.around({
+    *readTextFile([input], next) {
+      calls.push(`read:${input.path}`);
+      return yield* next(input);
+    },
+    *writeTextFile([input], next) {
+      calls.push(`write:${input.path}`);
+      return yield* next(input);
+    },
+  });
+}
+
+describe("Tier FL — the authored form decides the effect", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  const LYING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always reports content", [true]],
+    ["a handler that answers false then true", [false, true]],
+  ];
+
+  for (const [what, script] of LYING) {
+    it(`FL34: a self-closing File still reads under ${what}`, function* () {
+      const fixture = yield* useFixture();
+      yield* writeTextFile(join(fixture.workspace, "notes.md"), "the authored note\n");
+      const calls: string[] = [];
+      const answered: boolean[] = [];
+
+      const rendered = yield* runWith(
+        fixture,
+        `<Says />\n\n<File path="notes.md" />\n\n<Says />\n`,
+        new InMemoryStream(),
+        function* () {
+          yield* useLyingContent(script, answered);
+          yield* useFileCalls(calls);
+        },
+      );
+
+      // The handler is live and reporting content, which is what would have
+      // sent `<File />` down the write branch.
+      expect(answered.length).toBeGreaterThanOrEqual(2);
+      expect(String(rendered)).toContain("true");
+      // And the element did what it was written as: one read, no write, and the
+      // file it was authored to read is byte-for-byte what it was.
+      expect(calls).toEqual(["read:notes.md"]);
+      expect(String(rendered)).toContain("the authored note");
+      expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("the authored note\n");
+    });
+  }
+
+  const DENYING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always denies content", [false]],
+    ["a handler that answers true then false", [true, false]],
+  ];
+
+  for (const [what, script] of DENYING) {
+    it(`FL35: a paired File still writes under ${what}`, function* () {
+      const fixture = yield* useFixture();
+      const calls: string[] = [];
+      const answered: boolean[] = [];
+
+      yield* runWith(
+        fixture,
+        `<Says />\n\n<File path="out.md">the authored bytes</File>\n\n<Says />\n`,
+        new InMemoryStream(),
+        function* () {
+          yield* useLyingContent(script, answered);
+          yield* useFileCalls(calls);
+        },
+      );
+
+      expect(answered.length).toBeGreaterThanOrEqual(2);
+      // One write of the authored bytes, and no read of a path the document
+      // never asked to read.
+      expect(calls).toEqual(["write:out.md"]);
+      expect(yield* readTextFile(join(fixture.workspace, "out.md"))).toBe("the authored bytes");
+    });
+  }
+
+  it("FL36: an honest chain leaves both forms exactly as they were", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "the authored note\n");
+    const calls: string[] = [];
+
+    const rendered = yield* runWith(
+      fixture,
+      `<File path="notes.md" />\n\n<File path="out.md">the authored bytes</File>\n`,
+      new InMemoryStream(),
+      function* () {
+        yield* useFileCalls(calls);
+      },
+    );
+
+    expect(calls).toEqual(["read:notes.md", "write:out.md"]);
+    expect(String(rendered)).toContain("the authored note");
+    expect(yield* readTextFile(join(fixture.workspace, "out.md"))).toBe("the authored bytes");
+  });
+
+  it("FL37: the definition called without the engine's invocation reaches no provider", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "notes.md"), "the authored note\n");
+    const calls: string[] = [];
+
+    // What a component compiled against a core that predates the form hands
+    // over. Read as data rather than asserted into the type, because that is
+    // exactly what it is: a value from outside this type system.
+    const mismatched: ComponentInvocation = JSON.parse("{}");
+
+    // The definition called with it. There is no contextual fallback to guess
+    // with, so this refuses rather than choosing a branch.
+    let failure: string | undefined;
+    try {
+      yield* runWith(fixture, `<File path="notes.md" />\n`, new InMemoryStream(), function* () {
+        yield* useFileCalls(calls);
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            const definition = yield* next(name, position);
+            if (name !== "File" || definition.kind !== "function") {
+              return definition;
+            }
+            const original = definition.fn;
+            if (typeof original !== "function") {
+              return definition;
+            }
+            return {
+              ...definition,
+              *fn(props: Record<string, Json>) {
+                return yield* original(props, mismatched);
+              },
+            };
+          },
+        });
+      });
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+
+    // Fatal rather than printed, because the wrapper's own function is not the
+    // one core declared a printing boundary on — which is beside the point
+    // here. What matters is where it stopped.
+    expect(failure).toContain("without the invocation the engine issued");
+    expect(calls).toEqual([]);
+    expect(yield* readTextFile(join(fixture.workspace, "notes.md"))).toBe("the authored note\n");
   });
 });

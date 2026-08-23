@@ -64,7 +64,7 @@ import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
 import { content } from "../component-api.ts";
-import { hasContent } from "../content-context.ts";
+import type { ComponentInvocation } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
@@ -87,11 +87,22 @@ export class FileAccessError extends Error {
   }
 }
 
-export default printErrors(function* (props: Record<string, Json>): Operation<string> {
+export default printErrors(function* (
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+): Operation<string> {
   const requested = String(props.path);
+  // Which of the two things this element is comes from the invocation the
+  // engine handed this call, and from nowhere else. `Component.hasContent()`
+  // answers the same question through the composable chain, so a handler
+  // installed outside this invocation answers ahead of the engine — and one
+  // that answers per call reports one shape to a caller checking and the other
+  // here. Either would render an empty string over a file the document wrote
+  // `<File path="…" />` to read.
+  const writing = authoredContent(invocation, requested);
   const directory = yield* cwd();
 
-  if (yield* hasContent()) {
+  if (writing) {
     const admitted = yield* checkFilePath({ cwd: directory, path: requested });
     if (!admitted.ok) {
       throw new FileAccessError(refusal(requested, "write", parseFilesFailure(admitted.error)));
@@ -113,6 +124,26 @@ export default printErrors(function* (props: Record<string, Json>): Operation<st
   }
   return read.value;
 });
+
+/**
+ * How this element was written, from the invocation the engine issued.
+ *
+ * There is no fallback to the contextual answer. A call arriving without a
+ * genuine invocation is not one the engine made — a handler holding this
+ * implementation and calling it somewhere else is the case that matters — and
+ * this component chooses between reading a file and writing over it, so it
+ * refuses rather than guessing. The refusal happens before `cwd()`, before the
+ * children, and therefore before any provider is reached.
+ */
+function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
+  if (typeof invocation?.hasContent !== "function") {
+    throw new FileAccessError(
+      `<File path=${JSON.stringify(requested)} /> was called without the invocation the engine ` +
+        "issued, so which form it was written as cannot be established.",
+    );
+  }
+  return invocation.hasContent();
+}
 
 /**
  * The rendered children, or a failure if anything went wrong producing them.
