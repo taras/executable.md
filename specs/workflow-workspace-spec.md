@@ -1520,7 +1520,9 @@ handler installed outside an invocation answers ahead of the engine's own. Nor
 from anything `importComponent` middleware can supply: a handler may wrap this
 implementation, and an identity it could build — or one it captured from the
 element these sites are written inside, which is live for as long as they run —
-would be one it could give both sites. Two observation sites sharing one name would each replay the other's
+would be one it could give both sites. The attachment mints a claim domain for
+the implementation it registers, so a handler that keeps that implementation and
+runs it at some other element's invocation admits nothing there either. Two observation sites sharing one name would each replay the other's
 admitted fragment. It is deliberately not
 a printing boundary: a refused or failed observation stops the authored loop
 unless the document places a recovery boundary around it, because returning a

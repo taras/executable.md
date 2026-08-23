@@ -53,13 +53,14 @@
 
 import type { Operation } from "effection";
 import { hasContent, registerComponents } from "@executablemd/core";
-import { durableIdentityOf, pinnedFileRead } from "@executablemd/core/host";
+import { componentClaim, durableIdentityOf, pinnedFileRead } from "@executablemd/core/host";
 import type {
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { ComponentInvocation } from "@executablemd/core";
+import type { ComponentClaim } from "@executablemd/core/host";
 import { ephemeral } from "@executablemd/durable-streams";
 import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
@@ -144,7 +145,8 @@ type EvaluateComponent = (
 
 function createEvaluate(
   database: WorkflowRunDatabase,
-  options: GeneratedEvaluationOptions = {},
+  options: GeneratedEvaluationOptions,
+  claim: ComponentClaim,
 ): EvaluateComponent {
   // Copied at construction. What the host stated then is what every later
   // invocation is bounded by, whatever happens to the object it passed.
@@ -178,7 +180,11 @@ function createEvaluate(
     // wrap this implementation and call it with an argument of its own —
     // measured, not assumed. Any of them would let two `<Evaluate>` sites share
     // one durable name and each replay the other's admitted fragment.
-    const id = durableIdentityOf(invocation);
+    //
+    // Claimed in this attachment's own domain, so an implementation kept from a
+    // real `<Evaluate>` site and called from an invocation of something else
+    // names nothing: that element's issuance belongs to another component.
+    const id = durableIdentityOf(invocation, claim);
 
     // Wrapped where the work is not journaled: reading the element's shape and
     // reading the run's current roots are both ordinary operations, and only the
@@ -200,7 +206,16 @@ export function useGeneratedEvaluation(
   database: WorkflowRunDatabase,
   options: GeneratedEvaluationOptions = {},
 ): Operation<void> {
+  // One domain per attachment, minted here, closed over by the implementation
+  // and attached to the registration the engine resolves.
+  const claim = componentClaim();
   return registerComponents([
-    { name: "Evaluate", origin: ORIGIN, props, fn: createEvaluate(database, options) },
+    {
+      name: "Evaluate",
+      origin: ORIGIN,
+      props,
+      claim,
+      fn: createEvaluate(database, options, claim),
+    },
   ]);
 }

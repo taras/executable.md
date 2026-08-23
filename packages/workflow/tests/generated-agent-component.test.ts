@@ -162,6 +162,20 @@ function reads(events: DurableEvent[]): DurableEvent[] {
   );
 }
 
+/** The fragment one admission recorded, as the journal holds its result. */
+function admittedSource(event: DurableEvent): string | undefined {
+  const result: unknown = event.result;
+  if (typeof result !== "object" || result === null || !("value" in result)) {
+    return undefined;
+  }
+  const value: unknown = (result as { value: unknown }).value;
+  if (typeof value !== "object" || value === null || !("source" in value)) {
+    return undefined;
+  }
+  const source: unknown = (value as { source: unknown }).source;
+  return typeof source === "string" ? source : undefined;
+}
+
 /** The durable name one admission was recorded under. */
 function nameOf(event: DurableEvent): string {
   return event.type === "yield" ? event.description.name : "";
@@ -202,6 +216,12 @@ function reported(attempt: Attempt): string {
  * own that calls the original. `choose` is what it hands over in place of
  * the invocation the engine entered.
  */
+/** What the registered `<Evaluate>` implementation is, to a caller holding it. */
+type EvaluateImplementation = (
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+) => Operation<unknown>;
+
 function* interpose(
   choose: (invocation: ComponentInvocation, name: string) => ComponentInvocation,
   targets: readonly string[] = ["Evaluate"],
@@ -231,6 +251,26 @@ function* fixture(name = "two-observations"): Operation<string> {
 }
 
 /**
+ * A self-closing component that is not an observation site.
+ *
+ * Registered on its own terms and naming nothing durable: it is somewhere for a
+ * kept implementation to be called from.
+ */
+function* useElsewhere(): Operation<void> {
+  yield* registerComponents([
+    {
+      name: "Elsewhere",
+      origin: "test://elsewhere",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<string> {
+        return "";
+      },
+    },
+  ]);
+}
+
+/**
  * A content-bearing parent, registered the way a package registers one.
  *
  * It renders what the document wrote inside it, so its own invocation is open —
@@ -248,6 +288,29 @@ function* useFrame(): Operation<void> {
       },
     },
   ]);
+}
+
+/**
+ * Give `<Frame>` the claim domain `<Evaluate>` was registered with.
+ *
+ * Middleware can read a definition's domain by delegating an import, and
+ * attaching it here is deliberate: it takes the domain out of the argument, so
+ * what refuses a claim from inside the content is that the parent is expanding
+ * it, and nothing else.
+ */
+function* borrowFrameDomain(): Operation<void> {
+  yield* Component.around({
+    *importComponent([name], next) {
+      const definition = yield* next(name);
+      if (name !== "Frame" || definition.kind !== "function") {
+        return definition;
+      }
+      const evaluate = yield* next("Evaluate");
+      return evaluate.kind === "function" && evaluate.claim !== undefined
+        ? { ...definition, claim: evaluate.claim }
+        : definition;
+    },
+  });
 }
 
 /**
@@ -522,6 +585,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         const attempt = yield* scoped(function* () {
           yield* useFrame();
+          yield* borrowFrameDomain();
           // `<Frame>` is still running — it has not returned, and it never
           // claimed anything — so its issuance is genuine, live and unspent
           // while the sites in its content run. Routing it there is the
@@ -569,6 +633,64 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         expect(new Set(recorded.map(nameOf)).size).toBe(2);
         expect(reported(attempt)).toContain(ADMITTED_NOTE.trim());
         expect(attempt.performed.map((call) => call.url)).toEqual([URL_ADMITTED]);
+      });
+    });
+
+    it("refuses the registered implementation, kept and called from another element", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture("borrowed-observation");
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const attempt = yield* scoped(function* () {
+          yield* useElsewhere();
+          // The definition `importComponent` hands out at the real `<Evaluate>`
+          // site, kept and called at `<Elsewhere />` with that element's own
+          // genuine, live, unspent issuance — projecting nothing, since it is
+          // self-closing. Everything but the domain checks out.
+          let kept: EvaluateImplementation | undefined;
+          yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              if (definition.kind !== "function") {
+                return definition;
+              }
+              const original = definition.fn;
+              if (typeof original !== "function") {
+                return definition;
+              }
+              if (name === "Evaluate") {
+                kept = original as EvaluateImplementation;
+                return definition;
+              }
+              if (name !== "Elsewhere") {
+                return definition;
+              }
+              return {
+                ...definition,
+                *fn(_props: Record<string, Json>, invocation: ComponentInvocation) {
+                  const borrowed = kept;
+                  if (borrowed === undefined) {
+                    return "";
+                  }
+                  // A fragment that would perform a request, so a borrowed
+                  // admission would be visible as one.
+                  return yield* borrowed({ source: `<Fetch url="${URL_ADMITTED}" />` }, invocation);
+                },
+              };
+            },
+          });
+          return yield* runDocument(database, source, CEILING);
+        });
+
+        expect(reported(attempt)).toContain("invocation of something else");
+        // The real site was admitted, and nothing else was: no second record,
+        // and no request under an identity the author wrote no observation at.
+        const recorded = admissions(attempt.events);
+        expect(recorded).toHaveLength(1);
+        expect(admittedSource(recorded[0]!)).toBe(`<File path="alpha.md" />`);
+        expect(attempt.performed).toEqual([]);
       });
     });
 
