@@ -137,6 +137,45 @@ full suite locally only when the change affects test discovery, a runtime
 adapter, shared test setup, or another boundary that makes affected-test
 selection incomplete, or when the user asks for it.
 
+**Each of those three jobs is a matrix of weighted shards.** The corpus is split
+by measured per-file wall clock, longest file first onto the emptiest shard, so
+the shards finish together instead of one carrying every slow file. Every
+applicable file runs exactly once per runtime; a new file lands in exactly one
+shard and is charged the heaviest weight the current corpus recorded until it is
+measured. The check name says which shard it is — `test-deno (3/6)` — and each
+shard logs its runtime, its selection, its predicted total, and every file it
+was assigned before it runs the first one.
+
+`strategy.fail-fast: false` is what makes a failing shard report its own failure
+instead of cancelling its siblings and hiding theirs. `green.needs` still names
+the three job IDs: GitHub collapses a whole matrix into one result behind the
+ID, so a shard that fails, is cancelled, times out, or unexpectedly skips makes
+that dependency non-success without `green` having to learn what a shard is.
+
+One shard runs its files serially, each in its own process. A numeric failure
+does not stop the files after it, and the shard exits with the first failure —
+running the corpus is how you learn what is broken, and a shard that stopped at
+the first defect would hide the rest. Nothing captures or summarizes a child's
+output, so a failure's complete text survives in the log. Concurrency *inside* a
+shard is a separate question and deliberately not enabled here.
+
+To run one locally, pass the selection the matrix passes:
+
+```bash
+deno run --allow-all --frozen scripts/runtime-tests.ts deno 3/6
+pnpm test:node 3/6
+bun run test:bun 2/3
+```
+
+Leaving the selection off runs that runtime's whole applicable corpus in one
+invocation, which is what `pnpm test:node` and `bun run test:bun` have always
+done and what you want when debugging.
+
+**None of this changes local test selection.** `deno task test --changed`,
+`--changed=origin/main`, and `--related` remain the documented way to pick tests
+while implementing; shards are how CI runs the exhaustive pass, not a
+replacement for choosing a smaller one.
+
 To reproduce the complete applicable battery locally, one command runs it
 concurrently:
 
@@ -248,10 +287,14 @@ here:
   mid-write fails on a partial file, and fails the whole workspace check for a
   file nobody committed. The exact Cloudflare DOFS snapshot is skipped by
   `lint` and `fmt` because its drift verifier owns byte identity.
-- `test:node` and `test:bun` derive the same corpus through
+- All three runtime suites derive the same corpus through
   `scripts/lib/test-files.ts`, which walks `tests/` beneath each workspace
   member plus `scripts/tests/` — that boundary, and nothing else. A new
-  `*.test.ts` there runs under all three runtimes by default.
+  `*.test.ts` there runs under all three runtimes by default, in exactly one
+  shard of each. `scripts/tests/test-file-discovery.test.ts` walks the whole
+  repository with Deno's own test-file pattern and fails if a test file exists
+  that discovery cannot see, because such a file would run under no runtime at
+  all.
 - `scripts/runtime-test-exclusions.ts` is the one place a test opts out of a
   runtime. Every entry carries a reason and an issue, and
   `scripts/tests/runtime-exclusions.test.ts` checks that each names a file
@@ -282,6 +325,14 @@ writes only after every measured file passed, and it is the only command that
 writes that file — verification, the runtime suites, and every other check read
 it and leave it alone.
 
+Those weights are what the partition reads. A file with a recorded weight uses
+it; one without is charged the heaviest weight the *current* applicable corpus
+recorded, so a new test is never treated as free and a deleted outlier cannot
+inflate the fallback forever. With nothing recorded at all the partition refuses
+rather than inventing a number. Assignment is longest-processing-time-first,
+with equal weights ordered by ascending path and equal shard totals taking the
+lowest index, so two shard jobs on two runners compute the same split.
+
 Provenance is supplied, never inferred: the commit, the run URL, the attempt,
 the runner label, and the three runtime versions arrive in the environment
 (`WEIGHTS_COMMIT`, `WEIGHTS_RUN_URL`, `WEIGHTS_ATTEMPT`, `WEIGHTS_RUNNER`,
@@ -298,6 +349,13 @@ committing it is a deliberate act — which is what keeps the provenance in the
 committed file true of the run that produced it. Remeasure after anything that
 moves the corpus, the exclusions, or a runner command; never hand-edit a
 millisecond.
+
+**Shard counts are measured, not chosen.** For each runtime the floor is
+`floor(sum of applicable weights / 300000) + 1`, and the installed count is the
+smallest one for which five consecutive runs on one fixed head keep every shard
+`Test` step, and the whole runtime's execution window, under 300 seconds. A miss
+increments that runtime by one and starts a fresh sequence of five. Narrowing
+the corpus or enabling in-shard concurrency is not an answer to a miss.
 
 ## MUST READ
 
