@@ -113,6 +113,16 @@ function crossCheck(request: AgentLaunchRequest, record: PreparedLaunchRecord): 
       return "session";
     }
   }
+  // A client-allocated identity is only meaningful beside the build that
+  // accepted it, so the two travel together or the record is not one this
+  // authority will retain. The parser enforces the same pairing on the way back
+  // in; this is the live half, before anything durable exists.
+  if (record.identityProvenance === "client-allocated" && record.executableBinding === undefined) {
+    return "executable binding";
+  }
+  if (record.identityProvenance === "provider-returned" && record.executableBinding !== undefined) {
+    return "identity provenance";
+  }
   return undefined;
 }
 

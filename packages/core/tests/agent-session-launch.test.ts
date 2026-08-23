@@ -23,6 +23,7 @@ import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { Session, SessionLaunchResult } from "../src/agent/agent-api.ts";
 import type { ExitedLaunchRecord, PreparedLaunchRecord } from "../src/agent/launch.ts";
+import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import type { AgentProviderFactory } from "../src/agent/provider-api.ts";
@@ -115,6 +116,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   sessionState: "created",
                   instructionChannel: "stub.systemPrompt",
                   instructionReconciliation: "installed",
+                  identityProvenance: "provider-returned",
                   instructionsDigest: digest(request.instructions),
                   instructions: request.instructions,
                   cwd: request.cwd,
@@ -967,5 +969,122 @@ describe("Tier FS — the final public launch surface", () => {
 
     expect(Object.keys(core)).not.toContain("AgentLaunchJournal");
     expect(Object.keys(core)).not.toContain("AgentLaunchJournalApi");
+  });
+});
+
+/**
+ * Tier PB — provenance and executable binding, read strictly
+ * (specs/native-agent-session-launch-spec.md §Provider-native identity).
+ *
+ * A client-allocated identity is only meaningful beside the build that accepted
+ * it, and a record this build cannot account for is one it must not act on. The
+ * parser is where both of those become true.
+ */
+describe("Tier PB — provenance and binding", () => {
+  const BINDING = {
+    schema: "executable-build.v1",
+    reportedVersion: "2.1.235 (Claude Code)",
+    executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+  };
+
+  function record(overrides: Record<string, Json> = {}): Record<string, Json> {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: "xmd:v1:a",
+      provider: "acpx",
+      nativeSessionId: "native-1",
+      sessionState: "created",
+      instructionChannel: "acp.session.systemPrompt",
+      instructionReconciliation: "installed",
+      instructionsDigest: "a".repeat(64),
+      instructions: "go",
+      cwd: "/repo",
+      additionalDirectories: [],
+      permissionMode: "deny-all",
+      launcher: "claude",
+      ...overrides,
+    };
+  }
+
+  it("PB1: a released #518 record has no provenance and reads as provider-returned", function* () {
+    // The one compatibility inference, and it only ever infers the weaker
+    // claim: client allocation did not exist in that format.
+    const parsed = parsePrepared(record());
+    expect(parsed?.identityProvenance).toBe("provider-returned");
+    expect(parsed?.executableBinding).toBe(undefined);
+  });
+
+  it("PB2: client allocation requires explicit provenance and an exact binding", function* () {
+    expect(parsePrepared(record({ identityProvenance: "client-allocated" }))).toBe(undefined);
+    const good = parsePrepared(
+      record({ identityProvenance: "client-allocated", executableBinding: BINDING }),
+    );
+    expect(good?.identityProvenance).toBe("client-allocated");
+    expect(good?.executableBinding).toEqual(BINDING);
+  });
+
+  it("PB3: a provider-returned record carries no binding", function* () {
+    expect(
+      parsePrepared(
+        record({ identityProvenance: "provider-returned", executableBinding: BINDING }),
+      ),
+    ).toBe(undefined);
+  });
+
+  it("PB4: an unknown schema or an extra member refuses", function* () {
+    const cases: [string, Json][] = [
+      ["unknown provenance", record({ identityProvenance: "inferred" })],
+      [
+        "unknown binding schema",
+        record({
+          identityProvenance: "client-allocated",
+          executableBinding: { ...BINDING, schema: "executable-build.v2" },
+        }),
+      ],
+      [
+        "extra binding member",
+        record({
+          identityProvenance: "client-allocated",
+          executableBinding: { ...BINDING, path: "/usr/local/bin/claude" },
+        }),
+      ],
+      [
+        "extra digest member",
+        record({
+          identityProvenance: "client-allocated",
+          executableBinding: {
+            ...BINDING,
+            executableDigest: { algorithm: "sha256", value: "d".repeat(64), size: 12 },
+          },
+        }),
+      ],
+      [
+        "unknown digest algorithm",
+        record({
+          identityProvenance: "client-allocated",
+          executableBinding: {
+            ...BINDING,
+            executableDigest: { algorithm: "sha1", value: "d".repeat(64) },
+          },
+        }),
+      ],
+    ];
+    for (const [name, value] of cases) {
+      expect([name, parsePrepared(value)]).toEqual([name, undefined]);
+    }
+  });
+
+  it("PB5: the settled failure classes round-trip", function* () {
+    for (const failureClass of [
+      "executable-binding-refused",
+      "identity-unavailable",
+      "instructions-refused",
+      "session-busy",
+      "session-recovery-required",
+    ]) {
+      const parsed = parsePrepared(record({ failure: { class: failureClass, message: "why" } }));
+      expect([failureClass, parsed?.failure?.class]).toEqual([failureClass, failureClass]);
+    }
   });
 });

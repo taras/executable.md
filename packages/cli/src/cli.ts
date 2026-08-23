@@ -77,7 +77,8 @@ import type {
 } from "@executablemd/core";
 import { env as readEnv } from "@executablemd/runtime";
 import { createAcpxProvider, DEFAULT_AGENT_NAME } from "@executablemd/acp";
-import type { AgentSessionCoordinator } from "@executablemd/runtime";
+import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
+import type { AgentSessionRouteStore } from "@executablemd/acp";
 import {
   installTestingComponents,
   TestFailureError,
@@ -461,6 +462,7 @@ function* underRunDeadline(timeouts: RunTimeouts, body: () => Operation<void>): 
 function* installAgentStack(
   flags: AgentFlags,
   coordinator: AgentSessionCoordinator | undefined,
+  session: { routeStore?: AgentSessionRouteStore; executableObserver?: ExecutableObserver } = {},
 ): Operation<void> {
   const config = resolveAgentConfig(flags);
   if ("error" in config) {
@@ -472,7 +474,17 @@ function* installAgentStack(
   // The coordinator this host built, if it built one. It reaches the provider
   // directly rather than through a context: who owns a session is a security
   // decision, and one a document could replace is not one.
-  const acpx = createAcpxProvider(coordinator === undefined ? undefined : { coordinator });
+  // The whole host assembly, or none of it: an advertised agent refuses unless
+  // every question about its session can be answered.
+  const acpx = createAcpxProvider(
+    coordinator === undefined
+      ? undefined
+      : {
+          coordinator,
+          ...(session.routeStore ? { routeStore: session.routeStore } : {}),
+          ...(session.executableObserver ? { executableObserver: session.executableObserver } : {}),
+        },
+  );
   yield* registerAgentProvider("acpx", acpx);
   const defaultAgent =
     config.defaultAgent ?? (yield* readEnv("DEFAULT_AGENT_NAME")) ?? DEFAULT_AGENT_NAME;
@@ -562,6 +574,10 @@ export interface DocumentMode {
    * decision, and one a document could replace is not one.
    */
   sessionCoordinator?: AgentSessionCoordinator;
+  /** Where this host keeps construction routes, from the same trusted root. */
+  sessionRouteStore?: AgentSessionRouteStore;
+  /** How this host observes the build behind an agent's executable. */
+  executableObserver?: ExecutableObserver;
   props?: Record<string, Json>;
   /**
    * What a trusted host attaches to this one execution.
@@ -618,7 +634,10 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
   // through the deterministic TestAgent stack instead.
   if (mode.agent) {
-    yield* installAgentStack(mode.agent, mode.sessionCoordinator);
+    yield* installAgentStack(mode.agent, mode.sessionCoordinator, {
+      ...(mode.sessionRouteStore ? { routeStore: mode.sessionRouteStore } : {}),
+      ...(mode.executableObserver ? { executableObserver: mode.executableObserver } : {}),
+    });
   }
 }
 
@@ -1595,6 +1614,7 @@ function* dispatch(
   installService: HostServiceInstaller,
   workflowHost: WorkflowHost | undefined,
   coordinator: AgentSessionCoordinator | undefined,
+  session: { routeStore?: AgentSessionRouteStore; executableObserver?: ExecutableObserver } = {},
 ): Operation<void> {
   const propsPhase = yield* preparePropsPhase(helpRequest.args, evalFlags);
 
@@ -1667,6 +1687,8 @@ function* dispatch(
           testing: false,
           props: props.value,
           ...(coordinator === undefined ? {} : { sessionCoordinator: coordinator }),
+          ...(session.routeStore ? { sessionRouteStore: session.routeStore } : {}),
+          ...(session.executableObserver ? { executableObserver: session.executableObserver } : {}),
           agent: {
             agentProvider: config.agentProvider,
             defaultAgent: config.defaultAgent,
@@ -1821,9 +1843,12 @@ export function* runXmd(
   // one that creates and executes nothing.
   installWorkflowHost: HostWorkflowInstaller = unsupportedWorkflowHost,
   // Absent on a host that cannot own an agent session. Node and Bun pass none,
-  // and every advertised provider-returned operation refuses there rather than
+  // and every advertised operation refuses there rather than
   // acting without knowing who owns the session.
   coordinator?: AgentSessionCoordinator,
+  // Built from the same trusted root as the coordinator. A host that supplies
+  // one supplies all three, or an advertised agent refuses.
+  session: { routeStore?: AgentSessionRouteStore; executableObserver?: ExecutableObserver } = {},
 ): Operation<void> {
   // First, so that no later scanner — help, properties, agent flags — can
   // mistake the inline document's own text for an option.
@@ -1863,7 +1888,14 @@ export function* runXmd(
     !helpRequest.requested && selected !== undefined && !selected.help && selected.name === "run";
 
   if (!isRun) {
-    return yield* dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator);
+    return yield* dispatch(
+      evalFlags,
+      helpRequest,
+      installService,
+      workflowHost,
+      coordinator,
+      session,
+    );
   }
 
   const timeouts = resolveRunTimeouts(evalFlags.rest);
@@ -1874,6 +1906,6 @@ export function* runXmd(
   }
 
   yield* underRunDeadline(timeouts, () =>
-    dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator),
+    dispatch(evalFlags, helpRequest, installService, workflowHost, coordinator, session),
   );
 }

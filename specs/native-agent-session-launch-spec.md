@@ -167,6 +167,30 @@ cross-checks the returned record against the request, retains it before the next
 live effect, and derives the result. A provider supplies the work; it never
 supplies the verdict.
 
+A prepared record states who chose the identity. `provider-returned` means the
+provider created the session and reported its name; `client-allocated` means XMD
+chose it before the provider existed and supplied it unchanged. Client
+allocation requires an explicit provenance and an exact binding; a
+provider-returned record carries no binding. A record written before provenance
+existed reads as `provider-returned`, because client allocation did not exist in
+that released format — that is the only compatibility inference.
+
+The identity itself comes from the adapter, not from the provider. What shape a
+provider-native identity takes and what that provider will accept is knowledge
+about that provider, so the adapter allocates one and the provider decides only
+whether a freshly allocated candidate wins publication. Allocation happens while
+the session's exclusive ownership is held, so the route the identity is
+published under is the one the coordinator is protecting.
+
+For a client-allocated session the prepared record and the route agree exactly
+on provider, agent, logical session, native identity, provenance, instruction
+digest, launcher, and executable binding. A missing or conflicting account
+refuses; neither reconstructs or repairs the other.
+
+ACP never creates under a client-allocated identity; it attaches by name. An
+attachment that reports a different session than the one named is refused and
+its handle released before any turn is taken.
+
 `launcher` is a stable provider-assigned adapter identity such as `claude` or
 `codex`, not an executable path. The result describes a successful normal exit;
 nonzero exit, signal, and cancellation do not produce it. It contains only
@@ -252,6 +276,75 @@ that request before handoff.
 Raw prepared instructions never appear in process arguments or environment
 variables. A provider uses its session API or an invocation-private file with
 restrictive permissions and removes any temporary during cleanup.
+
+## Construction route
+
+Construction and live ownership answer different questions:
+
+```text
+construction route: how this logical session was first constructed
+session coordinator: who may act on it now
+```
+
+The coordinator is the single live authority and owns crash behavior. A route
+grants no right to ensure, prompt, detach, spawn, resume, or accept history.
+Both use the same natural key and the same digest, so one session names one
+lease, one ownership record, and one route:
+
+```text
+~/.acpx/xmd-native-sessions/v1/
+  leases/<digest>.lease
+  ownership/<digest>.json
+  routes/<digest>.json
+```
+
+The route is strict create-once durable state, published atomically by hard link
+into a mode-`0700` directory as a mode-`0600` record. It is never overwritten,
+deleted, converted, repaired, or partially read. The loser of a race reads the
+winner rather than replacing it, and a conflict is a refusal: both accounts
+describe a session that already exists, and picking one would be inventing
+history. There is no reader for any earlier mapping shape.
+
+The exact V1 record is a strict union. An `acp-first` record carries no provider
+identity, instruction layer, executable binding, process fact, or provider
+history. A `client-native` record carries a provider-native identity, the
+instruction digest, the launcher, and an executable binding — and no executable
+path, raw environment, argv, instruction text, credential, transcript, process
+handle, or temporary path.
+
+Route reconciliation happens while coordinator ownership is held, before any
+provider construction effect. `session()`, a first Prompt, and a
+provider-returned launch construct `acp-first`; a direct client-allocated launch
+constructs `client-native`. A session ACP already established upgrades to
+`acp-first` — existing history is never reclassified. A client-native launch
+meeting `acp-first` refuses `identity-unavailable` before the executable is
+observed, before an identity is allocated, and before detach or spawn.
+
+## Executable binding
+
+A session whose identity XMD chose is only meaningful while the build that
+created it can be reproduced. Two builds of one provider accept the same
+identity and disagree silently about what it names.
+
+The trusted host supplies an invocation-scoped executable observer directly to
+the provider, exactly as it supplies the coordinator and route store. It is not
+a contextual Api: a resolver document middleware could replace could point the
+observation at one binary while the run spawns another. The observer resolves,
+canonicalizes, requires an executable regular file, hashes its bytes, and asks
+that exact path for its version. The adapter that knows the provider parses the
+canonical version.
+
+What is retained is the schema, the canonical version, and the SHA-256 digest —
+never a path. Equality is over all of those. A matching build reached through a
+different path is compatible; a changed build at the same path is refused. ACP
+runtimes are partitioned by resolved agent command and complete binding, a
+handle belongs to the runtime that created it, and no handle crosses a
+partition. A stale reattachment reobserves and compares before selecting one.
+
+The canonical path is live capability only: it is spawned, and it reaches the
+matching ACP child through the vendored `agentProcessEnv` seam. It appears in no
+journal, route, output, diagnostic, public result, or process-global
+environment.
 
 ## Provider-native identity
 
@@ -362,7 +455,7 @@ agent    = the resolved agent command
 sessionKey = the resolved xmd:v1 session key
 ```
 
-Every operation that could act on an advertised provider-returned session enters
+Every operation that could act on an advertised session enters
 it first — establishing the session, subscribing a prompt stream, launching, and
 resuming an incomplete launch. Resolving an agent and placing a session own
 nothing, because there is no session yet to own. An agent no adapter is
@@ -407,12 +500,22 @@ and a record carrying any other member is refused rather than read partially.
 It holds no instructions, credential, cwd, executable path, argv, environment,
 transcript, or temporary path — the digest is the only name in the namespace.
 
+Selection stays read-only for an advertised agent this host cannot serve.
+Resolving the name is free; asking the adapter whether it is available spawns a
+probe child, which is provider work — so on such a host, session, subscribed
+Prompt, launch and incomplete replay all refuse before the adapter is contacted
+at all, not merely before ensure — and before the ACP session store is read.
+Deciding which existing session a caller meant walks candidate keys and loads
+each one, so a host that may not act on a session must not read that session's
+state to learn what it is refusing.
+
 Node and Bun build no coordinator. Neither runtime exposes a cross-process
 advisory lock, and V1 emulates none: a pid, heartbeat, or stale-file timeout
 calls a paused process dead and admits two owners. So every advertised
-provider-returned session, prompt, and launch refuses there with
-`unsupported-capability`, before contacting an agent, while read-only resolution
-and non-advertised ACP work are unaffected.
+session, prompt, launch and incomplete replay refuses there with
+`unsupported-capability`, before contacting an agent and before any session
+state is read, while read-only resolution and non-advertised ACP work are
+unaffected.
 
 V1 also holds one foreground-terminal lease for the root CLI execution. Two
 native launches cannot concurrently own the same terminal, even when they name
@@ -518,6 +621,14 @@ identity and history. Nothing is discarded to make room for a layer, and an
 empty cached transcript authorizes nothing: a session established eagerly by an
 enclosing `<Session>` is refused by a launch carrying a different layer, exactly
 as a session a native UI has been in is.
+
+A launch whose executable build cannot be named or confirmed retains
+`executable-binding-refused`: resolution, canonicalization, executable-file
+validation, canonical version parsing, digesting, schema recognition and
+binding equality all end there, at `prepared`, before detach, spawn, ACP ensure
+or a turn. Its diagnostic names the launcher, the mismatch and the canonical
+versions; never a path, raw version output, environment, argv, credential or
+provider-private state.
 
 A launch that cannot take ownership retains `session-busy` or
 `session-recovery-required` as its preparation and stops there. Both are
@@ -686,7 +797,7 @@ Implementation review checks these frozen invariants:
 13. Public launch routing is request-only: no return value, copy, superseded
     parent, foreign request, or repeated delegation authors a phase, and the
     authority reaches the installed provider directly.
-14. Every operation that can act on an advertised provider-returned session
+14. Every operation that can act on an advertised session
     takes ownership under one natural key first, contention refuses rather than
     queues, and an owner that did not prove it stopped leaves the session owned.
 

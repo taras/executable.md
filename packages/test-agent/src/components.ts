@@ -40,14 +40,15 @@ import {
   useProviderInstallation,
 } from "@executablemd/core";
 import type { ErrorSegment, Json, PropsSchema, Segment } from "@executablemd/core";
-import { createPartitionedAcpxProvider } from "@executablemd/acp";
+import { createMemorySessionRouteStore, createPartitionedAcpxProvider } from "@executablemd/acp";
 import type { AcpxProvider, SessionRouteContext } from "@executablemd/acp";
 import { command, installControlledLauncher, readTextFile } from "@executablemd/runtime";
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
+import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
-import { TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
+import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
 
 /** One `<TestAgent.Scenario>` mapping, before any worker exists. */
@@ -272,13 +273,19 @@ export function* installTestAgentComponents(): Operation<void> {
         const workerCommand = yield* command(["test-agent"]);
         const provider = yield* useTestAgentProvider({
           defaultAgent,
-          agents: [defaultAgent],
+          agents: [defaultAgent, TEST_AGENT_CLIENT_NATIVE],
           workerCommand,
           probeRoute: controller.probeRoute,
           routeFor,
           // This partition's own, so two tests owning "the same" session are
           // owning two sessions and never exclude each other.
           coordinator: createDeterministicSessionCoordinator(),
+          // Likewise its own: a sibling test constructing "the same" session
+          // publishes its own route rather than adopting the other's.
+          routeStore: createMemorySessionRouteStore(),
+          // And its own build, so a client-allocated session in one test is
+          // bound to a build the next test does not share.
+          executableObserver: createControlledExecutableObserver().observer,
         });
         return { provider, boundaryScope, scenarios, pending, bySessionKey };
       }

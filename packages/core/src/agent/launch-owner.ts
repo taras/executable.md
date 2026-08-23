@@ -119,6 +119,7 @@ function parseFailureClass(value: string): AgentLaunchError["failureClass"] {
     case "native-exit":
     case "session-busy":
     case "session-recovery-required":
+    case "executable-binding-refused":
       return value;
     default:
       return "unsupported-capability";
@@ -136,6 +137,9 @@ function unaccepted(request: AgentLaunchRequest, site: LaunchSite): PreparedLaun
     sessionState: "created",
     instructionChannel: "",
     instructionReconciliation: "installed",
+    // Nobody prepared anything, so nobody chose an identity. The weaker of the
+    // two claims is the honest one to retain.
+    identityProvenance: "provider-returned",
     instructionsDigest: "",
     instructions: "",
     cwd: site.cwd,

@@ -53,4 +53,62 @@ another owner holds — would carry a different class here and fail this test.
 
 <AssertEquals actual={refusal.cause.failureClass} expected={"instructions-refused"} />
 </Test>
+
+## A session XMD names itself
+
+The launches above let the provider name the session it created. An agent whose
+native UI can be handed an identity works the other way round: XMD allocates the
+identity before the provider exists, hands it to the native process, and can
+reattach to that same conversation afterwards.
+
+That only holds together while the build that created the session can be
+recognized later, so the launch observes one and binds it. Both facts are
+settled while this session is owned, and before anything is created.
+
+<TestAgent.Scenario agent="test-agent-client-native" session="implementer" src="./NativeSessionLaunch.implementer.md" />
+
+<Test name="a launch XMD named continues into the prompt that follows it">
+<Agent name="test-agent-client-native">
+<Session.Launch session="implementer">
+You are the repository implementor. Follow the approved plan.
+</Session.Launch>
+
+The scenario holds one scripted stage. The launch created a session rather than
+spending a turn, so the stage is still there for the prompt that follows — and
+the prompt reaches the same conversation the launch named.
+
+The prompt names the session directly rather than being wrapped in one. An
+enclosing `<Session>` is eager, and establishing the session first is what the
+next test is about.
+
+<Prompt session="implementer" as="continued">what changed?</Prompt>
+</Agent>
+
+<AssertMatch actual={continued} expected={/nothing yet/} />
+</Test>
+
+An eager `<Session>` is the other order: it establishes the session through ACP
+first, which settles how that session was constructed. A launch that would
+allocate an identity for it is not asking to continue that conversation — it is
+asking to name a different one — so it refuses, before observing a build,
+allocating an identity, detaching, or starting anything.
+
+<TestAgent.Scenario agent="test-agent-client-native" session="claimed" src="./NativeSessionLaunch.claimed.md" />
+
+<Test name="an ACP-first session refuses a launch that would name it again">
+<Agent name="test-agent-client-native">
+<Session name="claimed">
+<AssertThrows as="conversion" message="already has an identity of its own">
+<Session.Launch>
+You are somebody else entirely.
+</Session.Launch>
+</AssertThrows>
+</Session>
+</Agent>
+
+A construction route never converts, and the class says which refusal this was
+rather than leaving it to the wording.
+
+<AssertEquals actual={conversion.cause.failureClass} expected={"identity-unavailable"} />
+</Test>
 </TestAgent>

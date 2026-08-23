@@ -61,7 +61,8 @@ export type LaunchFailureClass =
   | "process-creation-failed"
   | "native-exit"
   | "session-busy"
-  | "session-recovery-required";
+  | "session-recovery-required"
+  | "executable-binding-refused";
 
 /**
  * `session-busy` is contention, not breakage: another XMD owner holds the
@@ -69,10 +70,74 @@ export type LaunchFailureClass =
  * exits succeeds. `session-recovery-required` is the conservative one — the
  * last owner never proved it stopped, so nothing here can say the session is
  * free, and no elapsed time, pid or released lock changes that.
+ *
+ * `executable-binding-refused` is the build question: the session was
+ * established by one build of a provider executable, and this run could not
+ * show it is talking to that same build. Resolution, canonicalization,
+ * executable-file validation, version parsing, digesting, schema recognition
+ * and equality all end here.
  */
 export interface LaunchFailure {
   class: LaunchFailureClass;
   message: string;
+}
+
+/**
+ * Who chose the provider-native session identity.
+ *
+ * `provider-returned` — the provider created the session and told XMD what it
+ *   is called. Whatever it returns is the identity.
+ * `client-allocated` — XMD chose the identity before the provider existed and
+ *   supplied it unchanged. Nothing the provider says can replace it, which is
+ *   the property that lets a native UI and a later ACP attachment name the
+ *   same conversation.
+ *
+ * The distinction is retained rather than inferred, because the two are
+ * indistinguishable after the fact: a returned identity and a supplied one are
+ * both just a string in the record.
+ */
+export type IdentityProvenance = "provider-returned" | "client-allocated";
+
+/**
+ * Which build of a provider executable a session was established against.
+ *
+ * A client-allocated session is only meaningful while the build that created
+ * it can be reproduced. Two builds of the same provider will accept the same
+ * identity and disagree silently about what it names — the observed cause of
+ * issue #519's first failed gate, where one Claude build created a session and
+ * a second was asked to resume it and produced an empty conversation.
+ *
+ * So the binding is retained and compared, and a session whose build cannot be
+ * reproduced is refused rather than resumed. What is retained is deliberately
+ * not a path: a path says where a build was, which stops being true, while a
+ * version and a digest say which build it was, which does not. That also keeps
+ * the record free of host layout.
+ */
+export interface ExecutableBuildBindingV1 {
+  schema: "executable-build.v1";
+  reportedVersion: string;
+  executableDigest: {
+    algorithm: "sha256";
+    value: string;
+  };
+}
+
+/**
+ * Whether two bindings name the same build.
+ *
+ * Equality is over what was retained, so the same build reached through a
+ * different path is compatible and a different build at the same path is not.
+ */
+export function sameExecutableBuild(
+  left: ExecutableBuildBindingV1,
+  right: ExecutableBuildBindingV1,
+): boolean {
+  return (
+    left.schema === right.schema &&
+    left.reportedVersion === right.reportedVersion &&
+    left.executableDigest.algorithm === right.executableDigest.algorithm &&
+    left.executableDigest.value === right.executableDigest.value
+  );
 }
 
 /**
@@ -96,6 +161,18 @@ export interface PreparedLaunchRecord {
   sessionState: "created" | "resumed";
   instructionChannel: string;
   instructionReconciliation: InstructionReconciliation;
+  /**
+   * Retained rather than derived from the provider, because a client-allocated
+   * identity that a reader cannot distinguish from a returned one is an
+   * identity a replay could silently replace.
+   */
+  identityProvenance: IdentityProvenance;
+  /**
+   * Present exactly when the provider binds one executable build, which today
+   * is the client-allocated path. A provider that returns its own identity
+   * owns its own session lifetime and binds nothing.
+   */
+  executableBinding?: ExecutableBuildBindingV1;
   instructionsDigest: string;
   instructions: string;
   cwd: string;

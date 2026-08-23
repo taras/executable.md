@@ -9,13 +9,18 @@
  *
  * A host that cannot take a kernel-released advisory lock and durably replace a
  * record builds nothing here. That is deliberate: an advertised
- * provider-returned session may be open in a native UI, and a host that cannot
+ * session may be open in a native UI, and a host that cannot
  * answer who owns it refuses rather than guessing.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createDenoAgentSessionCoordinator } from "@executablemd/runtime";
-import type { AgentSessionCoordinator } from "@executablemd/runtime";
+import {
+  createDenoAgentSessionCoordinator,
+  createDenoExecutableObserver,
+} from "@executablemd/runtime";
+import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
+import { createDenoSessionRouteStore } from "@executablemd/acp";
+import type { AgentSessionRouteStore } from "@executablemd/acp";
 
 export function sessionCoordinatorRoot(): string {
   return join(homedir(), ".acpx", "xmd-native-sessions", "v1");
@@ -24,4 +29,23 @@ export function sessionCoordinatorRoot(): string {
 /** This host's session coordinator, or nothing when it cannot provide one. */
 export function useSessionCoordinator(): AgentSessionCoordinator | undefined {
   return createDenoAgentSessionCoordinator(sessionCoordinatorRoot());
+}
+
+/**
+ * Where this host keeps construction routes, beside its leases and ownership
+ * records. One session names one lease, one ownership record and one route.
+ */
+export function useSessionRouteStore(): AgentSessionRouteStore | undefined {
+  return createDenoSessionRouteStore(sessionCoordinatorRoot());
+}
+
+/**
+ * How this host observes the build behind an agent's executable.
+ *
+ * Built here, from the real process environment, because a resolver a document
+ * could replace is a resolver that can point the observation at one binary
+ * while the run spawns another.
+ */
+export function useExecutableObserver(): ExecutableObserver | undefined {
+  return createDenoExecutableObserver();
 }

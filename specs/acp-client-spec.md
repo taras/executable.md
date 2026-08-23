@@ -35,13 +35,43 @@ interface AgentApi {
   performs no model turn, and a provider that answers `prompt()` does not
   thereby answer it: native session launch is its own capability, installed on
   its own.
-- Every operation that can act on an **advertised** provider-returned session —
-  `session()`, a subscribed `prompt()` stream, a launch, and an incomplete
-  launch replay — takes exclusive ownership of it first, through the session
-  coordinator its host passed into the provider. Resolving an agent and placing
-  a session own nothing. Acquisition never waits: contention refuses, and a host
-  that installs no coordinator refuses every one of them before contacting an
-  agent.
+- The provider is constructed with three host capabilities, all passed directly
+  and none contextual: the session coordinator, the construction-route store,
+  and — for an adapter that binds an executable build — the executable observer.
+  An advertised agent refuses when any of them is missing, because answering two
+  of the three questions is not enough to act on a session a native UI may be
+  in. An unadvertised agent keeps ordinary ACP behavior on every host.
+- Every operation that can act on an **advertised** session — `session()`, a
+  subscribed `prompt()` stream, a launch, and an incomplete launch replay —
+  takes exclusive ownership of it first, through the session coordinator its
+  host passed into the provider. Coverage follows the agent's capability, not
+  the operation, and not which mechanism constructed the session: a prompt for
+  an advertised agent may be talking to a session a native UI is in right now.
+  Resolving an agent owns nothing. Acquisition never waits: contention refuses.
+- A host that is missing any of the three capabilities refuses each of those
+  four surfaces **before any provider work at all**. Not merely before `ensure`:
+  before an agent is probed, and before the ACP session store is read. Deciding
+  which existing session a caller meant loads session records, and a host that
+  may not act on a session must not read that session's state to learn what it
+  is refusing. A read-only agent resolution still answers.
+- Before it ensures or takes a turn, and while ownership is held, the provider
+  reconciles the session's **construction route**. An eager `session()` publishes
+  `acp-first`; a client-native launch publishes `client-native` under an identity
+  its adapter allocated. Publication is create-once, so the loser of either order
+  adopts the winner rather than replacing it, and no route ever converts into the
+  other. `withSessionRoute` remains routing only — it selects which partition
+  serves a call and carries no authority to construct, own or answer.
+- A session constructed client-native is **attached to, never created**: the
+  provider passes the retained identity as `resumeSessionId`, and an attachment
+  that reports a different session is refused and its handle released before a
+  turn is taken. An ACP-first session attaches with no resume identity.
+- ACP runtimes are partitioned by **executable build binding** — the agent
+  command together with the canonical reported version and the digest of the
+  executable's bytes. A handle belongs to the runtime that made it and is used
+  only through it, so a session bound to one build can never take a turn through
+  a connection to another. The adapter child for a bound session is spawned with
+  a transient environment naming that exact executable, assembled per launch and
+  never written to the host process environment.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
   `prompt()`, and `launch()` report a missing provider; `prompt()` reports it
   **coldly** — the
@@ -303,6 +333,18 @@ run exits non-zero. A turn that fails for any other reason remains an ordinary
 prompt failure.
 
 ## ACPX provider
+
+The ACP runtime this package executes is a source snapshot of `acpx@0.12.0`
+under `packages/acp/vendor/acpx`, not the resolved package, carried with one
+behavioral patch that threads a transient agent-process environment through to
+each spawned child. `vendor/acpx/PROVENANCE.md` records the upstream release
+commit, the patch, and the packaging adaptations; `scripts/tests/acpx-vendor.test.ts`
+proves offline that nothing else differs from the pristine upstream bytes.
+
+The snapshot is owned by issue #519 and removed by issue #526, after a released
+upstream package set provides that input on its own and passes #526's removal
+gate. Vendoring is a workaround for a missing upstream capability, not a
+long-term position.
 
 `@executablemd/acp` implements the `rootProvider` seam over the `acpx` runtime.
 `createAcpxProvider()` returns an `AgentProviderFactory` supplied directly to

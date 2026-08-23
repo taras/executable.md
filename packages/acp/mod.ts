@@ -17,7 +17,7 @@
 export { createAcpxProvider } from "./src/provider.ts";
 export type { AcpxProviderDependencies, SessionRouteContext } from "./src/provider.ts";
 /** The agent ACPX selects when nothing else is configured. */
-export { DEFAULT_AGENT_NAME } from "acpx/runtime";
+export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
 
 /**
  * Native session launch: the adapters whose resume command shape this package
@@ -37,3 +37,19 @@ export {
 } from "./src/provider.ts";
 export type { AcpxPartitionSelector } from "./src/provider.ts";
 export type { AcpxProvider, ProbeCapableRuntime } from "./src/provider.ts";
+
+// The construction route: how a logical session was first constructed, kept
+// strictly and create-once beside the coordinator's own records. It is not an
+// Agent Api, a component, or a source of launch authority — the coordinator
+// remains the single live authority.
+export {
+  AgentSessionRouteError,
+  createDenoSessionRouteStore,
+  createMemorySessionRouteStore,
+  hasDenoSessionRouteStore,
+  parseAgentSessionRoute,
+  routeKey,
+  routeNamesKey,
+  serializeAgentSessionRoute,
+} from "./src/session-route.ts";
+export type { AgentSessionRouteStore, AgentSessionRouteV1 } from "./src/session-route.ts";

@@ -26,7 +26,9 @@ import {
   installControlledLauncher,
 } from "@executablemd/runtime";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
-import { createAcpxProvider } from "@executablemd/acp";
+import { createAcpxProvider, createMemorySessionRouteStore } from "@executablemd/acp";
+import type { AgentSessionRouteStore } from "@executablemd/acp";
+import type { ExecutableObserver } from "@executablemd/runtime";
 import { sessionCoordinatorRoot, useSessionCoordinator } from "../src/session-coordinator.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -43,14 +45,41 @@ function entrypoint(name: string): Operation<string> {
 
 /** Enough of a runtime to prove the provider never reached one. */
 interface RuntimeProbe {
+  /** Every way this runtime could have been contacted at all. */
+  doctors: number;
   ensures: number;
   closes: number;
+  turns: number;
+  /**
+   * ACP session records read and written.
+   *
+   * Resolving which session a caller meant walks candidate keys and loads each
+   * one, so a host that refuses only after finding a placement has already read
+   * the store of a session it may not act on. Reaching an agent is not the
+   * boundary; touching the session's own state is.
+   */
+  loads: number;
+  saves: number;
+}
+
+function countingStore(probe: RuntimeProbe) {
+  return {
+    load: () => {
+      probe.loads += 1;
+      return Promise.resolve(undefined);
+    },
+    save: () => {
+      probe.saves += 1;
+      return Promise.resolve();
+    },
+  };
 }
 
 function probeRuntime(probe: RuntimeProbe) {
   return () =>
     ({
       doctor() {
+        probe.doctors += 1;
         return Promise.resolve({ ok: true, agents: [] } as never);
       },
       ensureSession() {
@@ -58,6 +87,7 @@ function probeRuntime(probe: RuntimeProbe) {
         return Promise.reject(new Error("this test's provider must not reach a runtime"));
       },
       startTurn() {
+        probe.turns += 1;
         throw new Error("this test's provider must not start a turn");
       },
       runTurn() {
@@ -87,6 +117,48 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
   };
 }
 
+/**
+ * What core does with a launch whose preparation the journal already holds.
+ *
+ * The retained record is the one an interrupted client-allocated launch leaves
+ * behind, so nothing but detach and exit is asked of the provider — which is
+ * exactly the surface a refusal placed inside `prepare()` would never see.
+ */
+function replayingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
+  const prepared: LaunchRecord = {
+    phase: "prepared",
+    agent: "claude",
+    sessionKey: `xmd:v1:${"a".repeat(16)}`,
+    provider: "acpx",
+    nativeSessionId: "11111111-2222-3333-4444-555555555555",
+    sessionState: "created",
+    instructionChannel: "claude.systemPromptFile",
+    instructionReconciliation: "installed",
+    identityProvenance: "client-allocated",
+    instructionsDigest: "f".repeat(64),
+    instructions: "You are the repository implementor.",
+    cwd: "/work",
+    additionalDirectories: [],
+    permissionMode: "deny-all",
+    launcher: "claude",
+  };
+  return {
+    *perform(_request, phases) {
+      records.push(prepared);
+      const detached = yield* phases.detach(prepared);
+      records.push(detached);
+      if (detached.failure) {
+        return;
+      }
+      records.push(yield* phases.exit(prepared));
+    },
+    // deno-lint-ignore require-yield
+    *refuse(_request, preparation) {
+      records.push(preparation);
+    },
+  };
+}
+
 function launchRequest(): AgentLaunchRequest {
   const request = {
     instructions: "You are the repository implementor.",
@@ -104,6 +176,8 @@ function* launchUnder(
   coordinator: AgentSessionCoordinator | undefined,
   records: LaunchRecord[],
   probe: RuntimeProbe,
+  routeStore?: AgentSessionRouteStore,
+  executableObserver?: ExecutableObserver,
 ): Operation<void> {
   yield* scoped(function* () {
     yield* API.Env.around({
@@ -125,6 +199,8 @@ function* launchUnder(
       },
       advertiseNativeLaunch: ["claude"],
       ...(coordinator ? { coordinator } : {}),
+      ...(routeStore ? { routeStore } : {}),
+      ...(executableObserver ? { executableObserver } : {}),
     });
     yield* factory(
       { defaultAgent: "claude", permissionMode: "deny-all" },
@@ -149,7 +225,7 @@ describe("Tier HC — host session ownership", () => {
 
   it("HC3: a provider with no coordinator refuses before contacting the agent", function* () {
     const records: LaunchRecord[] = [];
-    const probe: RuntimeProbe = { ensures: 0, closes: 0 };
+    const probe: RuntimeProbe = { doctors: 0, ensures: 0, closes: 0, turns: 0, loads: 0, saves: 0 };
     yield* launchUnder(undefined, records, probe);
 
     const failure = records.find((record) => record.failure)?.failure;
@@ -160,9 +236,9 @@ describe("Tier HC — host session ownership", () => {
     expect(probe.closes).toBe(0);
   });
 
-  it("HC4: a coordinator this host can build gets past the ownership question", function* () {
+  it("HC4: a fully assembled host gets past the ownership question", function* () {
     if (!onDeno()) {
-      // Node and Bun build none at all, which HC1 and HC3 already say.
+      // Node and Bun build none of it, which HC1 and HC3 already say.
       return;
     }
     // Rooted in a directory this test owns, never the machine-wide one: a
@@ -172,19 +248,37 @@ describe("Tier HC — host session ownership", () => {
     yield* ensureDir(root);
     yield* ensure(() => rm(root, { recursive: true, force: true }));
     const records: LaunchRecord[] = [];
-    const probe: RuntimeProbe = { ensures: 0, closes: 0 };
-    let reached = false;
-    try {
-      yield* launchUnder(createDenoAgentSessionCoordinator(root), records, probe);
-    } catch (error) {
-      reached = error instanceof Error && error.message.includes("must not reach a runtime");
-    }
+    const probe: RuntimeProbe = { doctors: 0, ensures: 0, closes: 0, turns: 0, loads: 0, saves: 0 };
 
-    // Ownership was granted, so the launch got as far as the runtime this test
-    // deliberately makes unreachable — it did not stop at the coordinator.
-    expect(reached).toBe(true);
-    expect(probe.ensures).toBe(1);
-    expect(records.find((record) => record.failure)).toBe(undefined);
+    yield* launchUnder(
+      createDenoAgentSessionCoordinator(root),
+      records,
+      probe,
+      createMemorySessionRouteStore(),
+      // The whole assembly: this host can say who owns the session, how it was
+      // constructed, and which build it would run.
+      {
+        // deno-lint-ignore require-yield
+        *observe() {
+          return {
+            path: "/observed/claude",
+            digest: { algorithm: "sha256", value: "d".repeat(64) },
+            versionOutput: "2.1.235 (Claude Code)\n",
+          };
+        },
+      },
+    );
+
+    // Ownership, the route and the build were all answered, so the launch
+    // prepared a session rather than refusing for a missing capability. Claude
+    // allocates its own identity, so nothing was created through ACP.
+    const prepared = records.find((record) => record.phase === "prepared");
+    expect(prepared).toBeDefined();
+    expect(prepared?.failure).toBe(undefined);
+    expect((prepared as { identityProvenance?: string })?.identityProvenance).toBe(
+      "client-allocated",
+    );
+    expect(probe.ensures).toBe(0);
   });
 
   it("HC5: the Deno and compiled entrypoints install one; Node and Bun do not", function* () {
@@ -194,5 +288,98 @@ describe("Tier HC — host session ownership", () => {
     for (const name of ["node.ts", "bun.ts"]) {
       expect((yield* entrypoint(name)).includes("useSessionCoordinator")).toBe(false);
     }
+  });
+
+  it("HC7: an unassembled host touches nothing, on any of the four surfaces", function* () {
+    // Session, subscribed Prompt, launch and incomplete replay all refuse
+    // before the adapter is contacted at all — not merely before ensure. Asking
+    // whether an agent is available spawns a probe child, and that is provider
+    // work on a session a native UI may be in. So is resolving which session
+    // was meant, which reads the ACP session store; a host that may not act
+    // must not read that store to learn what it is refusing.
+    for (const surface of ["session", "prompt", "launch", "replay"] as const) {
+      const probe: RuntimeProbe = {
+        doctors: 0,
+        ensures: 0,
+        closes: 0,
+        turns: 0,
+        loads: 0,
+        saves: 0,
+      };
+      const records: LaunchRecord[] = [];
+      let refused = false;
+
+      yield* scoped(function* () {
+        yield* API.Env.around({
+          // deno-lint-ignore require-yield
+          *cwd() {
+            return "/work";
+          },
+        });
+        yield* installControlledLauncher();
+        // No coordinator, no route store, no observer: the Node and Bun shape.
+        const factory = createAcpxProvider({
+          createRuntime: probeRuntime(probe),
+          sessionStore: countingStore(probe),
+          agentRegistry: { resolve: () => "claude-cmd", list: () => ["claude"] },
+          advertiseNativeLaunch: ["claude"],
+        });
+        yield* factory(
+          { defaultAgent: "claude", permissionMode: "deny-all" },
+          surface === "replay" ? replayingAuthority(records) : collectingAuthority(records),
+        );
+
+        try {
+          if (surface === "session") {
+            yield* Agent.operations.session();
+          } else if (surface === "prompt") {
+            const stream = yield* Agent.operations.prompt("hello", {});
+            const subscription = yield* stream;
+            let next = yield* subscription.next();
+            while (!next.done) {
+              next = yield* subscription.next();
+            }
+          } else {
+            // `replay` differs in what the authority hands back, not in what is
+            // asked for: its journal already retained the preparation, so a
+            // host that only refused inside `prepare()` would let it through.
+            yield* Agent.operations.launch(launchRequest());
+          }
+        } catch {
+          refused = true;
+        }
+      });
+
+      // Read-only agent resolution still works; nothing else does.
+      const answered =
+        surface === "launch" || surface === "replay"
+          ? records.find((record) => record.failure) !== undefined
+          : refused;
+      expect([surface, answered]).toEqual([surface, true]);
+      expect([surface, probe.doctors]).toEqual([surface, 0]);
+      expect([surface, probe.ensures]).toEqual([surface, 0]);
+      expect([surface, probe.turns]).toEqual([surface, 0]);
+      expect([surface, probe.closes]).toEqual([surface, 0]);
+      expect([surface, probe.loads]).toEqual([surface, 0]);
+      expect([surface, probe.saves]).toEqual([surface, 0]);
+    }
+  });
+
+  it("HC6: a half-assembled host refuses an advertised agent", function* () {
+    // Fail-closed means all of it. A host that can say who owns a session but
+    // not how it was constructed cannot act on one a native UI may be in.
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { doctors: 0, ensures: 0, closes: 0, turns: 0, loads: 0, saves: 0 };
+    yield* launchUnder(
+      onDeno()
+        ? createDenoAgentSessionCoordinator(join(tmpdir(), `xmd-hc6-${randomUUID()}`))
+        : undefined,
+      records,
+      probe,
+      // No route store.
+    );
+
+    expect(records.find((record) => record.failure)?.failure?.class).toBe("unsupported-capability");
+    expect(probe.ensures).toBe(0);
   });
 });

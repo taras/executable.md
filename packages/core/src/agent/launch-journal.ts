@@ -20,7 +20,9 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import type {
   DetachedLaunchRecord,
+  ExecutableBuildBindingV1,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,
@@ -67,6 +69,7 @@ const FAILURE_CLASSES: readonly LaunchFailureClass[] = [
   "native-exit",
   "session-busy",
   "session-recovery-required",
+  "executable-binding-refused",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -112,6 +115,77 @@ function reconciliation(value: unknown): InstructionReconciliation | undefined {
   return RECONCILIATIONS.find((candidate) => candidate === value);
 }
 
+/**
+ * Who chose the identity, as the record says — or, for a record written before
+ * anyone could choose, as the format itself says.
+ *
+ * A merged #518 record has no provenance field, and could not have been
+ * client-allocated because that path did not exist in the released format. So
+ * absence reads as `provider-returned`. That is the one inference this parser
+ * makes, and it only ever infers the weaker claim: a client-allocated record
+ * must say so explicitly, and must carry the binding that makes it meaningful.
+ */
+function provenance(value: unknown): IdentityProvenance | undefined {
+  if (value === undefined) {
+    return "provider-returned";
+  }
+  return value === "provider-returned" || value === "client-allocated" ? value : undefined;
+}
+
+function serializeBinding(binding: ExecutableBuildBindingV1): Json {
+  return {
+    schema: binding.schema,
+    reportedVersion: binding.reportedVersion,
+    executableDigest: {
+      algorithm: binding.executableDigest.algorithm,
+      value: binding.executableDigest.value,
+    },
+  };
+}
+
+/**
+ * A binding is read strictly and never repaired.
+ *
+ * An unknown schema is a record this build cannot compare, and a binding it
+ * cannot compare is one it must not act on — so it refuses instead of ignoring
+ * the field and continuing against an unverified build.
+ */
+function exactly(value: Record<string, unknown>, members: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === members.length && keys.every((key) => members.includes(key));
+}
+
+function parseBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
+  if (!isRecord(value) || value.schema !== "executable-build.v1") {
+    return undefined;
+  }
+  // Exact members, on the binding and on the digest. A field this build cannot
+  // account for is state it must not compare against, and a binding it cannot
+  // compare is one it must not resume a session under.
+  if (!exactly(value, ["schema", "reportedVersion", "executableDigest"])) {
+    return undefined;
+  }
+  const { reportedVersion, executableDigest } = value;
+  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+    return undefined;
+  }
+  if (!isRecord(executableDigest) || !exactly(executableDigest, ["algorithm", "value"])) {
+    return undefined;
+  }
+  if (executableDigest.algorithm !== "sha256") {
+    return undefined;
+  }
+  const digest = executableDigest.value;
+  if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) {
+    return undefined;
+  }
+  return {
+    schema: "executable-build.v1",
+    reportedVersion,
+    executableDigest: { algorithm: "sha256", value: digest },
+  };
+}
+
 function permissionMode(value: unknown): PermissionMode | undefined {
   if (value === "approve-all" || value === "approve-reads" || value === "deny-all") {
     return value;
@@ -129,6 +203,7 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
     sessionState: record.sessionState,
     instructionChannel: record.instructionChannel,
     instructionReconciliation: record.instructionReconciliation,
+    identityProvenance: record.identityProvenance,
     instructionsDigest: record.instructionsDigest,
     instructions: record.instructions,
     cwd: record.cwd,
@@ -136,6 +211,9 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
     permissionMode: record.permissionMode,
     launcher: record.launcher,
   };
+  if (record.executableBinding !== undefined) {
+    payload.executableBinding = serializeBinding(record.executableBinding);
+  }
   if (record.requestedModel !== undefined) {
     payload.requestedModel = record.requestedModel;
   }
@@ -148,7 +226,14 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
   return payload;
 }
 
-function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
+/**
+ * Read a retained preparation strictly.
+ *
+ * Exported from this internal module so the strictness can be asserted
+ * directly. It is not part of the package's public surface: `packages/core/mod.ts`
+ * exports the record types, not the reader.
+ */
+export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   if (!isRecord(value) || value.phase !== "prepared") {
     return undefined;
   }
@@ -189,7 +274,21 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
   const directories = stringList(additionalDirectories);
   const mode = permissionMode(value.permissionMode);
   const reconciled = reconciliation(value.instructionReconciliation);
-  if (!directories || !mode || !reconciled) {
+  const provenanceValue = provenance(value.identityProvenance);
+  if (!directories || !mode || !reconciled || !provenanceValue) {
+    return undefined;
+  }
+  // A client-allocated session is only meaningful while the build that created
+  // it can be reproduced, so the binding is required exactly there — and
+  // forbidden elsewhere, because a provider that returns its own identity owns
+  // its own session lifetime and binds nothing.
+  let binding: ExecutableBuildBindingV1 | undefined;
+  if (provenanceValue === "client-allocated") {
+    binding = parseBinding(value.executableBinding);
+    if (!binding) {
+      return undefined;
+    }
+  } else if (value.executableBinding !== undefined) {
     return undefined;
   }
   const record: PreparedLaunchRecord = {
@@ -201,6 +300,7 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
     sessionState,
     instructionChannel,
     instructionReconciliation: reconciled,
+    identityProvenance: provenanceValue,
     instructionsDigest,
     instructions,
     cwd,
@@ -208,6 +308,9 @@ function parsePrepared(value: unknown): PreparedLaunchRecord | undefined {
     permissionMode: mode,
     launcher,
   };
+  if (binding) {
+    record.executableBinding = binding;
+  }
   if (typeof requestedModel === "string") {
     record.requestedModel = requestedModel;
   }

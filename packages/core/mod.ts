@@ -237,9 +237,12 @@ export { AgentPromptError } from "./src/agent/errors.ts";
 // public route carries. The authority that runs and retains a phase is not here
 // and is not anywhere: it is delivered to the selected provider.
 export { AgentLaunchError } from "./src/agent/launch.ts";
+export { sameExecutableBuild } from "./src/agent/launch.ts";
 export type {
   DetachedLaunchRecord,
+  ExecutableBuildBindingV1,
   ExitedLaunchRecord,
+  IdentityProvenance,
   InstructionReconciliation,
   LaunchFailure,
   LaunchFailureClass,

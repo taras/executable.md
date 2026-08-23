@@ -129,7 +129,12 @@ function useAcpConnection(
         handle(function* () {
           yield* worker.ready();
           const nativeSessionId = yield* worker.startSession(systemPromptOf(ctx.params._meta));
-          return { _meta: { agentSessionId: nativeSessionId } };
+          // A load reports the session it loaded. Answering with an identity of
+          // this agent's own would be claiming to have opened a different
+          // conversation than the one that was named — which is exactly what a
+          // client-allocated session is attached by name to rule out. The
+          // scenario's own identity stands in only when nothing was named.
+          return { _meta: { agentSessionId: ctx.params.sessionId ?? nativeSessionId } };
         }),
       )
       .onRequest("session/close", () => ({}))

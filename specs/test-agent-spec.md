@@ -203,6 +203,17 @@ constructing a prompt stream still selects and starts nothing. A handle this
 module did not create, or one whose owner has been torn down, reaches no state:
 it refuses before any ACP work rather than falling back to another partition.
 
+Every partition also owns its construction-route store and its executable
+observer, so a client-allocated session in one test is bound to a build the next
+test does not share.
+
+`<TestAgent>` serves two agents. The default one's worker asserts its own
+session identity, which is the provider-returned contract. `test-agent-client-native`
+is a separate controlled adapter that allocates the identity itself and binds an
+observed build, so the client-allocated path can be authored in Markdown without
+a real coding agent. The two are distinct adapters rather than one reclassified:
+the worker contract still has to hold.
+
 Two sibling tests naming the same agent, session and directory therefore do not
 contend. They are not two owners of one session; they are two sessions, each
 owned by a coordinator of its own.
@@ -396,6 +407,17 @@ The essential acceptance coverage is:
    teardown.
 4. The smoke runner replays the completed main journal and verifies the same
    result without contacting ACPX or the worker.
+5. `packages/test-agent/src/NativeSessionLaunch.test.md` is the whole-file
+   Markdown journey for native session launch, run as an ordinary root document
+   rather than through a target selector. It covers both construction routes
+   against the deterministic agent: a provider-returned launch that prepares its
+   own session and spends no turn, an established session refusing a different
+   instruction layer, a client-allocated launch under
+   `test-agent-client-native` continuing into the prompt that follows it, and an
+   eager `<Session>` — which settles the route as ACP-first — refusing a launch
+   that would name the same session again. Each refusal asserts its failure
+   class as well as its message, so a launch that stopped for some other reason
+   fails the journey rather than passing it.
 
 Unit tests use direct Context API and controller fixtures for edge cases that do
 not benefit from crossing the ACPX process boundary. CI does not start an

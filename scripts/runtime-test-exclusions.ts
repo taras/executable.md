@@ -379,6 +379,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/456",
   },
   {
+    path: "packages/acp/tests/session-route.test.ts",
+    reason:
+      "proves durable create-once route publication through Deno.link, 0700/0600 namespace modes, and a real two-process race under the Deno executable; the strict reader, the union's members and memory-store parity are runtime-neutral and are covered on every runtime through packages/acp/tests/native-launch.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/519",
+  },
+  {
+    path: "packages/runtime/tests/executable-observer.test.ts",
+    reason:
+      "the subject is the Deno executable observer, which reads the real process environment through Deno.env, resolves and canonicalizes against the host filesystem, and asks the exact observed path for its version through Deno.Command; the provider-neutral half — what a binding contains, how two bindings compare, and what a mismatch refuses — runs on every runtime through packages/acp/tests/native-launch.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/519",
+  },
+  {
     path: "packages/runtime/tests/agent-session-coordinator.test.ts",
     reason:
       "the subject is the Deno agent-session coordinator: a non-blocking advisory lock through Deno.FsFile.tryLock, raced against real Deno child processes that are killed mid-ownership to leave a tombstone. Both the lock primitive and the children are Deno's; the provider-neutral half of the same contract — owner kinds, contention, quiescence and the record shape — runs on every runtime through packages/acp/tests/native-launch.test.ts and packages/cli/tests/agent-session-coordinator.test.ts",

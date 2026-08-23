@@ -11,6 +11,7 @@ import { Agent } from "@executablemd/core";
 import type { SessionRouteContext } from "@executablemd/acp";
 import { useTestAgentProvider } from "../src/provider.ts";
 import { createDeterministicSessionCoordinator } from "../src/session-coordinator.ts";
+import { createMemorySessionRouteStore } from "@executablemd/acp";
 import { deriveSessionKey } from "../../acp/src/session-key.ts";
 import { createFakeRuntime, useFlatWorld } from "../../acp/tests/helpers.ts";
 
@@ -42,6 +43,7 @@ describe("Tier TS — test-agent ACPX state", () => {
       // The test agent advertises native launch, so every session and prompt
       // it serves takes ownership first. This partition owns its own.
       coordinator: createDeterministicSessionCoordinator(),
+      routeStore: createMemorySessionRouteStore(),
       dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(
@@ -88,6 +90,7 @@ describe("Tier TS — test-agent ACPX state", () => {
         return { route: INST, resolved: () => {} };
       },
       coordinator: createDeterministicSessionCoordinator(),
+      routeStore: createMemorySessionRouteStore(),
       dependencies: { createRuntime: harness.create },
     });
     yield* Agent.around(

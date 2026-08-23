@@ -16,6 +16,7 @@ import {
   agentSessionKeyDigest,
   AgentSessionRecoveryRequired,
   API,
+  ExecutableObservationError,
 } from "@executablemd/runtime";
 import type {
   AgentSessionCoordinator,
@@ -23,6 +24,8 @@ import type {
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
+  ExecutableObserver,
+  ExecutableRefusal,
 } from "@executablemd/runtime";
 import type {
   AcpAgentRegistry,
@@ -115,12 +118,21 @@ export interface FakeRuntimeHarness {
    */
   closeInputs: Record<string, unknown>[];
   closeFailure?: Error;
+  /** Fail every attempt to establish a session, as an unreachable agent does. */
+  ensureFailure?: Error;
   /**
    * Create sessions the way an adapter that asserts no provider-native
    * identity does. The handle still carries ACP and record ids, which is the
    * shape a client could mistake one of for a native id.
    */
   omitAgentSessionId?: boolean;
+  /**
+   * Answer every attachment with this identity, whatever was asked for.
+   *
+   * An adapter is free to report the session it actually attached to, and the
+   * one case that matters is when that is not the one XMD named.
+   */
+  misreportAgentSessionId?: string;
   script(turn: ScriptedTurn): void;
 }
 
@@ -145,6 +157,15 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     },
     create(options) {
       harness.createdOptions.push(options);
+      // Per created runtime, not per harness: the whole question is whether one
+      // runtime is handed a handle another runtime made, and a set shared by
+      // every runtime this harness builds could never answer it.
+      const mine = new WeakSet<object>();
+      const own = (handle: unknown, what: string) => {
+        if (typeof handle === "object" && handle !== null && !mine.has(handle)) {
+          throw new Error(`foreign handle reached ${what}: this runtime did not create it`);
+        }
+      };
       return {
         doctor() {
           harness.doctorCalls++;
@@ -156,6 +177,9 @@ export function createFakeRuntime(): FakeRuntimeHarness {
         },
         ensureSession(input) {
           harness.ensureCalls.push(input);
+          if (harness.ensureFailure) {
+            return Promise.reject(harness.ensureFailure);
+          }
           // ACPX persists a record as it establishes a session, including the
           // instruction layer the caller asked for; a fake that skipped that
           // would hide every decision a later launch makes by reading it back.
@@ -177,11 +201,19 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             backendSessionId: `backend:${input.sessionKey}`,
           };
           if (!harness.omitAgentSessionId) {
-            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+            // An attachment by name reports the name it attached to. Answering
+            // with something of the fake's own would make every resume look
+            // like a mismatch, and hide the one that is.
+            handle.agentSessionId =
+              harness.misreportAgentSessionId ??
+              input.resumeSessionId ??
+              `agent-session:${input.sessionKey}`;
           }
+          mine.add(handle);
           return Promise.resolve(handle);
         },
         startTurn(input) {
+          own(input.handle, "startTurn");
           const script = scripted.shift() ?? {};
           const events = script.events ?? DEFAULT_EVENTS;
           const result: AcpRuntimeTurnResult = script.result ?? {
@@ -263,6 +295,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return Promise.resolve();
         },
         close(input) {
+          own(input.handle, "close");
           harness.closeCalls.push(input.handle);
           harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
           if (harness.closeFailure) {
@@ -328,17 +361,45 @@ export interface CoordinatorHarness {
   }[];
   /** Leave `key` looking like the work of an owner that never finished. */
   tombstone(key: AgentSessionKey): void;
+  /**
+   * Clear that marker, as recovering the session does.
+   *
+   * The coordinator contract offers no recovery operation — recovery is what an
+   * operator does to the durable state, out of band. This is that, so a case
+   * can put a session past an unrecovered owner and go on to ask what the next
+   * thing wrong with it is.
+   */
+  recovered(key: AgentSessionKey): void;
+  /** What this session's ownership is retained as right now. */
+  state(key: AgentSessionKey): "active" | "idle" | undefined;
+  /**
+   * Ownership's own ordered log — `owned`, `quiesced`, `released-idle` or
+   * `released-active`.
+   *
+   * Separate from the provider/launcher trace so a caller can interleave its
+   * own markers into exactly one of the two without disturbing assertions on
+   * the other.
+   */
+  events: string[];
 }
 
 export function makeCoordinator(): CoordinatorHarness {
+  const order: string[] = [];
   const occupied = new Set<string>();
   const retained = new Map<string, "active" | "idle">();
   const acquisitions: CoordinatorHarness["acquisitions"] = [];
 
   const harness: CoordinatorHarness = {
     acquisitions,
+    events: order,
     tombstone(key) {
       retained.set(agentSessionKeyDigest(key), "active");
+    },
+    recovered(key) {
+      retained.delete(agentSessionKeyDigest(key));
+    },
+    state(key) {
+      return retained.get(agentSessionKeyDigest(key));
     },
     coordinator: {
       coordinate<T>(
@@ -364,8 +425,12 @@ export function makeCoordinator(): CoordinatorHarness {
           }
           acquisitions.push({ kind: owner.kind, key, outcome: "granted" });
           retained.set(digest, "active");
+          order.push("owned");
           let quiesced = false;
           yield* ensure(() => {
+            // Last, by construction: registered before the body runs, so every
+            // finalizer the body registers unwinds ahead of it.
+            order.push(quiesced ? "released-idle" : "released-active");
             if (quiesced) {
               retained.set(digest, "idle");
             }
@@ -374,10 +439,57 @@ export function makeCoordinator(): CoordinatorHarness {
             yield* body({
               quiesced() {
                 quiesced = true;
+                order.push("quiesced");
               },
             }),
           );
         });
+      },
+    },
+  };
+  return harness;
+}
+
+/**
+ * An executable observer that answers without a filesystem.
+ *
+ * The amendment's own seam: controlled tests substitute the whole observer
+ * rather than moving PATH, because the real one deliberately reads the process
+ * environment and cannot be redirected. `observed` is what every command
+ * resolves to; changing it between calls is how a test makes a build drift
+ * under a stable command.
+ */
+export interface ObserverHarness {
+  observer: ExecutableObserver;
+  /** What the next observation answers. */
+  observed: { path: string; digest: string; versionOutput: string };
+  /** Every command this observer was asked about, in order. */
+  asked: string[];
+  /** Refuse the next observation the way the host does. */
+  refuse?: ExecutableRefusal;
+}
+
+export function makeObserver(initial: Partial<ObserverHarness["observed"]> = {}): ObserverHarness {
+  const harness: ObserverHarness = {
+    asked: [],
+    observed: {
+      path: "/observed/claude",
+      digest: "d".repeat(64),
+      versionOutput: "2.1.235 (Claude Code)\n",
+      ...initial,
+    },
+    observer: {
+      // deno-lint-ignore require-yield
+      *observe(command) {
+        harness.asked.push(command);
+        if (harness.refuse) {
+          throw new ExecutableObservationError(`${command} refused`, { refusal: harness.refuse });
+        }
+        return {
+          path: harness.observed.path,
+          digest: { algorithm: "sha256", value: harness.observed.digest },
+          versionOutput: harness.observed.versionOutput,
+        };
       },
     },
   };

@@ -108,6 +108,12 @@
     // The runtime exclusions keep the same test out of the Node and Bun
     // execution suites.
     "packages/runtime/tests/agent-session-coordinator.test.ts",
+    // The Deno executable observer's proof: real Deno process and filesystem
+    // surfaces, and a real child asked for its version.
+    "packages/runtime/tests/executable-observer.test.ts",
+    // Durable create-once routes and a real two-process race, both Deno's.
+    "packages/acp/tests/session-route.test.ts",
+    "packages/acp/tests/fixtures/session-route-publisher.ts",
     "packages/runtime/tests/fixtures/agent-session-owner.ts"
   ]
 }

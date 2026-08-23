@@ -19,33 +19,54 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
+import { createHash } from "node:crypto";
 import type {
   AgentLaunchRequest,
   AgentProviderAuthority,
+  ExitedLaunchRecord,
   LaunchRecord,
   PreparedLaunchRecord,
   Session,
 } from "@executablemd/core";
+import { readFile, stat } from "node:fs/promises";
 import { flushOutput, installControlledLauncher, reserveTerminal } from "@executablemd/runtime";
 import type { AgentSessionCoordinator, NativeLaunchRequest } from "@executablemd/runtime";
+import type { AgentSessionRouteStore, AgentSessionRouteV1 } from "../src/session-route.ts";
 import { createAcpxProvider } from "../src/provider.ts";
+import { createMemorySessionRouteStore } from "../src/session-route.ts";
 import { nativeAdapterFor } from "../src/native-launch.ts";
 import type { NativeAdapter } from "../src/native-launch.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
   createFakeRuntime,
   makeCoordinator,
+  makeObserver,
   makeRecord,
   makeRegistry,
   makeStore,
   useFlatWorld,
 } from "./helpers.ts";
-import type { CoordinatorHarness, FakeRuntimeHarness } from "./helpers.ts";
+import type { CoordinatorHarness, FakeRuntimeHarness, ObserverHarness } from "./helpers.ts";
 import type { AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
 const CWD = "/work";
 const AGENT_COMMAND = "claude-cmd";
 const SESSION_KEY = deriveSessionKey(AGENT_COMMAND, CWD);
+
+/**
+ * What the journal gives an incomplete replay back.
+ *
+ * The suffix is the whole question. A launch interrupted after preparing but
+ * before detaching retained only `prepared`, so its replay runs detach live and
+ * native creation may never have happened. One interrupted after detaching
+ * retained both, so the native process was already free to start and the replay
+ * may do nothing but resume. The harness represents both, because telling them
+ * apart is what the provider is for.
+ */
+interface Replay {
+  prepared: PreparedLaunchRecord;
+  suffix: "prepared" | "prepared+detached";
+}
 
 /** Everything the launch touched, in the order it touched it. */
 interface Trace {
@@ -55,9 +76,35 @@ interface Trace {
   order: string[];
   /** Who owned the session, and when. */
   ownership: CoordinatorHarness;
+  /** How each session in this trace was constructed. */
+  routes: AgentSessionRouteStore;
+  /** Which build this trace observes behind the agent command. */
+  builds: ObserverHarness;
+  /**
+   * What the next launch in this trace replays, if anything.
+   *
+   * Read at each `perform` rather than fixed when the provider is installed, so
+   * one provider scope can run a prepared-only replay and then a detached one —
+   * which is the only way to show that neither answers the other.
+   */
+  replay?: Replay;
 }
 
 interface ProviderOptions {
+  /**
+   * Use the real Claude adapter, which allocates its own identity and binds a
+   * build.
+   *
+   * Off by default: Tier NL is the provider-returned contract — ACP creates the
+   * session and tells XMD what it is called — and #519 adds the
+   * client-allocated one beside it rather than replacing it. Tier CN covers
+   * that path.
+   */
+  /** Replay this retained preparation instead of preparing live. */
+  replay?: Replay;
+  bound?: boolean;
+  /** A registry whose answers may change between calls. */
+  registry?: { resolve: (agent: string) => string; list: () => string[] };
   advertise?: readonly string[];
   store?: AcpSessionStore;
   adapters?: Record<string, NativeAdapter>;
@@ -65,6 +112,12 @@ interface ProviderOptions {
   hold?: Operation<void>;
   onLaunch?: () => void;
   exitCode?: number;
+  /**
+   * Share one route store with another provider scope, alongside the
+   * coordinator. Two scopes that observe the same ACPX records must observe the
+   * same construction routes, or each would publish its own account.
+   */
+  routeStore?: AgentSessionRouteStore;
   /**
    * Share one coordinator with another provider scope.
    *
@@ -86,7 +139,31 @@ interface ProviderOptions {
 function traceAuthority(trace: Trace): AgentProviderAuthority {
   return {
     *perform(_request, phases) {
-      const prepared = yield* phases.prepare();
+      // A replay hands back what the journal retained rather than calling the
+      // provider's live preparation, exactly as the merged authority does when
+      // the phase is already recorded.
+      const replay = trace.replay;
+      const prepared = replay ? replay.prepared : yield* phases.prepare();
+      if (replay) {
+        trace.records.push(prepared);
+        trace.order.push("prepared");
+        // Only a journal that reached `detached` replays it. The other suffix
+        // runs the provider's detach live, which is how a replay learns its
+        // predecessor never got as far as handing the session over.
+        const detached =
+          replay.suffix === "prepared+detached"
+            ? { phase: "detached" as const }
+            : yield* phases.detach(prepared);
+        trace.records.push(detached);
+        trace.order.push("detached");
+        if (detached.failure) {
+          return;
+        }
+        const exited = yield* phases.exit(prepared);
+        trace.records.push(exited);
+        trace.order.push("exited");
+        return;
+      }
       trace.records.push(prepared);
       trace.order.push("prepared");
       if (prepared.failure) {
@@ -129,11 +206,15 @@ function* installLaunchStack(
   const factory = createAcpxProvider({
     createRuntime: harness.create,
     sessionStore: options.store ?? makeStore(),
-    agentRegistry: makeRegistry({ claude: AGENT_COMMAND, mystery: "mystery-cmd" }),
+    agentRegistry:
+      options.registry ?? makeRegistry({ claude: AGENT_COMMAND, mystery: "mystery-cmd" }),
     advertiseNativeLaunch: options.advertise ?? ["claude"],
     coordinator: options.coordinator ?? trace.ownership.coordinator,
-    ...(options.adapters ? { nativeAdapters: options.adapters } : {}),
+    routeStore: options.routeStore ?? trace.routes,
+    executableObserver: trace.builds.observer,
+    nativeAdapters: options.adapters ?? (options.bound ? {} : { claude: PROVIDER_RETURNED_CLAUDE }),
   });
+  trace.replay = options.replay;
   yield* factory(
     { defaultAgent: "claude", permissionMode: "approve-reads" },
     traceAuthority(trace),
@@ -141,7 +222,14 @@ function* installLaunchStack(
 }
 
 function newTrace(): Trace {
-  return { records: [], launches: [], order: [], ownership: makeCoordinator() };
+  return {
+    records: [],
+    launches: [],
+    order: [],
+    ownership: makeCoordinator(),
+    routes: createMemorySessionRouteStore(),
+    builds: makeObserver(),
+  };
 }
 
 /**
@@ -186,6 +274,20 @@ function* launch(
 ): Operation<void> {
   yield* Agent.operations.launch(launchRequest(instructions, options));
 }
+
+/**
+ * A Claude-shaped adapter that returns its own identity.
+ *
+ * What the merged #518 provider always assumed: ACP creates the session and the
+ * adapter reports what it is called. Declared here rather than in the package,
+ * because the real Claude adapter allocates its identity now — and Tier NL is
+ * the proof that the other kind still works exactly as it did.
+ */
+const PROVIDER_RETURNED_CLAUDE: NativeAdapter = {
+  launcher: "claude",
+  identity: "provider-returned",
+  resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+};
 
 const INSTRUCTIONS = "You are the repository implementor.";
 
@@ -798,6 +900,8 @@ describe("Tier NO — session ownership", () => {
         agentRegistry: makeRegistry({ claude: AGENT_COMMAND }),
         advertiseNativeLaunch: ["claude"],
         coordinator: watched,
+        routeStore: trace.routes,
+        executableObserver: trace.builds.observer,
       });
       yield* factory(
         { defaultAgent: "claude", permissionMode: "approve-reads" },
@@ -967,5 +1071,1008 @@ describe("Tier NO — session ownership", () => {
         expect(input.discardPersistentState).toBeUndefined();
       }
     });
+  });
+});
+
+/**
+ * Tier CN — the client-allocated construction path
+ * (specs/native-agent-session-launch-spec.md §Identity publication).
+ *
+ * XMD chooses the session identity before Claude exists, hands it to the native
+ * process, and can reattach to that same conversation afterwards. That only
+ * holds together while the build that created the session can be recognized
+ * later, and while exactly one durable account of the session exists — so these
+ * cases are mostly about the order things happen in, and about what refuses.
+ */
+describe("Tier CN — client-allocated construction", () => {
+  it("CN1: the launch allocates its identity, publishes a route, and spawns that exact build", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+
+    yield* launch(INSTRUCTIONS);
+
+    const prepared = trace.records[0] as PreparedLaunchRecord;
+    expect(prepared.identityProvenance).toBe("client-allocated");
+    expect(prepared.executableBinding).toEqual({
+      schema: "executable-build.v1",
+      reportedVersion: "2.1.235 (Claude Code)",
+      executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+    });
+    // Nothing was created through ACP: a client-native session is materialized
+    // by the native process itself.
+    expect(harness.ensureCalls).toEqual([]);
+
+    // The route and the record agree exactly.
+    const route = yield* trace.routes.read({
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: prepared.sessionKey,
+    });
+    expect(route).toMatchObject({
+      route: "client-native",
+      nativeSessionId: prepared.nativeSessionId,
+      identityProvenance: "client-allocated",
+      instructionsDigest: prepared.instructionsDigest,
+      launcher: "claude",
+    });
+
+    // The observed path is spawned with `--session-id` and a private file, and
+    // neither the path nor the instructions reach the record.
+    const command = trace.launches[0]!.command;
+    expect(command[0]).toBe("/observed/claude");
+    expect(command).toContain("--session-id");
+    expect(command).toContain(prepared.nativeSessionId);
+    expect(command).toContain("--system-prompt-file");
+    expect(command.join(" ")).not.toContain(INSTRUCTIONS);
+    expect(JSON.stringify(prepared)).not.toContain("/observed/claude");
+  });
+
+  it("CN2: a session ACP already constructed refuses before observing or allocating", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    // `<Session>` is eager: it constructs ACP-first and publishes that route.
+    yield* Agent.operations.session();
+    const observedBefore = trace.builds.asked.length;
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("identity-unavailable");
+    // Refused before the observer ran, before a UUID existed, and before any
+    // detach or spawn.
+    expect(trace.builds.asked.length).toBe(observedBefore);
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("CN13: retained #518 state with no route is upgraded to acp-first, then refused", function* () {
+    // A session this provider established before construction routes existed.
+    // What it is has never been written down, so a launch that only refused
+    // would leave the same open question for the next run to meet — and one day
+    // a run would answer it differently. The upgrade is what closes it.
+    const store = makeStore({
+      [SESSION_KEY]: {
+        ...makeRecord(AGENT_COMMAND, CWD),
+        acpxRecordId: SESSION_KEY,
+        messages: [],
+      },
+    });
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true, store });
+    expect(
+      yield* trace.routes.read({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY }),
+    ).toBe(undefined);
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("identity-unavailable");
+    // The exact route this history is now known by, carrying nothing about a
+    // provider session — and written before anything else could have happened.
+    expect(
+      yield* trace.routes.read({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY }),
+    ).toEqual({
+      schema: "session-route.v1",
+      route: "acp-first",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+    });
+    expect(trace.builds.asked).toEqual([]);
+    expect(trace.launches).toEqual([]);
+    expect(harness.ensureCalls).toEqual([]);
+  });
+
+  it("CN3: a changed instruction layer refuses, and nothing is discarded", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    yield* launch(INSTRUCTIONS);
+    const closesBefore = harness.closeCalls.length;
+
+    const refusal = yield* attempt(trace, "You are somebody else entirely.");
+
+    expect(refusal?.class).toBe("instructions-refused");
+    expect(harness.closeCalls.length).toBe(closesBefore);
+    expect(trace.launches.length).toBe(1);
+  });
+
+  it("CN4: relaunching the same layer adopts the retained identity rather than a new one", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    yield* launch(INSTRUCTIONS);
+    const first = trace.records[0] as PreparedLaunchRecord;
+
+    yield* launch(INSTRUCTIONS);
+    const second = trace.records.find(
+      (record, index) => index > 2 && record.phase === "prepared",
+    ) as PreparedLaunchRecord;
+
+    // The first durable publication is authoritative; a later caller adopts it
+    // rather than insisting its own candidate win.
+    expect(second.nativeSessionId).toBe(first.nativeSessionId);
+    expect(second.sessionState).toBe("resumed");
+    // And resumes rather than creating.
+    expect(trace.launches[1]!.command).toContain("--resume");
+    expect(trace.launches[1]!.command).not.toContain("--session-id");
+  });
+
+  it("CN5: a build that drifted under the same command refuses before the spawn", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    yield* launch(INSTRUCTIONS);
+
+    // Same command, different bytes: the drift this whole mechanism exists for.
+    trace.builds.observed.digest = "e".repeat(64);
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("executable-binding-refused");
+    expect(trace.launches.length).toBe(1);
+  });
+
+  it("CN6: an unobservable build refuses, and says nothing about the host", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    trace.builds.refuse = "not-found";
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("executable-binding-refused");
+    expect(refusal?.message).not.toContain("/observed/claude");
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("CN7: an unrecognized version is refused without quoting the output", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    trace.builds.observed.versionOutput = "some other program 9.9\n";
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("executable-binding-refused");
+    expect(refusal?.message).not.toContain("some other program");
+  });
+
+  it("CN8: an attachment resumes the retained identity rather than creating under it", function* () {
+    // The identity XMD allocated has to reach ACPX, or a later attachment
+    // creates replacement history under a name that already means something.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    yield* launch(INSTRUCTIONS);
+    const prepared = trace.records[0] as PreparedLaunchRecord;
+
+    yield* scoped(function* () {
+      const stream = yield* Agent.operations.prompt("what changed?", {});
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+    });
+
+    // The exact UUID, unchanged, from route to record to ACPX input.
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.ensureCalls[0]?.resumeSessionId).toBe(prepared.nativeSessionId);
+    const route = yield* trace.routes.read({
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: prepared.sessionKey,
+    });
+    expect((route as { nativeSessionId?: string }).nativeSessionId).toBe(prepared.nativeSessionId);
+  });
+
+  it("CN11: the identity is the adapter's, allocated inside ownership", function* () {
+    // What a provider-native identity may look like is knowledge about that
+    // provider, so the adapter is what produces one. A provider that minted its
+    // own would be deciding the dialect of every agent it can launch, and the
+    // first one whose identities are not UUIDs would find that out in
+    // production.
+    const claude = nativeAdapterFor("claude")!;
+    const ownedWhenAllocated: string[] = [];
+    const heldWhenAllocated: string[] = [];
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      adapters: {
+        claude: {
+          ...claude,
+          binding: {
+            ...claude.binding!,
+            allocate: () => {
+              // Ownership is already held here, over this session's own key:
+              // the route this identity is published under is the one the
+              // coordinator is protecting.
+              ownedWhenAllocated.push(trace.ownership.events.at(-1) ?? "none");
+              heldWhenAllocated.push(trace.ownership.acquisitions.at(-1)?.key.sessionKey ?? "none");
+              return "adapter-allocated-identity";
+            },
+          },
+        },
+      },
+    });
+
+    yield* launch(INSTRUCTIONS);
+    const prepared = trace.records[0] as PreparedLaunchRecord;
+
+    expect(prepared.nativeSessionId).toBe("adapter-allocated-identity");
+    expect(ownedWhenAllocated).toEqual(["owned"]);
+    expect(heldWhenAllocated).toEqual([SESSION_KEY]);
+    // And it is the identity the native process is told to create under.
+    expect(trace.launches[0]!.command).toContain("adapter-allocated-identity");
+  });
+
+  it("CN12: an attachment reporting another identity is refused before a turn", function* () {
+    // Resuming by name is the whole reason the identity was allocated before
+    // the provider existed. An adapter that answers with a different session
+    // has attached to a conversation this one does not name, and a turn taken
+    // through that handle would land in history that is not this session's.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+    yield* launch(INSTRUCTIONS);
+    harness.misreportAgentSessionId = "88888888-7777-6666-5555-444444444444";
+
+    let refused: Error | undefined;
+    yield* scoped(function* () {
+      try {
+        const stream = yield* Agent.operations.prompt("what changed?", {});
+        const subscription = yield* stream;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          next = yield* subscription.next();
+        }
+      } catch (error) {
+        refused = error as Error;
+      }
+    });
+
+    expect(refused?.message).toContain("would not belong to the conversation");
+    // Before the turn, and the handle it refused was released rather than kept.
+    expect(harness.turns).toEqual([]);
+    expect(harness.closeCalls.length).toBe(1);
+  });
+
+  it("CN10: one resolved command names the coordinator key, the route, and ACPX", function* () {
+    // A registry may answer differently outside the critical section that
+    // pinned its route — TestAgent's deliberately does. A key recomputed there
+    // would name a different session than the one this operation prepared, so
+    // the resolved command is carried rather than asked for twice.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    let resolutions = 0;
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      registry: {
+        resolve: () => {
+          resolutions += 1;
+          // The first answer is the one the operation prepares against; every
+          // later answer is deliberately different.
+          return resolutions === 1 ? AGENT_COMMAND : `${AGENT_COMMAND}--drifted`;
+        },
+        list: () => ["claude"],
+      },
+    });
+
+    yield* launch(INSTRUCTIONS);
+
+    // Ownership and the route agree, and both name the command the operation
+    // actually prepared against.
+    const owned = trace.ownership.acquisitions.at(-1)!.key;
+    expect(owned.agent).toBe(AGENT_COMMAND);
+    const route = yield* trace.routes.read(owned);
+    expect(route).toBeDefined();
+    expect(route!.agent).toBe(AGENT_COMMAND);
+    // Asked once. An implementation that re-resolved for ownership would have
+    // asked again and been handed the drifted string.
+    expect(resolutions).toBe(1);
+  });
+
+  it("CN9: an ACP-first session attaches without a resume identity", function* () {
+    // The other half: a session ACP created is named by ACP, and passing a
+    // resume identity there would be inventing one.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+
+    yield* Agent.operations.session();
+
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.ensureCalls[0]?.resumeSessionId).toBe(undefined);
+  });
+});
+
+/**
+ * Tier RP — one handle, one runtime
+ * (specs/native-agent-session-launch-spec.md §Executable binding).
+ *
+ * Runtimes are partitioned by agent command and executable build, so a handle
+ * belongs to the runtime that made it. Reaching for "the" runtime later uses a
+ * different ACP child for a session another child already owns — two
+ * connections to one conversation, which is the failure binding partitioning
+ * exists to prevent.
+ *
+ * The fake runtime refuses a handle it did not create, so a crossing shows up
+ * here rather than as a connection error somewhere downstream.
+ */
+describe("Tier RP — handles never cross runtime partitions", () => {
+  it("RP1: ensure, turn and close all use the one binding-keyed runtime", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, { bound: true });
+
+    // A client-native launch publishes the route, then a prompt attaches
+    // through the bound partition and runs a turn against that handle.
+    yield* launch(INSTRUCTIONS);
+    yield* scoped(function* () {
+      const stream = yield* Agent.operations.prompt("what changed?", {});
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+    });
+
+    // One runtime made the handle, ran the turn, and closed it. A crossing
+    // would have thrown `foreign handle reached …` from the fake.
+    expect(harness.ensureCalls.length).toBe(1);
+    expect(harness.turns.length).toBe(1);
+    expect(harness.closeCalls.length).toBeGreaterThan(0);
+  });
+
+  it("RP2: the fake refuses a handle another runtime made, so a crossing is visible", function* () {
+    // Without this the tier proves nothing: a passing RP1 has to mean the
+    // guard would have fired.
+    const first = createFakeRuntime();
+    const second = createFakeRuntime();
+    const options = {
+      cwd: "/work",
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ claude: AGENT_COMMAND }),
+    };
+    const a = first.create(options as never);
+    const b = second.create(options as never);
+
+    const handle = yield* until(
+      a.ensureSession({ sessionKey: "s", agent: "claude", mode: "persistent", cwd: "/work" }),
+    );
+
+    let refused = "";
+    try {
+      yield* until(b.close({ handle, reason: "crossing" }));
+    } catch (error) {
+      refused = error instanceof Error ? error.message : String(error);
+    }
+    expect(refused).toContain("foreign handle reached close");
+  });
+});
+
+/**
+ * Tier CX — what cancelling a launch has to finish first
+ * (specs/native-agent-session-launch-spec.md §Live lifetime).
+ *
+ * One ordered trace. Signal escalation is the launcher's own contract and is
+ * proven in `packages/runtime/tests/native-launcher.test.ts`; nothing here
+ * repeats those permutations.
+ */
+describe("Tier CX — cancellation finishes before ownership ends", () => {
+  it("CX1: the child settles and the private file is gone before ownership ends", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const hold = withResolvers<void>();
+    const started = withResolvers<void>();
+    let instructionFile = "";
+
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        bound: true,
+        hold: (function* () {
+          started.resolve();
+          yield* hold.operation;
+        })(),
+      });
+
+      const launching = yield* spawn(() => launch(INSTRUCTIONS));
+      yield* started.operation;
+
+      // 1. The child is active, and the instruction layer it was given is a
+      //    real file this process can see.
+      const command = trace.launches[0]!.command;
+      instructionFile = command[command.indexOf("--system-prompt-file") + 1]!;
+      expect(
+        yield* until(
+          stat(instructionFile).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(true);
+      const info = yield* until(stat(instructionFile));
+      expect(info.mode & 0o777).toBe(0o600);
+      trace.ownership.events.push("child-active");
+
+      // 2. Cancellation reaches the child, which settles. Marked before the
+      //    halt, because the halt does not return until everything it unwinds
+      //    has finished — including ownership.
+      trace.ownership.events.push("cancelling");
+      yield* launching.halt();
+    });
+
+    // 3. The file is gone.
+    expect(
+      yield* until(
+        stat(instructionFile).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    ).toBe(false);
+
+    // 4. And the order says so: the child spawned and was cancelled, and
+    //    ownership ended only after that. A launch that stopped on the way
+    //    never proved it stopped, so ownership is released still active —
+    //    which is what makes the next owner recover it rather than walk in.
+    const events = trace.ownership.events;
+    expect(events).toEqual(["owned", "child-active", "cancelling", "released-active"]);
+
+    // The child had started and was cancelled while ownership was held, and
+    // ownership ended only after that. It ended `active`, not idle: a launch
+    // that stopped on the way never proved it stopped, so the next owner is
+    // told to recover the session rather than walking into it.
+    expect(
+      trace.ownership.state({
+        provider: "acpx",
+        agent: AGENT_COMMAND,
+        sessionKey: (trace.records[0] as PreparedLaunchRecord).sessionKey,
+      }),
+    ).toBe("active");
+  });
+});
+
+/**
+ * Tier CR — resuming a client-allocated launch that did not finish
+ * (specs/native-agent-session-launch-spec.md §Replay).
+ *
+ * Two durable accounts of the session already exist: the journal's and the
+ * route's. A replay may act only if they still agree with each other and with
+ * the build this run would use. Neither repairs the other, and neither is
+ * republished — a replay that found a disagreement has discovered that the
+ * session it was going to resume is not the session it prepared.
+ */
+describe("Tier CR — client-allocated incomplete replay", () => {
+  /** A retained prepared record, as an interrupted launch would have left one. */
+  function retained(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: `xmd:v1:${"a".repeat(16)}`,
+      provider: "acpx",
+      nativeSessionId: "11111111-2222-3333-4444-555555555555",
+      sessionState: "created",
+      instructionChannel: "claude.systemPromptFile",
+      instructionReconciliation: "installed",
+      identityProvenance: "client-allocated",
+      executableBinding: {
+        schema: "executable-build.v1",
+        reportedVersion: "2.1.235 (Claude Code)",
+        executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+      },
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      instructions: INSTRUCTIONS,
+      cwd: CWD,
+      additionalDirectories: [],
+      permissionMode: "approve-reads",
+      launcher: "claude",
+      ...overrides,
+    };
+  }
+
+  /** The route that agrees with it. */
+  function agreeing(record: PreparedLaunchRecord): AgentSessionRouteV1 {
+    return {
+      schema: "session-route.v1",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: record.sessionKey,
+      nativeSessionId: record.nativeSessionId,
+      identityProvenance: "client-allocated",
+      instructionsDigest: record.instructionsDigest,
+      launcher: record.launcher,
+      executableBinding: record.executableBinding!,
+    };
+  }
+
+  /**
+   * Drive only the phase a replay would run live: `prepared` and `detached`
+   * come back from the journal, and `exit` is what is left.
+   */
+  function* resume(trace: Trace, record: PreparedLaunchRecord): Operation<ExitedLaunchRecord> {
+    let exited!: ExitedLaunchRecord;
+    yield* Agent.operations.launch(launchRequest(record.instructions));
+    exited = trace.records.findLast((entry) => entry.phase === "exited") as ExitedLaunchRecord;
+    return exited;
+  }
+
+  it("CR1: a route that agrees resumes the retained identity, and creates nothing", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared+detached" },
+    });
+    yield* trace.routes.publish(agreeing(retained()));
+
+    const exited = yield* resume(trace, retained());
+
+    expect(exited.failure).toBe(undefined);
+    // Resume-only: the retained identity, and no `--session-id`.
+    const command = trace.launches[0]!.command;
+    expect(command).toContain("--resume");
+    expect(command).toContain(retained().nativeSessionId);
+    expect(command).not.toContain("--session-id");
+    expect(harness.ensureCalls).toEqual([]);
+  });
+
+  it("CR2: a missing route refuses identity-unavailable, and publishes nothing", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared+detached" },
+    });
+
+    const exited = yield* resume(trace, retained());
+
+    expect(exited.failure?.class).toBe("identity-unavailable");
+    expect(trace.launches).toEqual([]);
+    // No replacement account was written to stand in for the missing one.
+    expect(
+      yield* trace.routes.read({
+        provider: "acpx",
+        agent: AGENT_COMMAND,
+        sessionKey: retained().sessionKey,
+      }),
+    ).toBe(undefined);
+  });
+
+  it("CR3: a route naming another identity refuses rather than substituting", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared+detached" },
+    });
+    const conflicting = agreeing(retained());
+    if (conflicting.route !== "client-native") {
+      throw new Error("the agreeing route is client-native by construction");
+    }
+    yield* trace.routes.publish({
+      ...conflicting,
+      nativeSessionId: "99999999-8888-7777-6666-555555555555",
+    });
+
+    const exited = yield* resume(trace, retained());
+
+    expect(exited.failure?.class).toBe("identity-unavailable");
+    expect(exited.failure?.message).toContain("neither account repairs the other");
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("CR4: a drifted build refuses executable-binding-refused before the spawn", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared+detached" },
+    });
+    yield* trace.routes.publish(agreeing(retained()));
+    trace.builds.observed.digest = "e".repeat(64);
+
+    const exited = yield* resume(trace, retained());
+
+    expect(exited.failure?.class).toBe("executable-binding-refused");
+    expect(trace.launches).toEqual([]);
+  });
+
+  it("CR6: a prepared-only replay creates under the retained identity", function* () {
+    // The predecessor never detached, so nothing ever handed this session to a
+    // native process and creation may still be owed. The identity is not
+    // reallocated — a second UUID would be a second conversation — so the
+    // create argv carries the retained one, with a private instruction file
+    // this run wrote rather than one the interrupted run left behind.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const hold = withResolvers<void>();
+    const started = withResolvers<void>();
+
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        bound: true,
+        replay: { prepared: retained(), suffix: "prepared" },
+        hold: (function* () {
+          started.resolve();
+          yield* hold.operation;
+        })(),
+      });
+      yield* trace.routes.publish(agreeing(retained()));
+
+      const launching = yield* spawn(() => Agent.operations.launch(launchRequest(INSTRUCTIONS)));
+      yield* started.operation;
+
+      const command = trace.launches[0]!.command;
+      expect(command).toContain("--session-id");
+      expect(command).toContain(retained().nativeSessionId);
+      expect(command).not.toContain("--resume");
+      // Written by this run, holding this run's instructions, readable by
+      // nobody else — not whatever the interrupted run left behind.
+      const file = command[command.indexOf("--system-prompt-file") + 1]!;
+      expect((yield* until(stat(file))).mode & 0o777).toBe(0o600);
+      expect(yield* until(readFile(file, "utf8"))).toBe(INSTRUCTIONS);
+
+      hold.resolve();
+      yield* launching;
+    });
+
+    const exited = trace.records.findLast(
+      (entry) => entry.phase === "exited",
+    ) as ExitedLaunchRecord;
+    expect(exited.failure).toBe(undefined);
+    // Still no ACP session: a client-allocated identity never goes through one.
+    expect(harness.ensureCalls).toEqual([]);
+  });
+
+  it("CR7: one replay's live detach does not reach the next replay", function* () {
+    // The two replays describe the same logical session and differ only in what
+    // their journals retained. The first ran detach live, which is how it knew
+    // creation might still be owed. If that observation outlived the launch
+    // that made it, the second — whose journal proves the session was already
+    // handed over — would create a second conversation under an identity that
+    // already names one.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared" },
+    });
+    yield* trace.routes.publish(agreeing(retained()));
+
+    yield* resume(trace, retained());
+    trace.replay = { prepared: retained(), suffix: "prepared+detached" };
+    const second = yield* resume(trace, retained());
+
+    expect(second.failure).toBe(undefined);
+    expect(trace.launches.length).toBe(2);
+    expect(trace.launches[0]!.command).toContain("--session-id");
+    expect(trace.launches[1]!.command).toContain("--resume");
+    expect(trace.launches[1]!.command).not.toContain("--session-id");
+  });
+
+  it("CR5: an active tombstone refuses the resume before any of that", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      bound: true,
+      replay: { prepared: retained(), suffix: "prepared+detached" },
+    });
+    yield* trace.routes.publish(agreeing(retained()));
+    // The key this launch will actually own, which is derived from the agent
+    // command and cwd — not the one the retained record happens to name.
+    trace.ownership.tombstone({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY });
+
+    const refusal = yield* attempt(trace, INSTRUCTIONS);
+
+    expect(refusal?.class).toBe("session-recovery-required");
+    expect(trace.builds.asked).toEqual([]);
+    expect(trace.launches).toEqual([]);
+  });
+});
+
+/**
+ * Tier RR — which construction wins, and what the loser does
+ * (specs/native-agent-session-launch-spec.md §Construction route).
+ *
+ * A session is constructed once, by one of two mechanisms, and the durable
+ * route says which. Both mechanisms can be reached at the same moment by two
+ * provider scopes that share a coordinator, a route namespace and an ACPX
+ * store — a document that opens an eager `<Session>` while another run launches
+ * the same session natively. Publication is what settles it, so both orders are
+ * exercised here rather than only the one a scheduler happened to produce.
+ *
+ * Nothing converts. The loser of either order refuses or attaches; it never
+ * rewrites, replaces or removes the account the winner published.
+ */
+describe("Tier RR — racing construction routes", () => {
+  /** One durable namespace, reached by two provider scopes. */
+  interface Namespace {
+    store: AcpSessionStore;
+    shared: CoordinatorHarness;
+    routes: AgentSessionRouteStore;
+    /**
+     * What ownership said at each route operation.
+     *
+     * S4 is a claim about *when* reconciliation happens, and reading that off
+     * the production source is not evidence. The coordinator's own log is:
+     * `owned` means an acquisition is live and has not been released yet, so a
+     * read or publication recorded against it happened inside ownership.
+     */
+    duringRoutes: string[];
+  }
+
+  function namespace(): Namespace {
+    const shared = makeCoordinator();
+    const inner = createMemorySessionRouteStore();
+    const duringRoutes: string[] = [];
+    const witness = (what: string) => {
+      duringRoutes.push(`${what}:${shared.events.at(-1) ?? "none"}`);
+    };
+    return {
+      store: makeStore(),
+      shared,
+      duringRoutes,
+      routes: {
+        *read(key) {
+          witness("read");
+          return yield* inner.read(key);
+        },
+        *publish(candidate) {
+          witness("publish");
+          return yield* inner.publish(candidate);
+        },
+      },
+    };
+  }
+
+  function* routeOf(space: Namespace, sessionKey: string) {
+    return yield* space.routes.read({
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey,
+    });
+  }
+
+  /**
+   * Run `body` in its own provider scope on the shared namespace.
+   *
+   * What a scope finds has to be durable rather than something a live sibling
+   * is holding in memory, so nothing of one scope's provider state reaches the
+   * other — only the coordinator, the routes and the ACPX records they share.
+   */
+  function* inScope<T>(
+    space: Namespace,
+    harness: FakeRuntimeHarness,
+    trace: Trace,
+    body: () => Operation<T>,
+  ): Operation<T> {
+    return yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        bound: true,
+        store: space.store,
+        coordinator: space.shared.coordinator,
+        routeStore: space.routes,
+      });
+      return yield* body();
+    });
+  }
+
+  /** One contender: its own provider scope, and the construction it intends. */
+  interface Contender<T> {
+    harness: FakeRuntimeHarness;
+    trace: Trace;
+    body: () => Operation<T>;
+  }
+
+  /**
+   * Stage both contenders, then release the chosen winner first.
+   *
+   * The point of the barrier is that neither construction may begin until both
+   * exist. Both provider scopes are open and both operations are suspended at
+   * their gate before anything is published, so which route wins cannot be an
+   * artifact of one scope having been built later than the other, and no
+   * provider-local state can be what decides it — the only thing the two share
+   * is the coordinator, the routes and the ACPX records.
+   *
+   * The winner is then released alone. Concurrent release would prove something
+   * else entirely: the shared coordinator refuses contention rather than
+   * queueing it, so the loser would answer `session-busy` and never reach the
+   * route at all. The loser is released once the winner has let ownership go,
+   * which is the state a second run actually meets.
+   */
+  function* race<A, B>(
+    space: Namespace,
+    first: Contender<A>,
+    second: Contender<B>,
+  ): Operation<{ first: A; second: B; during: string[] }> {
+    return yield* scoped(function* () {
+      const staged = { first: withResolvers<void>(), second: withResolvers<void>() };
+      const gate = { first: withResolvers<void>(), second: withResolvers<void>() };
+      const answered = { first: withResolvers<A>(), second: withResolvers<B>() };
+      const teardown = withResolvers<void>();
+
+      function stage<T>(
+        side: "first" | "second",
+        contender: Contender<T>,
+        answer: { resolve: (value: T) => void },
+      ): Operation<void> {
+        return inScope(space, contender.harness, contender.trace, function* () {
+          // Installed, and about to construct. Nothing has been published.
+          staged[side].resolve();
+          yield* gate[side].operation;
+          answer.resolve(yield* contender.body());
+          // The scope stays open while the other contender runs: nothing one
+          // provider holds may be what settles the other's outcome.
+          yield* teardown.operation;
+        });
+      }
+
+      const leader = yield* spawn(() => stage("first", first, answered.first));
+      const follower = yield* spawn(() => stage("second", second, answered.second));
+
+      // The barrier: both scopes exist and both constructions are pending.
+      yield* staged.first.operation;
+      yield* staged.second.operation;
+      expect(space.duringRoutes).toEqual([]);
+
+      gate.first.resolve();
+      const firstAnswer = yield* answered.first.operation;
+      gate.second.resolve();
+      const secondAnswer = yield* answered.second.operation;
+
+      // Taken here, before the case reads a route of its own: what is being
+      // asserted is when the *providers* touched the store, and a test's own
+      // read afterwards is not one of their operations.
+      const during = [...space.duringRoutes];
+
+      teardown.resolve();
+      yield* leader;
+      yield* follower;
+      return { first: firstAnswer, second: secondAnswer, during };
+    });
+  }
+
+  /** Every route operation the race made happened inside a live acquisition. */
+  function ownedThroughout(during: string[]): boolean {
+    return during.length > 0 && during.every((entry) => entry.endsWith(":owned"));
+  }
+
+  it("RR1: ACP-first publishes first, and the native launch refuses without converting", function* () {
+    const space = namespace();
+    const first = createFakeRuntime();
+    const second = createFakeRuntime();
+    const firstTrace = newTrace();
+    const secondTrace = newTrace();
+
+    const raced = yield* race(
+      space,
+      {
+        harness: first,
+        trace: firstTrace,
+        body: () => Agent.operations.session(),
+      },
+      {
+        harness: second,
+        trace: secondTrace,
+        body: () => attempt(secondTrace, INSTRUCTIONS),
+      },
+    );
+
+    const published = yield* routeOf(space, raced.first.sessionKey);
+    expect(published?.route).toBe("acp-first");
+    const refusal = raced.second;
+
+    expect(refusal?.class).toBe("identity-unavailable");
+    // Refused before a build was observed, before an identity existed, and
+    // before any child.
+    expect(secondTrace.builds.asked).toEqual([]);
+    expect(secondTrace.launches).toEqual([]);
+    // And the winner's account is exactly what it was.
+    expect(yield* routeOf(space, raced.first.sessionKey)).toEqual(published);
+    // Every read and publication above happened while the coordinator reported
+    // this session owned — reconciliation is inside ownership, not beside it.
+    expect([raced.during, ownedThroughout(raced.during)]).toEqual([raced.during, true]);
+  });
+
+  it("RR2: client-native publishes first, and the eager session attaches to it", function* () {
+    const space = namespace();
+    const first = createFakeRuntime();
+    const second = createFakeRuntime();
+    const firstTrace = newTrace();
+    const secondTrace = newTrace();
+
+    const raced = yield* race(
+      space,
+      {
+        harness: first,
+        trace: firstTrace,
+        body: () => launch(INSTRUCTIONS),
+      },
+      {
+        harness: second,
+        trace: secondTrace,
+        body: () => Agent.operations.session(),
+      },
+    );
+
+    const prepared = firstTrace.records[0] as PreparedLaunchRecord;
+    const published = yield* routeOf(space, prepared.sessionKey);
+    expect(published?.route).toBe("client-native");
+
+    // The sibling attached to the conversation that already exists rather than
+    // publishing an account of its own beside it.
+    expect(second.ensureCalls.length).toBe(1);
+    expect(second.ensureCalls[0]?.resumeSessionId).toBe(prepared.nativeSessionId);
+    expect(yield* routeOf(space, prepared.sessionKey)).toEqual(published);
+    expect([raced.during, ownedThroughout(raced.during)]).toEqual([raced.during, true]);
+  });
+
+  it("RR3: an ACP ensure that failed leaves its published route standing", function* () {
+    const space = namespace();
+    const first = createFakeRuntime();
+    const second = createFakeRuntime();
+    const firstTrace = newTrace();
+    const secondTrace = newTrace();
+    // The route is published inside ownership, before the provider reaches for
+    // an agent — so a session that could not be established has still said how
+    // it was going to be constructed.
+    first.ensureFailure = new Error("the agent could not be reached");
+
+    let raised: Error | undefined;
+    yield* inScope(space, first, firstTrace, function* () {
+      try {
+        yield* Agent.operations.session();
+      } catch (error) {
+        raised = error as Error;
+      }
+    });
+
+    expect(raised?.message).toContain("could not be reached");
+    const sessionKey = SESSION_KEY;
+    const published = yield* routeOf(space, sessionKey);
+    expect(published?.route).toBe("acp-first");
+
+    // A session whose owner never proved it stopped is the first thing wrong
+    // with it, and it is answered before anything reads a route.
+    const unrecovered = yield* inScope(space, second, secondTrace, function* () {
+      return yield* attempt(secondTrace, INSTRUCTIONS);
+    });
+    expect(unrecovered?.class).toBe("session-recovery-required");
+
+    // Past that, what is left is the account the failed establishment
+    // published. A failed ensure did not free the session to be constructed
+    // some other way.
+    space.shared.recovered({ provider: "acpx", agent: AGENT_COMMAND, sessionKey });
+    const third = createFakeRuntime();
+    const thirdTrace = newTrace();
+    const refusal = yield* inScope(space, third, thirdTrace, function* () {
+      return yield* attempt(thirdTrace, INSTRUCTIONS);
+    });
+
+    expect(refusal?.class).toBe("identity-unavailable");
+    expect(thirdTrace.launches).toEqual([]);
+    expect(yield* routeOf(space, sessionKey)).toEqual(published);
   });
 });
