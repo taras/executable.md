@@ -79,11 +79,16 @@ interface CwdBarrier {
   waiting(count: number): Operation<void>;
   /** Let the `index`-th parked call, in arrival order, proceed. */
   release(index: number): void;
+  /** Stop parking: release everything held and let later calls straight through. */
+  open(): void;
+  /** How many calls have arrived so far. */
+  arrivals(): number;
 }
 
 function createCwdBarrier(dir: string): CwdBarrier {
   const held: { resolve: () => void }[] = [];
   const watchers: { count: number; resolve: () => void }[] = [];
+  let parking = true;
 
   function announce(): void {
     for (const watcher of [...watchers]) {
@@ -95,8 +100,20 @@ function createCwdBarrier(dir: string): CwdBarrier {
   }
 
   return {
+    arrivals: () => held.length,
+    open: () => {
+      parking = false;
+      for (const gate of held) {
+        gate.resolve();
+      }
+    },
     agentCwd: () =>
       (function* (): Operation<string> {
+        if (!parking) {
+          held.push({ resolve: () => {} });
+          announce();
+          return dir;
+        }
         const gate = withResolvers<void>();
         held.push({ resolve: gate.resolve });
         announce();
@@ -3117,11 +3134,16 @@ describe("Tier RT — bound runtime partitions", () => {
       return undefined;
     };
 
+    // Observed during the interleaving and asserted after it drains: an
+    // expectation that threw while the ensure was still gated would leave this
+    // scope's own cancellation waiting for an answer nobody is going to give.
+    const seen: Record<string, number> = {};
+
     const first = yield* spawn(() => Agent.operations.session("held"));
     yield* arrived.operation;
 
     // One runtime, one ensure in flight, no handle on it yet.
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.whileInFlight = harness.createdOptions.length;
 
     let refused: Error | undefined;
     try {
@@ -3129,19 +3151,20 @@ describe("Tier RT — bound runtime partitions", () => {
     } catch (error) {
       refused = error as Error;
     }
-    expect(refused?.message).toContain("could not open");
 
     // The sibling gave up its own claim. The partition is still standing on
     // the work that has not finished, so a third session bound to the same
     // build reaches the same child rather than starting another.
     const third = yield* Agent.operations.session("later");
-    expect(third.agentSessionId).toBe(THIRD);
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.afterSiblingFailed = harness.createdOptions.length;
 
     gate.resolve();
     const settled = yield* first;
-    expect(settled.agentSessionId).toBe(FIRST);
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.afterSettled = harness.createdOptions.length;
+
+    expect(refused?.message).toContain("could not open");
+    expect([settled.agentSessionId, third.agentSessionId]).toEqual([FIRST, THIRD]);
+    expect(seen).toEqual({ whileInFlight: 1, afterSiblingFailed: 1, afterSettled: 1 });
   });
 
   it("RT6: two operations crossing the same lookup suspension converge on one runtime", function* () {
@@ -3228,32 +3251,143 @@ describe("Tier RT — bound runtime partitions", () => {
       return gate.operation;
     };
 
+    // Observed during the interleaving and asserted after it drains, so a
+    // failed expectation cannot strand this scope waiting on a gated ensure.
+    const seen: Record<string, number> = {};
+
     const holding = yield* spawn(() => Agent.operations.session("held"));
     yield* arrived.operation;
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.whileClaimed = harness.createdOptions.length;
 
     // A sibling runs to completion beside it, which releases its own handle on
     // the way out. The partition survives that, because the first operation is
     // still standing on it.
     const betaSession = yield* Agent.operations.session("beta");
-    expect(betaSession.agentSessionId).toBe(SECOND);
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.afterSiblingReleased = harness.createdOptions.length;
 
     // And a third reaches the same child rather than starting another.
     const gammaSession = yield* Agent.operations.session("gamma");
-    expect(gammaSession.agentSessionId).toBe(THIRD);
-    expect(harness.createdOptions).toHaveLength(1);
+    seen.afterThird = harness.createdOptions.length;
 
     // Only once the work that was standing on it finishes — and releases its
     // own handle — is the partition gone, and only then does the next operation
     // observe again and build one of its own.
     gate.resolve();
     const heldSession = yield* holding;
-    expect(heldSession.agentSessionId).toBe(FIRST);
-
     const deltaSession = yield* Agent.operations.session("delta");
-    expect(deltaSession.agentSessionId).toBe(FOURTH);
-    expect(harness.createdOptions).toHaveLength(2);
+    seen.afterFinalRelease = harness.createdOptions.length;
+
+    expect([heldSession.agentSessionId, betaSession.agentSessionId]).toEqual([FIRST, SECOND]);
+    expect([gammaSession.agentSessionId, deltaSession.agentSessionId]).toEqual([THIRD, FOURTH]);
+    expect(seen).toEqual({
+      whileClaimed: 1,
+      afterSiblingReleased: 1,
+      afterThird: 1,
+      afterFinalRelease: 2,
+    });
+  });
+
+  it("RT8: an election is one step, and a sibling releasing cannot undo it", function* () {
+    // Two properties, in the one interleaving that needs both. Resolving the
+    // directory an Agent runs in suspends, so it happens before the map is
+    // consulted rather than after a miss — an operation arriving to a map that
+    // already names its partition still crosses that suspension. And an entry
+    // is published already claimed, so there is no moment where it sits in the
+    // map standing on nothing for a sibling giving up its own claim to evict.
+    //
+    // Every observation is taken during the interleaving and asserted after it
+    // has been drained: an expectation that threw while an ensure was still
+    // gated would leave this scope's own cancellation waiting for an answer
+    // nobody is going to give.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const barrier = createCwdBarrier(CWD);
+    const held = deriveSessionKey(AGENT_COMMAND, CWD, "held");
+    const sibling = deriveSessionKey(AGENT_COMMAND, CWD, "sibling");
+    const joiner = deriveSessionKey(AGENT_COMMAND, CWD, "joiner");
+    const later = deriveSessionKey(AGENT_COMMAND, CWD, "later");
+    yield* routes.publish(route(held, FIRST));
+    yield* routes.publish(route(sibling, SECOND));
+    yield* routes.publish(route(joiner, THIRD));
+    yield* routes.publish(route(later, FOURTH));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+      agentCwd: barrier.agentCwd,
+    });
+
+    // The first operation holds its claim from the moment it elects until its
+    // ensure answers, which is what the gate is for.
+    const gate = withResolvers<void>();
+    const ensuring = withResolvers<void>();
+    harness.ensureGate = (input) => {
+      if (input.sessionKey !== held) {
+        return undefined;
+      }
+      ensuring.resolve();
+      return gate.operation;
+    };
+
+    const seen: Record<string, number> = {};
+
+    const holding = yield* spawn(() => Agent.operations.session("held"));
+    yield* barrier.waiting(1);
+    barrier.release(0);
+    yield* barrier.waiting(2);
+    // Parked having resolved its options and decided nothing: this suspension
+    // comes before the map is consulted, so nothing is published yet.
+    seen.beforeElection = harness.createdOptions.length;
+
+    barrier.release(1);
+    yield* ensuring.operation;
+    seen.afterElection = harness.createdOptions.length;
+
+    // A sibling now arrives to a map that already names this partition, and
+    // still crosses the suspension before deciding.
+    const beside = yield* spawn(() => Agent.operations.session("sibling"));
+    yield* barrier.waiting(3);
+    barrier.release(2);
+    yield* sleep(50);
+    seen.arrivalsOnAHit = barrier.arrivals();
+
+    // It joins that same entry and runs to completion beside the first, which
+    // releases its own handle on the way out. That release takes its own count
+    // to zero and the partition's to one, because the first is still standing
+    // on it.
+    barrier.open();
+    const siblingSession = yield* beside;
+    seen.afterSiblingReleased = harness.createdOptions.length;
+
+    // So a third reaches the same child rather than a second one.
+    const joinerSession = yield* Agent.operations.session("joiner");
+    seen.afterJoiner = harness.createdOptions.length;
+
+    // Reconstruction waits for the release that actually ends the work: the
+    // first operation answering, adopting, and giving its own handle back.
+    gate.resolve();
+    const heldSession = yield* holding;
+    const laterSession = yield* Agent.operations.session("later");
+    seen.afterFinalRelease = harness.createdOptions.length;
+
+    expect(seen).toEqual({
+      beforeElection: 0,
+      afterElection: 1,
+      // Four: the sibling's placement *and* its option resolution, on a hit.
+      arrivalsOnAHit: 4,
+      afterSiblingReleased: 1,
+      afterJoiner: 1,
+      afterFinalRelease: 2,
+    });
+    expect([heldSession.agentSessionId, siblingSession.agentSessionId]).toEqual([FIRST, SECOND]);
+    expect([joinerSession.agentSessionId, laterSession.agentSessionId]).toEqual([THIRD, FOURTH]);
+    // Every handle that belonged to the first partition was closed through it,
+    // and the one built afterwards was closed through its own.
+    expect(harness.closeRuntimeIndexes).toHaveLength(4);
+    expect(new Set(harness.closeRuntimeIndexes.slice(0, 3)).size).toBe(1);
+    expect(harness.closeRuntimeIndexes[3]).not.toBe(harness.closeRuntimeIndexes[0]);
   });
 
   it("RT4: provider teardown settles a partition still holding a handle", function* () {

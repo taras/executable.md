@@ -857,29 +857,16 @@ function* useAcpxProviderState(
   }
 
   /**
-   * The runtime for `build`, built if this is the first work to want one.
+   * Everything building a runtime for `build` would need, resolved in advance.
    *
-   * Claims nothing: taking a claim here would put a yield point between the
-   * claim and the cleanup that settles it, and `reserve()` is synchronous
-   * precisely so no such point exists.
+   * This is where the suspension lives — the directory an Agent runs in is
+   * asked for here — and it deliberately decides nothing and publishes nothing.
+   * Separating it is what lets the decision that follows be one synchronous
+   * step: an election that suspends part-way through is an election another
+   * operation can act between.
    */
-  function* runtimeFor(build?: BoundBuild): Operation<RuntimeEntry> {
-    const partition = build ? partitionOf(build) : undefined;
-    const held = partition === undefined ? unbound : runtimes.get(partition);
-    if (held) {
-      return held;
-    }
+  function* runtimeBlueprint(build?: BoundBuild): Operation<AcpRuntimeOptions> {
     const base = yield* runtimeOptions();
-    // Read again, and decide and publish without yielding after it. Resolving
-    // the options is the one suspension in here, and another operation electing
-    // the same partition can pass through it too — two entries for one binding
-    // would be two children for a session the first already owns, and the loser
-    // would be evictable by nobody, because eviction only removes the entry the
-    // map currently holds.
-    const raced = partition === undefined ? unbound : runtimes.get(partition);
-    if (raced) {
-      return raced;
-    }
     const options: AcpRuntimeOptions = {
       ...base,
       // The acpx callback boundary: `scope.run` returns a Promise-compatible
@@ -896,11 +883,30 @@ function* useAcpxProviderState(
         options.agentRegistry = pinnedRegistry(build.agentName, build.adapterCommand);
       }
     }
+    return options;
+  }
+
+  /**
+   * Elect the runtime for this partition and claim it, in one step.
+   *
+   * Synchronous from the map read to the claim, and that is the whole point.
+   * Publishing an entry and then claiming it across a suspension leaves it in
+   * the map standing on nothing — long enough for a sibling giving up its own
+   * claim to evict it, after which this caller holds a runtime the map no
+   * longer names and the next operation builds a second child for the same
+   * build. Here the entry is published already claimed.
+   */
+  function electRuntime(partition: string | undefined, options: AcpRuntimeOptions): RuntimeEntry {
+    const held = partition === undefined ? unbound : runtimes.get(partition);
+    if (held) {
+      held.active++;
+      return held;
+    }
     const entry: RuntimeEntry = {
       runtime: createRuntime(options),
       partition,
       handles: 0,
-      active: 0,
+      active: 1,
     };
     if (partition === undefined) {
       unbound = entry;
@@ -929,11 +935,6 @@ function* useAcpxProviderState(
       cwd: entry.cwd,
       session: entry.session,
     });
-  }
-
-  /** Claim this runtime for work about to start. Synchronous, deliberately. */
-  function reserve(entry: RuntimeEntry): void {
-    entry.active++;
   }
 
   /**
@@ -1014,28 +1015,31 @@ function* useAcpxProviderState(
     toSession: (handle: AcpRuntimeHandle, entry: RuntimeEntry) => ManagedSession,
   ): Operation<ManagedSession> {
     return scoped(function* (): Operation<ManagedSession> {
-      const entry = yield* runtimeFor(build);
+      const partition = build ? partitionOf(build) : undefined;
+      // Every suspension this needs, taken before anything is decided. What
+      // follows must not yield, so nothing it depends on may.
+      const options = yield* runtimeBlueprint(build);
+      let claimed: RuntimeEntry | undefined;
       let pending: Promise<AcpRuntimeHandle> | undefined;
-      let claimed = false;
       let settled = false;
 
-      // Registered before the claim is taken and before the ensure is started,
-      // because both of those are synchronous and this is not: an `ensure`
-      // registered after them could be cut off by a cancellation delivered
-      // while `ensureSession()` was still on the stack, which is exactly when
-      // there is a Promise in flight and nobody left to observe it.
+      // Registered before anything is claimed or published, and before the
+      // ensure is started, because all of those are synchronous and this is
+      // not: an `ensure` registered after them could be cut off by a
+      // cancellation delivered while `ensureSession()` was still on the stack,
+      // which is exactly when there is a Promise in flight and nobody left to
+      // observe it.
       yield* ensure(function* () {
         if (settled) {
           return;
         }
         settled = true;
-        if (!claimed) {
-          // Cancelled before this work claimed anything. The runtime may have
-          // been built for it and never used, and `evictIfIdle` removes it only
-          // if nothing else has since stood on it.
-          evictIfIdle(entry);
+        if (claimed === undefined) {
+          // Cancelled before the election. Nothing was published and nothing
+          // claimed, so there is nothing here to give back.
           return;
         }
+        const entry = claimed;
         if (pending === undefined) {
           releaseReservation(entry);
           return;
@@ -1062,8 +1066,12 @@ function* useAcpxProviderState(
         yield* abandonHandle(late, "cancelled before the session was established");
       });
 
-      claimed = true;
-      reserve(entry);
+      // One synchronous step: the map is read, an entry is published already
+      // claimed if this is the first work to want one, and the ensure is
+      // started. Nothing yields in here, so no sibling runs between the
+      // publication and the claim that keeps it alive.
+      const entry = electRuntime(partition, options);
+      claimed = entry;
       pending = entry.runtime.ensureSession(input);
 
       let handle: AcpRuntimeHandle;

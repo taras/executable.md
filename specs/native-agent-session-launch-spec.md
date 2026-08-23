@@ -577,9 +577,18 @@ different things can be: a handle nobody has closed, and work that has claimed
 the runtime and not yet produced one. An ensure in flight is the second kind.
 Eviction requires both to be zero — a partition removed while either is nonzero
 is one a concurrent operation rebuilds, which is a second child for a build the
-first is still talking to. Selecting a partition is one step: the decision and
-the publication have no suspension between them, so two operations electing the
-same one converge on it rather than standing up a runtime each.
+first is still talking to.
+
+Electing a partition is one step. Everything that suspends — resolving the
+directory an Agent runs in among it — happens first, so an operation arriving to
+a map that already names its partition crosses that suspension too rather than
+answering from a stale read. What follows does not suspend at all: the map is
+read, an entry is published *already claimed* if this is the first work to want
+one, and the ensure is started. Publishing an entry and claiming it across a
+suspension would leave it in the map standing on nothing, which a sibling giving
+up its own claim would evict — and the caller would then hold a runtime the map
+no longer names while the next operation built a second child for the same
+build.
 
 That, and what follows, is how items 8, 10 and 14 of the structural checklist
 are met rather than a further invariant beside them:
