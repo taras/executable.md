@@ -5,12 +5,20 @@ import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 
+import type { Runtime } from "../runtime-test-exclusions.ts";
+
 const CI_WORKFLOW = new URL("../../.github/workflows/ci.yml", import.meta.url);
 
 interface Step {
   env?: Record<string, string>;
+  name?: string;
   run?: string;
   uses?: string;
+}
+
+interface Strategy {
+  failFast: unknown;
+  shards: unknown;
 }
 
 interface Job {
@@ -18,6 +26,7 @@ interface Job {
   name?: string;
   needs?: string[];
   steps: Step[];
+  strategy?: Strategy;
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -56,10 +65,17 @@ function steps(value: unknown, label: string): Step[] {
     const step = object(entry, `${label}[${index}]`);
     return {
       env: "env" in step ? stringRecord(step.env, `${label}[${index}].env`) : undefined,
+      name: "name" in step ? string(step.name, `${label}[${index}].name`) : undefined,
       run: "run" in step ? string(step.run, `${label}[${index}].run`) : undefined,
       uses: "uses" in step ? string(step.uses, `${label}[${index}].uses`) : undefined,
     };
   });
+}
+
+function strategy(value: unknown, label: string): Strategy {
+  const record = object(value, label);
+  const matrix = object(record.matrix, `${label}.matrix`);
+  return { failFast: record["fail-fast"], shards: matrix.shard };
 }
 
 function job(value: unknown, label: string): Job {
@@ -69,7 +85,46 @@ function job(value: unknown, label: string): Job {
     name: "name" in record ? string(record.name, `${label}.name`) : undefined,
     needs: "needs" in record ? strings(record.needs, `${label}.needs`) : undefined,
     steps: steps(record.steps, `${label}.steps`),
+    strategy: "strategy" in record ? strategy(record.strategy, `${label}.strategy`) : undefined,
   };
+}
+
+/** The three sharded runtime jobs, by job ID. */
+const RUNTIME_JOBS: Record<string, Runtime> = {
+  "test-deno": "deno",
+  "test-node": "node",
+  "test-bun": "bun",
+};
+
+function matrixJob(workflow: Record<string, Job>, id: string): Job {
+  const found = workflow[id];
+  if (found === undefined) {
+    throw new Error(`workflow.jobs.${id} is missing`);
+  }
+  return found;
+}
+
+/** Every index a matrix declares, as declared. */
+function shardIndices(job: Job, id: string): number[] {
+  const shards = job.strategy?.shards;
+  if (!Array.isArray(shards)) {
+    throw new Error(`workflow.jobs.${id}.strategy.matrix.shard is not an array`);
+  }
+  return shards.map((entry, index) => {
+    if (typeof entry !== "number") {
+      throw new Error(`workflow.jobs.${id}.strategy.matrix.shard[${index}] is not a number`);
+    }
+    return entry;
+  });
+}
+
+/** The step that runs the tests, which is the only one a shard argument reaches. */
+function testStep(job: Job, id: string): Step {
+  const found = job.steps.find((step) => step.name === "Test");
+  if (found?.run === undefined) {
+    throw new Error(`workflow.jobs.${id} has no Test step`);
+  }
+  return found;
 }
 
 function* workflow(): Operation<Record<string, Job>> {
@@ -210,6 +265,125 @@ describe("the CI smoke job", () => {
     ]) {
       expect(commands).toContain(script);
     }
+  });
+});
+
+describe("the sharded runtime jobs", () => {
+  /**
+   * The job IDs are unchanged on purpose. GitHub waits for a whole matrix
+   * behind one ID, so `green.needs` keeps working without learning what a shard
+   * is — and a shard that failed, was cancelled, or unexpectedly skipped still
+   * makes that one dependency non-success.
+   */
+  it("keeps the three job IDs and makes each a fail-fast: false matrix", function* () {
+    const parsed = yield* workflow();
+
+    for (const id of Object.keys(RUNTIME_JOBS)) {
+      const job = matrixJob(parsed, id);
+      expect({ id, failFast: job.strategy?.failFast }).toEqual({ id, failFast: false });
+      expect({ id, indices: shardIndices(job, id).length }).not.toEqual({ id, indices: 0 });
+    }
+  });
+
+  it("declares each index once, and every index in one through the count", function* () {
+    const parsed = yield* workflow();
+
+    for (const id of Object.keys(RUNTIME_JOBS)) {
+      const indices = shardIndices(matrixJob(parsed, id), id);
+
+      expect({ id, indices }).toEqual({
+        id,
+        indices: Array.from({ length: indices.length }, (_, offset) => offset + 1),
+      });
+      expect({ id, distinct: new Set(indices).size }).toEqual({ id, distinct: indices.length });
+    }
+  });
+
+  it("shows and invokes the same index out of the same count", function* () {
+    const parsed = yield* workflow();
+
+    for (const [id, runtime] of Object.entries(RUNTIME_JOBS)) {
+      const job = matrixJob(parsed, id);
+      const count = shardIndices(job, id).length;
+      const selection = "${{ matrix.shard }}/" + count;
+
+      expect({ id, name: job.name }).toEqual({ id, name: `${id} (${selection})` });
+      const run = testStep(job, id).run ?? "";
+      expect({ id, invokes: run.includes(selection) }).toEqual({ id, invokes: true });
+      expect({ id, names: run.includes(runtime) }).toEqual({ id, names: true });
+    }
+  });
+
+  /** A shard argument anywhere else would make a preparation step shard-specific. */
+  it("gives the shard to the Test step and to nothing else", function* () {
+    const parsed = yield* workflow();
+
+    for (const id of Object.keys(RUNTIME_JOBS)) {
+      const job = matrixJob(parsed, id);
+      for (const step of job.steps) {
+        expect({ id, step: step.name, sharded: (step.run ?? "").includes("matrix.shard") }).toEqual(
+          { id, step: step.name, sharded: step.name === "Test" },
+        );
+      }
+    }
+  });
+
+  /**
+   * Every step above `Test` is what makes the runtime able to run at all. A
+   * matrix that dropped one would still report six green shards.
+   */
+  it("keeps each runtime's own preparation, in order", function* () {
+    const parsed = yield* workflow();
+    const required: Record<string, string[]> = {
+      "test-deno": [
+        "deno task check",
+        "deno task gen:publish-workflow",
+        "deno task deps",
+        "deno task build:web",
+      ],
+      "test-node": [
+        "deno task deps",
+        "deno task build:web",
+        "pnpm install",
+        "pnpm exec tsc --project tsconfig.node.json",
+      ],
+      "test-bun": ["bun install"],
+    };
+
+    for (const [id, commands] of Object.entries(required)) {
+      const job = matrixJob(parsed, id);
+      const runs = job.steps.map((step) => step.run ?? "");
+      const test = runs.findIndex((run) => run.includes("matrix.shard"));
+
+      let previous = -1;
+      for (const command of commands) {
+        const at = runs.findIndex((run) => run.includes(command));
+        expect({ id, command, found: at >= 0 }).toEqual({ id, command, found: true });
+        expect({ id, command, afterPrevious: at > previous }).toEqual({
+          id,
+          command,
+          afterPrevious: true,
+        });
+        expect({ id, command, beforeTest: at < test }).toEqual({ id, command, beforeTest: true });
+        previous = at;
+      }
+    }
+  });
+
+  it("keeps the Bun entrypoint smoke beside the Bun shards", function* () {
+    const bun = matrixJob(yield* workflow(), "test-bun");
+    const commands = bun.steps.map((step) => step.run ?? "").join("\n");
+
+    expect(commands).toContain(
+      "bun run packages/cli/src/bun.ts test smoke-test/test-agent/README.md",
+    );
+  });
+
+  /** No escape hatch: a red shard has to be able to redden the job. */
+  it("gives no shard a way to continue on error", function* () {
+    const source = yield* readTextFile(CI_WORKFLOW);
+
+    expect(source).not.toContain("continue-on-error");
   });
 });
 
@@ -366,6 +540,31 @@ describe("the CI workflow aggregate", () => {
     for (const occasion of ["push", "pull-request", "repair"] as const) {
       for (const result of rejected) {
         expect(yield* runGreen(commandText, results(parsed, result), occasion)).not.toEqual(0);
+      }
+    }
+  });
+
+  /**
+   * The matrix IDs by name. GitHub collapses a whole matrix into one result
+   * behind the job ID, so this is what proves a red shard reaches `green` —
+   * the derived checks above cannot tell a matrix from an ordinary job.
+   */
+  it("rejects any non-success from each runtime matrix, on every occasion", function* () {
+    const parsed = yield* workflow();
+    const commandText = command(green(parsed));
+
+    for (const occasion of ["push", "pull-request", "repair"] as const) {
+      for (const job of ["test-deno", "test-node", "test-bun"]) {
+        for (const result of ["failure", "cancelled", "skipped", "timed_out", "action_required"]) {
+          const values = required(parsed, occasion);
+          values[job] = result;
+          expect({
+            occasion,
+            job,
+            result,
+            code: yield* runGreen(commandText, values, occasion),
+          }).not.toEqual({ occasion, job, result, code: 0 });
+        }
       }
     }
   });

@@ -9,20 +9,10 @@
  * file missing any of them rather than partitioning against data nobody can
  * place.
  *
- * Reading is what every ordinary check does. Writing happens in exactly one
- * command, `deno task weights:measure`, and only after every measurement
- * passed — a file half-replaced by a suite that failed halfway would be
- * indistinguishable from one measured on a healthy corpus.
+ * This module reads. Producing a measurement is `measure-weights.ts`, and the
+ * separation is deliberate: a shard job parses this file on every runner, and
+ * it should not have to load a runner table and a process seam to do it.
  */
-import { createContext } from "effection";
-import type { Context, Operation } from "effection";
-import { exec } from "@effectionx/process";
-import { fileURLToPath } from "node:url";
-
-import { replaceThroughStaging } from "./staged-write.ts";
-import { applicableTestFiles } from "./test-files.ts";
-import { exitCode, oneFileCommand } from "./runtime-tests.ts";
-import type { Launch } from "./runtime-tests.ts";
 import { parseRuntime, RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
 
@@ -46,7 +36,7 @@ export interface TestWeights {
 export class TestWeightsError extends Error {}
 
 /** The one version this repository writes and reads. */
-const VERSION = 1;
+export const WEIGHTS_VERSION = 1;
 
 const COMMIT = /^[0-9a-f]{40}$/;
 const RUN_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/;
@@ -174,8 +164,8 @@ export function parseTestWeights(source: string): TestWeights {
   }
 
   const parsed = record(document, "weights");
-  if (parsed.version !== VERSION) {
-    throw new TestWeightsError(`weights.version must be ${VERSION}`);
+  if (parsed.version !== WEIGHTS_VERSION) {
+    throw new TestWeightsError(`weights.version must be ${WEIGHTS_VERSION}`);
   }
 
   const runtimes = record(parsed.runtimes, "weights.runtimes");
@@ -194,7 +184,7 @@ export function parseTestWeights(source: string): TestWeights {
   }
 
   return {
-    version: VERSION,
+    version: WEIGHTS_VERSION,
     source: parseWeightSource(parsed.source, "weights.source"),
     runtimes: measured,
   };
@@ -234,62 +224,4 @@ export function formatTestWeights(weights: TestWeights): string {
 /** Where the committed weights live, relative to the repository root. */
 export function weightsFile(root: URL): URL {
   return new URL("test-weights.json", root);
-}
-
-/** Runs one test file and settles with its exit status. */
-export type RunLaunch = (launch: Launch & { cwd: string }) => Operation<number>;
-
-/**
- * The seam a measurement runs through. The default spawns the real runner; a
- * test substitutes one that records what it was asked to run.
- */
-export const TestRuns: Context<RunLaunch> = createContext<RunLaunch>(
-  "test-weights.runs",
-  function* (launch) {
-    return exitCode(
-      yield* exec(launch.command, { arguments: launch.arguments, cwd: launch.cwd }).join(),
-    );
-  },
-);
-
-/**
- * Time every applicable file under every runtime, one file per process.
- *
- * The result is held in memory and returned; nothing is written here. A failure
- * anywhere aborts the whole measurement, because a corpus that cannot pass is a
- * corpus whose timings describe an error path rather than a test run.
- */
-export function* measureTestWeights(root: URL, source: WeightSource): Operation<TestWeights> {
-  const run = yield* TestRuns.expect();
-  const cwd = fileURLToPath(root);
-  const runtimes: Record<Runtime, Record<string, number>> = { deno: {}, node: {}, bun: {} };
-
-  for (const runtime of RUNTIMES) {
-    const files = yield* applicableTestFiles(runtime, root);
-    console.error(`measuring ${files.length} test files under ${runtime}`);
-
-    for (const file of files) {
-      const started = performance.now();
-      const code = yield* run({ ...oneFileCommand(runtime, file), cwd });
-      // The schema admits positive integers only, and a file that finishes in
-      // under half a millisecond would otherwise round to a weight of zero.
-      const elapsed = Math.max(1, Math.round(performance.now() - started));
-
-      if (code !== 0) {
-        throw new Error(
-          `${runtime} exited ${code} on ${file}; measurement stopped and no weights were written`,
-        );
-      }
-
-      runtimes[runtime][file] = elapsed;
-      console.error(`  ${file} ${elapsed}ms`);
-    }
-  }
-
-  return { version: VERSION, source, runtimes };
-}
-
-/** Replace the committed weights atomically, staging beside them first. */
-export function writeTestWeights(path: URL, weights: TestWeights): Operation<void> {
-  return replaceThroughStaging(path, formatTestWeights(weights));
 }

@@ -15,18 +15,17 @@ import { pathToFileURL } from "node:url";
 
 import {
   formatTestWeights,
-  measureTestWeights,
   parseTestWeights,
   parseWeightSource,
   PROVENANCE_VARIABLES,
-  TestRuns,
   TestWeightsError,
   weightsFile,
   weightSourceFrom,
-  writeTestWeights,
 } from "../lib/test-weights.ts";
-import type { RunLaunch, TestWeights, WeightSource } from "../lib/test-weights.ts";
-import { oneFileCommand } from "../lib/runtime-tests.ts";
+import type { TestWeights, WeightSource } from "../lib/test-weights.ts";
+import { measureTestWeights, writeTestWeights } from "../lib/measure-weights.ts";
+import { oneFileCommand, TestRuns } from "../lib/runtime-tests.ts";
+import type { RunLaunch } from "../lib/runtime-tests.ts";
 import { RUNTIMES } from "../runtime-test-exclusions.ts";
 
 const SOURCE: WeightSource = {

@@ -84,6 +84,7 @@
     "scripts/lib/github.ts",
     "scripts/lib/main-green.ts",
     "scripts/lib/main-health.ts",
+    "scripts/lib/measure-weights.ts",
     "scripts/lib/runtime-tests.ts",
     "scripts/lib/staged-write.ts",
     "scripts/lib/test-files.ts",
