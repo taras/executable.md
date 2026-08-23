@@ -1314,7 +1314,8 @@ expansion identity the engine derived, and by nothing else. The authored
 elements are two sessions. The name travels the compositional public chain,
 where a handler may observe or change it; the identity travels inside an opaque
 placement the element routes, readable only through the authority delivered to
-the installed provider. That placement is bound to the element that opened it
+the installed provider. It reaches the placement from the invocation capability
+the engine minted, never from the expansion context. That placement is bound to the element that opened it
 and is good for one use, so a handler cannot keep the first element's placement
 and route it for the second — both would otherwise resolve to the first
 element's identity.
@@ -2480,6 +2481,26 @@ A registry answers a name with whatever was registered under it, so admitting
 `timeout` or `exec` as words would let `ExecuteOptions.modifiers` substitute the
 middleware a binding contract names. Ordinary blocks are unaffected: a document
 still reaches a registered modifier by name, a replaced `timeout` included.
+
+### Capability-backed invocation identity
+
+A component that names a durable operation after itself decides which retained
+record a replay restores, so two sites arriving at one name each replay the
+other's work. That name never comes from a context or a contextual Api answer:
+both are replaceable by anything running above the invocation, which is the rule
+in *State across loaded copies*. The engine hands it over instead, as the second
+argument to a function component.
+
+Handing over a plain identifier would not settle it. `importComponent` is
+public: a handler may delegate the import, receive the registered definition and
+return a wrapper that calls the original with an object of its own. So what the
+engine hands over is opaque — a private field, nothing to read, and no shape to
+copy — and a trusted host takes the identity out of it through a delivered
+reader on the host entrypoint. The issuance is minted per invocation and ended
+when that invocation returns, and the authoritative read is single-use.
+Forwarding the genuine issuance is ordinary delegation and stays supported;
+minting one, keeping a finished one, and spending one site's at another are each
+refusals.
 
 ### Capability-backed nested execution
 

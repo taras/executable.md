@@ -64,6 +64,12 @@
 export { executeInstalled } from "./src/execute.ts";
 export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
+
+/**
+ * The durable identity of the invocation a trusted host was handed. One use, and
+ * only while that invocation is running — see `component-invocation.ts`.
+ */
+export { ComponentInvocationError, durableIdentityOf } from "./src/component-invocation.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 export {

@@ -20,6 +20,7 @@ import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
 import { sessionPlacement } from "./session-request.ts";
+import { durableIdentityOf } from "../component-invocation.ts";
 import type { ComponentInvocation } from "../types.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
@@ -184,7 +185,7 @@ export function* SessionComponent(
   // handler that kept the placement cannot route it for the next `<Session>`:
   // both would otherwise resolve to this element's identity. `close()` is
   // synchronous, so the guarantee holds however the call left.
-  const issuance = sessionPlacement(invocation.id, asString(props.name));
+  const issuance = sessionPlacement(durableIdentityOf(invocation), asString(props.name));
   let session: Session;
   try {
     session = yield* Agent.operations.session(issuance.request);

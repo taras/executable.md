@@ -1860,6 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
+| `src/component-invocation.ts` | `ComponentInvocation`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation, which is where a durable name comes from when a context would be replaceable (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -3805,6 +3806,30 @@ Supplied text reports the stable root identity `<eval>` (§8.1), so two inline
 runs of the same text derive the same identifiers. That is what `<eval>` means
 everywhere else, and workflow-wide identity is a run identifier together with an
 expansion identifier, never the expansion identifier alone.
+
+**The invocation a component is handed.** A function component is invoked with
+two arguments: its validated props, and the invocation the engine entered. The
+second is where a component naming a *durable* operation after itself gets the
+name, and it is deliberately not the context above: what a document can rebind
+it can rebind, and a contextual Api handler installed outside an invocation
+answers ahead of the engine's own (Tier CIV). A component that needs nothing
+from it declares one parameter and never sees it.
+
+It is a capability, not a value. There is nothing on it to read: the identity
+sits behind a private field, and only a trusted host takes it, through
+`durableIdentityOf()` on the host entrypoint. This is what `importComponent`
+middleware makes necessary — a handler may delegate an import, receive the
+registered definition and return a wrapper that calls the original with an
+object of its own, so a structural `{ id }` would be a durable identity any
+wrapper could mint, and two sites given one minted value collapse into one
+durable name.
+
+The engine mints one per invocation and ends it when that invocation returns,
+however it left. Forwarding the genuine issuance is ordinary delegation and
+stays supported. Everything else refuses rather than answering: a value the
+engine did not mint names no identity, an issuance whose invocation has finished
+names none here, and a second authoritative read of one refuses, so a wrapper
+cannot keep the first site's issuance and spend it at the second.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9910,6 +9935,19 @@ perform, separately from the binding, the rendered output, and the journal.
 | FE35 | Independence | Cancelling one invocation tears down only its own request |
 | FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
 | FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
+
+### Tier CIV — The invocation the engine hands a component
+
+Defined in §5.6.
+
+| # | Test | Verify |
+|---|------|--------|
+| CIV1 | Distinct sites | Two invocations are handed two identities, each the engine's own for that invocation |
+| CIV2 | The Api is replaceable | A handler installed outside an invocation replaces a Component Api answer the engine would have given, which is why a durable name may not come from one |
+| CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
+| CIV4 | No minting | `importComponent` middleware that delegates and calls the original with an object of its own is refused at both sites, and takes no identity |
+| CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
+| CIV6 | No substitution | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

@@ -64,6 +64,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
+import { issueInvocation } from "./component-invocation.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -2927,7 +2928,15 @@ function* expandFunctionComponent(
           if (TestHarnessComponentDefinition.own(definition.fn)) {
             return yield* definition.fn.invoke(validatedProps, binding);
           }
-          return yield* definition.fn(validatedProps, { id: expansion.id });
+          // Minted here and ended in the same breath: the capability is alive
+          // exactly while this invocation is, so an issuance a wrapper kept
+          // from another element authorizes nothing when it is routed here.
+          const issued = issueInvocation(expansion.id);
+          try {
+            return yield* definition.fn(validatedProps, issued.invocation);
+          } finally {
+            issued.close();
+          }
         } catch (error) {
           if (error instanceof Error) {
             throw error;

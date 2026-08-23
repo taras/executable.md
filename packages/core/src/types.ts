@@ -8,6 +8,7 @@
 import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
+import type { ComponentInvocation } from "./component-invocation.ts";
 
 export type Json = DurableJson;
 
@@ -236,29 +237,10 @@ export type ComponentExecution<T> = Operation<T>;
  * generator's return value is never used. `useContent(slot?)` is a
  * compatibility alias with the same behavior.
  */
+export type { ComponentInvocation } from "./component-invocation.ts";
+
 export interface FunctionComponent {
   (props: Record<string, Json>, invocation: ComponentInvocation): ComponentExecution<unknown>;
-}
-
-/**
- * What the engine tells a function component about the invocation it is in.
- *
- * Handed as an argument rather than published anywhere, because this is what a
- * component names a durable operation after. Every other channel into an
- * invocation is composable: a Context is addressed by name, so a loaded
- * component may bind one for its descendants, and a contextual Api handler
- * installed by an ancestor answers ahead of the engine's own. An argument
- * passed at the call site is neither — the engine hands this to the exact
- * implementation it resolved, and nothing sits between them (Code Rule 15).
- *
- * A component that does not need it declares one parameter and never sees it.
- */
-export interface ComponentInvocation {
-  /**
-   * This invocation's durable identity — the same value `getExpansion()`
-   * reports, from a channel a document cannot substitute.
-   */
-  readonly id: string;
 }
 
 /**
