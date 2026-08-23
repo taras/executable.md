@@ -1477,6 +1477,12 @@ happen, and everything around it is ordinary Markdown:
 </Loop>
 ```
 
+and the next iteration's `<Prompt>` renders what the last one observed:
+
+```md
+<Json value={observation} />
+```
+
 `<Prompt>` remains exactly one durable Agent turn; no hidden retry or
 observation loop is added to it, and the Agent Api gains no second operation. The
 document owns the attempt bound and the response schema. Reaching the bound is
@@ -1486,14 +1492,25 @@ completed Prompt and observation records are the evidence for exhaustion.
 
 `<Evaluate>`'s schema is closed on one required string prop, and paired content
 is refused: a `source` the element rendered is not a fragment anybody handed it.
-It answers with each admitted observation's own returned value, in the order the
-fragment invoked them, with whatever the fragment rendered kept beside them —
-never instead of them. An admitted `<Fetch>` written without a binding renders
-nothing at all, so a result taken from the rendered fragment would answer the
-Agent's question with an empty string. It declares no `returns`: the answer is
-deterministic JSON text, it renders where it is written, and an ordinary `as`
-captures and suppresses it — which is how a document renders one observation into
-the next `<Prompt>` in the same Session.
+It answers with a detached value, not text:
+
+```json
+{
+  "observations": [{ "name": "Fetch", "value": {} }],
+  "output": ""
+}
+```
+
+Each admitted observation's own returned value, in the order the fragment invoked
+them, with whatever the fragment rendered under `output` — beside them, never
+instead of them. An admitted `<Fetch>` written without a binding renders nothing
+at all, so a result taken from the rendered fragment would answer the Agent's
+question with an empty string.
+
+It declares no `returns`, so the value binds by reference under `as` and nothing
+about it is rewritten on the way to the document. Turning it into text is the
+document's decision, made where the text is wanted: the representative flow binds
+it and renders it into the next `<Prompt>` with `<Json>`.
 
 Its durable operation is named after the invocation the engine handed it, as an
 argument at the call site. A durable name never comes from an Effection Context

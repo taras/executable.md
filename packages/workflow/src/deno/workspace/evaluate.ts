@@ -35,11 +35,13 @@
  * never resolves through here at all: the evaluator resolves only its own closed
  * table of pinned identities.
  *
- * ## It declares no `returns`
+ * ## It answers with a value, and declares no `returns`
  *
- * What it answers with is deterministic JSON text carrying each admitted
- * observation's own value — not the fragment's rendered output, which for an
- * uncaptured `<Fetch>` is empty. It renders where it is written. `as="observation"` captures and suppresses it exactly as it does for
+ * Each admitted observation's own value, in invocation order, with whatever the
+ * fragment rendered beside them under `output` — not the rendered output alone,
+ * which for an uncaptured `<Fetch>` is empty. It binds by reference under `as`,
+ * unchecked, so nothing about the value is rewritten on the way to the document;
+ * a document turns it into text where it wants text, with `<Json>`. `as="observation"` captures and suppresses it exactly as it does for
  * any other component, which is how a document renders the result into the next
  * `<Prompt>` in the same session.
  *
@@ -58,7 +60,8 @@ import type {
   GeneratedRequest,
 } from "@executablemd/core/host";
 import type { ComponentInvocation } from "@executablemd/core";
-import type { Json } from "@executablemd/durable-streams";
+import { ephemeral } from "@executablemd/durable-streams";
+import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import {
   observeGeneratedXmd,
@@ -79,30 +82,28 @@ export const props = {
 };
 
 /**
- * What the document reads back, as text it can render into the next `<Prompt>`.
+ * What the document reads back: a detached value, not text.
  *
  * The observations' own values, in the order the fragment invoked them, with
- * whatever the fragment rendered kept beside them. An admitted `<Fetch>` written
- * without a binding renders nothing — a component returning a non-string has
- * nowhere to render — so a result taken from the rendered fragment would answer
- * the Agent's question with an empty string.
+ * whatever the fragment rendered kept beside them under `output`. An admitted
+ * `<Fetch>` written without a binding renders nothing — a component returning a
+ * non-string has nowhere to render — so a result taken from the rendered
+ * fragment would answer the Agent's question with an empty string.
  *
- * Deterministic JSON, because the next thing that happens to it is that a
- * document interpolates it into a prompt, and an Agent reading its own previous
- * observation should read the same shape every time.
+ * A value rather than a serialization, because deciding how a value becomes text
+ * is the document's to make and it has `<Json>` to make it with. The pinned
+ * identity each observation ran under stays on the host-facing result and out of
+ * this one: it says which implementation the host admitted, which is a fact about
+ * the run rather than something the next prompt is answering.
  */
-function observationText(result: GeneratedObservationResult): string {
-  return JSON.stringify(
-    {
-      observations: result.observations.map((observation) => ({
-        name: observation.name,
-        value: observation.value,
-      })),
-      rendered: result.rendered,
-    },
-    undefined,
-    2,
-  );
+function observationValue(result: GeneratedObservationResult): Json {
+  return {
+    observations: result.observations.map((observation) => ({
+      name: observation.name,
+      value: observation.value,
+    })),
+    output: result.output,
+  };
 }
 
 /** A generated fragment offered to this host in a form it does not take. */
@@ -129,20 +130,34 @@ export interface GeneratedEvaluationOptions {
   readonly components?: readonly GeneratedObservation[];
 }
 
-export function useGeneratedEvaluation(
+/**
+ * The implementation, without the registration.
+ *
+ * Separated so a suite can invoke it the way the engine does — with an explicit
+ * `ComponentInvocation` — and see which of the two identities it named its
+ * durable operation after. Through the engine the two agree, because the engine
+ * republishes the expansion context for each invocation it enters; handing them
+ * apart is the only way to observe which one is load-bearing.
+ */
+export type EvaluateComponent = (
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+) => Workflow<Json>;
+
+export function createEvaluate(
   database: WorkflowRunDatabase,
   options: GeneratedEvaluationOptions = {},
-): Operation<void> {
-  // Copied at installation. What the host stated then is what every later
+): EvaluateComponent {
+  // Copied at construction. What the host stated then is what every later
   // invocation is bounded by, whatever happens to the object it passed.
   const requests: GeneratedRequest[] = [...(options.requests ?? [])];
   const components: GeneratedObservation[] = [...(options.components ?? [])];
 
-  function* Evaluate(
+  return function* Evaluate(
     elementProps: Record<string, Json>,
     invocation: ComponentInvocation,
-  ): Operation<string> {
-    if (yield* hasContent()) {
+  ): Workflow<Json> {
+    if (yield* ephemeral(hasContent())) {
       throw new GeneratedEvaluationError(
         "<Evaluate> takes the generated source as its `source` prop and renders no content of " +
           "its own. Write it self-closing.",
@@ -164,8 +179,11 @@ export function useGeneratedEvaluation(
     // ahead of the engine's own — measured, not assumed. Either would let two
     // `<Evaluate>` sites share one durable name and each replay the other's
     // admitted fragment.
+    // Wrapped where the work is not journaled: reading the element's shape and
+    // reading the run's current roots are both ordinary operations, and only the
+    // admission below belongs in the run's history.
     const id = invocation.id;
-    const selection = yield* workspaceRootSelection(database);
+    const selection = yield* ephemeral(workspaceRootSelection(database));
 
     const policy: GeneratedObservationPolicy = {
       workspaceRoots: selection.roots,
@@ -174,8 +192,15 @@ export function useGeneratedEvaluation(
       components: [pinnedFileRead(), ...components],
     };
     const result = yield* observeGeneratedXmd(id, source, policy);
-    return observationText(result);
-  }
+    return observationValue(result);
+  };
+}
 
-  return registerComponents([{ name: "Evaluate", origin: ORIGIN, props, fn: Evaluate }]);
+export function useGeneratedEvaluation(
+  database: WorkflowRunDatabase,
+  options: GeneratedEvaluationOptions = {},
+): Operation<void> {
+  return registerComponents([
+    { name: "Evaluate", origin: ORIGIN, props, fn: createEvaluate(database, options) },
+  ]);
 }

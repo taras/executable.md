@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, sleep, spawn } from "effection";
+import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile } from "@effectionx/fs";
 import { dirname, join } from "node:path";
@@ -114,9 +114,14 @@ function runFixture(
           // deno-lint-ignore require-yield
           *fetch([url]): Operation<RuntimeFetchResponse> {
             performed.push(url);
+            const headers: Array<[string, string]> = [["content-type", "text/plain"]];
             return {
               status: 200,
-              headers: { get: () => null, entries: () => [] },
+              headers: {
+                get: (key: string) =>
+                  headers.find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1] ?? null,
+                entries: () => headers,
+              },
               // deno-lint-ignore require-yield
               *text(): Operation<string> {
                 return "the release notes are ready";
@@ -328,7 +333,10 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
           sessionStore: store,
         }),
       );
-      yield* sleep(120);
+      // The barrier, not a delay: the first turn has committed its observation
+      // and the second — the manual one — is in flight. A delay here is a race
+      // that halts before the first admission commits often enough to matter.
+      yield* interrupted.startedTurns(2);
       yield* attempt.halt();
 
       const first = yield* database.journal.readAll();
@@ -392,8 +400,16 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // status and the body it never saw rendered.
       expect(fake.prompts).toHaveLength(2);
       const second = fake.prompts[1] ?? "";
+      // The complete retained response, not a summary of it: status, headers and
+      // body, under the observation's own name and in invocation order.
+      expect(second).toContain('"name": "Fetch"');
       expect(second).toContain('"status": 200');
+      expect(second).toContain('"content-type"');
+      expect(second).toContain("text/plain");
       expect(second).toContain("the release notes are ready");
+      // And the fragment's own rendering, kept beside the values rather than
+      // standing in for them — an uncaptured `<Fetch>` renders nothing.
+      expect(second).toContain('"output": ""');
       // The first prompt had no observation yet, so the difference is the
       // observation rather than the document's own prose.
       expect(fake.prompts[0]).not.toContain("the release notes are ready");

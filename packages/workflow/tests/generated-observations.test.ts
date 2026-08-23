@@ -93,7 +93,7 @@ function evaluate(source: string, policy: GeneratedObservationPolicy): Operation
     const events = yield* stream.readAll();
     if (result.ok) {
       return {
-        output: captured.result?.rendered ?? "",
+        output: captured.result?.output ?? "",
         values: captured.result?.observations ?? [],
         events,
       };

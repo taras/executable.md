@@ -18,7 +18,7 @@ Workspace. A fragment naming anything else performs nothing at all.
 
 The conversation is bounded here, in the document, where you can read the bound.
 
-<Let as="observation" value="" />
+<Let as="observation" value={null} />
 
 <Agent name="codex">
 <Session name="review">
@@ -54,9 +54,11 @@ exactly like this:
 <File path="notes.md" />
 ```
 
-What the previous observation returned, if there was one:
+What the previous observation returned, if there was one. `observations` holds
+one entry per element the fragment performed, in the order it performed them,
+and `output` is whatever the fragment rendered — usually nothing:
 
-{observation}
+<Json value={observation} />
 </Prompt>
 
 <Parse as="turn" schema={{"oneOf":[{"type":"object","properties":{"kind":{"const":"observation"},"source":{"type":"string"}},"required":["kind","source"],"additionalProperties":false},{"type":"object","properties":{"kind":{"const":"proposal"},"source":{"type":"string"}},"required":["kind","source"],"additionalProperties":false}]}}>{reply}</Parse>
@@ -71,9 +73,14 @@ that change is a separate decision nobody has taken here.
 
 An observation is performed instead. `<Evaluate>` reads the whole fragment
 before it does anything, so a fragment whose second element is not admitted
-performs nothing — not even the part of it that was fine. What comes back is
-bound rather than rendered, because the reader of this run wants the agent's
-answer, not the file it happened to open.
+performs nothing — not even the part of it that was fine.
+
+What comes back is a value rather than text: each element's own result, in the
+order they ran. That matters because most observations render nothing at all — a
+`<Fetch>` written without a binding has nowhere to put its response — so reading
+the fragment's rendered output would tell the agent nothing. It is bound rather
+than rendered here, because the reader of this run wants the agent's answer, not
+the file it happened to open.
 
 <Evaluate source={turn.source} as="observation" />
 

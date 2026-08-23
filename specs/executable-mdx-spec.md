@@ -9543,6 +9543,9 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the registration even while it is live |
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
+| WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
+| WGAC7 | The name is the invocation | Handed a durable identity and a conflicting published expansion context, the admission is named after the argument; reverting to the context fails it |
+| WGAC8 | The result shape | The result carries each observation's name, pinned identity and value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway |
 
 ### Tier WAL — The workflow Agent observation loop
 
@@ -9557,6 +9560,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
 | WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
 | WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
+| WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
 
 ### Tier WFX — A killed run resumes from its frontier
 

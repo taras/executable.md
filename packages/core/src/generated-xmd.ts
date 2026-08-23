@@ -301,7 +301,8 @@ export interface GeneratedObservationValue {
  */
 export interface GeneratedObservationResult {
   readonly observations: readonly GeneratedObservationValue[];
-  readonly rendered: string;
+  /** What the fragment rendered, beside the values rather than instead of them. */
+  readonly output: string;
 }
 
 /** What a trusted host asks this evaluator to admit. */
@@ -866,7 +867,7 @@ function expand(
       // own, and what it may invoke is this table and nothing else.
       { imports: authority },
     );
-    return { observations: authority.values, rendered: renderSegments(expanded) };
+    return { observations: authority.values, output: renderSegments(expanded) };
   });
 }
 

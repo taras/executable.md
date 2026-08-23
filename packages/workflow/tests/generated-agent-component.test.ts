@@ -24,10 +24,12 @@ import {
   execute,
   inlineSource,
   registerComponents,
+  retainedSource,
 } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import { createContext } from "effection";
 import type { Context } from "effection";
-import type { Json } from "@executablemd/durable-streams";
+import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
@@ -35,6 +37,7 @@ import type { WorkflowRunDatabase } from "../mod.ts";
 import { withWorkflowWorkspace } from "../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../src/deno/workspace/host.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
+import { createEvaluate } from "../src/deno/workspace/evaluate.ts";
 import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 
 /**
@@ -47,6 +50,10 @@ import { createRun, useStorageRoot, withStorage } from "./support/storage.ts";
 const CurrentExpansion: Context<{ id: string; name: string } | undefined> = createContext<
   { id: string; name: string } | undefined
 >("expand.current", undefined);
+
+/** What a loaded component publishes, and what the engine hands. */
+const FORGED = "published-identity";
+const HANDED = "handed-identity";
 
 const URL_ADMITTED = "https://api.example.test/admitted";
 const URL_OTHER = "https://api.example.test/other";
@@ -231,15 +238,19 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       // of "the root this run is on" rather than "some root this run retains".
       const attempt = yield* runDocument(
         database,
-        `<Evaluate source={'<File path="notes.md" />'} />\n\n` +
+        `<Evaluate source={'<File path="notes.md" />'} as="first" />\n\n` +
           `<File path="between.md">written between observations</File>\n\n` +
-          `<Evaluate source={'<File path="notes.md" />'} />\n`,
+          `<Evaluate source={'<File path="notes.md" />'} as="second" />\n\n` +
+          `<Json value={second} />\n`,
       );
 
       expect(attempt.failure).toBe(undefined);
       // Both observations read the run's own Workspace, through the ordinary
-      // transaction-bound Files provider.
+      // transaction-bound Files provider. `<Evaluate>` answers with a value, so
+      // the document renders it where it wants text — which is what `<Json>` is
+      // for, and what the representative document does into its next prompt.
       expect(reported(attempt)).toContain("the retained note");
+      expect(reported(attempt)).toContain('"name": "File"');
 
       const recorded = admissions(attempt.events);
       expect(recorded).toHaveLength(2);
@@ -340,6 +351,70 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       for (const name of names) {
         expect(name).not.toContain("forged-identity");
       }
+    });
+  });
+
+  it("WGAC7: the durable name is the invocation the engine handed, not the published context", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "notes.md", "the retained note\n");
+
+      // The implementation, invoked the way the engine invokes it, with the two
+      // identities deliberately pulled apart: a forged expansion context saying
+      // one thing and the engine's own argument saying another. Through the
+      // engine they always agree, because it republishes the context for each
+      // invocation it enters — which is exactly why agreeing there proves
+      // nothing about which one is load-bearing.
+      const evaluate = createEvaluate(database, {});
+      const events = yield* scoped(function* () {
+        yield* useHostFiles();
+        yield* withWorkflowWorkspace(
+          database,
+          scoped(function* () {
+            // What the engine supplies at an invocation, supplied here because
+            // the call below stands in for one. Note which side of the seam it
+            // is on: `hasContent()` is the composable channel and a caller can
+            // answer it; the identity is the argument, which nothing composes.
+            yield* Component.around({
+              // deno-lint-ignore require-yield
+              *hasContent(_args, _next) {
+                return false;
+              },
+            });
+            yield* CurrentExpansion.set({ id: FORGED, name: "Evaluate" });
+
+            // The trusted-host seam: inside the durable execution, outside any
+            // component invocation, which is the only place the two identities
+            // can be handed apart.
+            const execution = yield* executeInstalled(
+              {
+                ...retainedSource("workflows/probe.md", "The host evaluated a fragment.\n"),
+                stream: database.journal,
+              },
+              [
+                {
+                  *prepare(): Workflow<void> {
+                    yield* evaluate({ source: `<File path="notes.md" />` }, { id: HANDED });
+                  },
+                },
+              ],
+            );
+            const result = yield* execution;
+            if (!result.ok) {
+              throw result.error;
+            }
+          }),
+        );
+        return yield* database.journal.readAll();
+      });
+
+      const recorded = admissions(events);
+      expect(recorded).toHaveLength(1);
+      const name = recorded[0]?.type === "yield" ? recorded[0].description.name : "";
+      // Named after what the engine handed, and after nothing that was published.
+      expect(name).toContain(HANDED);
+      expect(name).not.toContain(FORGED);
     });
   });
 

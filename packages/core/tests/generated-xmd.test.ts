@@ -197,7 +197,7 @@ function evaluate(
     const events = yield* stream.readAll();
     if (result.ok) {
       return {
-        output: captured.result?.rendered ?? "",
+        output: captured.result?.output ?? "",
         values: captured.result?.observations ?? [],
         rendered: result.value,
         events,
@@ -1096,6 +1096,10 @@ describe("Tier GX — the secret gate covers what is retained", () => {
  * rather than a check inside the component after earlier elements have run.
  */
 
+function isRecord(value: unknown): value is Record<string, Json> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** A Files provider over one real directory, and what it was asked to read. */
 interface Reads {
   readonly performed: string[];
@@ -1152,6 +1156,44 @@ describe("Tier WGAC — the pinned read-only File", () => {
     // and the comparison is on this string.
     expect(pinnedFileRead().identity).not.toBe("@executablemd/core#File");
     expect(pinnedFileRead().selfClosing).toBe(true);
+  });
+
+  it("WGAC8: the result carries each observation's value, in order, beside the rendering", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    const transport = yield* useTransport(() => ({ status: 200, body: "answered" }));
+
+    // One admitted read that renders its value, one that renders nothing at all:
+    // `<Fetch>` returns a record, and a component returning a non-string has
+    // nowhere to render. A result taken from the rendering would keep the first
+    // and lose the second.
+    const source = `<File path="notes.md" />\n\n<Fetch url="${URL_ONE}" />\n`;
+
+    const attempt = yield* scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(request(source, [pinnedFileRead(), pinnedFetch([ADMITTED_REQUEST])]));
+    });
+
+    expect(attempt.failure).toBe(undefined);
+    expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
+
+    const values = attempt.values ?? [];
+    // Invocation order, and the exact field names a host reads.
+    expect(values.map((observation) => observation.name)).toEqual(["File", "Fetch"]);
+    expect(values.map((observation) => observation.identity)).toEqual([
+      pinnedFileRead().identity,
+      pinnedFetch([ADMITTED_REQUEST]).identity,
+    ]);
+    expect(values[0]?.value).toBe("the retained note\n");
+    const response = values[1]?.value;
+    expect(isRecord(response)).toBe(true);
+    expect(isRecord(response) ? response.status : undefined).toBe(200);
+    expect(isRecord(response) ? response.body : undefined).toBe("answered");
+
+    // And the rendering, kept separately rather than standing in for them: the
+    // File read renders its text, the Fetch renders nothing.
+    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).not.toContain("answered");
   });
 
   it("WGAC2: a paired File anywhere in a mixed fragment performs no read and no write", function* () {
