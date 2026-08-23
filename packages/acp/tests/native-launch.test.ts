@@ -127,6 +127,12 @@ interface Replay {
  */
 function traceAuthority(trace: Trace): AgentProviderAuthority {
   return {
+    // These suites route launches, never a `<Session>` placement. Throwing
+    // rather than answering means a placement that did reach here fails
+    // loudly instead of being handed an identity nobody derived.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     *perform(_request, phases) {
       // A replay hands back what the journal retained rather than calling the
       // provider's live preparation, exactly as the real authority does when

@@ -96,6 +96,13 @@ export { walkSchema } from "./src/schema-walk.ts";
 export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
 
 export { hasContent, useContent } from "./src/content-context.ts";
+export type { ComponentInvocation } from "./src/types.ts";
+/**
+ * The opaque session placement a `<Session>` element routes. A handler reads its
+ * descriptive name; only provider authority reads the engine identity.
+ */
+export { AgentSessionProtocolError, isSessionRequest } from "./src/agent/session-request.ts";
+export type { AgentSessionRequest } from "./src/agent/session-request.ts";
 export { ContentError } from "./src/errors.ts";
 export { getExpansion } from "./src/expansion.ts";
 export type { Expansion } from "./src/expansion.ts";

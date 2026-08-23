@@ -37,8 +37,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { Agent } from "@executablemd/core";
+import { Agent, isSessionRequest } from "@executablemd/core";
 import type {
+  AgentSessionRequest,
   AgentLaunchRequest,
   AgentProviderAuthority,
   AgentPromptEvent,
@@ -115,8 +116,17 @@ export interface AcpxSessionContext {
   readonly agentName: string;
   /** The resolved agent command, not the name a document wrote. */
   readonly agentCommand: string;
-  /** The authored `<Session>` name, when the document named one. */
+  /** The authored `<Session>` name, when the document named one. Descriptive. */
   readonly session: string | undefined;
+  /**
+   * The engine-derived expansion identity of the `<Session>` element, when one
+   * routed a placement.
+   *
+   * The only thing here a document cannot change. It arrives through the
+   * authority delivered to this provider rather than on the public chain, so a
+   * handler that rewrote the name above did not rewrite this.
+   */
+  readonly sessionIdentity?: string;
 }
 
 /** Where one logical session lives, as the host placing it decides. */
@@ -379,7 +389,7 @@ interface LaunchInvocation {
  */
 export interface AcpxProvider {
   agent(name?: string): Operation<string>;
-  session(option?: string | Session): Operation<Session>;
+  session(option?: string | Session | AgentSessionRequest): Operation<Session>;
   promptStream(content: string, options?: PromptOptions): Stream<AgentPromptEvent, string>;
 }
 
@@ -443,7 +453,7 @@ export function createPartitionedAcpxProvider(select: AcpxPartitionSelector): Ag
           return yield* (yield* selected()).agent(name);
         },
         *session([name], _next) {
-          return yield* (yield* selected()).session(name);
+          return yield* (yield* selected()).placeSession(name, authority);
         },
         *prompt([content, options], _next) {
           // Selection belongs inside the subscription, with the rest of the
@@ -492,6 +502,17 @@ export function createAcpxProvider(dependencies?: AcpxProviderDependencies): Age
 /** Everything the provider does, including the authoritative launch path. */
 interface AcpxProviderState extends AcpxProvider {
   launch(request: AgentLaunchRequest, authority: AgentProviderAuthority): Operation<void>;
+  /**
+   * The same resolution, with the authority that can read a placement.
+   *
+   * Delivered as a live argument for the same reason a launch's is: the engine
+   * identity a `<Session>` routes is readable only through it, and a provider
+   * state holding one would be holding authority it could hand anywhere.
+   */
+  placeSession(
+    option: string | Session | AgentSessionRequest | undefined,
+    authority: AgentProviderAuthority,
+  ): Operation<Session>;
 }
 
 /**
@@ -582,7 +603,7 @@ class AcpxPartition implements AcpxProvider {
     return this.#live().agent(name);
   }
 
-  session(option?: string | Session): Operation<Session> {
+  session(option?: string | Session | AgentSessionRequest): Operation<Session> {
     return this.#live().session(option);
   }
 
@@ -725,6 +746,7 @@ function* useAcpxProviderState(
     agentName: string,
     option: string | Session | undefined,
     callerCwd: string,
+    sessionIdentity?: string,
   ): Operation<Prepared> {
     if (typeof option === "object") {
       const entry = managed.get(option.sessionKey);
@@ -756,7 +778,12 @@ function* useAcpxProviderState(
     }
     const agentCommand = registry.resolve(agentName);
     if (sessions) {
-      const placed = yield* sessions.place({ agentName, agentCommand, session: option });
+      const placed = yield* sessions.place({
+        agentName,
+        agentCommand,
+        session: option,
+        ...(sessionIdentity === undefined ? {} : { sessionIdentity }),
+      });
       return { kind: "placement", sessionKey: placed.sessionKey, agentCommand, placement: placed };
     }
     const placement = yield* resolveSessionPlacement(store, agentCommand, callerCwd, option);
@@ -1916,6 +1943,71 @@ function* useAcpxProviderState(
     return undefined;
   }
 
+  /**
+   * Resolve one session, reading a routed placement's engine identity through
+   * the authority when there is one.
+   *
+   * The name and the identity arrive by different routes on purpose: a handler
+   * on the public chain may change the name it routes, and the identity it
+   * cannot see is the one this run retains a session under.
+   */
+  function* resolveSession(
+    option: string | Session | AgentSessionRequest | undefined,
+    authority: AgentProviderAuthority | undefined,
+  ): Operation<Session> {
+    let named: string | Session | undefined;
+    let sessionIdentity: string | undefined;
+    if (option !== undefined && typeof option === "object" && isSessionRequest(option)) {
+      if (authority === undefined) {
+        throw new Error(
+          "a session placement reached this provider without the authority that reads it",
+        );
+      }
+      named = option.name;
+      sessionIdentity = authority.sessionIdentity(option);
+    } else {
+      named = option;
+    }
+
+    const agentName = yield* Agent.operations.agent();
+    const callerCwd = resolve(yield* agentCwd());
+    const context: SessionRouteContext = { agentName, session: named, cwd: callerCwd };
+    const prepared = yield* withSessionRoute(context, () =>
+      prepare(agentName, named, callerCwd, sessionIdentity),
+    );
+    return yield* owning(
+      agentName,
+      agentCommandOf(prepared),
+      prepared.sessionKey,
+      "session",
+      function* (ownership) {
+        // Inside ownership, before any provider construction effect.
+        // `<Session>` is eager, so establishing one publishes `acp-first` and a
+        // launch that would name it again refuses rather than converting. A
+        // failed ensure leaves the route standing: it may have created provider
+        // state before the caller saw the failure, and preserving the route is
+        // what stops that uncertainty from later being reclassified as
+        // client-native.
+        yield* constructAcpFirst(agentName, prepared);
+        const session = yield* turns.withSlot(prepared.sessionKey, () =>
+          withSessionRoute(context, function* () {
+            const entry = yield* ensureFromPrepared(agentName, prepared);
+            return entry.session;
+          }),
+        );
+        // Establishing a session is not owning one. The handle is released
+        // here, so nothing this provider holds afterwards is a second owner of
+        // a session a native UI may take — the next operation reattaches under
+        // its own acquisition.
+        yield* releaseHandle(prepared.sessionKey);
+        if (!holding(prepared.sessionKey)) {
+          ownership.quiesced();
+        }
+        return session;
+      },
+    );
+  }
+
   yield* ensure(function* () {
     for (const turn of [...activeTurns]) {
       activeTurns.delete(turn);
@@ -1958,43 +2050,10 @@ function* useAcpxProviderState(
       return yield* resolveAgent(name);
     },
     *session(option) {
-      const agentName = yield* Agent.operations.agent();
-      const callerCwd = resolve(yield* agentCwd());
-      const context: SessionRouteContext = { agentName, session: option, cwd: callerCwd };
-      const prepared = yield* withSessionRoute(context, () =>
-        prepare(agentName, option, callerCwd),
-      );
-      return yield* owning(
-        agentName,
-        agentCommandOf(prepared),
-        prepared.sessionKey,
-        "session",
-        function* (ownership) {
-          // Inside ownership, before any provider construction effect.
-          // `<Session>` is eager, so establishing one publishes `acp-first`
-          // and a launch that would name it again refuses rather than
-          // converting. A failed ensure leaves the route standing: it may have
-          // created provider state before the caller saw the failure, and
-          // preserving the route is what stops that uncertainty from later
-          // being reclassified as client-native.
-          yield* constructAcpFirst(agentName, prepared);
-          const session = yield* turns.withSlot(prepared.sessionKey, () =>
-            withSessionRoute(context, function* () {
-              const entry = yield* ensureFromPrepared(agentName, prepared);
-              return entry.session;
-            }),
-          );
-          // Establishing a session is not owning one. The handle is released
-          // here, so nothing this provider holds afterwards is a second owner
-          // of a session a native UI may take — the next operation reattaches
-          // under its own acquisition.
-          yield* releaseHandle(prepared.sessionKey);
-          if (!holding(prepared.sessionKey)) {
-            ownership.quiesced();
-          }
-          return session;
-        },
-      );
+      return yield* resolveSession(option, undefined);
+    },
+    *placeSession(option, authority) {
+      return yield* resolveSession(option, authority);
     },
     promptStream,
     launch,

@@ -312,35 +312,52 @@ session options, and its public permission routing.
 
 A provider session outlives one execution, so a continued run reattaches the
 conversation it was having rather than replaying its transcript into a new one.
-The logical key is derived from the workflow run, the provider, the resolved
-agent command and the authored `<Session>` name — with a literal marker for an
-unnamed one — and it is also the key ACPX holds the session under. A directory is
-not part of it: the host-owned working directory is arrangement that is recreated
-empty on every attachment.
 
-The run retains one small record per logical key, beside its own storage: the
-record's version, the identity it was created under, the ACPX session key, the
-fingerprint of the session policy in force when the session was created, and the
-provider-native session identity once the adapter asserts one. It holds no prompt
-text and no transcript.
+**Identity is the engine's.** Within one workflow run a session is identified by
+the Agent/Session expansion identity the engine derived, and by nothing else. The
+authored `<Session name>` is descriptive: two sibling `<Session name="review">`
+elements are two sessions, and a document that reuses a name cannot make them
+one. The name travels the public `Agent.session()` chain, where a handler may
+observe or change it; the identity travels inside an opaque placement the
+`<Session>` element routes and is readable only through the authority delivered
+to the installed provider. Middleware holding the placement reads the name and
+reaches no further.
 
-Continuation is decided before ACPX is contacted:
+The provider and the resolved agent command are stored beside that identity as
+compatibility attributes. Changing either refuses reattachment rather than
+addressing a second mapping. The key ACPX places a session under is a different
+thing and namespaces both, because ACPX's store is shared; that key is
+arrangement, not this run's session identity.
 
-- a session may be created only when there is no record **and** ACPX holds
-  nothing under that key. The key is derived from the run, the provider and the
-  agent alone, so it survives losing the record — and ACPX would reuse the
-  session it still has while ignoring the creation options supplied with it;
-- a record whose identity and policy fingerprint still agree, and whose native
-  session the provider still holds, reattaches;
-- an ACPX session with no record of its own, an unreadable record, a record from
-  a version this host does not have, a changed provider, agent or policy, a
-  provider that no longer holds the session, and an adapter that answers with a
-  different native session are each one explicit incompatibility.
+**A canonical assertion comes before the mapping.** The order is: provider
+creation, then the provider's canonical, tagged assertion of a durable identity,
+then the mapping commit, then the first Prompt. Holding a key in ACPX's store is
+not an assertion — it says something is there, not what conversation it is — so a
+mapping is committed only from one canonical assertion, and an interruption
+before that commit is reconciled only the same way.
 
-No incompatible case starts a replacement session. ACPX fixes a session's
-creation-time options when the ACP session is created and ignores them when it
-reuses a persistent record, so continuing without comparing the retained policy
-would be continuing a session created under a wider one.
+Continuation is decided before a turn starts:
+
+- no mapping and no assertion means nothing was ever established here, and a
+  session may be created;
+- no mapping and exactly one canonical assertion is the pre-commit window, and
+  reconciles to that identity;
+- a mapping whose identity, compatibility attributes and policy fingerprint
+  agree, and whose assertion the provider still makes with the same kind and
+  value, reattaches;
+- a missing assertion, an assertion of a different kind or value, a changed
+  provider, agent or policy, and more than one assertion are each one explicit
+  refusal.
+
+No refusal starts a replacement session. ACPX fixes a session's creation-time
+options when the ACP session is created and ignores them when it reuses a
+persistent record, so continuing without comparing the retained policy would be
+continuing a session created under a wider one.
+
+The mapping is a row in the run's own database, committed in the run's own
+transaction: a mapping that could commit while the run did not would describe a
+session the run never had. What stays beside the run on disk is the provider's
+own session store and one empty working directory per session, both disposable.
 
 ## Command-line configuration
 

@@ -5,6 +5,7 @@ import { WorkflowTransactionError } from "../../storage/errors.ts";
 import type { WorkflowRunConnections, WorkflowRunTransactionToken } from "../connections.ts";
 import { createDenoWorkspaceFilesystem, type DenoWorkspaceFilesystem } from "./filesystem.ts";
 import { createWorkspaceMetadata, type WorkspaceMetadata } from "./repositories.ts";
+import { createAgentSessions, type AgentSessions } from "./agent-sessions.ts";
 import { type StoredWorkspaceRoot } from "./manifest.ts";
 import {
   captureWorkspaceRoot,
@@ -26,6 +27,14 @@ export interface PrivateWorkspaceTransaction {
    * does not have, or holds one it never recorded.
    */
   readonly metadata: WorkspaceMetadata;
+  /**
+   * The Agent sessions this run retains, inside this same transaction.
+   *
+   * Beside the filesystem for the same reason the metadata is: a conversation
+   * and the row naming it are one fact, and a mapping that could commit while
+   * the run did not would describe a session this run never had.
+   */
+  readonly agentSessions: AgentSessions;
   currentRoot(): Operation<string>;
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
@@ -125,6 +134,8 @@ export function usePrivateWorkspace(
           filesystem: decorate(createDenoWorkspaceFilesystem(connection, authorize)),
 
           metadata: createWorkspaceMetadata(connection.database, authorize),
+
+          agentSessions: createAgentSessions(connection.database, authorize),
 
           // deno-lint-ignore require-yield
           *currentRoot(): Operation<string> {

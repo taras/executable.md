@@ -1468,49 +1468,55 @@ retained assets. The journal preserves observable prompts, responses, tool
 events and outcomes for replay and training. It does not claim to reconstruct
 provider-internal summaries, hidden context or tool state.
 
-Each logical Agent session is identified by the WorkflowRun, the provider, the
-resolved agent identity and the Agent/Session expansion identity — with a
-literal marker for an unnamed `<Session>`. A working directory and any provider
-placement are deliberately not part of that identity: they are attachment
-details, and the host-owned directory is recreated empty on every attachment.
+**Identity is the engine's.** Within one run a logical Agent session is
+identified by the Agent/Session expansion identity the engine derived, and by
+nothing else. The authored `<Session name>` is descriptive: two sibling
+`<Session name="review">` elements are two sessions. The name travels the
+compositional `Agent.session()` chain, where a handler may change it; the
+identity travels inside an opaque placement the element routes, readable only
+through the authority delivered to the installed provider.
 
-The run retains one record per logical key in a provider-session sidecar beside
-its own storage, under a name run discovery cannot match. The record carries its
-own version, the identity it was created under, the provider's session key, the
-fingerprint of the session policy in force when the session was created, and the
-provider-native session identity once the adapter asserts one. It carries no
-prompt text and no transcript. The record is written before the first turn, so an
-attempt interrupted between establishing a session and recording it leaves the
-key resolvable rather than ambiguous.
+The provider and the resolved agent command are stored beside that identity as
+compatibility attributes. Changing either refuses reattachment rather than
+selecting or creating a second mapping. A working directory and any provider
+placement key are not identity at all.
+
+**The mapping lives in the run.** It is a row in the run's own database,
+committed in the run's own transaction — a mapping that could commit while the
+run did not would describe a session the run never had. The table is part of the
+schema the run is created with, so it appears with every other table or not at
+all. What stays beside the run on disk is the provider's own session store and
+one empty working directory per session; both are disposable, and neither is
+retained state.
+
+**A canonical assertion comes before the mapping.** The order is provider
+creation, then the provider's canonical, tagged assertion of a durable identity,
+then the mapping commit, then the first Prompt. Occupancy of a key in the
+provider's own store is not an assertion — it says something is there, not what
+conversation it is.
 
 Partial replay attaches lazily. Completed Prompts restore without contacting the
 provider, and full replay never attaches one. Before a later live Prompt, the
-host resolves the same logical key under a new empty working directory:
+host resolves the same identity under a new empty working directory:
 
-- a session may be created only when there is no record **and** the provider
-  holds nothing under that key. The key does not depend on the record, so losing
-  the record does not make the provider forget — and a provider that still holds
-  the session would reuse its own persistent state and ignore the creation
-  options this host supplies, leaving the host talking to a session whose ceiling
-  it cannot name;
-- a record whose identity and policy fingerprint still agree, and whose native
-  session the provider still holds, reattaches;
-- a provider session with no record of its own, an unreadable record, a record
-  from a version this host does not have, a changed provider, agent or policy, a
-  provider that no longer holds the session, and an adapter that answers with a
-  different native session are each one explicit incompatibility.
+- no mapping and no assertion means nothing was ever established, and a session
+  may be created;
+- no mapping and exactly one canonical assertion is the pre-commit window — an
+  attempt interrupted between the provider asserting and this run recording it —
+  and reconciles to that identity;
+- a mapping whose identity, compatibility attributes and policy fingerprint
+  agree, and whose assertion the provider still makes with the same kind and
+  value, reattaches;
+- a missing assertion, an assertion of a different kind or value, a changed
+  provider, agent or policy, and more than one assertion are each one explicit
+  refusal.
 
-No incompatible case starts a replacement session, and none injects a transcript
-while claiming conversation continuity.
+No refusal starts a replacement session, and none injects a transcript while
+claiming conversation continuity.
 
-The sidecar outlives an execution, because it is what a continuation reads; the
-working directories do not. Their removal runs after provider teardown, so
-whatever was standing in them has stopped first. A run whose document never
-prompts an Agent allocates no sidecar at all.
-
-Deleting a run removes its retained storage and its provider-session sidecar
-under the executor lock, and reports exactly the categories that went. A refused
-deletion — a run with a live workflow executor — removes neither.
+Deleting a run removes its retained storage — the mapping with it, because the
+mapping is in it — and its provider-session directory, under the executor lock,
+and reports exactly the categories that went. A refused deletion removes neither.
 
 ## 9. Replay and continuation
 

@@ -56,27 +56,25 @@ export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts
 export type { WorkflowAgentAttachment, WorkflowAgentInstaller } from "./src/deno/workspace/host.ts";
 export {
   providerSessionDirectory,
-  providerSessionKey,
-  providerSessionMappingPath,
   providerSessionPaths,
-  readProviderSession,
   removeProviderSessions,
-  resolveProviderSession,
-  retainProviderSessionIdentity,
   useEmptyDirectory,
   useProviderSessions,
-  WorkflowAgentSessionError,
   workflowProviderSessions,
-  writeProviderSession,
 } from "./src/deno/provider-sessions.ts";
+export type { ProviderSessionPaths } from "./src/deno/provider-sessions.ts";
+export {
+  agentSessionKey,
+  resolveAgentSession,
+  WorkflowAgentSessionError,
+} from "./src/deno/workspace/agent-sessions.ts";
 export type {
-  ProviderSessionIdentity,
-  ProviderSessionPaths,
-  ProviderSessionProbe,
-  ProviderSessionRecord,
-  ProviderSessionResolution,
-  ProviderSessionState,
-} from "./src/deno/provider-sessions.ts";
+  AgentSessionIdentity,
+  AgentSessionRecord,
+  AgentSessionResolution,
+  ProviderAssertion,
+} from "./src/deno/workspace/agent-sessions.ts";
+export { transactWorkspaceRoots } from "./src/deno/workspace/private.ts";
 export {
   WORKSPACE_GIT_ADD,
   WORKSPACE_GIT_SWITCH,

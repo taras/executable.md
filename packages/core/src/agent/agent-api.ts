@@ -20,6 +20,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation, Stream } from "effection";
+import type { AgentSessionRequest } from "./session-request.ts";
 import type { AgentLaunchRequest } from "./launch-request.ts";
 
 /** The public agent value — an agent name resolvable by the provider. */
@@ -100,7 +101,16 @@ export type PermissionOutcome =
 
 export interface AgentApi {
   agent(name?: string): Operation<Agent>;
-  session(name?: string): Operation<Session>;
+  /**
+   * Resolve the session this element names.
+   *
+   * `name` is descriptive and compositional: a handler may observe it, change
+   * it, or supply one. A `<Session>` element routes an opaque placement instead,
+   * which reads as its name to every handler and carries the engine-derived
+   * identity where only the installed provider's authority can reach it — a
+   * durable identity on this chain would be one any middleware could rewrite.
+   */
+  session(name?: string | AgentSessionRequest): Operation<Session>;
   prompt(content: string, options?: PromptOptions): Operation<Stream<AgentPromptEvent, string>>;
   /**
    * Route one launch request.

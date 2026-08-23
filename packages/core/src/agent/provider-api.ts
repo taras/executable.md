@@ -163,7 +163,12 @@ function deliveryOf(value: unknown): {
   }
   const perform = Reflect.get(authority, "perform");
   const refuse = Reflect.get(authority, "refuse");
-  if (typeof perform !== "function" || typeof refuse !== "function") {
+  const sessionIdentity = Reflect.get(authority, "sessionIdentity");
+  if (
+    typeof perform !== "function" ||
+    typeof refuse !== "function" ||
+    typeof sessionIdentity !== "function"
+  ) {
     throw new AgentProviderInstallError(
       "the live agent provider installation carried no launch authority",
     );
@@ -173,6 +178,15 @@ function deliveryOf(value: unknown): {
     authority: {
       perform: (request, phases) => Reflect.apply(perform, authority, [request, phases]),
       refuse: (request, preparation) => Reflect.apply(refuse, authority, [request, preparation]),
+      sessionIdentity: (request) => {
+        const identity = Reflect.apply(sessionIdentity, authority, [request]);
+        if (typeof identity !== "string" || identity === "") {
+          throw new AgentProviderInstallError(
+            "the live agent provider installation answered a session placement with no identity",
+          );
+        }
+        return identity;
+      },
     },
   };
 }

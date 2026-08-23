@@ -119,6 +119,12 @@ export interface WorkflowWorkspaceOptions {
 /** What an Agent profile is told about the run it is being attached to. */
 export interface WorkflowAgentAttachment {
   readonly runId: string;
+  /**
+   * The run itself, so a profile can retain what it learns in the run's own
+   * transaction. A mapping that could commit while the run did not would
+   * describe a session this run never had.
+   */
+  readonly database: WorkflowRunDatabase;
 }
 
 export type WorkflowAgentInstaller = (attachment: WorkflowAgentAttachment) => Operation<void>;
@@ -145,7 +151,7 @@ export function withWorkflowWorkspace<T>(
       }
       yield* useCompositionComponents();
       if (options.agent !== undefined) {
-        yield* options.agent({ runId: database.record.runId });
+        yield* options.agent({ runId: database.record.runId, database });
       }
       return yield* operation;
     }),

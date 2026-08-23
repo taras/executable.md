@@ -18,6 +18,9 @@ import { scoped } from "effection";
 import type { Operation } from "effection";
 import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
+
+import { sessionPlacement } from "./session-request.ts";
+import type { ComponentInvocation } from "../types.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
@@ -169,8 +172,16 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
   return yield* content();
 }
 
-export function* SessionComponent(props: Record<string, Json>): Operation<Json> {
-  const session: Session = yield* Agent.operations.session(asString(props.name));
+export function* SessionComponent(
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+): Operation<Json> {
+  // The name routes; the identity does not. `<Session name="review">` written
+  // twice is two sessions, and no handler on the public chain can make them one
+  // — it holds the placement, reads the name, and reaches no further.
+  const session: Session = yield* Agent.operations.session(
+    sessionPlacement(invocation.id, asString(props.name)),
+  );
   if (!(yield* hasContent())) {
     return "";
   }

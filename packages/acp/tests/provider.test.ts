@@ -723,6 +723,12 @@ function stubAuthority(): AuthorityLog {
   const log: AuthorityLog = {
     performed: 0,
     refused: 0,
+    // These suites route launches, never a `<Session>` placement. Throwing
+    // rather than answering means a placement that did reach here fails
+    // loudly instead of being handed an identity nobody derived.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     // deno-lint-ignore require-yield
     *perform() {
       log.performed += 1;

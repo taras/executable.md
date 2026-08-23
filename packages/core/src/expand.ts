@@ -2927,7 +2927,7 @@ function* expandFunctionComponent(
           if (TestHarnessComponentDefinition.own(definition.fn)) {
             return yield* definition.fn.invoke(validatedProps, binding);
           }
-          return yield* definition.fn(validatedProps);
+          return yield* definition.fn(validatedProps, { id: expansion.id });
         } catch (error) {
           if (error instanceof Error) {
             throw error;
