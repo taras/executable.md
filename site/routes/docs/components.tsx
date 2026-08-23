@@ -171,6 +171,8 @@ Whether the replacement committed is unknown: the target holds either the
 complete previous content or the complete replacement, never a partial write.
 A temporary file beside it may remain.`;
 
+const FILE_DELETE = `<File.Delete path="notes/obsolete.md" />`;
+
 const FILE_INLINE = `<File path="a.txt">one line</File>`;
 
 const FILE_BLOCK = `<File path="a.txt">
@@ -607,6 +609,50 @@ export default define.page(function Components() {
         the case your document controls — its own children — but check-then-use
         does not become atomic by being ordered more carefully. Containment that
         does not depend on observed state is tracked in issue #227.
+      </p>
+
+      <h3>Removing a file</h3>
+      <p>
+        <code>&lt;File.Delete&gt;</code>{" "}
+        is the third thing you can do to a path. It takes the same one{" "}
+        <code>path</code>{" "}
+        relative to the same contextual working directory, and it is
+        self-closing — there is nothing to wrap and nothing to write.
+      </p>
+      <CodeBlock>{FILE_DELETE}</CodeBlock>
+      <p>
+        It renders nothing and hands nothing back: no path, no receipt, no word
+        on whether anything was there. A deletion that succeeded leaves the path
+        naming nothing, which is the whole of what you asked for.{" "}
+        <code>as</code>{" "}
+        still works and captures the empty string, like any other component that
+        returns text.
+      </p>
+      <p>
+        Which means deleting a path that names nothing is a <em>success</em>
+        {" "}
+        — you can remove a file you are not sure you created, twice, without
+        asking first.
+      </p>
+      <p>
+        A symlink is removed as the link. Whatever it pointed at is neither
+        followed nor changed, inside the working directory or outside it — which
+        is the opposite of what a write does, and deliberately so: following it
+        would delete a file your document never named.
+      </p>
+      <p>
+        Every directory is refused, empty ones included. Removing a tree is not
+        a spelling of this component, and there is no <code>recursive</code>
+        {" "}
+        prop to make it one.
+      </p>
+      <p>
+        Containment is the same two-stage story as above, with one difference
+        that follows from the link rule: only the <em>parent</em>{" "}
+        of the path is resolved, and the last segment you wrote is left alone.
+        An empty path, an absolute one, a <code>..</code>{" "}
+        escape and a parent symlink leading out are all refused before anything
+        is removed, and the message names the path you wrote and nothing else.
       </p>
 
       <h2>Finding files</h2>

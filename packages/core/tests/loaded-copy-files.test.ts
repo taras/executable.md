@@ -177,17 +177,20 @@ describe("Tier LC — a separately loaded runtime copy", () => {
 
     // The other copy's payload-free success, which is `{ ok: true }` with no
     // `value` member at all.
-    const unit = yield* answered(() => ({ ok: true }) as Result<void>);
+    const unit = yield* answered(() => fromOutside({ ok: true }));
     expect(unit).toEqual({ ok: true, value: undefined });
 
-    // And the two containers that describe nothing a caller may act on.
-    for (const malformed of [
-      () => ({ ok: true, value: "receipt-PLANTED" }) as unknown as Result<void>,
-      () => ({ ok: false }) as unknown as Result<void>,
-    ]) {
+    // And the two containers that describe nothing a caller may act on. The
+    // annotation is what lets each one be built from plain data: the contract
+    // under test is precisely the one the signature cannot enforce.
+    const malformed: Array<() => Result<void>> = [
+      () => fromOutside({ ok: true, value: "receipt-PLANTED" }),
+      () => fromOutside({ ok: false }),
+    ];
+    for (const outcome of malformed) {
       let thrown: unknown;
       try {
-        yield* answered(malformed);
+        yield* answered(outcome);
       } catch (error) {
         thrown = error;
       }
@@ -201,6 +204,18 @@ describe("Tier LC — a separately loaded runtime copy", () => {
     }
   });
 });
+
+/**
+ * Data as it arrives from outside the type system.
+ *
+ * A provider is a contextual handler: at run time it returns whatever it likes,
+ * and the contract these cases exercise is the one the types cannot enforce.
+ * Round-tripping through JSON is how a container the signature forbids is built
+ * without asserting a type it does not have.
+ */
+function fromOutside<T>(value: unknown): T {
+  return JSON.parse(JSON.stringify(value));
+}
 
 /** One deletion, answered by a provider that returns exactly `outcome`. */
 function answered(outcome: () => Result<void>): Operation<Result<void>> {

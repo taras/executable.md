@@ -8997,7 +8997,7 @@ platform's.
 | HF14 | Absence | Every operation throws provider-unavailable with the fixed diagnostic and no cause, and no low-level call is made |
 | HF15 | Installation | `useHostFiles()` installs beneath ordinary middleware, which can still wrap it |
 | HF16 | Directory links on every platform | A junction on Windows and a directory symlink elsewhere are refused on the same terms |
-| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims — deletion's five among them — and prints every one it checked |
+| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims — admission, the write round trip, containment, the search, temporary directories, and deletion's regular file, absent path, final link, directory and containment behavior — and prints every one it checked |
 | HF18 | Deletion's shape | A regular file is removed, the success carries no value at all, and a second deletion of the same path is the same success |
 | HF19 | Final links | An inward link, an outward file link, a dangling link, and an outward directory link are each removed as the link, and nothing on the far side of any of them moves |
 | HF20 | Directories | An empty directory, a full one, `.`, and a path normalizing onto the working directory are each refused at the target phase; so is `.` under a working directory reached through a link, which is what separates classifying the directory from resolving its parent |
@@ -9536,6 +9536,14 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 | WF12 | Discarded partial mutation | A write that refuses after creating two parent directories leaves neither behind, leaves what the Workspace already held untouched, records the sanitized refusal, and does not stop the next effect from committing |
 | WF13 | Unreadable history | A recorded outcome carrying a member its variant does not have, a member of the wrong type, or a phase or reason the operation's vocabulary does not hold, is refused as exactly the cause-free `protocol` provider invariant — nothing the record held is repeated back, and no later file effect is performed |
 | WF14 | The transaction filesystem is the provider's | Contextual middleware installed from inside the document — including descriptors rebuilt for every name a filesystem seam has used — neither observes nor replaces the filesystem a Workspace transaction hands its body |
+| WF15 | Atomic deletion | `<File.Delete>` removes one file and records one `delete` effect whose outcome is `{ kind: "deleted" }`; the current root, the newest journal row's root and the published effect agree, and a neighbouring file is untouched |
+| WF16 | Deleting nothing | Two deletions of a path that names nothing both record the same successful outcome, and the run's committed root is the one it started with |
+| WF17 | Logical links | A link to a file and a link to a directory are each removed as the link, and what either named is still there |
+| WF18 | Every directory | An empty directory and a full one are both refused at the target phase, with no removal performed and the committed root unchanged — the row that discriminates the pinned filesystem, whose nonrecursive `rm` removes an empty directory |
+| WF19 | Paths that name nothing removable | An empty path is refused by prop validation before the component runs; an absolute path and a `..` escape are refused lexically with no effect recorded; a parent link whose target leaves the Workspace root is refused at resolution and publishes that refusal against the unchanged root. None performs a removal |
+| WF20 | Rollback after the removal | An infrastructure failure between the removal and publication rolls the outer transaction back: the file, the committed root and the committed effect history are all the ones the run started with |
+| WF21 | Completed replay | A completed deletion restores its outcome without a second low-level removal, even where the path was privately recreated afterwards, and appends nothing |
+| WF22 | Cancelled deletion | A halt between the removal and the commit publishes no outcome and moves no root; the continuation, which has no record of it, performs and records the deletion exactly once |
 
 ### Tier EP — The execution protocol
 

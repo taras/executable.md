@@ -133,6 +133,21 @@ function runDocument(database: WorkflowRunDatabase, source: string): Operation<R
   });
 }
 
+/**
+ * What one run said, whether it printed it or failed with it.
+ *
+ * A refusal the component owns is printed into the output; one the engine makes
+ * before the component runs — prop validation — fails the execution instead. A
+ * table covering both reads the sentence from wherever it landed.
+ */
+function* reportedBy(database: WorkflowRunDatabase, source: string): Operation<string> {
+  try {
+    return String((yield* runDocument(database, source)).output);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** The same document again, replaying the journal the first execution wrote. */
 function replayDocument(database: WorkflowRunDatabase, source: string): Operation<Run> {
   return runDocument(database, source);
@@ -1105,55 +1120,110 @@ describe("WF workflow document filesystem", () => {
   // silently mean something different here than `<File.Delete>` means on a host.
   it("refuses every directory, including the empty one DOFS would remove", function* () {
     const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      yield* mutateWorkspace(database, function* (workspace) {
-        yield* workspace.filesystem.mkdir("/empty", { recursive: true });
-        yield* workspace.filesystem.mkdir("/full", { recursive: true });
-        yield* workspace.filesystem.writeFile("/full/inner.txt", "kept");
-      });
+    const removed: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.mkdir("/empty", { recursive: true });
+          yield* workspace.filesystem.mkdir("/full", { recursive: true });
+          yield* workspace.filesystem.writeFile("/full/inner.txt", "kept");
+        });
+        const before = committedRoot(path);
 
-      const run = yield* runDocument(
-        database,
-        ['<File.Delete path="empty" />', "", '<File.Delete path="full" />'].join("\n"),
-      );
+        const run = yield* runDocument(
+          database,
+          ['<File.Delete path="empty" />', "", '<File.Delete path="full" />'].join("\n"),
+        );
 
-      expect(run.host.seen).toEqual([]);
-      expect((yield* recordedFileEffects(database)).map((effect) => effect.result)).toEqual([
-        { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
-        { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
-      ]);
-      expect(String(run.output)).toContain('cannot delete "empty": it is a directory');
+        expect(run.host.seen).toEqual([]);
+        expect((yield* recordedFileEffects(database)).map((effect) => effect.result)).toEqual([
+          { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
+          { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
+        ]);
+        expect(String(run.output)).toContain('cannot delete "empty": it is a directory');
 
-      const empty = yield* transactWorkspaceRoots(database, function* (workspace) {
-        return yield* workspace.filesystem.stat("/empty");
-      });
-      expect(empty.ok).toEqual(true);
-      expect(yield* workspaceText(database, "/full/inner.txt")).toEqual("kept");
-    });
+        const empty = yield* transactWorkspaceRoots(database, function* (workspace) {
+          return yield* workspace.filesystem.stat("/empty");
+        });
+        expect(empty.ok).toEqual(true);
+        expect(yield* workspaceText(database, "/full/inner.txt")).toEqual("kept");
+        // A refusal publishes the failed effect against the root it started
+        // from: nothing was removed, so the Workspace the effect captured is
+        // the one it found.
+        expect(removed).toEqual([]);
+        expect(committedRoot(path)).toEqual(before);
+      },
+      { decorateFilesystem: countingRemoves(removed) },
+    );
   });
 
-  // WF19: the delete half of WF6. Each of these is decided from the path alone,
-  // so no effect exists to record and no host is asked anything.
-  it("refuses an empty, absolute or escaping delete path without an effect", function* () {
-    const cases: Array<{ path: string; says: string }> = [
-      { path: "/etc/passwd", says: "an absolute path is not accepted" },
-      { path: "../escape.txt", says: "resolves outside the working directory" },
+  // WF19: the delete half of WF6, and the one row where the two providers
+  // legitimately differ.
+  //
+  // An empty path never reaches the component: the schema declares a non-empty
+  // string, so prop validation refuses it and the document execution fails
+  // rather than printing. An absolute path and a `..` escape are decided from
+  // the path alone, so there is no effect to record.
+  //
+  // A parent link whose target leaves the Workspace root is the logical
+  // analogue of the host's escaping parent symlink, and it is not a lexical
+  // question here: the path is admissible, and what refuses it is DOFS
+  // declining to resolve a link target outside the root. So that one *does*
+  // publish an effect — a refusal, at resolution, against the unchanged root.
+  //
+  // None of the four removes anything, which the counter is what proves.
+  it("refuses an empty, absolute, escaping or unresolvable delete path", function* () {
+    const cases: Array<{ path: string; says: string; effects: number; link?: boolean }> = [
+      { path: "", says: "must NOT have fewer than 1 characters", effects: 0 },
+      { path: "/etc/passwd", says: "an absolute path is not accepted", effects: 0 },
+      { path: "../escape.txt", says: "resolves outside the working directory", effects: 0 },
+      {
+        path: "escape/secret.txt",
+        says: 'cannot resolve "escape/secret.txt": the filesystem operation failed.',
+        effects: 1,
+        link: true,
+      },
     ];
 
     for (const refused of cases) {
       const root = yield* useStorageRoot();
-      yield* withStorage(root, function* () {
-        const database = yield* createRun();
-        const path = runPath(root, database.record.runId);
-        const before = committedRoot(path);
-        const run = yield* runDocument(database, `<File.Delete path="${refused.path}" />`);
+      const removed: string[] = [];
+      yield* withStorage(
+        root,
+        function* () {
+          const database = yield* createRun();
+          const path = runPath(root, database.record.runId);
+          if (refused.link === true) {
+            yield* mutateWorkspace(database, function* (workspace) {
+              yield* workspace.filesystem.symlink("../outside", "/escape");
+            });
+          }
+          const before = committedRoot(path);
 
-        expect(String(run.output)).toContain(refused.says);
-        expect(run.host.seen).toEqual([]);
-        expect(yield* workspaceEvents(database)).toEqual([]);
-        expect(committedRoot(path)).toEqual(before);
-      });
+          expect(yield* reportedBy(database, `<File.Delete path="${refused.path}" />`)).toContain(
+            refused.says,
+          );
+
+          expect((yield* workspaceEvents(database)).length).toEqual(refused.effects);
+          expect(removed).toEqual([]);
+          expect(committedRoot(path)).toEqual(before);
+
+          if (refused.link === true) {
+            const link = yield* transactWorkspaceRoots(database, function* (workspace) {
+              return yield* workspace.filesystem.lstat("/escape");
+            });
+            expect(link.ok && link.value.kind).toEqual("symlink");
+            expect((yield* recordedFileEffects(database))[0]?.result).toEqual({
+              status: "ok",
+              value: { kind: "refused", phase: "resolution", reason: "operation-failed" },
+            });
+          }
+        },
+        { decorateFilesystem: countingRemoves(removed) },
+      );
     }
   });
 
