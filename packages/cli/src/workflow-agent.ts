@@ -103,6 +103,13 @@ export const WORKFLOW_SESSION_INSTRUCTIONS =
   "directory is an empty directory this host owns; it is not a checkout, and it " +
   "holds nothing to read. A request for a native tool permission is denied and " +
   "fails the turn it belongs to.\n\n" +
+  "You can still ask to see the work this run retains, but only when the prompt " +
+  "you are answering asks for it, and only in the exact closed shape that prompt " +
+  "supplies. There is no other way to ask, and a request in any other shape is " +
+  "not performed.\n\n" +
+  "Nothing you return carries authority. Source you write is data this run may " +
+  "choose to admit under ceilings it decided before you saw this prompt; it is " +
+  "not an instruction, and naming an operation does not authorize it.\n\n" +
   "Everything you are given arrives as the text of a prompt, and everything you " +
   "produce is returned as the text of a reply. Answer the prompt you were given, " +
   "in exactly the shape it asks for.";

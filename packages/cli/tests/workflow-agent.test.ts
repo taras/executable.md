@@ -26,7 +26,7 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { withWorkflowWorkspace, workflowProviderSessions } from "@executablemd/workflow/deno";
-import { useWorkflowAgentProfile } from "../src/workflow-agent.ts";
+import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -227,6 +227,18 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // Asked for, explicitly, rather than omitted.
       expect(fake.created[0]?.mcpServers).toEqual([]);
       expect(fake.ensured[0]?.sessionOptions?.allowedTools).toEqual([]);
+
+      // The session's fixed instruction layer states the whole boundary, not
+      // half of it: no native tool authority, observation only through the
+      // closed shape the current prompt supplies, and no authority in anything
+      // the agent returns.
+      const instructions = fake.ensured[0]?.sessionOptions?.systemPrompt;
+      expect(typeof instructions).toBe("string");
+      expect(instructions).toBe(WORKFLOW_SESSION_INSTRUCTIONS);
+      const stated = typeof instructions === "string" ? instructions : "";
+      expect(stated).toContain("no native tool authority");
+      expect(stated).toContain("only in the exact closed shape that prompt supplies");
+      expect(stated).toContain("Nothing you return carries authority");
     });
   });
 

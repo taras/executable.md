@@ -1341,8 +1341,16 @@ host owns: created empty before the session is established, never written to by
 this host, never read back into the Workspace, and removed when the attachment
 ends. The runtime is created with no MCP servers, each session asks for an empty
 native tool set, and the permission mode is `deny-all` with non-interactive
-denial. A fixed session instruction layer states that boundary to the Agent in
-the same terms.
+denial.
+
+A fixed session instruction layer states that boundary to the Agent in the same
+terms, and states all of it: no native tool is authorized; retained work can be
+asked for only when the prompt being answered asks for it and only in the exact
+closed shape that prompt supplies (§8.4); and nothing the Agent returns carries
+authority, because source it writes is data this run may admit under ceilings it
+decided before the prompt was sent. Those instructions take part in the session
+policy fingerprint (§8.5), so changing them refuses a session created under the
+previous wording.
 
 A native tool permission request is denied and fails the turn it belongs to,
 with a fixed diagnostic that names nothing the request carried. It does not
