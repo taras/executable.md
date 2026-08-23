@@ -17,7 +17,7 @@ import {
   SIDE_EFFECT_FREE_MANIFESTS,
 } from "../build-web-client.ts";
 import { assertSideEffectFree, normalizeSideEffects } from "../lib/side-effect-free.ts";
-import { byteLength } from "../lib/web-client-module.ts";
+import { byteLength, generatedModule, incomplete } from "../lib/web-client-module.ts";
 import { loadGeneratedModule } from "./generated-module.ts";
 
 const REPO_ROOT = new URL("../../", import.meta.url);
@@ -232,6 +232,127 @@ describe("build-web-client", () => {
 
     expect(failure).toEqual(new Error("the check that started the build failed"));
     expect(yield* readdir(scratch)).toEqual([]);
+  });
+});
+
+/**
+ * CP7 — how the generated module reaches the path everything imports.
+ *
+ * A build republishes the one file three runtimes resolve through while they
+ * are resolving through it. Written in place, the window between truncation and
+ * the last byte is a file that parses as nothing; staged and renamed, there is
+ * no window at all. The `.staged` name carries a UUID, so a second build
+ * publishing at the same time stages somewhere else.
+ */
+describe("atomic publication", () => {
+  /** The module as a reader finds it: whole, partial, or not there. */
+  function* reading(output: string): Operation<string> {
+    let text: string;
+    try {
+      text = yield* readTextFile(output);
+    } catch {
+      return "absent";
+    }
+    const wrong = incomplete(text);
+    return wrong === undefined ? `whole ${byteLength(text)}` : `partial: ${wrong}`;
+  }
+
+  function* residue(directory: string): Operation<string[]> {
+    return (yield* readdir(directory)).filter((name) => name.includes(".staged"));
+  }
+
+  /**
+   * The mechanism, not the symptom.
+   *
+   * A reader polling the file cannot reliably catch an in-place write — the
+   * window is a few milliseconds and nothing arranges to land in it, which is
+   * exactly why the live check below passes against a direct write too. The
+   * inode is not a race: `writeTextFile` truncates the file it already has, and
+   * a rename replaces it with a different one.
+   */
+  it("publishes by replacing the file rather than by writing over it", function* () {
+    const directory = yield* scratchDirectory("build-web-client-rename-");
+    const output = path.join(directory, "client-bundle.ts");
+    yield* writeTextFile(output, generatedModule("const a = 1;", ":root{}"));
+    const before = (yield* lstat(output)).ino;
+
+    yield* deno(["task", "build:web", "--out", output]);
+
+    expect((yield* lstat(output)).ino).not.toEqual(before);
+  });
+
+  it("never exposes an absent or partial module while it republishes one", function* () {
+    const directory = yield* scratchDirectory("build-web-client-atomic-");
+    const output = path.join(directory, "client-bundle.ts");
+    // A whole module of a different size, so the publication is observable as a
+    // change rather than inferred from timing.
+    yield* writeTextFile(output, generatedModule("const a = 1;", ":root{}"));
+
+    const observed: string[] = [];
+    const before = yield* reading(output);
+
+    const build = yield* spawn(() => deno(["task", "build:web", "--out", output]));
+    const watch = yield* spawn(function* () {
+      while (true) {
+        observed.push(yield* reading(output));
+        yield* sleep(1);
+      }
+    });
+    yield* build;
+    yield* watch.halt();
+    const after = yield* reading(output);
+
+    expect(observed.filter((seen) => !seen.startsWith("whole"))).toEqual([]);
+    // Non-vacuous on both sides: the watch saw the old module and the new one
+    // is a different module, so it spanned the publication.
+    expect(observed).toContain(before);
+    expect(after).not.toEqual(before);
+    expect(after.startsWith("whole")).toBe(true);
+  });
+
+  it("leaves no staging beside the module it published", function* () {
+    const directory = yield* scratchDirectory("build-web-client-staged-");
+    const output = path.join(directory, "client-bundle.ts");
+
+    yield* deno(["task", "build:web", "--out", output]);
+
+    expect(yield* residue(directory)).toEqual([]);
+  });
+
+  it("creates the directory it publishes into", function* () {
+    const directory = yield* scratchDirectory("build-web-client-mkdir-");
+    const output = path.join(directory, "generated", "client-bundle.ts");
+
+    yield* deno(["task", "build:web", "--out", output]);
+
+    expect((yield* reading(output)).startsWith("whole")).toBe(true);
+  });
+});
+
+describe("the generated module, read back", () => {
+  const whole = generatedModule("const a = 1;", ":root{--x:1px}");
+
+  it("accepts what a build publishes", function* () {
+    expect(incomplete(whole)).toEqual(undefined);
+  });
+
+  it("refuses every way a half-written or foreign file could look", function* () {
+    const refusals: [string, string][] = [
+      ["", "generated header is missing"],
+      // One byte short: every statement is there and the file still stopped early.
+      [whole.slice(0, -1), "does not end with its last statement"],
+      [whole.slice(0, whole.length - 10), "`export const themeCssBytes` is missing"],
+      [whole.slice(0, 200), "is missing or is not a string literal"],
+      [whole.replace(/export const clientJsBytes = \d+;/, ""), "clientJsBytes` is missing"],
+      [
+        whole.replace(/export const themeCssBytes = \d+;/, "export const themeCssBytes = 0;"),
+        "themeCss is recorded as empty",
+      ],
+    ];
+
+    for (const [text, expected] of refusals) {
+      expect(incomplete(text) ?? "accepted").toContain(expected);
+    }
   });
 });
 

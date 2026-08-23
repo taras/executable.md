@@ -63,12 +63,13 @@
 import { ensure, main, scoped, until } from "effection";
 import type { Operation } from "effection";
 import { exec } from "@effectionx/process";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm } from "@effectionx/fs";
 import { encodeBase64 } from "@std/encoding/base64";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { assertSideEffectFree, sideEffectFreeManifests } from "./lib/side-effect-free.ts";
+import { replaceThroughStaging } from "./lib/staged-write.ts";
 import { byteLength, generatedModule } from "./lib/web-client-module.ts";
 
 const repoRoot = new URL("../", import.meta.url);
@@ -244,7 +245,10 @@ if (import.meta.main) {
     const output = outputModule(args, repoRoot);
     const result = yield* buildWebClient();
     yield* ensureDir(new URL(".", output));
-    yield* writeTextFile(output, result.module);
+    // Staged rather than written in place: the runtimes that resolve through
+    // this module read it while a build replaces it, and a direct write exposes
+    // a truncated file. The rename publishes every byte at once.
+    yield* replaceThroughStaging(output, result.module);
     console.log(`generated ${output.pathname} (${byteLength(result.module)} bytes)`);
   });
 }
