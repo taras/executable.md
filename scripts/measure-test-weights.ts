@@ -19,12 +19,8 @@
 
 import { exit, main } from "effection";
 
-import {
-  measureTestWeights,
-  weightSourceFrom,
-  weightsFile,
-  writeTestWeights,
-} from "./lib/test-weights.ts";
+import { measureTestWeights, writeTestWeights } from "./lib/measure-weights.ts";
+import { weightsFile, weightSourceFrom } from "./lib/test-weights.ts";
 import type { WeightSource } from "./lib/test-weights.ts";
 
 const repoRoot = new URL("../", import.meta.url);

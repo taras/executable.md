@@ -124,9 +124,22 @@ const COMPLETE: Record<string, string> = {
 /** What measurement prints before it launches its first test process. */
 const FIRST_LAUNCH = "measuring ";
 
+/**
+ * The committed weights exactly as they are, or `undefined` when there are
+ * none.
+ *
+ * A refusal must leave them alone, and until the repository committed a
+ * measurement that was provable by the file's absence. It is not any more: the
+ * file exists now, so what is asserted is that the bytes did not move.
+ */
+function* committedWeights(): Operation<string | undefined> {
+  const path = weightsFile(ROOT);
+  return (yield* exists(path)) ? yield* readTextFile(path) : undefined;
+}
+
 describe("the measurement command", () => {
   it("refuses an empty environment before running a single test", function* () {
-    expect(yield* exists(weightsFile(ROOT))).toBe(false);
+    const before = yield* committedWeights();
 
     const { code, stderr } = yield* measure({});
 
@@ -135,16 +148,18 @@ describe("the measurement command", () => {
       expect(stderr).toContain(variable);
     }
     expect(stderr).not.toContain(FIRST_LAUNCH);
-    expect(yield* exists(weightsFile(ROOT))).toBe(false);
+    expect(yield* committedWeights()).toEqual(before);
   });
 
   it("names the one value it is missing", function* () {
+    const before = yield* committedWeights();
+
     const { code, stderr } = yield* measure({ ...COMPLETE, WEIGHTS_BUN: "" });
 
     expect(code).toEqual(1);
     expect(stderr).toContain("WEIGHTS_BUN");
     expect(stderr).not.toContain(FIRST_LAUNCH);
-    expect(yield* exists(weightsFile(ROOT))).toBe(false);
+    expect(yield* committedWeights()).toEqual(before);
   });
 
   it("is the only task that writes the weights", function* () {

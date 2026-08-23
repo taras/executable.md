@@ -538,3 +538,143 @@ removed with its scope.
 
 BDD syntax such as `describe`, `it`, `beforeEach`, and `beforeAll` is not
 supported. Gherkin syntax such as `Given`, `When`, and `Then` is not supported.
+
+## Repository Runtime Suites
+
+The sections above specify the Executable Markdown testing language. This one
+specifies something different: how *this repository's* own TypeScript test
+corpus is discovered, divided, and run under each supported runtime. It changes
+nothing about `<Test>`, `<Testing>`, assertions, or mocking.
+
+### One corpus
+
+`listTestFiles(root)` is the only discovery source. It returns sorted
+repository-relative POSIX paths for every `*.test.ts` beneath `tests/` in each
+root workspace member plus `scripts/tests/`, and nothing else. Walking those
+concrete directories rather than the repository root is what keeps nested
+worktrees, the site, and the deliberately malformed fixtures out without naming
+any of them.
+
+That result is the same set Deno's own test-file pattern finds in the
+repository. A test file discovery cannot see would run under no runtime at all,
+so the equivalence is a regression rather than a convention.
+
+### Applicable corpus
+
+`applicableTestFiles(runtime, root)` is discovery minus the entries
+`scripts/runtime-test-exclusions.ts` records for that runtime, in the same
+sorted order. Every supported runtime is keyed there, including the one that
+excludes nothing: an absent key reads as an unmeasured runtime, which is the one
+thing weights and partitions must never see.
+
+A file leaves a runtime only through that manifest, and each entry carries a
+reason and an issue. The manifest is validated structurally; it cannot show that
+an excluded test has become portable, so removing a stale entry stays a manual
+act.
+
+### Versioned weights
+
+`test-weights.json` records how long each applicable file takes under each
+runtime, in milliseconds. It is version 1 and carries provenance — the commit,
+the run URL, the attempt, the runner label, and all three runtime versions —
+because a weight measured on another machine, image, or commit describes a
+corpus that no longer exists.
+
+The file is parsed rather than trusted. Version, every provenance field, the
+runtime names, the shape of every path, and the positivity and integrality of
+every millisecond are checked; anything else is refused, because a partition
+computed from unplaceable data is worse than no partition.
+
+`deno task weights:measure` is the only command that writes it. Measurement runs
+each applicable file alone through that runtime's exact one-file command, times
+the child with a monotonic clock, holds the results in memory, and writes only
+after every file passed — a file half-replaced by a suite that failed halfway
+would be indistinguishable from one measured on a healthy corpus. The write goes
+through a staged copy of the invocation's own, so it is atomic and a cancelled
+run removes only its own staging. Ordinary verification never rewrites it.
+
+### Fallback
+
+A file with a recorded weight uses it. A file without one is charged the
+*maximum* recorded weight among the applicable files that do have one:
+conservative, non-zero, and named in the shard's log. Weights recorded for files
+that have since left the corpus are ignored entirely, so a deleted outlier
+cannot inflate that fallback forever.
+
+When no applicable file has a recorded weight there is no conservative number to
+pick — a zero would pack the corpus onto one shard and a constant would be a
+timing assumption in disguise — so the partition refuses.
+
+### Partition
+
+Each runtime's applicable corpus is partitioned independently, by
+longest-processing-time-first assignment:
+
+1. order the files by descending effective weight, breaking equal weights by
+   ascending repository path;
+2. create the requested number of indexed empty shards;
+3. assign each file in turn to the shard with the lowest total weight, breaking
+   equal totals by the lowest shard index;
+4. sort each shard's assigned paths; and
+5. retain shard indices rather than re-sorting the shards.
+
+This minimizes the longest shard rather than equalizing file counts, because the
+wall clock a run waits on is the slowest shard. A count below one or above the
+applicable file count is refused, as is an index outside `1..count`.
+
+The result is a pure function of the applicable paths, the weights, the count,
+and the index: repeated calls return byte-identical lists, which is what lets a
+matrix job be told only its index and still be certain it runs exactly the files
+no sibling runs. The shards are pairwise disjoint and their union is exactly the
+applicable corpus — every applicable file runs exactly once per runtime.
+
+### Execution
+
+`runtime-tests.ts <deno|node|bun> [<index>/<count>]` runs a runtime's tests. With
+no selection it runs the whole applicable corpus in one invocation. With one it
+resolves that shard and invokes its files serially, in sorted order, each
+through that runtime's one-file command:
+
+- Deno — `deno test --allow-all --frozen <file>`
+- Node — `tsx --tsconfig tsconfig.node.json --test --test-concurrency=1 <file>`
+- Bun — `bun test --timeout=300000 <file>`
+
+A malformed runtime, index, or count is refused before any test process starts.
+
+A numeric failure does not prevent the files assigned after it: the shard
+continues, retains the first failed file and its status, and exits with that
+status once every assigned file has had its chance. A status without a numeric
+code — a signalled child — is failure. Native output is neither captured,
+truncated, nor replaced by a summary.
+
+Cancellation is distinct from failure. Halting a shard halts the process group
+of the file it is running and starts no later file. The shard owns no scratch
+state to leave behind.
+
+### CI topology
+
+`test-deno`, `test-node`, and `test-bun` are `fail-fast: false` matrices under
+those same job IDs. Each shows its selection in its name, passes that selection
+only to its `Test` step, and keeps that runtime's own preparation unchanged and
+repeated per shard. `green` requires all three job IDs; GitHub collapses a
+matrix into one result behind its ID, so a shard that fails, is cancelled, times
+out, or unexpectedly skips makes that dependency non-success.
+
+Concurrency inside a shard is not enabled.
+
+### Remeasurement and calibration
+
+Remeasure after any change to the corpus, the exclusions, or a runner command.
+A hosted `workflow_dispatch` produces the measurement on the runner CI uses and
+uploads it as an artifact; committing that artifact is a deliberate act, which
+is what keeps the provenance true of the run that produced it. Milliseconds are
+never edited by hand.
+
+Counts are measured rather than chosen. For each runtime the lower bound is
+`floor(sum of applicable weights / 300000) + 1`, and the installed count is the
+smallest for which five consecutive runs on one fixed head keep every shard
+`Test` step, and that runtime's whole execution window, under 300 seconds. A
+miss increments only that runtime and begins a fresh sequence of five. Narrowing
+the corpus, dropping a runtime, or enabling in-shard concurrency is not a
+response to a miss. A single file whose own weight reaches 300 seconds cannot be
+solved by any count, and is reported rather than absorbed.

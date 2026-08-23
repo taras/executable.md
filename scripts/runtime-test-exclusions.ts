@@ -84,6 +84,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/279",
   },
   {
+    path: "scripts/tests/shard-execution.test.ts",
+    reason:
+      "runs a shard against a temporary Deno workspace through real `deno test` children, and kills one mid-run to prove the process group goes with it; Bun's job installs no Deno at all, and the ordering and argument-vector half of the same contract is scripts/tests/runtime-tests.test.ts",
+    issue: "https://github.com/taras/executable.md/issues/280",
+  },
+  {
     path: "scripts/tests/measure-test-weights.test.ts",
     reason:
       "runs `deno task weights:measure` itself through Deno.execPath() with an environment of its own, to prove the command refuses incomplete provenance before it starts a test process; the portable half — the weights parser, the environment refusal and the measurement operation — is scripts/tests/test-weights.test.ts",
