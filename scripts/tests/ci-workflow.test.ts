@@ -180,6 +180,9 @@ function results(workflow: Record<string, Job>, result: string): Record<string, 
 /** The three shapes GitHub delivers this workflow in. */
 type Occasion = "push" | "pull-request" | "repair";
 
+/** Every occasion, named once, drawn from the union rather than asserted into it. */
+const OCCASIONS: Occasion[] = ["push", "pull-request", "repair"];
+
 const EVENTS: Record<Occasion, { EVENT: string; REPAIR: string }> = {
   push: { EVENT: "push", REPAIR: "false" },
   "pull-request": { EVENT: "pull_request", REPAIR: "false" },
@@ -623,7 +626,7 @@ describe("the CI workflow aggregate", () => {
     const parsed = yield* workflow();
     const commandText = command(green(parsed));
 
-    for (const occasion of ["push", "pull-request", "repair"] as const) {
+    for (const occasion of OCCASIONS) {
       for (const job of ["test-deno", "test-node", "test-bun"]) {
         for (const result of ["failure", "cancelled", "skipped", "timed_out", "action_required"]) {
           const values = required(parsed, occasion);

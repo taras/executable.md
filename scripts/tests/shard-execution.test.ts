@@ -16,12 +16,15 @@ import { expect } from "@executablemd/test-support/expect";
 import { sleep, spawn } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readdir, writeTextFile } from "@effectionx/fs";
-import { Stdio } from "@effectionx/process";
+import { exec, Stdio } from "@effectionx/process";
 import { useTempDirectory } from "@executablemd/test-support/temp";
-import { pathToFileURL } from "node:url";
+import { chmod } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { until } from "effection";
 
 import { runShardFiles } from "../lib/runtime-tests.ts";
 
+const REPOSITORY = new URL("../../", import.meta.url);
 const decoder = new TextDecoder();
 
 interface Seen {
@@ -173,5 +176,104 @@ describe("a shard running real children", () => {
     // nothing, so the only entries are the fixture's and the child's.
     const left = (yield* readdir(new URL(".", root))).sort();
     expect(left).toEqual(["deno.json", "slow.marker", "tests"]);
+  });
+});
+
+/**
+ * A stand-in for the real runner, on `PATH` under its own name.
+ *
+ * The driver spawns its runner by bare command name, so a shim named `deno`
+ * ahead of the real one on `PATH` is what any launched runner actually
+ * executes. It marks the filesystem and exits successfully — so the marker's
+ * presence is a runner start, and its absence is proof that none happened.
+ * Nothing about the driver's own logging is involved in that answer.
+ */
+interface Sentinel {
+  /** Prepend to `PATH` so a launched runner resolves to the shim. */
+  bin: string;
+  /** Written the instant any runner starts. */
+  marker: URL;
+}
+
+function* runnerSentinel(): Operation<Sentinel> {
+  const base = yield* useTempDirectory("shard-sentinel-");
+  const root = pathToFileURL(`${base}/`);
+  const bin = new URL("bin/", root);
+  yield* ensureDir(bin);
+
+  const marker = new URL("runner-started", root);
+  const shim = new URL("deno", bin);
+  yield* writeTextFile(shim, `#!/bin/sh\n: > "${fileURLToPath(marker)}"\nexit 0\n`);
+  yield* until(chmod(shim, 0o755));
+
+  return { bin: fileURLToPath(bin), marker };
+}
+
+/** The real entrypoint, with a shimmed runner ahead of the real one on `PATH`. */
+function* driver(
+  sentinel: Sentinel,
+  selection: string,
+): Operation<{ code?: number; stderr: string }> {
+  const result = yield* exec(Deno.execPath(), {
+    arguments: ["run", "--allow-all", "--frozen", "scripts/runtime-tests.ts", "deno", selection],
+    cwd: fileURLToPath(REPOSITORY),
+    env: {
+      PATH: `${sentinel.bin}:${Deno.env.get("PATH") ?? ""}`,
+      HOME: Deno.env.get("HOME") ?? "",
+    },
+  }).join();
+  return { code: result.code, stderr: result.stderr };
+}
+
+describe("a shard selection nobody assigned", () => {
+  /**
+   * The count `ci.yml` declares for Deno. An index beyond it, and a count beyond
+   * the corpus, both parse — they are well-formed `<index>/<count>` — so nothing
+   * before the partition can reject them.
+   */
+  const DECLARED = 8;
+
+  it("refuses an in-range-looking index before any runner starts", function* () {
+    const sentinel = yield* runnerSentinel();
+
+    const { code, stderr } = yield* driver(sentinel, `${DECLARED + 1}/${DECLARED}`);
+
+    expect(code).toEqual(1);
+    expect(stderr).toContain(`shard index ${DECLARED + 1} is outside 1..${DECLARED}`);
+    expect(yield* exists(sentinel.marker)).toBe(false);
+  });
+
+  it("refuses a count larger than the corpus before any runner starts", function* () {
+    const sentinel = yield* runnerSentinel();
+
+    const { code, stderr } = yield* driver(sentinel, "1/99999");
+
+    expect(code).toEqual(1);
+    expect(stderr).toContain("exceeds");
+    expect(yield* exists(sentinel.marker)).toBe(false);
+  });
+
+  it("refuses a malformed selection before any runner starts", function* () {
+    const sentinel = yield* runnerSentinel();
+
+    const { code, stderr } = yield* driver(sentinel, "3/");
+
+    expect(code).toEqual(1);
+    expect(stderr).toContain("usage: runtime-tests.ts");
+    expect(yield* exists(sentinel.marker)).toBe(false);
+  });
+
+  /**
+   * The sentinel has to be capable of firing, or the three refusals above prove
+   * nothing. A selection the partition accepts reaches the runner, and the shim
+   * records it.
+   */
+  it("starts the runner for a selection the partition accepts", function* () {
+    const sentinel = yield* runnerSentinel();
+
+    const { code } = yield* driver(sentinel, `1/${DECLARED}`);
+
+    expect(code).toEqual(0);
+    expect(yield* exists(sentinel.marker)).toBe(true);
   });
 });
