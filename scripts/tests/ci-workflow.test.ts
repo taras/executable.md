@@ -5,8 +5,13 @@ import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 
+import { applicableTestFiles } from "../lib/test-files.ts";
+import { partitionTests } from "../lib/test-shards.ts";
+import { parseTestWeights, weightsFile } from "../lib/test-weights.ts";
+import { RUNTIMES } from "../runtime-test-exclusions.ts";
 import type { Runtime } from "../runtime-test-exclusions.ts";
 
+const ROOT = new URL("../../", import.meta.url);
 const CI_WORKFLOW = new URL("../../.github/workflows/ci.yml", import.meta.url);
 
 interface Step {
@@ -384,6 +389,71 @@ describe("the sharded runtime jobs", () => {
     const source = yield* readTextFile(CI_WORKFLOW);
 
     expect(source).not.toContain("continue-on-error");
+  });
+});
+
+describe("the actual partition the workflow installs", () => {
+  /**
+   * Not synthetic data: the committed corpus, the committed exclusions, the
+   * committed weights, and the counts `ci.yml` declares. This is the only place
+   * that proves the numbers in the workflow describe a real, complete,
+   * non-overlapping split of what CI is meant to run.
+   */
+  it("covers each runtime's applicable corpus exactly once", function* () {
+    const parsed = yield* workflow();
+    const weights = parseTestWeights(yield* readTextFile(weightsFile(ROOT)));
+
+    for (const [id, runtime] of Object.entries(RUNTIME_JOBS)) {
+      const count = shardIndices(matrixJob(parsed, id), id).length;
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      const shards = partitionTests(applicable, weights.runtimes[runtime], count);
+      const assigned = shards.flatMap((shard) => shard.files);
+
+      expect({ id, shards: shards.length }).toEqual({ id, shards: count });
+      expect({ id, assigned: [...assigned].sort() }).toEqual({
+        id,
+        assigned: [...applicable].sort(),
+      });
+      expect({ id, distinct: new Set(assigned).size }).toEqual({ id, distinct: applicable.length });
+      for (const shard of shards) {
+        expect({ id, index: shard.index, empty: shard.files.length === 0 }).toEqual({
+          id,
+          index: shard.index,
+          empty: false,
+        });
+      }
+    }
+  });
+
+  it("assigns the same files every time it is asked", function* () {
+    const parsed = yield* workflow();
+    const weights = parseTestWeights(yield* readTextFile(weightsFile(ROOT)));
+
+    for (const [id, runtime] of Object.entries(RUNTIME_JOBS)) {
+      const count = shardIndices(matrixJob(parsed, id), id).length;
+      const applicable = yield* applicableTestFiles(runtime, ROOT);
+      const recorded = weights.runtimes[runtime];
+
+      expect(partitionTests(applicable, recorded, count)).toEqual(
+        partitionTests(applicable, recorded, count),
+      );
+    }
+  });
+
+  it("weighs the corpus it is about to run", function* () {
+    const weights = parseTestWeights(yield* readTextFile(weightsFile(ROOT)));
+
+    for (const runtime of RUNTIMES) {
+      const applicable = new Set(yield* applicableTestFiles(runtime, ROOT));
+      const unmeasured = [...applicable].filter((file) => !(file in weights.runtimes[runtime]));
+
+      // A file may be newer than the measurement — it runs at the fallback. The
+      // measurement is stale in a way worth seeing when most of it is.
+      expect({ runtime, share: unmeasured.length < applicable.size / 2 }).toEqual({
+        runtime,
+        share: true,
+      });
+    }
   });
 });
 
