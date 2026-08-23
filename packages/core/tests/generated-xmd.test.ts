@@ -36,7 +36,7 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Component, content } from "../src/component-api.ts";
+import { Component, content, hasContent } from "../src/component-api.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -1782,26 +1782,23 @@ describe("Tier GXC — a resumed run is held to its classes and forms", () => {
 describe("Tier GXC — the authored form survives the public content chain", () => {
   beforeAll(() => useTempFileCompiler());
 
-  /** A handler installed outside the generated scope that observes and delegates. */
-  function observing(): ExecutionInstallation {
-    return {
-      *install() {
-        yield* Component.around({
-          *hasContent(_args, next) {
-            return yield* next();
-          },
-        });
-      },
-    };
-  }
-
-  /** A handler installed outside the generated scope, answering for every invocation. */
-  function forcing(answer: boolean): ExecutionInstallation {
+  /**
+   * A handler outside the generated scope, answering each call from a script.
+   *
+   * The last entry repeats, so `[true]` lies the same way every time and
+   * `[false, true]` is the toggle that defeats any caller which checks the
+   * chain and then invokes something that reads it again.
+   */
+  function scripted(script: readonly boolean[], answered: boolean[]): ExecutionInstallation {
+    let call = 0;
     return {
       *install() {
         yield* Component.around({
           // deno-lint-ignore require-yield
           *hasContent(_args, _next) {
+            const answer = script[Math.min(call, script.length - 1)] ?? false;
+            call += 1;
+            answered.push(answer);
             return answer;
           },
         });
@@ -1809,7 +1806,96 @@ describe("Tier GXC — the authored form survives the public content chain", () 
     };
   }
 
-  it("GXC10: middleware reporting content cannot make an admitted read write", function* () {
+  /** A read component that reports what the chain answers, so a lie is visible. */
+  function says(): GeneratedObservation {
+    return pinnedComponent("Says", "test://says", {
+      kind: "function",
+      name: "Says",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<Json> {
+        return `says:${yield* hasContent()}`;
+      },
+    });
+  }
+
+  const REPORTING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always reports content", [true]],
+    ["a handler that answers false then true", [false, true]],
+  ];
+
+  for (const [what, script] of REPORTING) {
+    it(`GXC10: an admitted read still reads under ${what}`, function* () {
+      const root = yield* useWorkspace();
+      yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+      const answered: boolean[] = [];
+
+      const attempt = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(
+          selecting(`<Says />\n\n<File path="notes.md" />\n`, [pinnedFileRead(), says()], {
+            allow: ["read"],
+          }),
+          { installations: [scripted(script, answered)] },
+        );
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(attempt.evaluated.failure).toBe(undefined);
+      // The chain is live and reporting content, which is what would have sent
+      // the self-closing `<File />` down the write branch.
+      expect(answered.length).toBeGreaterThanOrEqual(1);
+      expect(String(attempt.evaluated.output)).toContain("says:");
+      // One read, no write, and the file it was admitted to read is unchanged.
+      expect(attempt.files).toEqual(["notes.md"]);
+      expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
+      expect(attempt.evaluated.values).toEqual([
+        { name: "Says", value: `says:${script[0]}` },
+        { name: "File", value: "the retained note\n" },
+      ]);
+      // And the admission still names the identity and form it was granted for.
+      expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+        { name: "Says", identity: "test://says", form: "self-closing" },
+        { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
+      ]);
+    });
+  }
+
+  const DENYING: Array<[string, readonly boolean[]]> = [
+    ["a handler that always denies content", [false]],
+    ["a handler that answers true then false", [true, false]],
+  ];
+
+  for (const [what, script] of DENYING) {
+    it(`GXC10: an admitted write still writes under ${what}`, function* () {
+      const root = yield* useWorkspace();
+      const answered: boolean[] = [];
+
+      const attempt = yield* scoped(function* () {
+        const files = yield* useWorkspaceFiles(root);
+        const evaluated = yield* evaluate(
+          selecting(
+            `<File path="proposed.md">the fragment wrote this</File>\n`,
+            [pinnedFileRead()],
+            { allow: ["write"], mutations: [pinnedFileWrite()] },
+          ),
+          { installations: [scripted(script, answered)] },
+        );
+        return { evaluated, files: [...files.performed] };
+      });
+
+      expect(attempt.evaluated.failure).toBe(undefined);
+      // One write of the admitted bytes, and no read of a path the fragment
+      // never asked to read.
+      expect(attempt.files).toEqual(["write:proposed.md"]);
+      expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
+      expect(attempt.evaluated.values).toEqual([]);
+      expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
+        { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
+      ]);
+    });
+  }
+
+  it("GXC10: an invocation the evaluator did not receive is refused", function* () {
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
 
@@ -1817,47 +1903,42 @@ describe("Tier GXC — the authored form survives the public content chain", () 
       const files = yield* useWorkspaceFiles(root);
       const evaluated = yield* evaluate(
         selecting(`<File path="notes.md" />\n`, [pinnedFileRead()], { allow: ["read"] }),
-        { installations: [forcing(true)] },
+        {
+          installations: [
+            {
+              *install() {
+                yield* Component.around({
+                  *importComponent([name, position], next) {
+                    const definition = yield* next(name, position);
+                    if (name !== "File" || definition.kind !== "function") {
+                      return definition;
+                    }
+                    const original = definition.fn;
+                    if (typeof original !== "function") {
+                      return definition;
+                    }
+                    // A stand-in the wrapper built, reported as content-bearing.
+                    // The witness refuses the substituted definition first; the
+                    // form check is what would refuse it if one ever got past.
+                    return {
+                      ...definition,
+                      *fn(props: Record<string, Json>) {
+                        return yield* original(props, { hasContent: () => true });
+                      },
+                    };
+                  },
+                });
+              },
+            },
+          ],
+        },
       );
       return { evaluated, files: [...files.performed] };
     });
 
-    // Without the form check this writes: `<File>` branches on `hasContent()`,
-    // and a self-closing element reported as content-bearing renders an empty
-    // string over the file it was admitted to read.
-    expect(attempt.evaluated.failure).toContain("admitted for one form");
+    expect(attempt.evaluated.failure).toBeDefined();
     expect(attempt.files).toEqual([]);
     expect(yield* readTextFile(join(root, "notes.md"))).toBe("the retained note\n");
-    // The identity and form the run was granted are retained and unchanged: the
-    // admission is what it was, and this invocation is what did not match it.
-    expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
-      { name: "File", identity: pinnedFileRead().identity, form: "self-closing" },
-    ]);
-  });
-
-  it("GXC10: middleware denying content cannot make an admitted write read", function* () {
-    const root = yield* useWorkspace();
-
-    const attempt = yield* scoped(function* () {
-      const files = yield* useWorkspaceFiles(root);
-      const evaluated = yield* evaluate(
-        selecting(`<File path="proposed.md">the fragment wrote this</File>\n`, [pinnedFileRead()], {
-          allow: ["write"],
-          mutations: [pinnedFileWrite()],
-        }),
-        { installations: [forcing(false)] },
-      );
-      return { evaluated, files: [...files.performed] };
-    });
-
-    expect(attempt.evaluated.failure).toContain("admitted for one form");
-    // Neither direction: no write, and no read of a path this fragment never
-    // asked to read.
-    expect(attempt.files).toEqual([]);
-    expect(yield* exists(join(root, "proposed.md"))).toBe(false);
-    expect(recordedNames(admittedFragments(attempt.evaluated.events)[0])).toEqual([
-      { name: "File", identity: pinnedFileWrite().identity, form: "paired" },
-    ]);
   });
 
   it("GXC10: an honest chain still runs both forms through ordinary providers", function* () {
@@ -1872,8 +1953,6 @@ describe("Tier GXC — the authored form survives the public content chain", () 
           [pinnedFileRead()],
           { allow: ["read", "write"], mutations: [pinnedFileWrite()] },
         ),
-        // Observing without deciding: the handler delegates, so the engine's own
-        // answer about the element's shape is what comes back.
         { installations: [observing()] },
       );
       return { evaluated, files: [...files.performed] };
@@ -1883,4 +1962,17 @@ describe("Tier GXC — the authored form survives the public content chain", () 
     expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
     expect(yield* readTextFile(join(root, "proposed.md"))).toBe("the fragment wrote this");
   });
+
+  /** A handler outside the generated scope that observes and delegates. */
+  function observing(): ExecutionInstallation {
+    return {
+      *install() {
+        yield* Component.around({
+          *hasContent(_args, next) {
+            return yield* next();
+          },
+        });
+      },
+    };
+  }
 });

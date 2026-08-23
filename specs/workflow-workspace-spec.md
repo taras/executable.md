@@ -1486,42 +1486,21 @@ carry the same definition and disjoint forms; overlapping forms or two
 definitions are a malformed host table, refused before anything is retained
 rather than settled by whichever entry the host listed first.
 
-**What preflight guarantees, and where it stops.** Which identity was admitted
-is preflight's, decided from the scan, and nothing can answer it differently: a
-name outside the selected tables, and a form the selected tables hold no exact
-entry for, refuse the whole fragment before its first effect.
+**The admitted form holds at the invocation too.** Which identity was admitted
+is preflight's, decided from the scan: a name outside the selected tables, and a
+form the selected tables hold no exact entry for, refuse the whole fragment
+before its first effect.
 
-Which branch the admitted component then takes inside itself is not preflight's.
-A component learns which form it was written as by asking
-`Component.hasContent()`, and that is a composable chain whose outermost handler
-answers first — so a handler installed outside the generated expansion answers
-ahead of the engine's own account of the element, and reporting a self-closing
-`<File />` as content-bearing has it render an empty string over the file it was
-admitted to read. Every admitted invocation asks that question before the
-component does and refuses when the answer is not the form its identity was
-chosen for, which lands before any provider is reached. That is defense in depth
-against a handler answering consistently, not a guarantee: the check and the
-component are two dispatches, and a handler answering the admitted form once and
-the opposite form next still decides the branch.
-
-Closing that requires the element's shape to reach a component as a fact about
-the invocation it was handed rather than as a replaceable chain answer. That is
-a core boundary — it repairs an ordinary authored `<File />` against the same
-middleware — and it is a prerequisite this contract is completed by rather than
-something the evaluator can supply.
-
-`Fetch` is admitted only as core's pinned identity, and only for an exact
-bounded request: the scheme, host, path, method, normalized headers and
-effective timeout must all equal one the host stated. Anything else is refused
-before `API.Fetch` is reached, with no request performed. A repository component
-that takes the name `Fetch` is not the pinned identity and satisfies no
-admission.
-
-Ownership splits at the same line everywhere else does. Core owns parsing,
-whole-fragment preflight, exact invocation, the durable admission record and
-replay. The trusted workflow host owns the ceilings — which roots exist, which
-identities are admitted, and which requests are allowed — because those are
-decisions about what this run is for.
+Which branch the admitted component then takes inside itself is held to the same
+decision. A component reads the form it was written as from the invocation the
+engine issued (executable-mdx-spec §5.6), and every admitted invocation is
+checked against that same fact before the component runs, refusing when it is
+not the form its identity was chosen for. Neither read consults
+`Component.hasContent()`, whose outermost handler answers first and may answer
+differently on each call, so an admitted `File:read` does not become a write and
+an admitted `File:write` does not become a read, however many times something is
+asked. A refusal there lands before any provider is reached, and the fragment
+performs nothing.
 
 #### The authored loop, and where it is written
 

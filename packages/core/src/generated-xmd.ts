@@ -57,24 +57,13 @@
  * and a second account of it on the result would be a second thing to keep
  * true.
  *
- * The form is *also* checked where the component runs, and that check is
- * partial. `<File>` learns its own form by asking `Component.hasContent()`, and
- * that chain resolves the outermost handler first — so a handler installed
- * outside this expansion answers ahead of the engine's own account of the
- * element and can report a self-closing `<File />` as content-bearing, which
- * writes an empty string over the file the fragment was admitted to read. Every
- * admitted invocation therefore asks that same question before the component
- * does and refuses when the answer is not the form its identity was chosen for.
- *
- * That stops a handler which answers the same way every time. It does not stop
- * a stateful one: the check and the component are two dispatches, and a handler
- * that answers the admitted form once and the opposite form next still decides
- * the branch. No number of prior reads can bind a later one, so the standing
- * guarantee is preflight's — which identity was admitted, and that nothing
- * outside the table runs — and not which branch the component takes inside it.
- * Closing that needs the element's shape to reach the component as a fact about
- * its own invocation rather than as a replaceable answer, which is a core
- * boundary this module does not own.
+ * The form holds where the component runs, too. `<File>` learns which spelling
+ * it is from the invocation the engine issued (executable-mdx-spec §5.6), and
+ * so does this: every admitted invocation is checked against that same fact
+ * before the component runs, and refused when it is not the form its identity
+ * was chosen for. Nothing a handler answers reaches either read, so an admitted
+ * `File:read` cannot be turned into a write, or an admitted `File:write` into a
+ * read, however many times something is asked.
  *
  * ## A resumed run is held to the ceilings it was admitted under
  *
@@ -110,7 +99,7 @@ import type { Json as DurableJson, Workflow } from "@executablemd/durable-stream
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
-import { Component, hasContent } from "./component-api.ts";
+import { Component } from "./component-api.ts";
 import { ErrorMode } from "./errors.ts";
 import { CanonicalImports, retain } from "./components/import-authority.ts";
 import type { ImportAuthority, ImportedDefinition } from "./components/import-authority.ts";
@@ -125,6 +114,7 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
+import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { FunctionComponentDefinition, Json, JsonObject, Segment } from "./types.ts";
 
 /** A generated fragment this evaluator will not run, or an import it refuses. */
@@ -182,25 +172,20 @@ const CEILING =
 const UNREADABLE = "the retained generated-XMD admission record cannot be read as one.";
 
 /**
- * What an admitted invocation is refused with when the form under it moved.
+ * What an admitted invocation is refused with when its form is not the one its
+ * identity was admitted for.
  *
- * The authored form chose the identity, so it is part of what was admitted. It
- * is decided in preflight from the scan — which nothing can answer differently
- * — but a component learns it by asking `Component.hasContent()`, and that is a
- * composable chain a handler outside this expansion answers first. A handler
- * that reports a self-closing `<File />` as content-bearing would have it write
- * an empty string over the file it was admitted to read.
- *
- * So the form is checked against the chain once per invocation, before the
- * component runs and therefore before any provider is reached. It is defense in
- * depth rather than a guarantee: a handler that answers differently on the
- * component's own call is not caught here, and cannot be. Fixed, and naming
- * nothing the fragment carried.
+ * Preflight decides the form from the scan and this reads the engine's own
+ * account of the same element, so the two agree for every invocation the engine
+ * made. What they do not agree about is an invocation something built rather
+ * than received — which is the case this refuses, before the component runs and
+ * therefore before any provider is reached. Fixed, and naming nothing the
+ * fragment carried.
  */
 const SHAPE =
   "a generated element was admitted for one form and invoked as another. An admitted identity " +
-  "runs the form it was admitted for, and Component.hasContent middleware may observe that " +
-  "form but may not decide it.";
+  "runs the form the element was written as, which is read from the invocation the engine " +
+  "issued rather than from anything composed around it.";
 
 /** How an import that did not come from canonical execution is refused. */
 const WITNESS = {
@@ -538,18 +523,25 @@ type RetainedAdmission =
   | { readonly decision: "refused"; readonly construct: Construct };
 
 /**
- * Refuse this invocation unless the content chain still reports the form it was
- * admitted for.
+ * Refuse this invocation unless it is the form its identity was admitted for.
  *
- * The check is a read of the same operation the component is about to make, in
- * the same invocation scope and therefore through the same handlers, so what a
- * handler answering consistently reports here is what the component gets. A
- * handler that answers per call is a different matter: this read and the
- * component's are two dispatches, and only the second one decides the branch.
+ * Read from the invocation the engine issued, which is the same place the
+ * admitted component reads it (executable-mdx-spec §5.6). Preflight decided the
+ * identity from the scan and this reads the engine's own account of the same
+ * element, so the two agree unless something built the invocation rather than
+ * receiving it — which is what this refuses.
+ *
+ * Not `Component.hasContent()`. That chain is answered by whoever installed a
+ * handler outside this expansion, and a check there would bind nothing: it and
+ * the component's own read are two dispatches, so a handler answering per call
+ * satisfies the check and still decides the branch.
  */
-function* holdForm(form: AuthoredForm): Operation<void> {
-  const reported: AuthoredForm = (yield* hasContent()) ? "paired" : "self-closing";
-  if (reported !== form) {
+function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
+  if (typeof invocation?.hasContent !== "function") {
+    throw new GeneratedXmdError(SHAPE);
+  }
+  const written: AuthoredForm = invocation.hasContent() ? "paired" : "self-closing";
+  if (written !== form) {
     throw new GeneratedXmdError(SHAPE);
   }
 }
@@ -618,9 +610,9 @@ class GeneratedImportAuthority implements ImportAuthority {
       ...copy,
       *fn(props, invocation) {
         // Before the component runs, and therefore before it reaches a
-        // provider: the form that chose this identity must still be the form
-        // this invocation is being run as.
-        yield* holdForm(form);
+        // provider: the form that chose this identity must be the form this
+        // invocation is of.
+        holdForm(form, invocation);
         const value = yield* implementation(props, invocation);
         values?.push({
           name: entry.name,
