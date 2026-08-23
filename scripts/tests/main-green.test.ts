@@ -1,25 +1,38 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { Ok } from "effection";
+import { Ok, sleep, spawn, withResolvers } from "effection";
 import type { Operation } from "effection";
+import { when } from "@effectionx/converge";
 import { readTextFile } from "@effectionx/fs";
 
 import {
   announce,
   inspectMain,
+  JOB_TIMEOUT_MINUTES,
   judge,
   mainGreen,
   MainNotGreen,
+  NoVerdict,
+  POLL_INTERVAL_MILLISECONDS,
   Reads,
   REPAIR_LABEL,
   REPAIR_LABEL_DESCRIPTION,
   repairRequested,
+  WAIT_TIMEOUT_MILLISECONDS,
+  waitForMain,
 } from "../lib/main-green.ts";
-import type { MainReads, Obstacle } from "../lib/main-green.ts";
+import type { MainReads, Observation, WaitOptions } from "../lib/main-green.ts";
 import type { Run } from "../lib/main-health.ts";
 
 const HEAD = "209bf218aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OTHER = "511776efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/** No interval and a bound no correct case reaches, so waiting costs no time. */
+const FAST: WaitOptions = { interval: 0, timeout: 5000 };
+
+function short(sha: string): string {
+  return sha.slice(0, 7);
+}
 
 function run(overrides: Partial<Run> = {}): Run {
   return {
@@ -38,267 +51,95 @@ function run(overrides: Partial<Run> = {}): Run {
   };
 }
 
-function verdict(input: { head?: string; runs: Run[]; became?: string }) {
+function kindOf(input: { head?: string; runs: Run[]; became?: string }): Observation["kind"] {
   const head = input.head ?? HEAD;
-  return judge({ head, runs: input.runs, became: input.became ?? head });
+  return judge({ head, runs: input.runs, became: input.became ?? head }).kind;
 }
 
-/** The obstacle a block reports, or the reason it did not block. */
-function obstacleOf(input: { head?: string; runs: Run[]; became?: string }): Obstacle | "passed" {
-  const decided = verdict(input);
-  if (decided.ok) {
-    return "passed";
-  }
-  if (!(decided.error instanceof MainNotGreen)) {
-    throw new Error(`expected MainNotGreen, saw ${decided.error.name}`);
-  }
-  return decided.error.obstacle;
-}
-
-function kindOf(input: {
-  head?: string;
-  runs: Run[];
-  became?: string;
-}): Obstacle["kind"] | "passed" {
-  const obstacle = obstacleOf(input);
-  return obstacle === "passed" ? "passed" : obstacle.kind;
-}
-
-interface World {
-  heads?: string[];
+/** One pass over `main`: the head it reads, what it lists, and the head after. */
+interface Poll {
+  head: string;
   runs?: Run[];
+  became?: string;
 }
 
-/** A reads that records its calls, so their order is observable. */
-function world(input: World): { reads: MainReads; calls: string[] } {
+interface Script {
+  reads: MainReads;
+  calls: string[];
+  notes: string[];
+  note: (message: string) => void;
+}
+
+/**
+ * A `main` that behaves as scripted, one `Poll` per iteration.
+ *
+ * Reading past the last poll throws, so a case that converges later than it
+ * claims fails rather than quietly reading a repeated state. `endless` repeats
+ * the final poll instead, which is the only way to reach the wait's own bound.
+ */
+function world(polls: Poll[], options: { endless?: boolean } = {}): Script {
   const calls: string[] = [];
-  const heads = [...(input.heads ?? [HEAD, HEAD])];
+  const notes: string[] = [];
+  const queue = [...polls];
+  let current: Poll | undefined;
 
   const reads: MainReads = {
     // deno-lint-ignore require-yield
     *head(): Operation<string> {
-      const next = heads.shift();
-      if (next === undefined) {
-        throw new Error("head() was read more times than the world provides");
+      if (current === undefined) {
+        const next = queue.length > 1 || !options.endless ? queue.shift() : queue[0];
+        if (next === undefined) {
+          throw new Error("head() was read past the last scripted poll");
+        }
+        current = next;
+        calls.push(`head:${short(next.head)}`);
+        return next.head;
       }
-      calls.push(`head:${next.slice(0, 7)}`);
-      return next;
+      const became = current.became ?? current.head;
+      current = undefined;
+      calls.push(`head:${short(became)}`);
+      return became;
     },
     // deno-lint-ignore require-yield
     *runs(head: string): Operation<Run[]> {
-      calls.push(`runs:${head.slice(0, 7)}`);
-      return input.runs ?? [];
+      calls.push(`runs:${short(head)}`);
+      return current?.runs ?? [];
     },
   };
 
-  return { reads, calls };
+  return { reads, calls, notes, note: (message) => void notes.push(message) };
 }
 
-describe("MG1 — main's exact head has a completed successful run", () => {
-  it("passes, and reports the run it passed on", function* () {
-    const authoritative = run();
+describe("MGW1 — a ci-main-red-fix pull request bypasses the wait entirely", () => {
+  it("clears without reading main and without pausing", function* () {
+    const { reads, calls, note, notes } = world([]);
 
-    expect(verdict({ runs: [authoritative] })).toEqual(Ok(authoritative));
-  });
-
-  it("passes through the gate an ordinary pull request runs", function* () {
-    const { reads, calls } = world({ runs: [run()] });
-
-    const cleared = yield* Reads.with(reads, () => mainGreen("[]"));
-
-    expect(cleared.ok).toBe(true);
-    expect(cleared.ok && cleared.value.via).toEqual("main");
-    expect(calls).toEqual(["head:209bf21", "runs:209bf21", "head:209bf21"]);
-  });
-});
-
-describe("MG2 — the authoritative run failed", () => {
-  it("blocks, and names the run rather than the race", function* () {
-    expect(kindOf({ runs: [run({ conclusion: "failure" })] })).toEqual("unsuccessful");
-  });
-
-  it("tells the author how to proceed", function* () {
-    const decided = verdict({ runs: [run({ conclusion: "failure" })] });
-
-    expect(decided.ok).toBe(false);
-    expect(decided.ok === false && decided.error.message).toContain(REPAIR_LABEL);
-  });
-});
-
-describe("MG3 — the authoritative run has not finished", () => {
-  it("blocks for a queued run and for one in progress", function* () {
-    for (const status of ["queued", "in_progress", "waiting", "requested", "pending"]) {
-      expect(kindOf({ runs: [run({ status, conclusion: undefined })] })).toEqual("unfinished");
-    }
-  });
-
-  /** A conclusion GitHub has not retracted must not outrank an unfinished status. */
-  it("blocks an in-progress re-run that still carries a stale success", function* () {
-    expect(kindOf({ runs: [run({ status: "in_progress", conclusion: "success" })] })).toEqual(
-      "unfinished",
+    const cleared = yield* Reads.with(reads, () =>
+      mainGreen(JSON.stringify([REPAIR_LABEL]), { ...FAST, note }),
     );
-  });
-});
-
-describe("MG4 — the authoritative run was cancelled, timed out or failed at startup", () => {
-  it("blocks each of them", function* () {
-    for (const conclusion of ["cancelled", "timed_out", "startup_failure"]) {
-      expect(kindOf({ runs: [run({ conclusion })] })).toEqual("unsuccessful");
-    }
-  });
-
-  /**
-   * Main Health stays silent for `cancelled` — it is not a statement that
-   * `main` is broken. The gate is the opposite claim: silence about `main` is
-   * not proof of `main`, so anything short of a success blocks.
-   */
-  it("blocks a conclusion Main Health deliberately does not report", function* () {
-    expect(kindOf({ runs: [run({ conclusion: "cancelled" })] })).toEqual("unsuccessful");
-    expect(kindOf({ runs: [run({ conclusion: "neutral" })] })).toEqual("unsuccessful");
-    expect(kindOf({ runs: [run({ conclusion: undefined })] })).toEqual("unsuccessful");
-  });
-});
-
-describe("MG5 — no qualifying run exists for the exact head", () => {
-  it("blocks when nothing was listed at all", function* () {
-    expect(kindOf({ runs: [] })).toEqual("absent");
-  });
-
-  /** The selector's rules, exercised through the gate that depends on them. */
-  it("blocks when every candidate is disqualified by branch, event or workflow", function* () {
-    const disqualified = [
-      run({ id: 1, headBranch: "release/0.8.1" }),
-      run({ id: 2, event: "pull_request" }),
-      run({ id: 3, event: "workflow_dispatch" }),
-      run({ id: 4, workflow: "Draft release" }),
-    ];
-
-    for (const candidate of disqualified) {
-      expect(kindOf({ runs: [candidate] })).toEqual("absent");
-    }
-    expect(kindOf({ runs: disqualified })).toEqual("absent");
-  });
-});
-
-describe("MG6 — an older main commit is green and the current one is not", () => {
-  it("blocks, however new and however successful the older run is", function* () {
-    const stale = run({ id: 99, runNumber: 999, attempt: 9, headSha: OTHER });
-
-    expect(kindOf({ head: HEAD, runs: [stale] })).toEqual("absent");
-  });
-
-  it("never lets a run for another head satisfy this head", function* () {
-    const decided = verdict({ head: HEAD, runs: [run({ headSha: OTHER })] });
-
-    expect(decided.ok).toBe(false);
-    expect(decided.ok === false && decided.error.message).toContain("209bf21");
-  });
-});
-
-describe("MG7 — several runs or attempts exist", () => {
-  it("takes the greatest run number", function* () {
-    const newest = run({ id: 2, runNumber: 41, conclusion: "failure" });
-    const older = run({ id: 1, runNumber: 40, conclusion: "success" });
-
-    expect(kindOf({ runs: [older, newest] })).toEqual("unsuccessful");
-    expect(obstacleOf({ runs: [older, newest] })).toEqual({ kind: "unsuccessful", run: newest });
-  });
-
-  it("takes the greatest attempt within that run number", function* () {
-    const first = run({ id: 5, runNumber: 41, attempt: 1, conclusion: "failure" });
-    const rerun = run({ id: 5, runNumber: 41, attempt: 2, conclusion: "success" });
-
-    expect(verdict({ runs: [first, rerun] })).toEqual(Ok(rerun));
-  });
-
-  /** A re-run that failed must supersede the original success, not the reverse. */
-  it("lets a failed re-run block a run number that once succeeded", function* () {
-    const first = run({ id: 5, runNumber: 41, attempt: 1, conclusion: "success" });
-    const rerun = run({ id: 5, runNumber: 41, attempt: 2, conclusion: "failure" });
-
-    expect(kindOf({ runs: [first, rerun] })).toEqual("unsuccessful");
-  });
-
-  it("is not decided by listing order", function* () {
-    const newest = run({ id: 3, runNumber: 42 });
-    const middle = run({ id: 2, runNumber: 41, conclusion: "failure" });
-    const oldest = run({ id: 1, runNumber: 40, conclusion: "failure" });
-
-    expect(verdict({ runs: [newest, middle, oldest] })).toEqual(Ok(newest));
-    expect(verdict({ runs: [oldest, middle, newest] })).toEqual(Ok(newest));
-  });
-});
-
-describe("MG8 — main advances while the gate inspects it", () => {
-  it("blocks, because the run it read is no longer about the base", function* () {
-    expect(kindOf({ head: HEAD, runs: [run()], became: OTHER })).toEqual("advanced");
-  });
-
-  it("reads the head again after the run, not before it", function* () {
-    const { reads, calls } = world({ heads: [HEAD, OTHER], runs: [run()] });
-
-    const cleared = yield* Reads.with(reads, () => inspectMain());
-
-    expect(calls).toEqual(["head:209bf21", "runs:209bf21", "head:511776e"]);
-    expect(cleared.ok).toBe(false);
-    expect(cleared.ok === false && cleared.error instanceof MainNotGreen).toBe(true);
-    expect(cleared.ok === false && cleared.error.message).toContain("advanced");
-  });
-
-  it("still passes when the head is unchanged across both reads", function* () {
-    const { reads } = world({ heads: [HEAD, HEAD], runs: [run()] });
-
-    expect((yield* Reads.with(reads, () => inspectMain())).ok).toBe(true);
-  });
-});
-
-describe("MG9 — an ordinary pull request is gated on main's health", () => {
-  it("consults main when no label asks otherwise", function* () {
-    const { reads, calls } = world({ runs: [run({ conclusion: "failure" })] });
-
-    const cleared = yield* Reads.with(reads, () => mainGreen("[]"));
-
-    expect(cleared.ok).toBe(false);
-    expect(calls.length).toBeGreaterThan(0);
-  });
-
-  it("is not excused by any other label", function* () {
-    const { reads, calls } = world({ runs: [run({ conclusion: "failure" })] });
-    const labels = JSON.stringify(["flake", "ci-main-red", "bug", "ci-main-red-fix-please"]);
-
-    const cleared = yield* Reads.with(reads, () => mainGreen(labels));
-
-    expect(cleared.ok).toBe(false);
-    expect(calls.length).toBeGreaterThan(0);
-  });
-});
-
-describe("MG10 — a ci-main-red-fix pull request bypasses only the lookup", () => {
-  it("passes without reading main at all", function* () {
-    const { reads, calls } = world({ runs: [run({ conclusion: "failure" })] });
-
-    const cleared = yield* Reads.with(reads, () => mainGreen(JSON.stringify([REPAIR_LABEL])));
 
     expect(cleared).toEqual(Ok({ via: "repair" }));
     expect(calls).toEqual([]);
+    expect(notes).toEqual([]);
   });
 
-  it("says which path it took, so a passing gate is never ambiguous", function* () {
-    expect(announce({ via: "repair" })).toContain(REPAIR_LABEL);
-    expect(announce({ via: "main", run: run() })).toContain("209bf21");
+  it("is not excused by any other label", function* () {
+    const { reads, calls, note } = world([
+      {
+        head: HEAD,
+        runs: [run({ conclusion: "failure" })],
+      },
+    ]);
+    const labels = JSON.stringify(["flake", "ci-main-red", "bug", "ci-main-red-fix-please"]);
+
+    const cleared = yield* Reads.with(reads, () => mainGreen(labels, { ...FAST, note }));
+
+    expect(cleared.ok).toBe(false);
+    expect(calls.length).toBeGreaterThan(0);
   });
 
-  it("recognizes the label beside others", function* () {
+  it("recognizes the label beside others, and only exactly", function* () {
     expect(repairRequested(JSON.stringify(["bug", REPAIR_LABEL, "flake"]))).toBe(true);
-  });
-
-  /**
-   * The label is authority, so a near-miss must not carry it. The workflow's
-   * `contains()` compares strings case-insensitively where this compares them
-   * exactly; only a maintainer can create a label at all, and the difference
-   * blocks rather than grants, so the exact rule is the one worth holding.
-   */
-  it("matches the label exactly", function* () {
     for (const near of ["ci-main-red", "ci-main-red-fix ", "CI-MAIN-RED-FIX", "main-red-fix"]) {
       expect(repairRequested(JSON.stringify([near]))).toBe(false);
     }
@@ -312,7 +153,10 @@ describe("MG10 — a ci-main-red-fix pull request bypasses only the lookup", () 
       } catch (error) {
         raised = error;
       }
-      expect({ malformed, raised: raised instanceof Error }).toEqual({ malformed, raised: true });
+      expect({ malformed, raised: raised instanceof Error }).toEqual({
+        malformed,
+        raised: true,
+      });
     }
   });
 
@@ -325,7 +169,359 @@ describe("MG10 — a ci-main-red-fix pull request bypasses only the lookup", () 
   });
 });
 
-describe("the main-green workflow job", () => {
+describe("MGW2 — absent, queued and in-progress runs are waited through", () => {
+  const pending: Record<string, Run[]> = {
+    "nothing listed yet": [],
+    queued: [run({ status: "queued", conclusion: undefined })],
+    "in progress": [run({ status: "in_progress", conclusion: undefined })],
+    "in progress carrying a stale success": [run({ status: "in_progress", conclusion: "success" })],
+    "only runs for other branches, events or workflows": [
+      run({ id: 1, headBranch: "release/0.8.1" }),
+      run({ id: 2, event: "pull_request" }),
+      run({ id: 3, workflow: "Draft release" }),
+    ],
+  };
+
+  for (const [state, runs] of Object.entries(pending)) {
+    it(`waits through ${state} and passes when the same head completes`, function* () {
+      const finished = run({ runNumber: 41 });
+      const { reads, calls, note } = world([
+        { head: HEAD, runs },
+        { head: HEAD, runs: [finished] },
+      ]);
+
+      const cleared = yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+      expect(cleared).toEqual(Ok(finished));
+      // Two complete polls, so the first one genuinely did not decide.
+      expect(calls).toEqual([
+        "head:209bf21",
+        "runs:209bf21",
+        "head:209bf21",
+        "head:209bf21",
+        "runs:209bf21",
+        "head:209bf21",
+      ]);
+    });
+  }
+
+  it("says what it is waiting on, and only when that changes", function* () {
+    const queued = run({ status: "queued", conclusion: undefined });
+    const started = run({ status: "in_progress", conclusion: undefined });
+    const { reads, notes, note } = world([
+      { head: HEAD, runs: [queued] },
+      { head: HEAD, runs: [queued] },
+      { head: HEAD, runs: [started] },
+      { head: HEAD, runs: [started] },
+      { head: HEAD, runs: [run()] },
+    ]);
+
+    yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(notes.length).toBe(2);
+    expect(notes[0]).toContain("queued");
+    expect(notes[1]).toContain("in_progress");
+  });
+
+  it("names the run it is waiting on by number and attempt", function* () {
+    const { reads, notes, note } = world([
+      {
+        head: HEAD,
+        runs: [run({ runNumber: 41, attempt: 3, status: "queued" })],
+      },
+      { head: HEAD, runs: [run()] },
+    ]);
+
+    yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(notes[0]).toContain("41.3");
+  });
+});
+
+describe("MGW3 — main advances while the gate is watching it", () => {
+  it("discards an unfinished candidate and decides only the new head", function* () {
+    const arrived = run({ headSha: OTHER, runNumber: 41 });
+    const { reads, calls, note } = world([
+      {
+        head: HEAD,
+        runs: [run({ status: "in_progress", conclusion: undefined })],
+        became: OTHER,
+      },
+      { head: OTHER, runs: [arrived] },
+    ]);
+
+    const cleared = yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(cleared).toEqual(Ok(arrived));
+    expect(calls).toEqual([
+      "head:209bf21",
+      "runs:209bf21",
+      "head:511776e",
+      "head:511776e",
+      "runs:511776e",
+      "head:511776e",
+    ]);
+  });
+
+  /** The direction a one-shot gate got wrong: a failure main has left is not main. */
+  it("does not fail on a completed unsuccessful run for the head main left", function* () {
+    const arrived = run({ headSha: OTHER, runNumber: 41 });
+    const { reads, note } = world([
+      { head: HEAD, runs: [run({ conclusion: "failure" })], became: OTHER },
+      { head: OTHER, runs: [arrived] },
+    ]);
+
+    const cleared = yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(cleared).toEqual(Ok(arrived));
+  });
+
+  it("reports that it is following the new head", function* () {
+    const { reads, notes, note } = world([
+      { head: HEAD, runs: [run()], became: OTHER },
+      { head: OTHER, runs: [run({ headSha: OTHER })] },
+    ]);
+
+    yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(notes).toEqual(["`main` advanced from 209bf21 to 511776e — following the new head."]);
+  });
+
+  it("judges advancement before anything it read about the old head", function* () {
+    expect(kindOf({ head: HEAD, runs: [run()], became: OTHER })).toEqual("advanced");
+    expect(kindOf({ head: HEAD, runs: [], became: OTHER })).toEqual("advanced");
+    expect(
+      kindOf({
+        head: HEAD,
+        runs: [run({ conclusion: "failure" })],
+        became: OTHER,
+      }),
+    ).toEqual("advanced");
+  });
+});
+
+describe("MGW4 — a completed unsuccessful run for the current head fails at once", () => {
+  it("blocks on the first poll, names the run, and never waits", function* () {
+    const failed = run({ conclusion: "failure" });
+    const { reads, calls, notes, note } = world([
+      {
+        head: HEAD,
+        runs: [failed],
+      },
+    ]);
+
+    const cleared = yield* Reads.with(reads, () => waitForMain({ ...FAST, note }));
+
+    expect(cleared.ok).toBe(false);
+    expect(cleared.ok === false && cleared.error instanceof MainNotGreen).toBe(true);
+    expect(
+      cleared.ok === false && cleared.error instanceof MainNotGreen && cleared.error.run,
+    ).toEqual(failed);
+    expect(cleared.ok === false && cleared.error.message).toContain(REPAIR_LABEL);
+    expect(calls).toEqual(["head:209bf21", "runs:209bf21", "head:209bf21"]);
+    expect(notes).toEqual([]);
+  });
+
+  it("blocks on every conclusion that is not a success", function* () {
+    for (const conclusion of ["failure", "cancelled", "timed_out", "startup_failure", "neutral"]) {
+      expect(kindOf({ runs: [run({ conclusion })] })).toEqual("unsuccessful");
+    }
+    expect(kindOf({ runs: [run({ conclusion: undefined })] })).toEqual("unsuccessful");
+  });
+
+  /** The selector's rules, exercised through the judgment that depends on them. */
+  it("selects the greatest run number, then the greatest attempt", function* () {
+    const older = run({ id: 1, runNumber: 40, conclusion: "success" });
+    const newest = run({ id: 2, runNumber: 41, conclusion: "failure" });
+    expect(kindOf({ runs: [older, newest] })).toEqual("unsuccessful");
+    expect(kindOf({ runs: [newest, older] })).toEqual("unsuccessful");
+
+    const first = run({
+      id: 5,
+      runNumber: 41,
+      attempt: 1,
+      conclusion: "success",
+    });
+    const rerun = run({
+      id: 5,
+      runNumber: 41,
+      attempt: 2,
+      conclusion: "failure",
+    });
+    expect(kindOf({ runs: [first, rerun] })).toEqual("unsuccessful");
+  });
+
+  /** However new and however successful, a run for another head decides nothing. */
+  it("never lets a run for another head satisfy this head", function* () {
+    const stale = run({ id: 99, runNumber: 999, attempt: 9, headSha: OTHER });
+
+    expect(kindOf({ head: HEAD, runs: [stale] })).toEqual("absent");
+  });
+});
+
+describe("MGW5 — success is accepted only against a final head read", () => {
+  it("reads head, then runs, then head again, and returns that run", function* () {
+    const authoritative = run();
+    const { reads, calls, note } = world([
+      {
+        head: HEAD,
+        runs: [authoritative],
+      },
+    ]);
+
+    const seen = yield* Reads.with(reads, () => inspectMain());
+    expect(seen).toEqual({ kind: "successful", run: authoritative });
+    expect(calls).toEqual(["head:209bf21", "runs:209bf21", "head:209bf21"]);
+
+    const second = world([{ head: HEAD, runs: [authoritative] }]);
+    const cleared = yield* Reads.with(second.reads, () => mainGreen("[]", { ...FAST, note }));
+    expect(cleared).toEqual(Ok({ via: "main", run: authoritative }));
+  });
+
+  it("says which path it took, so a passing gate is never ambiguous", function* () {
+    expect(announce({ via: "repair" })).toContain(REPAIR_LABEL);
+    expect(announce({ via: "main", run: run() })).toContain("209bf21");
+  });
+});
+
+describe("MGW6 — an infrastructure failure is not a wait and not a verdict", () => {
+  const refusal = new Error("gh: could not read the run list");
+
+  it("stops on a failing head read without polling again", function* () {
+    const calls: string[] = [];
+    const reads: MainReads = {
+      // deno-lint-ignore require-yield
+      *head(): Operation<string> {
+        calls.push("head");
+        throw refusal;
+      },
+      // deno-lint-ignore require-yield
+      *runs(): Operation<Run[]> {
+        calls.push("runs");
+        return [];
+      },
+    };
+
+    const cleared = yield* Reads.with(reads, () => waitForMain(FAST));
+
+    expect(cleared.ok).toBe(false);
+    expect(cleared.ok === false && cleared.error).toBe(refusal);
+    expect(cleared.ok === false && cleared.error instanceof MainNotGreen).toBe(false);
+    expect(cleared.ok === false && cleared.error instanceof NoVerdict).toBe(false);
+    expect(calls).toEqual(["head"]);
+  });
+
+  it("stops on a failing run read without polling again", function* () {
+    const calls: string[] = [];
+    const reads: MainReads = {
+      // deno-lint-ignore require-yield
+      *head(): Operation<string> {
+        calls.push("head");
+        return HEAD;
+      },
+      // deno-lint-ignore require-yield
+      *runs(): Operation<Run[]> {
+        calls.push("runs");
+        throw refusal;
+      },
+    };
+
+    const cleared = yield* Reads.with(reads, () => waitForMain(FAST));
+
+    expect(cleared.ok).toBe(false);
+    expect(cleared.ok === false && cleared.error).toBe(refusal);
+    expect(calls).toEqual(["head", "runs"]);
+  });
+});
+
+describe("MGW7 — the wait is bounded and cancellable", () => {
+  it("gives up inside its own bound and says so without blaming main", function* () {
+    const { reads, note } = world([{ head: HEAD, runs: [] }], {
+      endless: true,
+    });
+
+    const cleared = yield* Reads.with(reads, () => waitForMain({ interval: 1, timeout: 30, note }));
+
+    expect(cleared.ok).toBe(false);
+    expect(cleared.ok === false && cleared.error instanceof NoVerdict).toBe(true);
+    expect(cleared.ok === false && cleared.error instanceof MainNotGreen).toBe(false);
+    expect(cleared.ok === false && cleared.error.message).toContain("waiting for CI to start");
+  });
+
+  it("begins no further poll once its task is halted", function* () {
+    const parked = withResolvers<void>();
+    const { reads, calls } = world([{ head: HEAD, runs: [] }], {
+      endless: true,
+    });
+
+    const waiter = yield* spawn(() =>
+      Reads.with(reads, () =>
+        waitForMain({
+          interval: 10_000,
+          timeout: 600_000,
+          note: () => parked.resolve(),
+        }),
+      ),
+    );
+
+    yield* parked.operation;
+    yield* waiter.halt();
+    const atHalt = [...calls];
+
+    // Longer than anything still in flight would take to land.
+    yield* sleep(100);
+
+    expect(calls).toEqual(atHalt);
+    // Non-vacuous: it had polled once, and had not been allowed a second.
+    expect(atHalt).toEqual(["head:209bf21", "runs:209bf21", "head:209bf21"]);
+  });
+
+  /** Waiting is the change here, so a case that never waits proves nothing. */
+  it("actually sleeps its interval between polls", function* () {
+    const { reads, note } = world([
+      { head: HEAD, runs: [] },
+      { head: HEAD, runs: [run()] },
+    ]);
+
+    const started = yield* now();
+    yield* Reads.with(reads, () => waitForMain({ interval: 60, timeout: 5000, note }));
+
+    expect((yield* now()) - started).toBeGreaterThanOrEqual(50);
+  });
+});
+
+// deno-lint-ignore require-yield
+function* now(): Operation<number> {
+  return Date.now();
+}
+
+describe("MGW8 — the poll interval and the job's bound are held together", () => {
+  const ci = new URL("../../.github/workflows/ci.yml", import.meta.url);
+
+  function* job(): Operation<string | undefined> {
+    return /\n  main-green:\n((?:.+\n|\n)*?)(?=\n  \w)/.exec(yield* readTextFile(ci))?.[1];
+  }
+
+  it("polls every fifteen seconds", function* () {
+    expect(POLL_INTERVAL_MILLISECONDS).toBe(15_000);
+  });
+
+  it("bounds the job at sixty minutes", function* () {
+    expect(yield* job()).toContain(`timeout-minutes: ${JOB_TIMEOUT_MINUTES}`);
+    expect(JOB_TIMEOUT_MINUTES).toBe(60);
+  });
+
+  /**
+   * The waiter has to give up first. Reaching the job's own bound kills the
+   * step mid-poll, and the log then says nothing about what was awaited.
+   */
+  it("gives the waiter a bound strictly inside the job's", function* () {
+    expect(WAIT_TIMEOUT_MILLISECONDS).toBeLessThan(JOB_TIMEOUT_MINUTES * 60 * 1000);
+    expect(WAIT_TIMEOUT_MILLISECONDS).toBeGreaterThan(POLL_INTERVAL_MILLISECONDS);
+  });
+});
+
+describe("MGW9 — the main-green workflow job", () => {
   const ci = new URL("../../.github/workflows/ci.yml", import.meta.url);
 
   function* source(): Operation<string> {

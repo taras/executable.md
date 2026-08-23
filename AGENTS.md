@@ -167,6 +167,17 @@ satisfies it: that is exactly the state a red `main` is in one commit after it
 broke. The decision is `scripts/lib/main-green.ts`; the job that runs it holds
 `contents: read` and `actions: read` and nothing else.
 
+**The gate waits for that verdict rather than demanding one already exists.** A
+pull request opened while `main`'s own CI is still running has no verdict to
+read, and that is a missing answer, not a red `main`. So it converges: an
+absent, queued or in-progress authoritative run is polled every fifteen seconds,
+a head that advances is followed to the new commit, a completed unsuccessful run
+for the head still current fails at once, and a completed successful one passes
+only after a final head read proves it still describes `main`. The job carries
+`timeout-minutes: 60` and the waiter gives up just inside it; running out means
+this pull request obtained no proof, which is a different claim from `main`
+having failed. Re-running the job is what to do about it.
+
 **Restoring a red `main` takes the `ci-main-red-fix` label.** A repair pull
 request cannot satisfy the gate by construction, because the base it would prove
 is the broken one. A maintainer applies that label to one pull request, and it
