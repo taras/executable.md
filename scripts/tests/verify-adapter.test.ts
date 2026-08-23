@@ -9,8 +9,18 @@ import { chmod, readFile, symlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { descendants, emitAll, host, openSpool, SpoolSinks, useVerifyHost } from "../verify.ts";
+import {
+  consumerCommand,
+  descendants,
+  emitAll,
+  host,
+  openSpool,
+  producerCommand,
+  SpoolSinks,
+  useVerifyHost,
+} from "../verify.ts";
 import type { AdapterHost, CommandSpec, OpenSpool, Spool, WriteBytes } from "../verify.ts";
+import { SETTLED } from "../lib/consumer-cycle.ts";
 import { compareTracked, UnsupportedEntryError } from "../lib/tracked.ts";
 import type { TrackedEntry, TrackedState } from "../lib/tracked.ts";
 import type { VerifyHost } from "../lib/verify.ts";
@@ -700,5 +710,36 @@ describe("descendants outside the command's process group", () => {
     const settled = (yield* until(readFile(beats))).length;
     yield* sleep(500);
     expect((yield* until(readFile(beats))).length).toEqual(settled);
+  });
+});
+
+/**
+ * The launches themselves. Under the repository's `"auto"` node_modules mode,
+ * a bare `deno` process re-creates the workspace's `node_modules` links before
+ * it reaches its own code — an unlink followed by a symlink, which another
+ * participant resolving through the link in that instant observes as the
+ * package not existing. Every deno process the proof starts therefore declines
+ * that management, and the declined launch must still be able to consume the
+ * layout it stands on.
+ */
+describe("participant launches", () => {
+  it("declines node_modules management on every deno process the proof starts", function* () {
+    expect(consumerCommand("deno", "/tree", "/control").args).toContain(
+      "--node-modules-dir=manual",
+    );
+    expect(producerCommand().args).toContain("--node-modules-dir=manual");
+  });
+
+  it("consumes the prepared layout through the unmanaged deno launch", function* () {
+    const spools = yield* scratch("verify-launch-spools");
+    const control = yield* scratch("verify-launch-control");
+    const workspace = fileURLToPath(new URL("../../", import.meta.url));
+    const owned = yield* useVerifyHost({ spools, control, root: workspace, log() {} });
+    yield* owned.signal(SETTLED);
+
+    const settled = yield* owned.consume("deno");
+
+    expect(settled.code).toEqual(0);
+    expect((yield* owned.cycles("deno"))?.after).toEqual(1);
   });
 });
