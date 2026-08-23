@@ -18,13 +18,14 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
+import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect, execute, retainedSource } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
-import { withWorkflowWorkspace } from "@executablemd/workflow/deno";
+import { withWorkflowWorkspace, workflowRunPath } from "@executablemd/workflow/deno";
 import { useWorkflowAgentProfile } from "../src/workflow-agent.ts";
 import type { WorkflowAgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
@@ -102,9 +103,48 @@ function attach(
   });
 }
 
-/** Every session key the fake was asked to establish, in order. */
+/** The distinct session keys the fake was asked to establish. */
 function established(fake: FakeAcp): string[] {
-  return fake.ensured.map((input) => input.sessionKey);
+  return [...new Set(fake.ensured.map((input) => input.sessionKey))].sort();
+}
+
+/** One retained mapping, as a second connection sees it. */
+interface MappingRow {
+  readonly sessionIdentity: string;
+  readonly kind: string;
+  readonly value: string;
+}
+
+/**
+ * The rows `agent_sessions` actually holds.
+ *
+ * Read on a connection of its own, so what is asserted is what committed rather
+ * than what this process believes it wrote.
+ */
+function mappingRows(path: string): MappingRow[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT session_identity, assertion_kind, assertion_value FROM agent_sessions " +
+          "ORDER BY session_identity",
+      )
+      .all()
+      .map((row) => ({
+        sessionIdentity: String(row["session_identity"]),
+        kind: String(row["assertion_kind"]),
+        value: String(row["assertion_value"]),
+      }));
+  } finally {
+    database.close();
+  }
+}
+
+/** Every provider-native identity the substituted store currently holds. */
+function storeAssertions(store: ReturnType<typeof makeStore>): string[] {
+  return [...store.records.values()]
+    .flatMap((record) => (record.agentSessionId === undefined ? [] : [record.agentSessionId]))
+    .sort();
 }
 
 describe("Tier WSR — a restart reattaches each Session site", () => {
@@ -120,8 +160,11 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
       const store = makeStore();
 
       // The first attachment is interrupted while the second site's turn is in
-      // flight, so the first site's mapping has committed and the second site's
-      // has not.
+      // flight. Both sites have placed and both mappings have committed by then:
+      // a mapping commits after the provider asserts and before the Prompt that
+      // follows it begins, so a second turn starting means the second commit
+      // already happened. What the interruption leaves unfinished is the turn,
+      // not the retention.
       const interrupted = createFakeAcp();
       interrupted.script({ reply: "the first reviewer saw the checklist" });
       interrupted.script({ reply: "", manual: true });
@@ -137,7 +180,20 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
 
       const before = established(interrupted);
       // Two sites, two sessions — with one authored name between them.
-      expect(new Set(before).size).toBe(2);
+      expect(before).toHaveLength(2);
+
+      // Two rows in the run's own database, one per site, each carrying the
+      // tagged identity its provider asserted. This is the retention the
+      // restart below has to resolve from; without it the restart could still
+      // reconcile from the provider store and prove nothing.
+      const rows = mappingRows(workflowRunPath(root, database.record.runId));
+      expect(rows).toHaveLength(2);
+      expect(new Set(rows.map((row) => row.sessionIdentity)).size).toBe(2);
+      expect(rows.map((row) => row.kind)).toEqual(["acpx.agentSessionId", "acpx.agentSessionId"]);
+      // And what the database holds is what the provider actually asserted —
+      // compared against the store rather than re-derived from the keys under
+      // test, which would assert nothing.
+      expect(rows.map((row) => row.value).sort()).toEqual(storeAssertions(store));
 
       // The restart: a new attachment over the same run and the same provider
       // store, with a provider that answers the turn the first attempt never
@@ -151,25 +207,13 @@ describe("Tier WSR — a restart reattaches each Session site", () => {
 
       expect(second.failure).toBe(undefined);
 
-      // Each site came back to its own conversation. The second attachment
-      // establishes only the keys the first one did — no third session, and no
-      // site reattached to the other's.
-      const after = established(resumed);
-      expect(after.length).toBeGreaterThan(0);
-      for (const key of after) {
-        expect(before).toContain(key);
-      }
-      expect(new Set([...before, ...after]).size).toBe(2);
+      // Exactly the two sites the first attachment established — not a subset,
+      // and not one of them twice. Each site resolved to its own mapping.
+      expect(established(resumed)).toEqual(before);
 
-      // And the identities the provider asserted are still one per site, which
-      // is what "reattached to its own" means rather than "reattached". A key
-      // may be ensured more than once in an attachment, so the claim is about
-      // distinct sites rather than about how many times each was asked for.
-      const sites = new Set(after);
-      const asserted = new Set([...sites].map((key) => `agent-session:${key}`));
-      expect(asserted.size).toBe(sites.size);
-      // The site the first attempt never finished is the one this attempt ran.
-      expect(sites.size).toBeGreaterThan(0);
+      // The rows are unchanged: reattachment compared and continued rather than
+      // replacing either identity.
+      expect(mappingRows(workflowRunPath(root, database.record.runId))).toEqual(rows);
     });
   });
 
