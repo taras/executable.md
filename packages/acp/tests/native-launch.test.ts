@@ -56,6 +56,7 @@ import {
 } from "./helpers.ts";
 import type { CoordinatorHarness, FakeObserverHarness, FakeRuntimeHarness } from "./helpers.ts";
 import type { ExecutableBuildBindingV1 } from "@executablemd/core";
+import type { AcpxSessionPolicy } from "../src/provider.ts";
 import type { ExecutableObserver } from "@executablemd/runtime";
 import type { AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";
 
@@ -70,9 +71,14 @@ const SESSION_KEY = deriveSessionKey(AGENT_COMMAND, CWD);
  */
 const TEST_BINDING: NativeBinding = {
   command: "claude",
+  // The same contract the shipped Claude adapter carries: exactly one canonical
+  // line is an answer, and zero or several are not.
   version: (output) => {
-    const line = output.trim();
-    return /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line) ? line : undefined;
+    const canonical = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line));
+    return canonical.length === 1 ? canonical[0] : undefined;
   },
   environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
 };
@@ -132,6 +138,8 @@ interface ProviderOptions {
    * claim, and making it here would prove neither.
    */
   coordinator?: AgentSessionCoordinator;
+  /** Host-owned session placement and retention, as a workflow host supplies. */
+  sessions?: AcpxSessionPolicy;
 }
 
 /**
@@ -240,6 +248,7 @@ function* installLaunchStack(
       : { executableObserver: options.observer ?? createFakeObserver().observer }),
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
+    ...(options.sessions ? { sessions: options.sessions } : {}),
     nativeAdapters: options.adapters ?? { claude: PROVIDER_RETURNED_CLAUDE },
   });
   yield* factory(
@@ -1519,13 +1528,6 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     };
   }
 
-  /** The same record as the released contract left one: no build recorded. */
-  function legacyRetained(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
-    const record = retained(overrides);
-    delete record.executableBinding;
-    return record;
-  }
-
   const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
 
   /** An ACP-first route for the same session, which no launch may adopt. */
@@ -1552,21 +1554,6 @@ describe("Tier CR — client-allocated incomplete replay", () => {
       instructionsDigest: record.instructionsDigest,
       launcher: record.launcher,
       executableBinding: record.executableBinding ?? OBSERVED_BUILD,
-    };
-  }
-
-  /** The same route as the released contract published one: unbound. */
-  function legacyAgreeing(record: PreparedLaunchRecord): AgentSessionRoute {
-    return {
-      schema: "session-route.v1",
-      route: "client-native",
-      provider: "acpx",
-      agent: AGENT_COMMAND,
-      sessionKey: record.sessionKey,
-      nativeSessionId: record.nativeSessionId,
-      identityProvenance: "client-allocated",
-      instructionsDigest: record.instructionsDigest,
-      launcher: record.launcher,
     };
   }
 
@@ -2235,6 +2222,8 @@ describe("Tier CX — cancellation before ownership ends", () => {
  */
 describe("Tier CA — client-native attachment", () => {
   const ALLOCATED = "44444444-5555-6666-7777-888888888888";
+  /** A second session bound to the same build, for what a refusal leaves behind. */
+  const SECOND_ALLOCATED = "77777777-8888-9999-aaaa-bbbbbbbbbbbb";
 
   function adapter(): NativeAdapter {
     return {
@@ -2502,6 +2491,147 @@ describe("Tier CA — client-native attachment", () => {
     expect(raised?.message).not.toContain("/home/operator");
     expect(space.harness.turns).toEqual([]);
     expect([...space.store.records.keys()]).toEqual([]);
+  });
+
+  it("CA11: a rejected exact resume leaves no partition for the next attempt", function* () {
+    // The runtime is built before the ensure that would use it, so an ensure
+    // that rejects leaves one holding a live path for work that never happened.
+    // A binding compares a version and a digest, so the same build found
+    // somewhere else is the same partition key and a different file to run —
+    // and handing the next attachment the old path is how it would run one.
+    const observer = createFakeObserver();
+    observer.queued = [
+      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
+      {
+        path: "/moved/bin/claude",
+        digest: "a".repeat(64),
+        versionOutput: "2.1.241 (Claude Code)\n",
+      },
+    ];
+    const space = yield* installAttachment(bound(), { observer: observer.observer });
+    // A second session bound to the same build, so what the next attachment
+    // reaches for is the same partition. It is a different session because the
+    // refusal below withholds quiescence, and a session whose owner never
+    // proved it stopped is one the coordinator refuses — a different contract,
+    // asserted by CA12.
+    const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
+    yield* space.routes.publish(bound({ sessionKey: second, nativeSessionId: SECOND_ALLOCATED }));
+    space.harness.ensureFailure = new Error("No conversation found with that session ID");
+
+    const refused = yield* attach();
+    expect(refused?.message).toContain("could not open");
+
+    // The same build, found somewhere else. Nothing is reused: this attachment
+    // observes again and builds its own runtime around what it found.
+    space.harness.ensureFailure = undefined;
+    const session = yield* Agent.operations.session("second");
+
+    expect(session.agentSessionId).toBe(SECOND_ALLOCATED);
+    expect(observer.observed).toEqual(["claude", "claude"]);
+    expect(
+      space.harness.createdOptions.map(
+        (options) => options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE,
+      ),
+    ).toEqual([OBSERVED_PATH, "/moved/bin/claude"]);
+  });
+
+  it("CA12: a mismatch whose close failed withholds quiescence and keeps its handle", function* () {
+    // Two things happened: the attachment named another conversation, and
+    // giving up the handle did not work. The refusal is owed either way, but a
+    // close that failed released nothing — so this scope still holds a live
+    // handle, must not say the session is free, and has to leave that handle
+    // reachable through the runtime that made it.
+    let harness: FakeRuntimeHarness | undefined;
+    let events: string[] = [];
+    let teardown: Error | undefined;
+
+    try {
+      yield* scoped(function* () {
+        const space = yield* installAttachment(bound());
+        harness = space.harness;
+        space.harness.assertIdentity = "00000000-1111-2222-3333-444444444444";
+        space.harness.closeFailure = new Error("the agent child did not answer the close");
+
+        const raised = yield* attach();
+
+        expect(raised?.message).toContain("did not report");
+        // Attempted in band, and it failed.
+        expect(space.harness.closeCalls).toHaveLength(1);
+        expect(space.harness.turns).toEqual([]);
+        events = [...space.trace.ownership.events];
+      });
+    } catch (error) {
+      // Teardown reports what it could not settle rather than swallowing it.
+      teardown = error as Error;
+    }
+
+    // The session stays owned: nothing acknowledged that this scope had
+    // finished with it.
+    expect(events).toContain("owned");
+    expect(events).not.toContain("quiesced");
+    // And teardown found the handle again, through its creating partition.
+    expect(harness?.closeCalls).toHaveLength(2);
+    expect(harness?.closeRuntimes).toEqual([OBSERVED_PATH, OBSERVED_PATH]);
+    expect(teardown).toBeInstanceOf(Error);
+  });
+
+  it("CA13: a host that cannot retain the session gives the handle back to its creator", function* () {
+    // The ensure succeeded, so the handle is this provider's whatever happens
+    // next. A host refusing to retain what the session is leaves it unusable,
+    // not unowned.
+    let retentions = 0;
+    const space = yield* installAttachment(bound(), {
+      sessions: {
+        // deno-lint-ignore require-yield
+        *place(context) {
+          const named = typeof context.session === "string" ? context.session : undefined;
+          return { sessionKey: deriveSessionKey(AGENT_COMMAND, CWD, named), cwd: CWD };
+        },
+        // deno-lint-ignore require-yield
+        *established() {
+          retentions += 1;
+          if (retentions === 1) {
+            throw new Error("the run could not retain this session");
+          }
+        },
+      },
+    });
+    const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
+    yield* space.routes.publish(bound({ sessionKey: second, nativeSessionId: SECOND_ALLOCATED }));
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("could not retain");
+    // Closed through the runtime that made it, and closed exactly once.
+    expect(space.harness.closeCalls).toHaveLength(1);
+    expect(space.harness.closeRuntimes).toEqual([OBSERVED_PATH]);
+    expect(space.harness.turns).toEqual([]);
+
+    // The accounting came back with it. A partition still counting a handle
+    // nobody holds would be reused here instead of rebuilt, so a second
+    // runtime is what says the count reached zero.
+    const session = yield* Agent.operations.session("second");
+    expect(session.agentSessionId).toBe(SECOND_ALLOCATED);
+    expect(space.harness.createdOptions).toHaveLength(2);
+  });
+
+  it("CA14: output naming several builds refuses before a child, an ensure or a turn", function* () {
+    // One canonical line is an answer. Several is a list of builds, and taking
+    // the first would be choosing one — which is the question this refuses.
+    const observer = createFakeObserver({
+      versionOutput: "2.1.241 (Claude Code)\n2.1.242 (Claude Code)\n",
+    });
+    const space = yield* installAttachment(bound(), { observer: observer.observer });
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("does not recognize");
+    // Nothing was repeated back: the output is the provider's, not the reader's.
+    expect(raised?.message).not.toContain("2.1.242");
+    expect(space.harness.createdOptions).toEqual([]);
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.turns).toEqual([]);
+    expect(space.trace.launches).toEqual([]);
   });
 
   it("CA9: a legacy unbound route refuses rather than attaching", function* () {
@@ -2896,5 +3026,55 @@ describe("Tier AO — explicit ACP-only capability", () => {
     // The turn happened, through the ordinary unbound ACP path.
     expect(harness.turns).toHaveLength(1);
     expect(touched).toEqual([]);
+  });
+});
+
+/**
+ * Tier CV — the shipped Claude adapter's canonical version
+ * (specs/native-agent-session-launch-spec.md §Executable binding).
+ *
+ * The fixtures above carry the same contract, but they are fixtures. This is
+ * the parser production runs, and what it decides is which builds a session may
+ * be bound to at all.
+ */
+describe("Tier CV — canonical Claude version", () => {
+  function parse(output: string): string | undefined {
+    const adapter = nativeAdapterFor("claude");
+    if (!adapter || !allocatesIdentity(adapter)) {
+      throw new Error("the shipped claude adapter names its own sessions");
+    }
+    return adapter.binding.version(output);
+  }
+
+  it("CV1: one canonical line is the answer, whole", function* () {
+    // The whole line, not the number: the same version string from a different
+    // product would otherwise compare equal.
+    expect(parse("2.1.241 (Claude Code)\n")).toBe("2.1.241 (Claude Code)");
+    expect(parse("  2.1.241 (Claude Code)  \n")).toBe("2.1.241 (Claude Code)");
+    // Surrounded by output that is not a version at all.
+    expect(parse("checking for updates\n2.1.241 (Claude Code)\ndone\n")).toBe(
+      "2.1.241 (Claude Code)",
+    );
+  });
+
+  it("CV2: output naming no build is not an answer", function* () {
+    for (const output of [
+      "",
+      "claude version 2.1.241\n",
+      "2.1.241\n",
+      "2.1.241 (Claude Code) beta\n",
+      "v2.1.241 (Claude Code)\n",
+    ]) {
+      expect([output, parse(output)]).toEqual([output, undefined]);
+    }
+  });
+
+  it("CV3: output naming several builds is not an answer either", function* () {
+    // Taking the first would be choosing a build out of a list of them, which
+    // is exactly the question a binding exists to settle.
+    expect(parse("2.1.241 (Claude Code)\n2.1.242 (Claude Code)\n")).toBe(undefined);
+    // Including two that agree: a file reporting its version twice is a file
+    // this adapter cannot read as one answer.
+    expect(parse("2.1.241 (Claude Code)\n2.1.241 (Claude Code)\n")).toBe(undefined);
   });
 });

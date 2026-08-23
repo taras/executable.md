@@ -89,15 +89,19 @@ export interface NativeBinding {
  * alone is not a build: the same version string from a different product would
  * compare equal. Anything that does not look like this is unrecognized, and an
  * unrecognized build is refused rather than retained under a guess.
+ *
+ * Exactly one line may match. Zero is an output this adapter does not
+ * recognize; two or more is output it cannot read as one answer, and taking
+ * the first would be picking a build out of a list of them. Neither is
+ * repeated anywhere — the caller refuses with a stable class, and the output
+ * itself is provider-private.
  */
 function claudeVersion(output: string): string | undefined {
-  for (const line of output.split("\n")) {
-    const candidate = line.trim();
-    if (/^\d+\.\d+\.\d+ \(Claude Code\)$/.test(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
+  const canonical = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line));
+  return canonical.length === 1 ? canonical[0] : undefined;
 }
 
 interface AdapterCommands {

@@ -370,7 +370,11 @@ interface ExecutableBuildBindingV1 {
 
 Every member is exact, and equality requires all of them to agree. The digest is
 the lowercase SHA-256 of the canonical executable target; `reportedVersion` is
-the adapter's canonical parse of what that exact target reports. A matching build
+the adapter's canonical parse of what that exact target reports. That parse
+accepts exactly one canonical line: output naming no build is unrecognized, and
+output naming several is a list of builds rather than an answer — taking the
+first would be choosing one, which is the question a binding exists to settle.
+Neither is repeated in a diagnostic. A matching build
 reached at another path is the same build; a changed build at the same path is
 not. A path is never a member: it says where a build was, which stops being
 true, and it names host layout besides.
@@ -566,8 +570,29 @@ Runtime partitions are scope-owned. Different bindings never share an ACP child,
 a managed handle remembers the partition that created it, and every turn, close,
 detach, cancellation and stale-handle release goes through that same partition.
 When a bound partition's last handle closes it is removed and torn down; a later
-attachment reobserves and builds another. Provider teardown settles whatever
-remains.
+attachment reobserves and builds another.
+
+A failure anywhere in that sequence leaves the account honest rather than tidy:
+
+- **An ensure that rejects leaves no partition.** The runtime is built before
+  the ensure that would use it, so a rejection would otherwise strand one
+  holding a live path for work that never happened — and a binding compares a
+  version and a digest, so the same build found somewhere else is the same
+  partition key and a different file to run. A partition no handle was taken on
+  is discarded, and the next attempt observes again and builds its own.
+- **A handle outlives every later check.** From the moment ensure returns, the
+  handle belongs to this provider and is bound to its creating runtime, before
+  the identity comparison and before the host is asked to retain the session.
+  Each of those can fail, and a handle nothing holds a reference to is one
+  teardown cannot close through the runtime that made it.
+- **A close that failed released nothing.** It does not decrement the
+  partition, evict it, forget the handle, mark it stale, or let the operation
+  acknowledge quiescence. The refusal is still raised; what differs is that this
+  scope still has something to answer for, and the handle stays reachable for
+  teardown.
+- **Teardown attempts every owned close**, does the release bookkeeping only
+  after a close settles, and reports what it could not settle rather than
+  claiming that partition finished.
 
 ## Ownership and concurrency
 
@@ -1030,7 +1055,12 @@ Focused tests prove:
     arrangement or a returned identity that is not the route's; and
 21. ACP runtimes are partitioned by resolved agent command and binding, a handle
     is closed by the partition that created it, the last close evicts a bound
-    partition, and provider teardown settles what remains.
+    partition, and provider teardown settles what remains;
+22. a rejected ensure strands no partition and no live path, a handle that came
+    back survives every later refusal bound to its creator, and a close that
+    failed releases nothing and withholds quiescence; and
+23. a canonical version parse accepts exactly one matching line, and refuses
+    zero or several without repeating the output.
 
 The authored half of this is one executable Markdown document,
 `packages/test-agent/src/NativeSessionLaunch.test.md`, run whole. It authors the
@@ -1192,6 +1222,9 @@ Implementation review checks these frozen invariants:
     separate trusted-host choices, and neither is inferred from the other.
 22. A released V1 route and a completed legacy journal remain readable, and
     neither authorizes ACP attachment or incomplete live replay.
+23. A failed acquisition retains no partition and no live path; a handle that
+    exists is owned and bound to its creator until a close actually settles; and
+    a close that failed releases nothing and acknowledges no quiescence.
 
 Item 12 is the 2026-08-20 architecture amendment. ACPX fixes `systemPrompt` at
 session creation, while native turns are not authoritative in its cached
