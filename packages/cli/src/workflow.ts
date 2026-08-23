@@ -84,7 +84,6 @@ import type {
   WorkflowRunStatus,
   WorkflowStopReason,
 } from "@executablemd/workflow";
-import { evaluationComponents } from "@executablemd/workflow/deno";
 import type {
   WorkflowExecutionBegun,
   WorkflowExecutionTransitions,
@@ -864,7 +863,13 @@ export function runWorkflow(
     // reaches `node:sqlite` — which Node greets with an experimental warning on
     // standard error the moment it loads. A run that opens no workflow storage
     // should not be announcing that it might have.
-    const { createSuspensionController } = yield* until(import("@executablemd/workflow/deno"));
+    // `evaluationComponents` comes through the same import, and for the same
+    // reason: `<Evaluate>` is the workflow host's component, and a run that
+    // opens no workflow storage must not load the adapter that reaches
+    // `node:sqlite` — which Bun does not have at all.
+    const { createSuspensionController, evaluationComponents } = yield* until(
+      import("@executablemd/workflow/deno"),
+    );
     const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
