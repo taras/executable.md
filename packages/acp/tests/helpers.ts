@@ -16,6 +16,7 @@ import {
   agentSessionKeyDigest,
   AgentSessionRecoveryRequired,
   API,
+  ExecutableObservationError,
 } from "@executablemd/runtime";
 import type {
   AgentSessionCoordinator,
@@ -23,6 +24,8 @@ import type {
   AgentSessionOwner,
   AgentSessionOwnerKind,
   AgentSessionOwnership,
+  ExecutableObserver,
+  ExecutableRefusal,
 } from "@executablemd/runtime";
 import type {
   AcpAgentRegistry,
@@ -36,7 +39,7 @@ import type {
   AcpRuntimeTurnResult,
   AcpSessionRecord,
   AcpSessionStore,
-} from "acpx/runtime";
+} from "../src/acpx-runtime.ts";
 import type { ProbeCapableRuntime } from "../src/provider.ts";
 
 export function makeRecord(agentCommand: string, cwd: string): AcpSessionRecord {
@@ -114,6 +117,14 @@ export interface FakeRuntimeHarness {
    * discards persistent state" is a claim about exactly that.
    */
   closeInputs: Record<string, unknown>[];
+  /**
+   * The bound executable each close went through, in order.
+   *
+   * A handle belongs to the runtime that made it, and the only thing that
+   * distinguishes two runtimes here is the transient environment they were
+   * built with — so this is what shows a close reached its own partition.
+   */
+  closeRuntimes: (string | undefined)[];
   closeFailure?: Error;
   /** Fail every attempt to establish a session, as an unreachable agent does. */
   ensureFailure?: Error;
@@ -123,7 +134,71 @@ export interface FakeRuntimeHarness {
    * shape a client could mistake one of for a native id.
    */
   omitAgentSessionId?: boolean;
+  /**
+   * The conversation an attachment reports, whatever it was asked to resume.
+   *
+   * A real adapter answers with the session it loaded; this is how a test makes
+   * one answer with a different conversation than the one it was told to open.
+   */
+  assertIdentity?: string;
   script(turn: ScriptedTurn): void;
+}
+
+/** One controlled build, as an observer would report it. */
+export interface FakeObservation {
+  path: string;
+  digest: string;
+  versionOutput: string;
+}
+
+export interface FakeObserverHarness {
+  observer: ExecutableObserver;
+  /** Every command this observer was asked about, in order. */
+  observed: string[];
+  /** What the next observation answers, or the failure it raises. */
+  observation: FakeObservation;
+  /** Answers taken in order before `observation`, so a build can change. */
+  queued: FakeObservation[];
+  failure?: ExecutableRefusal;
+}
+
+/**
+ * A complete substitute for the host's executable observer.
+ *
+ * The whole seam is replaced, exactly as a trusted host supplies the whole
+ * thing: nothing inside the observer is made replaceable to be testable, so
+ * drift is expressed by answering differently rather than by a control the
+ * production path also has.
+ */
+export function createFakeObserver(observation?: Partial<FakeObservation>): FakeObserverHarness {
+  const harness: FakeObserverHarness = {
+    observed: [],
+    queued: [],
+    observation: {
+      path: "/opt/builds/claude",
+      digest: "a".repeat(64),
+      versionOutput: "2.1.241 (Claude Code)\n",
+      ...observation,
+    },
+    observer: {
+      // deno-lint-ignore require-yield
+      *observe(command) {
+        harness.observed.push(command);
+        if (harness.failure) {
+          throw new ExecutableObservationError(`${command} could not be observed`, {
+            refusal: harness.failure,
+          });
+        }
+        const answer = harness.queued.shift() ?? harness.observation;
+        return {
+          path: answer.path,
+          digest: { algorithm: "sha256", value: answer.digest },
+          versionOutput: answer.versionOutput,
+        };
+      },
+    },
+  };
+  return harness;
 }
 
 const DEFAULT_EVENTS: AcpRuntimeEvent[] = [
@@ -142,6 +217,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
     turns: [],
     closeCalls: [],
     closeInputs: [],
+    closeRuntimes: [],
     script(turn) {
       scripted.push(turn);
     },
@@ -169,10 +245,14 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             acpxRecordId: input.sessionKey,
             messages: [],
           };
+          // What the adapter says it opened. An exact resume answers with the
+          // conversation it was told to load, and `assertIdentity` is how a
+          // test makes it answer with another one.
+          const asserted =
+            harness.assertIdentity ?? input.resumeSessionId ?? `agent-session:${input.sessionKey}`;
           if (input.sessionOptions?.systemPrompt !== undefined) {
             record.acpx = { session_options: { system_prompt: input.sessionOptions.systemPrompt } };
           }
-          void options.sessionStore.save(record);
           const handle: AcpRuntimeHandle = {
             sessionKey: input.sessionKey,
             backend: "acpx",
@@ -182,8 +262,10 @@ export function createFakeRuntime(): FakeRuntimeHarness {
             backendSessionId: `backend:${input.sessionKey}`,
           };
           if (!harness.omitAgentSessionId) {
-            handle.agentSessionId = `agent-session:${input.sessionKey}`;
+            handle.agentSessionId = asserted;
+            record.agentSessionId = asserted;
           }
+          void options.sessionStore.save(record);
           return Promise.resolve(handle);
         },
         startTurn(input) {
@@ -268,6 +350,7 @@ export function createFakeRuntime(): FakeRuntimeHarness {
           return Promise.resolve();
         },
         close(input) {
+          harness.closeRuntimes.push(options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
           harness.closeCalls.push(input.handle);
           harness.closeInputs.push({ ...(input as unknown as Record<string, unknown>) });
           if (harness.closeFailure) {

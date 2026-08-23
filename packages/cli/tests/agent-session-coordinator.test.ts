@@ -32,17 +32,20 @@ import {
 } from "@executablemd/runtime";
 import type { AgentSessionCoordinator } from "@executablemd/runtime";
 import {
+  ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
   createAcpxProvider,
   createDenoSessionRouteStore,
   createMemorySessionRouteStore,
 } from "@executablemd/acp";
-import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
-import type { NativeLaunchRequest } from "@executablemd/runtime";
+import type { AgentSessionRouteStore, NativeAdapter, NativeBinding } from "@executablemd/acp";
+import type { ExecutableObserver, NativeLaunchRequest } from "@executablemd/runtime";
+import { createFakeObserver } from "../../acp/tests/helpers.ts";
 import {
   sessionCoordinatorRoot,
+  useExecutableObserver,
+  useMachineSessions,
   useSessionCoordinator,
-  useSessionRouteStore,
 } from "../src/session-coordinator.ts";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -179,10 +182,21 @@ const PROVIDER_RETURNED: NativeAdapter = {
   resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
 };
 
+/** The Claude-shaped build contract a client-allocated adapter carries. */
+const BINDING: NativeBinding = {
+  command: "claude",
+  version: (output) => {
+    const line = output.trim();
+    return /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line) ? line : undefined;
+  },
+  environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
+};
+
 /** A Claude-shaped adapter that names its own sessions. */
 const CLIENT_ALLOCATED: NativeAdapter = {
   launcher: "claude",
   identity: "client-allocated",
+  binding: BINDING,
   allocate: () => randomUUID(),
   create: (nativeSessionId, instructionFile) => [
     "claude",
@@ -236,6 +250,8 @@ function* launchUnder(
     defaults?: boolean;
     launched?: NativeLaunchRequest[];
     agent?: string;
+    /** The build this host would observe. Absent means it can observe none. */
+    observer?: ExecutableObserver;
     /** Drive every phase, not only preparation. */
     perform?: boolean;
   } = {},
@@ -265,10 +281,12 @@ function* launchUnder(
         ? {}
         : {
             advertiseNativeLaunch: ["claude"],
+            advertiseClientNativeAttachment: ["claude"],
             nativeAdapters: { claude: options.adapter ?? PROVIDER_RETURNED },
           }),
       ...(coordinator ? { coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
+      ...(options.observer ? { executableObserver: options.observer } : {}),
     });
     yield* factory(
       { defaultAgent: agent, permissionMode: "deny-all" },
@@ -351,7 +369,7 @@ describe("Tier HC — host session ownership", () => {
         : undefined,
       records,
       probe,
-      { adapter: CLIENT_ALLOCATED },
+      { adapter: CLIENT_ALLOCATED, observer: createFakeObserver().observer },
     );
 
     const failure = records.find((record) => record.failure)?.failure;
@@ -408,12 +426,21 @@ describe("Tier HC — host session ownership", () => {
     // Only this host assembles both halves. Node and Bun build neither, which
     // is what makes the same call refuse there.
     const routeStore = onDeno() ? createDenoSessionRouteStore(root) : undefined;
+    // A controlled observation, because the subject is the host assembly rather
+    // than which Claude happens to be installed on the machine running this.
+    const observer = createFakeObserver();
 
     yield* launchUnder(
       onDeno() ? createDenoAgentSessionCoordinator(root) : undefined,
       records,
       probe,
-      { defaults: true, perform: true, launched, ...(routeStore ? { routeStore } : {}) },
+      {
+        defaults: true,
+        perform: true,
+        launched,
+        observer: observer.observer,
+        ...(routeStore ? { routeStore } : {}),
+      },
     );
 
     if (!onDeno()) {
@@ -437,7 +464,9 @@ describe("Tier HC — host session ownership", () => {
     expect(probe.ensures).toBe(0);
     expect(launched.length).toBe(1);
     const command = launched[0]!.command;
-    expect(command[0]).toBe("claude");
+    // The exact file that was observed, not the launcher name: the name is what
+    // the durable record carries, and this is what the run spawns.
+    expect(command[0]).toBe(observer.observation.path);
     expect(command[1]).toBe("--session-id");
     expect(command[3]).toBe("--system-prompt-file");
     // The prepared text crossed as a path, so it is in neither surface another
@@ -469,12 +498,56 @@ describe("Tier HC — host session ownership", () => {
     expect(failure?.message).toContain("not advertised");
   });
 
-  it("HC5: the Deno and compiled entrypoints install one; Node and Bun do not", function* () {
+  it("HC5: the Deno and compiled entrypoints assemble machine sessions; Node and Bun do not", function* () {
     for (const name of ["deno.ts", "compiled.ts"]) {
-      expect((yield* entrypoint(name)).includes("useSessionCoordinator()")).toBe(true);
+      expect((yield* entrypoint(name)).includes("useMachineSessions()")).toBe(true);
     }
     for (const name of ["node.ts", "bun.ts"]) {
-      expect((yield* entrypoint(name)).includes("useSessionCoordinator")).toBe(false);
+      const source = yield* entrypoint(name);
+      expect(source.includes("useMachineSessions")).toBe(false);
+      // The same advertised names, and none of the answers: the refusal has to
+      // say so rather than the agent quietly not existing here.
+      expect(source.includes("unassembledMachineSessions()")).toBe(true);
     }
+  });
+
+  it("HC11: an agent that names its own sessions needs an observer too", function* () {
+    // The third half of fail-closed. A host that can say who owns the session
+    // and how it was constructed still cannot act on one whose build it has no
+    // way to recognize.
+    const records: LaunchRecord[] = [];
+    const probe: RuntimeProbe = { ensures: 0, closes: 0, doctors: 0, runtimes: 0 };
+    yield* launchUnder(
+      onDeno()
+        ? createDenoAgentSessionCoordinator(join(tmpdir(), `xmd-hc11-${randomUUID()}`))
+        : undefined,
+      records,
+      probe,
+      { adapter: CLIENT_ALLOCATED, routeStore: createMemorySessionRouteStore() },
+    );
+
+    const failure = records.find((record) => record.failure)?.failure;
+    expect(failure?.class).toBe("unsupported-capability");
+    if (onDeno()) {
+      expect(failure?.message).toContain("executable build observation");
+    }
+    expect(probe.runtimes).toBe(0);
+    expect(probe.ensures).toBe(0);
+  });
+
+  it("HC12: the two advertised sets are separate, and this host states both", function* () {
+    // What a host actually assembles. Native launch and ACP attachment are
+    // different proofs, so they are different lists — and the ordinary profile
+    // says which adapters it has proven for each rather than inheriting either.
+    expect([...ADVERTISED_NATIVE_LAUNCH]).toEqual(["claude"]);
+    expect([...ADVERTISED_CLIENT_NATIVE_ATTACHMENT]).toEqual(["claude"]);
+    const assembly = useMachineSessions();
+    expect([...assembly.advertiseNativeLaunch]).toEqual(["claude"]);
+    expect([...assembly.advertiseClientNativeAttachment]).toEqual(["claude"]);
+    // Built from the same trusted root as the coordinator beside it.
+    expect(assembly.coordinator === undefined).toBe(!onDeno());
+    expect(assembly.routeStore === undefined).toBe(!onDeno());
+    expect(assembly.executableObserver === undefined).toBe(!onDeno());
+    expect(useExecutableObserver() === undefined).toBe(!onDeno());
   });
 });

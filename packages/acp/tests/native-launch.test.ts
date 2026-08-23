@@ -16,7 +16,7 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, scoped, sleep, spawn, until, withResolvers } from "effection";
+import { ensure, Ok, scoped, sleep, spawn, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { Agent } from "@executablemd/core";
 import type {
@@ -41,11 +41,12 @@ import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
-import type { NativeAdapter } from "../src/native-launch.ts";
+import type { NativeAdapter, NativeBinding } from "../src/native-launch.ts";
 import { AgentSessionRouteError, createMemorySessionRouteStore } from "../src/session-route.ts";
-import type { AgentSessionRouteStore, AgentSessionRouteV1 } from "../src/session-route.ts";
+import type { AgentSessionRoute, AgentSessionRouteStore } from "../src/session-route.ts";
 import { deriveSessionKey } from "../src/session-key.ts";
 import {
+  createFakeObserver,
   createFakeRuntime,
   makeCoordinator,
   makeRecord,
@@ -53,12 +54,38 @@ import {
   makeStore,
   useFlatWorld,
 } from "./helpers.ts";
-import type { CoordinatorHarness, FakeRuntimeHarness } from "./helpers.ts";
-import type { AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
+import type { CoordinatorHarness, FakeObserverHarness, FakeRuntimeHarness } from "./helpers.ts";
+import type { ExecutableBuildBindingV1 } from "@executablemd/core";
+import type { ExecutableObserver } from "@executablemd/runtime";
+import type { AcpSessionRecord, AcpSessionStore } from "../src/acpx-runtime.ts";
 
 const CWD = "/work";
 const AGENT_COMMAND = "claude-cmd";
 const SESSION_KEY = deriveSessionKey(AGENT_COMMAND, CWD);
+
+/**
+ * The Claude-shaped build contract every controlled client-allocated adapter
+ * here carries: which command to observe, what its version output means, and
+ * what the ACP child needs in order to run that same build.
+ */
+const TEST_BINDING: NativeBinding = {
+  command: "claude",
+  version: (output) => {
+    const line = output.trim();
+    return /^\d+\.\d+\.\d+ \(Claude Code\)$/.test(line) ? line : undefined;
+  },
+  environment: (livePath) => ({ CLAUDE_CODE_EXECUTABLE: livePath }),
+};
+
+/** What `createFakeObserver()`'s default observation binds to. */
+const OBSERVED_BUILD: ExecutableBuildBindingV1 = {
+  schema: "executable-build.v1",
+  reportedVersion: "2.1.241 (Claude Code)",
+  executableDigest: { algorithm: "sha256", value: "a".repeat(64) },
+};
+
+/** The canonical path that same observation reports. */
+const OBSERVED_PATH = "/opt/builds/claude";
 
 /** Everything the launch touched, in the order it touched it. */
 interface Trace {
@@ -80,6 +107,10 @@ interface Trace {
 
 interface ProviderOptions {
   advertise?: readonly string[];
+  /** Advertised for client-native attachment; defaults to `advertise`. */
+  attach?: readonly string[];
+  /** `false` gives this host no way to observe a build at all. */
+  observer?: ExecutableObserver | false;
   store?: AcpSessionStore;
   adapters?: Record<string, NativeAdapter>;
   /**
@@ -203,6 +234,10 @@ function* installLaunchStack(
     sessionStore: options.store ?? makeStore(),
     agentRegistry: makeRegistry({ claude: AGENT_COMMAND, mystery: "mystery-cmd" }),
     advertiseNativeLaunch: options.advertise ?? ["claude"],
+    advertiseClientNativeAttachment: options.attach ?? options.advertise ?? ["claude"],
+    ...(options.observer === false
+      ? {}
+      : { executableObserver: options.observer ?? createFakeObserver().observer }),
     coordinator: options.coordinator ?? trace.ownership.coordinator,
     ...(options.routeStore ? { routeStore: options.routeStore } : {}),
     nativeAdapters: options.adapters ?? { claude: PROVIDER_RETURNED_CLAUDE },
@@ -1095,6 +1130,7 @@ describe("Tier CN — client-allocated construction", () => {
     return {
       launcher: "claude",
       identity: "client-allocated",
+      binding: TEST_BINDING,
       allocate,
       create: (nativeSessionId, instructionFile) => [
         "claude",
@@ -1119,7 +1155,7 @@ describe("Tier CN — client-allocated construction", () => {
     });
   }
 
-  function* routeOf(store: AgentSessionRouteStore): Operation<AgentSessionRouteV1 | undefined> {
+  function* routeOf(store: AgentSessionRouteStore): Operation<AgentSessionRoute | undefined> {
     return yield* store.read({ provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY });
   }
 
@@ -1149,8 +1185,10 @@ describe("Tier CN — client-allocated construction", () => {
     expect(prepared.identityProvenance).toBe("client-allocated");
     expect(prepared.nativeSessionId).toBe(ALLOCATED);
     const route = yield* routeOf(routes);
+    // A new client-native session publishes the bound form: the identity XMD
+    // chose, beside the build that was observed accepting it.
     expect(route).toEqual({
-      schema: "session-route.v1",
+      schema: "session-route.v2",
       route: "client-native",
       provider: "acpx",
       agent: AGENT_COMMAND,
@@ -1159,7 +1197,9 @@ describe("Tier CN — client-allocated construction", () => {
       identityProvenance: "client-allocated",
       instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
       launcher: "claude",
+      executableBinding: OBSERVED_BUILD,
     });
+    expect(prepared.executableBinding).toEqual(OBSERVED_BUILD);
     expect(trace.launches[0]!.command).toContain(ALLOCATED);
     // ACP created nothing: this session is materialized by the native process.
     expect(harness.ensureCalls).toEqual([]);
@@ -1175,7 +1215,9 @@ describe("Tier CN — client-allocated construction", () => {
     yield* launch(INSTRUCTIONS);
 
     const command = trace.launches[0]!.command;
-    expect(command[0]).toBe("claude");
+    // The exact file that was observed, not the name the adapter writes: the
+    // name is what durable records carry, and this is what the run spawns.
+    expect(command[0]).toBe(OBSERVED_PATH);
     expect(command).toContain("--session-id");
     expect(command).toContain("--system-prompt-file");
     expect(command).not.toContain("--resume");
@@ -1203,7 +1245,7 @@ describe("Tier CN — client-allocated construction", () => {
     // The first durable publication is authoritative, so the second launch
     // adopts its identity rather than insisting its own candidate win.
     expect(trace.launches.length).toBe(2);
-    expect(trace.launches[1]!.command).toEqual(["claude", "--resume", ALLOCATED]);
+    expect(trace.launches[1]!.command).toEqual([OBSERVED_PATH, "--resume", ALLOCATED]);
     // Nothing was allocated the second time: a session that already has an
     // identity is resumed under it, and a second candidate for a conversation
     // that already exists is a value with nowhere to go.
@@ -1332,32 +1374,23 @@ describe("Tier CN — client-allocated construction", () => {
     expect((yield* routeOf(routes))?.route).toBe("acp-first");
   });
 
-  it("CN8: a Session on a client-native route raises rather than retaining a launch", function* () {
-    // There is no launch here, so there is no launch record to fail. The
-    // provider says so in its own error, before a runtime, an ensure or a turn.
+  it("CN8: a Session on a bound client-native route attaches to the identity it already has", function* () {
+    // Attachment, never conversion: the route stays client-native, the session
+    // ACP joins is the one the native process was told to make, and the
+    // identity crosses as an exact resume rather than being created under.
     const harness = createFakeRuntime();
     const trace = newTrace();
     const routes = createMemorySessionRouteStore();
     yield* installClientNative(harness, trace, { routeStore: routes });
     yield* launch(INSTRUCTIONS);
-    const ensuresBefore = harness.ensureCalls.length;
+    const before = yield* routeOf(routes);
 
-    const doctorsBefore = harness.doctorCalls;
-    const runtimesBefore = harness.createdOptions.length;
+    const session = yield* Agent.operations.session();
 
-    let raised: Error | undefined;
-    try {
-      yield* Agent.operations.session();
-    } catch (error) {
-      raised = error as Error;
-    }
-
-    expect(raised?.name).toBe("AgentSessionRouteError");
-    expect(raised?.message).toContain("client-allocated identity");
-    // Zero provider work: no probe child, no runtime, no ensure, no turn.
-    expect(harness.doctorCalls).toBe(doctorsBefore);
-    expect(harness.createdOptions.length).toBe(runtimesBefore);
-    expect(harness.ensureCalls.length).toBe(ensuresBefore);
+    expect(harness.ensureCalls.at(-1)?.resumeSessionId).toBe(ALLOCATED);
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    // Nothing republished, nothing converted, and no second identity.
+    expect(yield* routeOf(routes)).toEqual(before);
     expect(harness.turns).toEqual([]);
     expect(trace.records.filter((record) => record.failure)).toEqual([]);
   });
@@ -1451,6 +1484,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
   const ADAPTER: NativeAdapter = {
     launcher: "claude",
     identity: "client-allocated",
+    binding: TEST_BINDING,
     allocate: () => ALLOCATED,
     create: (nativeSessionId, instructionFile) => [
       "claude",
@@ -1474,6 +1508,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
       instructionChannel: "claude.systemPromptFile",
       instructionReconciliation: "installed",
       identityProvenance: "client-allocated",
+      executableBinding: OBSERVED_BUILD,
       instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
       instructions: INSTRUCTIONS,
       cwd: CWD,
@@ -1484,10 +1519,17 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     };
   }
 
+  /** The same record as the released contract left one: no build recorded. */
+  function legacyRetained(overrides: Partial<PreparedLaunchRecord> = {}): PreparedLaunchRecord {
+    const record = retained(overrides);
+    delete record.executableBinding;
+    return record;
+  }
+
   const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
 
   /** An ACP-first route for the same session, which no launch may adopt. */
-  function acpFirst(): AgentSessionRouteV1 {
+  function acpFirst(): AgentSessionRoute {
     return {
       schema: "session-route.v1",
       route: "acp-first",
@@ -1498,7 +1540,23 @@ describe("Tier CR — client-allocated incomplete replay", () => {
   }
 
   /** The route that agrees with it. */
-  function agreeing(record: PreparedLaunchRecord): AgentSessionRouteV1 {
+  function agreeing(record: PreparedLaunchRecord): AgentSessionRoute {
+    return {
+      schema: "session-route.v2",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: record.sessionKey,
+      nativeSessionId: record.nativeSessionId,
+      identityProvenance: "client-allocated",
+      instructionsDigest: record.instructionsDigest,
+      launcher: record.launcher,
+      executableBinding: record.executableBinding ?? OBSERVED_BUILD,
+    };
+  }
+
+  /** The same route as the released contract published one: unbound. */
+  function legacyAgreeing(record: PreparedLaunchRecord): AgentSessionRoute {
     return {
       schema: "session-route.v1",
       route: "client-native",
@@ -1535,7 +1593,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
 
     yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
 
-    expect(trace.launches[0]!.command).toEqual(["claude", "--resume", ALLOCATED]);
+    expect(trace.launches[0]!.command).toEqual([OBSERVED_PATH, "--resume", ALLOCATED]);
     expect(harness.ensureCalls).toEqual([]);
   });
 
@@ -1577,7 +1635,7 @@ describe("Tier CR — client-allocated incomplete replay", () => {
 
     expect(trace.launches.length).toBe(2);
     expect(trace.launches[0]!.command).toContain("--session-id");
-    expect(trace.launches[1]!.command).toEqual(["claude", "--resume", ALLOCATED]);
+    expect(trace.launches[1]!.command).toEqual([OBSERVED_PATH, "--resume", ALLOCATED]);
   });
 
   it("CR5: a route-store failure names a durable path, and the journal repeats none of it", function* () {
@@ -1636,25 +1694,25 @@ describe("Tier CR — client-allocated incomplete replay", () => {
     // about to retain — writing down that the handoff began is itself advancing
     // the launch. For a detached replay it is the spawn.
     const other = "99999999-0000-0000-0000-000000000000";
-    const named = agreeing(retained()) as Extract<AgentSessionRouteV1, { route: "client-native" }>;
+    const named = agreeing(retained()) as Extract<
+      AgentSessionRoute,
+      { schema: "session-route.v2" }
+    >;
     // Each case is one way the journal and the route can describe different
     // sessions: a route that says something else, or a retained record another
     // provider wrote.
-    const disagreements: [
-      string,
-      AgentSessionRouteV1 | undefined,
-      Partial<PreparedLaunchRecord>,
-    ][] = [
-      ["no route at all", undefined, {}],
-      ["another identity", { ...named, nativeSessionId: other }, {}],
-      ["another instruction layer", { ...named, instructionsDigest: "c".repeat(64) }, {}],
-      ["another launcher", { ...named, launcher: "codex" }, {}],
-      ["an ACP-first route", acpFirst(), {}],
-      // An agreeing ACPX route is not evidence that this provider owns the
-      // session a different one prepared: that is two providers naming one
-      // string.
-      ["a record another provider prepared", agreeing(retained()), { provider: "other" }],
-    ];
+    const disagreements: [string, AgentSessionRoute | undefined, Partial<PreparedLaunchRecord>][] =
+      [
+        ["no route at all", undefined, {}],
+        ["another identity", { ...named, nativeSessionId: other }, {}],
+        ["another instruction layer", { ...named, instructionsDigest: "c".repeat(64) }, {}],
+        ["another launcher", { ...named, launcher: "codex" }, {}],
+        ["an ACP-first route", acpFirst(), {}],
+        // An agreeing ACPX route is not evidence that this provider owns the
+        // session a different one prepared: that is two providers naming one
+        // string.
+        ["a record another provider prepared", agreeing(retained()), { provider: "other" }],
+      ];
 
     for (const suffix of ["prepared", "prepared+detached"] as const) {
       for (const [name, planted, overrides] of disagreements) {
@@ -1724,6 +1782,7 @@ describe("Tier PF — normalized private failures", () => {
           claude: {
             launcher: "claude",
             identity: "client-allocated",
+            binding: TEST_BINDING,
             allocate: () => "66666666-7777-8888-9999-000000000000",
             create: () => {
               throw value;
@@ -1758,6 +1817,7 @@ describe("Tier PF — normalized private failures", () => {
         claude: {
           launcher: "claude",
           identity: "client-allocated",
+          binding: TEST_BINDING,
           allocate: () => "77777777-8888-9999-0000-111111111111",
           create: (_id, instructionFile) => {
             // The file exists at this moment; the failure is what happens next.
@@ -1806,6 +1866,7 @@ describe("Tier PF — normalized private failures", () => {
         claude: {
           launcher: "claude",
           identity: "client-allocated",
+          binding: TEST_BINDING,
           allocate: () => "88888888-9999-0000-1111-222222222222",
           create: (nativeSessionId, instructionFile) => [
             "claude",
@@ -1853,6 +1914,7 @@ describe("Tier PF — normalized private failures", () => {
         claude: {
           launcher: "claude",
           identity: "client-allocated",
+          binding: TEST_BINDING,
           allocate: () => "33333333-4444-5555-6666-777777777777",
           create: () => {
             throw new Error(`spawning /private/${marker}/claude failed: ${marker}`);
@@ -1891,6 +1953,7 @@ describe("Tier RR — racing construction routes", () => {
   const ADAPTER: NativeAdapter = {
     launcher: "claude",
     identity: "client-allocated",
+    binding: TEST_BINDING,
     allocate: () => ALLOCATED,
     create: (nativeSessionId, instructionFile) => [
       "claude",
@@ -2008,7 +2071,7 @@ describe("Tier RR — racing construction routes", () => {
     });
   }
 
-  function* routeOf(space: Namespace): Operation<AgentSessionRouteV1 | undefined> {
+  function* routeOf(space: Namespace): Operation<AgentSessionRoute | undefined> {
     return yield* space.routes.read({
       provider: "acpx",
       agent: AGENT_COMMAND,
@@ -2047,7 +2110,7 @@ describe("Tier RR — racing construction routes", () => {
     expect([during, during.every((entry) => entry.endsWith(":owned"))]).toEqual([during, true]);
   });
 
-  it("RR2: client-native wins, and the eager session refuses in its own words", function* () {
+  it("RR2: client-native wins, and the eager session attaches to its identity", function* () {
     const space = namespace();
     const firstTrace = newTrace();
     const secondTrace = newTrace();
@@ -2075,9 +2138,10 @@ describe("Tier RR — racing construction routes", () => {
 
     const published = yield* routeOf(space);
     expect(published?.route).toBe("client-native");
-    // No launch was asked for, so no launch record fails: the provider says so
-    // in its own typed error.
-    expect(raised?.name).toBe("AgentSessionRouteError");
+    // The loser adopts the winner's account rather than replacing it: the
+    // eager session attaches to the conversation the launch named, and no
+    // launch record was authored because none was asked for.
+    expect(raised).toBe(undefined);
     expect(secondTrace.records).toEqual([]);
     expect(yield* routeOf(space)).toEqual(published);
     expect([during, during.every((entry) => entry.endsWith(":owned"))]).toEqual([during, true]);
@@ -2108,6 +2172,7 @@ describe("Tier CX — cancellation before ownership ends", () => {
           claude: {
             launcher: "claude",
             identity: "client-allocated",
+            binding: TEST_BINDING,
             allocate: () => "55555555-6666-7777-8888-999999999999",
             create: (nativeSessionId, instructionFile) => [
               "claude",
@@ -2154,5 +2219,682 @@ describe("Tier CX — cancellation before ownership ends", () => {
     // A launch that stopped on the way never proved the session stopped, so it
     // stays owned rather than looking finished.
     expect(trace.ownership.events).not.toContain("quiesced");
+  });
+});
+
+/**
+ * Tier CA — attaching ACP to a session a native process constructed
+ * (specs/native-agent-session-launch-spec.md §Provider-native identity).
+ *
+ * Attachment, never conversion. The route stays client-native, the identity
+ * crosses unchanged as an exact resume, and the provider has to say it opened
+ * that same conversation before a turn may start. Every way it cannot — no
+ * advertised capability, no observer, a different build, provider arrangement
+ * that names something else, an attachment that answers with another session —
+ * fails closed before the turn it would make unsafe.
+ */
+describe("Tier CA — client-native attachment", () => {
+  const ALLOCATED = "44444444-5555-6666-7777-888888888888";
+
+  function adapter(): NativeAdapter {
+    return {
+      launcher: "claude",
+      identity: "client-allocated",
+      binding: TEST_BINDING,
+      allocate: () => ALLOCATED,
+      create: (nativeSessionId, instructionFile) => [
+        "claude",
+        "--session-id",
+        nativeSessionId,
+        "--system-prompt-file",
+        instructionFile,
+      ],
+      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+    };
+  }
+
+  const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
+
+  /** The bound route a native launch leaves behind. */
+  function bound(overrides: Partial<AgentSessionRouteV2Shape> = {}): AgentSessionRoute {
+    return {
+      schema: "session-route.v2",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+      executableBinding: OBSERVED_BUILD,
+      ...overrides,
+    };
+  }
+
+  type AgentSessionRouteV2Shape = Extract<AgentSessionRoute, { schema: "session-route.v2" }>;
+
+  /** The same session as the released unbound contract published it. */
+  function legacy(): AgentSessionRoute {
+    return {
+      schema: "session-route.v1",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+    };
+  }
+
+  interface Attached {
+    harness: FakeRuntimeHarness;
+    trace: Trace;
+    routes: AgentSessionRouteStore;
+    observer: FakeObserverHarness;
+    store: ReturnType<typeof makeStore>;
+  }
+
+  function* installAttachment(
+    published: AgentSessionRoute | undefined,
+    options: ProviderOptions & { observer?: ExecutableObserver | false } = {},
+  ): Operation<Attached> {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    const store = makeStore();
+    if (published) {
+      yield* routes.publish(published);
+    }
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      store,
+      observer: options.observer === undefined ? observer.observer : options.observer,
+      ...options,
+    });
+    return { harness, trace, routes, observer, store };
+  }
+
+  /** What a Session attempt raised, or nothing. */
+  function* attach(): Operation<Error | undefined> {
+    try {
+      yield* Agent.operations.session();
+      return undefined;
+    } catch (error) {
+      return error as Error;
+    }
+  }
+
+  it("CA1: the route's exact identity crosses as resumeSessionId, with the observed build", function* () {
+    const space = yield* installAttachment(bound());
+
+    const session = yield* Agent.operations.session();
+
+    // The identity the route names, unchanged. Never an ACP session id, an
+    // ACPX record id, or anything that merely looks like a UUID.
+    expect(space.harness.ensureCalls).toHaveLength(1);
+    expect(space.harness.ensureCalls[0]?.resumeSessionId).toBe(ALLOCATED);
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    // The build was reobserved before the runtime existed, and the exact path
+    // it found reaches only the matching child's transient environment.
+    expect(space.observer.observed).toEqual(["claude"]);
+    const options = space.harness.createdOptions.at(-1);
+    expect(options?.agentProcessEnv).toEqual({ CLAUDE_CODE_EXECUTABLE: OBSERVED_PATH });
+    // And nowhere else.
+    expect(JSON.stringify(yield* space.routes.read(KEY))).not.toContain(OBSERVED_PATH);
+    expect(JSON.stringify(space.trace.records)).not.toContain(OBSERVED_PATH);
+  });
+
+  it("CA2: a subscribed Prompt attaches under the same identity", function* () {
+    const space = yield* installAttachment(bound());
+
+    yield* scoped(function* () {
+      const stream = yield* Agent.operations.prompt("continue", {});
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      expect(next.value).toBe("hello world");
+    });
+
+    expect(space.harness.ensureCalls[0]?.resumeSessionId).toBe(ALLOCATED);
+    expect(space.harness.turns).toHaveLength(1);
+    // The turn ran through the child that was given the bound executable.
+    expect(space.harness.turns[0]?.input.handle.agentSessionId).toBe(ALLOCATED);
+  });
+
+  it("CA3: an unadvertised attachment gate refuses before ensure", function* () {
+    // Knowing how to hand a session to a native UI is not evidence that this
+    // build can join the conversation afterwards. The two are separate
+    // choices, and neither is inferred from the other.
+    const space = yield* installAttachment(bound(), { advertise: ["claude"], attach: [] });
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("not advertised as able to attach");
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.turns).toEqual([]);
+  });
+
+  it("CA4: a host that cannot observe a build refuses before any provider effect", function* () {
+    const space = yield* installAttachment(bound(), { observer: false });
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("executable build observation");
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.createdOptions).toEqual([]);
+  });
+
+  it("CA5: a build this run cannot name, or cannot reach, refuses before ensure", function* () {
+    for (const [name, mutate] of [
+      [
+        "another build at the same command",
+        (observer: FakeObserverHarness) => {
+          observer.observation.digest = "b".repeat(64);
+        },
+      ],
+      [
+        "another version of the same bytes",
+        (observer: FakeObserverHarness) => {
+          observer.observation.versionOutput = "2.1.242 (Claude Code)\n";
+        },
+      ],
+      [
+        "output this adapter does not recognize",
+        (observer: FakeObserverHarness) => {
+          observer.observation.versionOutput = "claude version 2.1.241\n";
+        },
+      ],
+      [
+        "an executable that could not be observed at all",
+        (observer: FakeObserverHarness) => {
+          observer.failure = "not-executable";
+        },
+      ],
+    ] as const) {
+      yield* scoped(function* () {
+        const observer = createFakeObserver();
+        mutate(observer);
+        const space = yield* installAttachment(bound(), { observer: observer.observer });
+
+        const raised = yield* attach();
+
+        expect([name, raised === undefined]).toEqual([name, false]);
+        expect([name, space.harness.ensureCalls]).toEqual([name, []]);
+        // A moved build is still that build, so nothing here may name a path.
+        expect([name, raised?.message.includes(OBSERVED_PATH)]).toEqual([name, false]);
+      });
+    }
+  });
+
+  it("CA6: a moved build is the same build", function* () {
+    // Equality is over what was retained — a version and a digest — so the same
+    // bytes reached at another path attach exactly as they would have before.
+    const observer = createFakeObserver({ path: "/elsewhere/bin/claude" });
+    const space = yield* installAttachment(bound(), { observer: observer.observer });
+
+    const session = yield* Agent.operations.session();
+
+    expect(session.agentSessionId).toBe(ALLOCATED);
+    expect(space.harness.createdOptions.at(-1)?.agentProcessEnv).toEqual({
+      CLAUDE_CODE_EXECUTABLE: "/elsewhere/bin/claude",
+    });
+  });
+
+  it("CA7: retained provider arrangement that names something else refuses before ensure", function* () {
+    for (const [name, asserted] of [
+      ["another conversation", "99999999-0000-0000-0000-000000000000"],
+      ["no conversation at all", undefined],
+    ] as const) {
+      yield* scoped(function* () {
+        const store = makeStore();
+        const record = makeRecord(AGENT_COMMAND, CWD);
+        record.acpxRecordId = SESSION_KEY;
+        if (asserted !== undefined) {
+          record.agentSessionId = asserted;
+        }
+        store.records.set(SESSION_KEY, record);
+        const space = yield* installAttachment(bound(), { store });
+
+        const raised = yield* attach();
+
+        expect([name, raised === undefined]).toEqual([name, false]);
+        expect([name, space.harness.ensureCalls]).toEqual([name, []]);
+        expect([name, space.harness.turns]).toEqual([name, []]);
+      });
+    }
+  });
+
+  it("CA8: an attachment that opened another conversation is closed before a turn", function* () {
+    // The last check, and the one nothing before it can make: what the provider
+    // says it loaded. A turn taken through this handle would land in history
+    // that is not this session's.
+    const space = yield* installAttachment(bound());
+    space.harness.assertIdentity = "00000000-1111-2222-3333-444444444444";
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("did not report");
+    expect(space.harness.ensureCalls).toHaveLength(1);
+    expect(space.harness.closeCalls).toHaveLength(1);
+    expect(space.harness.turns).toEqual([]);
+  });
+
+  it("CA8b: a provider that cannot open the named conversation refuses in one class", function* () {
+    // Missing history and an adapter that cannot resume by name are the same
+    // answer: the conversation this session names is not reachable. The
+    // adapter's own message would carry provider-private detail, so the stable
+    // class is what crosses — and nothing was created in its place.
+    const space = yield* installAttachment(bound());
+    space.harness.ensureFailure = new Error(
+      "No conversation found with session ID /home/operator/.claude/projects/x",
+    );
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("could not open");
+    expect(raised?.message).not.toContain("/home/operator");
+    expect(space.harness.turns).toEqual([]);
+    expect([...space.store.records.keys()]).toEqual([]);
+  });
+
+  it("CA9: a legacy unbound route refuses rather than attaching", function* () {
+    // Constructed before XMD recorded which build accepted the identity. A
+    // build observed now says which one is installed today, not which one has
+    // this conversation, so there is nothing to compare and nothing to join.
+    const space = yield* installAttachment(legacy());
+
+    const raised = yield* attach();
+
+    expect(raised?.message).toContain("before XMD recorded which build");
+    expect(space.harness.ensureCalls).toEqual([]);
+    expect(space.harness.createdOptions).toEqual([]);
+    // The route is left exactly as it was: not upgraded, not supplemented.
+    expect(yield* space.routes.read(KEY)).toEqual(legacy());
+  });
+
+  it("CA10: a route this build cannot read reaches no provider work", function* () {
+    const routes: AgentSessionRouteStore = {
+      // deno-lint-ignore require-yield
+      *read(): Operation<AgentSessionRoute | undefined> {
+        throw new AgentSessionRouteError("the construction route record is not readable");
+      },
+      // deno-lint-ignore require-yield
+      *publish(candidate) {
+        return candidate;
+      },
+    };
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+    });
+
+    const raised = yield* attach();
+
+    expect(raised?.name).toBe("AgentSessionRouteError");
+    expect(harness.ensureCalls).toEqual([]);
+    expect(harness.createdOptions).toEqual([]);
+  });
+});
+
+/**
+ * Tier RT — one runtime per agent command and build
+ * (specs/acp-client-spec.md §ACPX provider).
+ *
+ * A child running the wrong build accepts the session identity and disagrees
+ * silently about what it names, so sessions bound to different builds never
+ * share one. A partition holds a live executable path for the work it owns, and
+ * when the last handle it made closes it is gone rather than kept for nobody.
+ */
+describe("Tier RT — bound runtime partitions", () => {
+  const FIRST = "aaaaaaaa-1111-2222-3333-444444444444";
+  const SECOND = "bbbbbbbb-1111-2222-3333-444444444444";
+
+  function adapter(): NativeAdapter {
+    return {
+      launcher: "claude",
+      identity: "client-allocated",
+      binding: TEST_BINDING,
+      allocate: () => FIRST,
+      create: (nativeSessionId, instructionFile) => [
+        "claude",
+        "--session-id",
+        nativeSessionId,
+        "--system-prompt-file",
+        instructionFile,
+      ],
+      resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+    };
+  }
+
+  function route(sessionKey: string, id: string, binding = OBSERVED_BUILD): AgentSessionRoute {
+    return {
+      schema: "session-route.v2",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey,
+      nativeSessionId: id,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+      executableBinding: binding,
+    };
+  }
+
+  /** The environments every runtime this harness built was given. */
+  function environments(harness: FakeRuntimeHarness): (string | undefined)[] {
+    return harness.createdOptions.map((options) => options.agentProcessEnv?.CLAUDE_CODE_EXECUTABLE);
+  }
+
+  it("RT1: the last close evicts the partition, and later work reobserves", function* () {
+    // Each `<Session>` releases its handle as it returns, so the partition it
+    // built goes with it. The next attachment observes again and builds
+    // another, rather than reusing a path nobody is holding.
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    yield* routes.publish(route(SESSION_KEY, FIRST));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    yield* Agent.operations.session();
+    yield* Agent.operations.session();
+
+    expect(observer.observed).toEqual(["claude", "claude"]);
+    expect(environments(harness)).toEqual([OBSERVED_PATH, OBSERVED_PATH]);
+    // Each handle was closed through the runtime that created it.
+    expect(harness.closeCalls).toHaveLength(2);
+  });
+
+  it("RT2: a different build never shares a child", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    yield* routes.publish(route(SESSION_KEY, FIRST));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    yield* Agent.operations.session();
+    // The same command, a different build behind it, and a route that names
+    // the old one: the attachment refuses rather than reusing the child.
+    observer.observation.digest = "c".repeat(64);
+    observer.observation.path = "/opt/builds/other-claude";
+    let raised: Error | undefined;
+    try {
+      yield* Agent.operations.session();
+    } catch (error) {
+      raised = error as Error;
+    }
+
+    expect(raised?.message).toContain("cannot be confirmed");
+    // One runtime, for the one build that was ever accepted.
+    expect(environments(harness)).toEqual([OBSERVED_PATH]);
+  });
+
+  it("RT3: each handle is closed by the partition that created it", function* () {
+    // Two sessions, two builds, two children. The only thing that tells the
+    // runtimes apart is the transient environment each was built with, which is
+    // exactly what a close has to reach.
+    const other: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      reportedVersion: "2.1.242 (Claude Code)",
+      executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+    };
+    const OTHER_PATH = "/opt/builds/claude-2";
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    observer.queued = [
+      { path: OBSERVED_PATH, digest: "a".repeat(64), versionOutput: "2.1.241 (Claude Code)\n" },
+      { path: OTHER_PATH, digest: "d".repeat(64), versionOutput: "2.1.242 (Claude Code)\n" },
+    ];
+    const second = deriveSessionKey(AGENT_COMMAND, CWD, "second");
+    yield* routes.publish(route(SESSION_KEY, FIRST));
+    yield* routes.publish(route(second, SECOND, other));
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: adapter() },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    yield* Agent.operations.session();
+    yield* Agent.operations.session("second");
+
+    expect(environments(harness)).toEqual([OBSERVED_PATH, OTHER_PATH]);
+    expect(harness.closeRuntimes).toEqual([OBSERVED_PATH, OTHER_PATH]);
+  });
+
+  it("RT4: provider teardown settles a partition still holding a handle", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    yield* scoped(function* () {
+      yield* installLaunchStack(harness, trace, {
+        // Unadvertised: no ownership is taken, so the prompt registers no
+        // release and the handle it made is still live when the scope ends.
+        advertise: [],
+        attach: [],
+        adapters: { claude: adapter() },
+        routeStore: routes,
+      });
+      yield* scoped(function* () {
+        const stream = yield* Agent.operations.prompt("hello", {});
+        const subscription = yield* stream;
+        let next = yield* subscription.next();
+        while (!next.done) {
+          next = yield* subscription.next();
+        }
+      });
+      expect(harness.closeCalls).toEqual([]);
+    });
+
+    expect(harness.closeCalls).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier LU — the released unbound client-native contract
+ * (specs/native-agent-session-launch-spec.md §Durability and replay).
+ *
+ * A session constructed before XMD recorded which build accepted its identity
+ * keeps exactly the behavior that released: native resume, under the launcher
+ * name, with nothing written into the record it never had. What it may not do
+ * is anything that depends on knowing the build.
+ */
+describe("Tier LU — legacy unbound client-native", () => {
+  const ALLOCATED = "55555555-6666-7777-8888-999999999999";
+
+  const ADAPTER: NativeAdapter = {
+    launcher: "claude",
+    identity: "client-allocated",
+    binding: TEST_BINDING,
+    allocate: () => ALLOCATED,
+    create: (nativeSessionId, instructionFile) => [
+      "claude",
+      "--session-id",
+      nativeSessionId,
+      "--system-prompt-file",
+      instructionFile,
+    ],
+    resume: (nativeSessionId) => ["claude", "--resume", nativeSessionId],
+  };
+
+  const KEY = { provider: "acpx", agent: AGENT_COMMAND, sessionKey: SESSION_KEY };
+
+  function legacyRoute(): AgentSessionRoute {
+    return {
+      schema: "session-route.v1",
+      route: "client-native",
+      provider: "acpx",
+      agent: AGENT_COMMAND,
+      sessionKey: SESSION_KEY,
+      nativeSessionId: ALLOCATED,
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      launcher: "claude",
+    };
+  }
+
+  function legacyRecord(): PreparedLaunchRecord {
+    return {
+      phase: "prepared",
+      agent: "claude",
+      sessionKey: SESSION_KEY,
+      provider: "acpx",
+      nativeSessionId: ALLOCATED,
+      sessionState: "created",
+      instructionChannel: "claude.systemPromptFile",
+      instructionReconciliation: "installed",
+      identityProvenance: "client-allocated",
+      instructionsDigest: createHash("sha256").update(INSTRUCTIONS).digest("hex"),
+      instructions: INSTRUCTIONS,
+      cwd: CWD,
+      additionalDirectories: [],
+      permissionMode: "approve-reads",
+      launcher: "claude",
+    };
+  }
+
+  it("LU1: a legacy route still resumes natively, under the launcher name", function* () {
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+    const routes = createMemorySessionRouteStore();
+    const observer = createFakeObserver();
+    yield* routes.publish(legacyRoute());
+    yield* installLaunchStack(harness, trace, {
+      adapters: { claude: ADAPTER },
+      routeStore: routes,
+      observer: observer.observer,
+    });
+
+    yield* launch(INSTRUCTIONS);
+
+    // Exactly what the released contract does: the launcher name, the retained
+    // identity, no build observed, and no binding invented for a session that
+    // never recorded one.
+    expect(trace.launches[0]!.command).toEqual(["claude", "--resume", ALLOCATED]);
+    expect(observer.observed).toEqual([]);
+    const prepared = trace.records[0] as PreparedLaunchRecord;
+    expect(prepared.executableBinding).toBe(undefined);
+    expect(yield* routes.read(KEY)).toEqual(legacyRoute());
+  });
+
+  it("LU2: an incomplete legacy replay refuses before any live work", function* () {
+    // The predecessor prepared under a contract that recorded no build, so
+    // nothing here can show which build has this session's history. Resuming
+    // anyway would be answering the question by ignoring it.
+    for (const suffix of ["prepared", "prepared+detached"] as const) {
+      yield* scoped(function* () {
+        const harness = createFakeRuntime();
+        const trace = newTrace();
+        const routes = createMemorySessionRouteStore();
+        const observer = createFakeObserver();
+        yield* routes.publish(legacyRoute());
+        yield* installLaunchStack(harness, trace, {
+          adapters: { claude: ADAPTER },
+          routeStore: routes,
+          observer: observer.observer,
+        });
+        trace.replay = { prepared: legacyRecord(), suffix };
+
+        yield* Agent.operations.launch(launchRequest(INSTRUCTIONS));
+
+        const failed = trace.records.findLast((record) => record.failure);
+        expect([suffix, failed?.failure?.class]).toEqual([suffix, "executable-binding-refused"]);
+        expect([suffix, trace.launches]).toEqual([suffix, []]);
+        expect([suffix, harness.ensureCalls]).toEqual([suffix, []]);
+        // Nothing was upgraded on the way past.
+        expect([suffix, yield* routes.read(KEY)]).toEqual([suffix, legacyRoute()]);
+      });
+    }
+  });
+});
+
+/**
+ * Tier AO — an ACP-only profile reaches none of the machine-wide account
+ * (specs/acp-client-spec.md §ACPX provider).
+ *
+ * A specialized host may not acquire ordinary-run capabilities by omission. The
+ * workflow profile is exactly such a host: its sessions belong to a run, and
+ * the coordinator, the construction route and the executable observer describe
+ * a different account entirely. Stating both sets empty is what makes that
+ * true, and the only way to say it is to hand this provider all three seams and
+ * show none of them is touched.
+ */
+describe("Tier AO — explicit ACP-only capability", () => {
+  it("AO1: an ACP-only Claude prompt touches no coordinator, route or observer", function* () {
+    const touched: string[] = [];
+    const harness = createFakeRuntime();
+    const trace = newTrace();
+
+    yield* useFlatWorld(CWD);
+    const factory = createAcpxProvider({
+      createRuntime: harness.create,
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ claude: AGENT_COMMAND }),
+      // The whole point: stated, not inherited.
+      advertiseNativeLaunch: [],
+      advertiseClientNativeAttachment: [],
+      // Poison. Every one of these is available, and reaching any of them is
+      // this profile acting on an account it does not own.
+      coordinator: {
+        *coordinate(_key, _owner, body) {
+          touched.push("coordinator");
+          return Ok(yield* body({ quiesced() {} }));
+        },
+      },
+      routeStore: {
+        // deno-lint-ignore require-yield
+        *read(): Operation<AgentSessionRoute | undefined> {
+          touched.push("route:read");
+          return undefined;
+        },
+        // deno-lint-ignore require-yield
+        *publish(candidate) {
+          touched.push("route:publish");
+          return candidate;
+        },
+      },
+      executableObserver: {
+        // deno-lint-ignore require-yield
+        *observe() {
+          touched.push("observer");
+          throw new Error("this profile observes no build");
+        },
+      },
+    });
+
+    yield* scoped(function* () {
+      yield* factory({ defaultAgent: "claude", permissionMode: "deny-all" }, traceAuthority(trace));
+      const stream = yield* Agent.operations.prompt("what changed?", {});
+      const subscription = yield* stream;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      expect(next.value).toBe("hello world");
+    });
+
+    // The turn happened, through the ordinary unbound ACP path.
+    expect(harness.turns).toHaveLength(1);
+    expect(touched).toEqual([]);
   });
 });

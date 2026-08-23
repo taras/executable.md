@@ -95,6 +95,40 @@ You are somebody else entirely.
 <AssertEquals actual={layer.cause.failureClass} expected={"instructions-refused"} />
 </Test>
 
+## Joining the conversation a native process made
+
+A session the native process created is still a conversation, and `<Prompt>` is
+how a document joins it. Attaching does not convert it: the session keeps the
+identity XMD chose for it, and ACP is told to open that exact conversation
+rather than to make one.
+
+So the same named `<Session>` continues where the launches left off, and what it
+gets back is the answer that belongs to that conversation rather than to a fresh
+one.
+
+<TestAgent.Scenario agent="test-agent-client-native" session="attached" src="./NativeSessionLaunch.attached.md" />
+
+<Test name="a prompt continues the session a native launch constructed">
+<Agent name="test-agent-client-native">
+<Session.Launch session="attached">
+You are the repository implementor. Follow the approved plan.
+</Session.Launch>
+
+The second launch resumes rather than naming anything new — it allocates no
+identity at all — and the prompt afterwards joins that same conversation.
+
+<Session.Launch session="attached">
+You are the repository implementor. Follow the approved plan.
+</Session.Launch>
+
+<Session name="attached">
+<Prompt as="continued">where did we leave off?</Prompt>
+</Session>
+</Agent>
+
+<AssertMatch actual={continued} expected={/the plan you approved/} />
+</Test>
+
 An eager `<Session>` is the other order. Establishing one settles how that
 session was constructed — through ACP — and a launch that would name the same
 session is not asking to continue that conversation. It is asking to name a

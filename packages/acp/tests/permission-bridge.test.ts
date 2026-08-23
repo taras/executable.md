@@ -21,7 +21,7 @@ import {
 import type { Operation, Scope } from "effection";
 import { Agent } from "@executablemd/core";
 import type { Session } from "@executablemd/core";
-import type { AcpPermissionRequest } from "acpx/runtime";
+import type { AcpPermissionRequest } from "../src/acpx-runtime.ts";
 import { createPermissionBridge } from "../src/permission-bridge.ts";
 
 interface Release {

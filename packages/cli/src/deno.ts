@@ -13,7 +13,7 @@ import process from "node:process";
 import { API, useHostFiles } from "@executablemd/runtime";
 import { compileDataUri } from "@executablemd/core";
 import { runXmd } from "./cli.ts";
-import { useSessionCoordinator, useSessionRouteStore } from "./session-coordinator.ts";
+import { useMachineSessions } from "./session-coordinator.ts";
 import { useDenoWorkflowHost } from "./deno-workflow.ts";
 import {
   isCredentialHelperMode,
@@ -69,18 +69,15 @@ if (isCredentialHelperMode(process.argv.slice(2))) {
     // no host default: a run with no provider must fail rather than reach the
     // host by accident.
     yield* useHostFiles();
-    // Session ownership, which only a host with a kernel-released advisory lock
-    // and durable record replacement can offer. Passing it here is what lets an
-    // advertised session be acted on at all: a host that
-    // offers none refuses rather than risking two owners of one conversation.
+    // Machine-wide agent sessions: who owns one, how it was constructed, which
+    // build it belongs to, and which adapters this host has proven for native
+    // launch and for ACP attachment. Only a host with a kernel-released
+    // advisory lock, durable record replacement and real executable observation
+    // can offer them, and passing them here is what lets an advertised session
+    // be acted on at all — a host that offers none refuses rather than risking
+    // two owners of one conversation.
     // Helper mode receives neither this nor the workflow host: it is not the
     // public CLI and assembles none of it.
-    yield* runXmd(
-      args,
-      useDenoService,
-      () => useDenoWorkflowHost(HELPER),
-      useSessionCoordinator(),
-      { routeStore: useSessionRouteStore() },
-    );
+    yield* runXmd(args, useDenoService, () => useDenoWorkflowHost(HELPER), useMachineSessions());
   });
 }

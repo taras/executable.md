@@ -61,7 +61,8 @@ export type LaunchFailureClass =
   | "process-creation-failed"
   | "native-exit"
   | "session-busy"
-  | "session-recovery-required";
+  | "session-recovery-required"
+  | "executable-binding-refused";
 
 /**
  * `session-busy` is contention, not breakage: another XMD owner holds the
@@ -69,6 +70,13 @@ export type LaunchFailureClass =
  * exits succeeds. `session-recovery-required` is the conservative one — the
  * last owner never proved it stopped, so nothing here can say the session is
  * free, and no elapsed time, pid or released lock changes that.
+ *
+ * `executable-binding-refused` is the build question: the session was
+ * established by one build of a provider executable, and this run could not
+ * show it is talking to that same build. Resolution, canonicalization,
+ * executable-file validation, version parsing, digesting, schema recognition,
+ * equality, and a session established before any build was recorded all end
+ * here.
  */
 export interface LaunchFailure {
   class: LaunchFailureClass;
@@ -89,6 +97,45 @@ export interface LaunchFailure {
  * the record.
  */
 export type IdentityProvenance = "provider-returned" | "client-allocated";
+
+/**
+ * Which build of a provider executable a session was established against.
+ *
+ * A client-allocated session is only meaningful while the build that created
+ * it can be reproduced. Two builds of the same provider accept the same
+ * identity and disagree silently about what it names, so a session whose build
+ * cannot be reproduced is refused rather than resumed.
+ *
+ * What is retained is deliberately not a path: a path says where a build was,
+ * which stops being true, while a version and a digest say which build it was,
+ * which does not. That also keeps the record free of host layout.
+ */
+export interface ExecutableBuildBindingV1 {
+  readonly schema: "executable-build.v1";
+  readonly reportedVersion: string;
+  readonly executableDigest: {
+    readonly algorithm: "sha256";
+    readonly value: string;
+  };
+}
+
+/**
+ * Whether two bindings name the same build.
+ *
+ * Equality is over what was retained, so the same build reached through a
+ * different path is compatible and a different build at the same path is not.
+ */
+export function sameExecutableBuild(
+  left: ExecutableBuildBindingV1,
+  right: ExecutableBuildBindingV1,
+): boolean {
+  return (
+    left.schema === right.schema &&
+    left.reportedVersion === right.reportedVersion &&
+    left.executableDigest.algorithm === right.executableDigest.algorithm &&
+    left.executableDigest.value === right.executableDigest.value
+  );
+}
 
 /**
  * What one provider retained about the session it prepared.
@@ -117,6 +164,16 @@ export interface PreparedLaunchRecord {
    * could silently replace.
    */
   identityProvenance: IdentityProvenance;
+  /**
+   * Which build accepted the client-allocated identity, present exactly when
+   * this provider binds one. A provider that returns its own identity owns its
+   * own session lifetime and binds nothing, so it carries none.
+   *
+   * Optional because the client-allocated path was released before any build
+   * was observed. A record without it is legacy history: readable, resumable by
+   * the native-only contract that wrote it, and never an attachable session.
+   */
+  executableBinding?: ExecutableBuildBindingV1;
   instructionsDigest: string;
   instructions: string;
   cwd: string;

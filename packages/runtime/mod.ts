@@ -161,3 +161,13 @@ export {
   createDenoAgentSessionCoordinator,
   hasDenoAgentSessionCoordinator,
 } from "./deno-agent-session-coordinator.ts";
+export { ExecutableObservationError } from "./executable-observer.ts";
+export type {
+  ExecutableObserver,
+  ExecutableRefusal,
+  ObservedExecutable,
+} from "./executable-observer.ts";
+export {
+  createDenoExecutableObserver,
+  hasDenoExecutableObserver,
+} from "./deno-executable-observer.ts";

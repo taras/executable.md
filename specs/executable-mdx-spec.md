@@ -8913,6 +8913,7 @@ Each row names the derivation it kills.
 | AF16-AF20 | Prompt-failure policy | Absent by default; forces `throwOnError` when it says yes; an explicit `throwOnError` wins without consulting it; a repository `Prompt` never consults it |
 | AF21 | `<Session.Launch>` is a caller, not a second implementation | It renders its body and calls `Agent.launch()` with what it rendered; the phase sequencing, retention and result belong to that one canonical operation, and the component holds none of them |
 | AF22 | A refused launch is an observation | The failure is raised as an error segment whose cause carries `phase` and `failureClass`, so `<AssertThrows as="…">` binds a value an author can assert which refusal it was on, rather than the wording of a message |
+| AF23 | A `<Session>` joins what a launch constructed | The same named `<Session>` after a client-native `<Session.Launch>` attaches to the conversation the native process made, and a `<Prompt>` in it answers from that conversation's history rather than from a new one. The route is unchanged: not republished, not converted, and no second identity allocated. Authored whole in `packages/test-agent/src/NativeSessionLaunch.test.md`; a provider that reported another conversation fails it |
 
 ### Tier CR — Component registration and resolution
 
@@ -9522,6 +9523,7 @@ document against a real run database.
 |---|------|--------|
 | WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
+| WSR3 | Claude belongs to the run | A `<Session>` naming `claude` — the agent `xmd run` owns machine-wide — runs under this profile, commits its `acpx.agentSessionId` mapping, and a restart reattaches the same assertion and leaves the row unchanged. Removing the profile's explicit empty capability sets fails it before the agent is contacted |
 
 ### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
 
@@ -9551,6 +9553,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
 | WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
 | WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
+| WAL8 | ACP-only Claude | The profile states both ordinary-run native capability sets empty, so an agent `xmd run` would own machine-wide is served here over ACP alone. A provider handed a coordinator, a route store and an executable observer under those empty sets reaches none of them for a Claude prompt |
 | WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
 
 ### Tier WFX — A killed run resumes from its frontier

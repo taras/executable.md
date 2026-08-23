@@ -25,13 +25,15 @@ export type {
   SessionRouteContext,
 } from "./src/provider.ts";
 /** The agent ACPX selects when nothing else is configured. */
-export { DEFAULT_AGENT_NAME } from "acpx/runtime";
+export { DEFAULT_AGENT_NAME } from "./src/acpx-runtime.ts";
 
 /**
  * Native session launch: the adapters whose resume command shape this package
- * knows, and the (empty by default) set it is willing to hand a session to.
+ * knows, and the two separate sets it is willing to use them for — handing a
+ * session to a native UI, and attaching ACP to one a native process made.
  */
 export {
+  ADVERTISED_CLIENT_NATIVE_ATTACHMENT,
   ADVERTISED_NATIVE_LAUNCH,
   knownNativeAdapters,
   nativeAdapterFor,
@@ -40,6 +42,7 @@ export { allocatesIdentity } from "./src/native-launch.ts";
 export type {
   ClientAllocatedAdapter,
   NativeAdapter,
+  NativeBinding,
   ProviderReturnedAdapter,
 } from "./src/native-launch.ts";
 
@@ -64,7 +67,7 @@ export type {
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
   AcpSessionRecord,
-} from "acpx/runtime";
+} from "./src/acpx-runtime.ts";
 
 /**
  * ACPX's persistent session store, for a host arranging its own retention. The
@@ -95,4 +98,9 @@ export {
   routeNamesKey,
   serializeAgentSessionRoute,
 } from "./src/session-route.ts";
-export type { AgentSessionRouteStore, AgentSessionRouteV1 } from "./src/session-route.ts";
+export type {
+  AgentSessionRoute,
+  AgentSessionRouteStore,
+  AgentSessionRouteV1,
+  AgentSessionRouteV2,
+} from "./src/session-route.ts";

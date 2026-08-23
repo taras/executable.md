@@ -35,12 +35,13 @@ interface AgentApi {
   performs no model turn, and a provider that answers `prompt()` does not
   thereby answer it: native session launch is its own capability, installed on
   its own.
-- Built-in **`claude` is advertised**, as a client-allocated adapter: its
+- Built-in **`claude` is advertised**, for two separate capabilities: native
+  launch, and attaching ACP to a session a native process constructed. Its
   sessions are named by XMD and created by the native process
-  (specs/native-agent-session-launch-spec.md). So the ownership and
-  construction-route requirements below apply to it on every host, and only the
-  hosts that assemble both a coordinator and a route store — Deno and the
-  compiled binary — can serve it. `codex` remains unadvertised.
+  (specs/native-agent-session-launch-spec.md). So the ownership,
+  construction-route and executable-observation requirements below apply to it
+  on every host, and only the hosts that assemble all three — Deno and the
+  compiled binary — can serve it. `codex` remains unadvertised for both.
 - Every operation that can act on an **advertised** session — `session()`, a
   subscribed `prompt()` stream, a launch, and an incomplete launch replay —
   takes exclusive ownership of it first, through the session coordinator its
@@ -52,12 +53,15 @@ interface AgentApi {
   effect — no availability probe, no runtime, no route read, no identity, no
   child. An agent that is not advertised keeps ordinary ACP behavior on every
   host, Codex included.
-- The host also passes in a **construction-route store**, directly and from the
-  same trusted root as the coordinator. It is required only for an advertised
-  agent whose adapter names its own sessions: a provider that returns the
-  identity constructs nothing a route governs, and keeps its behavior unchanged
-  on a host that keeps no routes. A host missing it refuses that agent before
-  any provider effect, on the same terms as a missing coordinator.
+- The host also passes in a **construction-route store** and an **executable
+  observer**, directly and from the same trusted root as the coordinator. Both
+  are required only for an advertised agent whose adapter names its own
+  sessions: a provider that returns the identity constructs nothing a route
+  governs and binds no build, and keeps its behavior unchanged on a host that
+  has neither. A host missing either refuses that agent before any provider
+  effect, on the same terms as a missing coordinator. The observer is not a
+  contextual Api for the same reason the coordinator is not: executable
+  validation decides which retained history may be accepted.
 - While ownership is held and before any provider construction effect, the
   provider reconciles the route. A first `session()` or subscribed `prompt()`
   publishes or adopts `acp-first` before runtime creation, `ensureSession()` or
@@ -68,6 +72,17 @@ interface AgentApi {
   case it publishes or adopts `acp-first` and retains `identity-unavailable`.
   Publication is create-once, so the loser of either order adopts the winner,
   and no route converts.
+- A `session()` or subscribed `prompt()` meeting a **bound** `client-native`
+  route **attaches** to it. Under the same ownership it reobserves the build and
+  compares the binding exactly, requires any retained ACP arrangement to assert
+  that route's identity, selects the runtime for `(resolved agent command,
+  binding)`, calls `ensureSession()` with `resumeSessionId` equal to that
+  identity, and requires the returned canonical assertion to equal it before a
+  turn. The observed executable path reaches only that runtime's transient child
+  environment. A legacy unbound `client-native` route, an agent this host has
+  not advertised for attachment, build drift, a disagreeing arrangement and a
+  differing returned identity each refuse before a turn and create no substitute
+  conversation.
 - A `session()` or subscribed `prompt()` that meets a `client-native` route
   raises `AgentSessionRouteError` before runtime creation, ensure, turn, close
   or accepted history. It manufactures no launch failure, because no launch was
@@ -314,6 +329,16 @@ received.
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.
 
+The profile states both native capability sets empty for the same reason. A
+workflow session belongs to a run — named by a row in the run's own database,
+arranged in the run's own sidecar, continued by reattaching that row — and the
+machine-wide account of ownership, construction routes and executable builds
+describes a different thing entirely. Inheriting the package's advertised sets
+by omission would make an ordinary workflow Claude prompt demand machine
+ownership and a route this profile has no way to give it. The profile therefore
+supplies no session coordinator, no route store and no executable observer, and
+never consults their namespace.
+
 A native permission request under this profile does not reach
 `Agent.requestPermission`. The provider answers it: a reject option when ACP
 offered one, otherwise cancellation — and the turn the request belonged to fails
@@ -493,10 +518,23 @@ none.
   Promise-returning leaves are consumed with `until`; the provider's only
   Promise-producing adapter is the `onPermissionRequest` callback, and the bridge
   itself is operation-based.
+- **Runtime partitions.** Ordinary ACP-first work uses one unbound runtime. A
+  bound attachment uses one runtime per `(resolved agent command, executable
+  build binding)`, created with the observed path in `agentProcessEnv` and torn
+  down when its last handle closes. A managed session retains the partition that
+  created its handle, and every turn, close, detach and teardown goes through
+  that one — reaching for "the" runtime afterwards would open a second child for
+  a session the first already owns. `agentProcessEnv` is a local patch to the
+  vendored ACP runtime; `packages/acp/vendor/acpx/PROVENANCE.md` records why it
+  exists and what removes it.
 - **Host-owned dependencies.** `AcpxProviderDependencies` carries what a host,
-  rather than a document, decides: `agentCwd` answers with the directory an Agent
-  runs in when the contextual one is not a directory an agent process could stand
-  in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
+  rather than a document, decides: `advertiseNativeLaunch` and
+  `advertiseClientNativeAttachment` are two separate lists, and a profile whose
+  session authority differs from ordinary `xmd run` states both explicitly
+  rather than inheriting the package's defaults by omission;
+  `executableObserver` says how this host observes the build behind an
+  executable; `agentCwd` answers with the directory an Agent runs in when the
+  contextual one is not a directory an agent process could stand in; `mcpServers` and `newSessionOptions` are passed to runtime creation and to
   `ensureSession()` exactly as given; `permissions: "strict"` selects the
   workflow profile's permission path; and `sessions` replaces directory-walk
   placement with a host's own, and is where a retained session this host cannot

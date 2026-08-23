@@ -13,8 +13,8 @@
 
 import { until } from "effection";
 import type { Operation } from "effection";
-import { createRuntimeStore } from "acpx/runtime";
-import type { AcpSessionStore } from "acpx/runtime";
+import { createRuntimeStore } from "./acpx-runtime.ts";
+import type { AcpSessionStore } from "./acpx-runtime.ts";
 
 /** Where ACPX keeps the sessions one host owns. */
 export type AcpxSessionStore = AcpSessionStore;

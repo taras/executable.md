@@ -39,7 +39,7 @@ import {
   useFlatWorld,
   useGitWorld,
 } from "./helpers.ts";
-import type { AcpPermissionRequest } from "acpx/runtime";
+import type { AcpPermissionRequest } from "../src/acpx-runtime.ts";
 import type { FakeRuntimeHarness } from "./helpers.ts";
 
 const CWD = "/work";

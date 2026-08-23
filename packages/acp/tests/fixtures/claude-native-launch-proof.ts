@@ -45,7 +45,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
-import { createAgentRegistry } from "acpx/runtime";
+import { createAgentRegistry } from "../../src/acpx-runtime.ts";
 import { agentSessionKeyDigest } from "@executablemd/runtime";
 import { ADVERTISED_NATIVE_LAUNCH } from "../../src/native-launch.ts";
 

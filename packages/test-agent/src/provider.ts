@@ -19,7 +19,7 @@ import type {
 } from "@executablemd/acp";
 import type { AgentSessionRouteStore, NativeAdapter } from "@executablemd/acp";
 import { useRouteSlot } from "./route-slot.ts";
-import type { AgentSessionCoordinator } from "@executablemd/runtime";
+import type { AgentSessionCoordinator, ExecutableObserver } from "@executablemd/runtime";
 import type { AcpAgentRegistry, AcpSessionRecord, AcpSessionStore } from "acpx/runtime";
 
 /**
@@ -70,6 +70,8 @@ export interface TestAgentProviderOptions {
   coordinator?: AgentSessionCoordinator;
   /** How this partition's sessions were constructed. Its own, like the rest. */
   routeStore?: AgentSessionRouteStore;
+  /** Which build this partition observes. Its own controlled one. */
+  executableObserver?: ExecutableObserver;
   dependencies?: AcpxProviderDependencies;
 }
 
@@ -103,10 +105,24 @@ export const TEST_AGENT_NATIVE_ADAPTER: NativeAdapter = {
  */
 export const TEST_AGENT_CLIENT_NATIVE = "test-agent-client-native";
 
+/** The version this partition's controlled build reports. Shaped like a real one. */
+export const TEST_AGENT_BUILD_VERSION = "9.9.9 (Test Agent)";
+
 /** A controlled adapter that names its own sessions, in the test agent's dialect. */
 export const TEST_AGENT_CLIENT_NATIVE_ADAPTER: NativeAdapter = {
   launcher: TEST_AGENT_LAUNCHER,
   identity: "client-allocated",
+  binding: {
+    command: "xmd-test-agent-ui",
+    version: (output) =>
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => /^\d+\.\d+\.\d+ \(Test Agent\)$/.test(line)),
+    // No pinned adapter command: this partition's registry answers with the
+    // scenario route, and pinning one would name a process that does not exist.
+    environment: (livePath) => ({ XMD_TEST_AGENT_EXECUTABLE: livePath }),
+  },
   allocate: () => randomUUID(),
   create: (nativeSessionId, instructionFile) => [
     "xmd-test-agent-ui",
@@ -141,6 +157,10 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
       sessionStore: createMemorySessionStore(),
       agentRegistry: registry,
       advertiseNativeLaunch: options.agents,
+      // Both gates, stated separately, because they are separate capabilities.
+      // This partition proves them the same way — deterministically — so it
+      // advertises the same names for each.
+      advertiseClientNativeAttachment: options.agents,
       // Every agent this partition serves gets the provider-returned adapter,
       // except the one name reserved for the client-allocated contract.
       nativeAdapters: Object.fromEntries(
@@ -170,6 +190,7 @@ export function* useTestAgentProvider(options: TestAgentProviderOptions): Operat
         }),
       ...(options.coordinator ? { coordinator: options.coordinator } : {}),
       ...(options.routeStore ? { routeStore: options.routeStore } : {}),
+      ...(options.executableObserver ? { executableObserver: options.executableObserver } : {}),
       ...(options.dependencies?.createRuntime
         ? { createRuntime: options.dependencies.createRuntime }
         : {}),

@@ -32,7 +32,13 @@ import {
   parseAgentSessionRoute,
   serializeAgentSessionRoute,
 } from "../src/session-route.ts";
-import type { AgentSessionRouteStore, AgentSessionRouteV1 } from "../src/session-route.ts";
+import type {
+  AgentSessionRoute,
+  AgentSessionRouteStore,
+  AgentSessionRouteV1,
+  AgentSessionRouteV2,
+} from "../src/session-route.ts";
+import type { ExecutableBuildBindingV1 } from "@executablemd/core";
 import { cliBase } from "@executablemd/test-support/launch";
 
 const KEY: AgentSessionKey = {
@@ -68,6 +74,22 @@ function clientNative(
   };
 }
 
+const BUILD: ExecutableBuildBindingV1 = {
+  schema: "executable-build.v1",
+  reportedVersion: "2.1.241 (Claude Code)",
+  executableDigest: { algorithm: "sha256", value: "c".repeat(64) },
+};
+
+/** The bound form, which exists only for `client-native`. */
+function boundClientNative(overrides: Partial<AgentSessionRouteV2> = {}): AgentSessionRouteV2 {
+  return {
+    ...(clientNative() as Extract<AgentSessionRouteV1, { route: "client-native" }>),
+    schema: "session-route.v2",
+    executableBinding: BUILD,
+    ...overrides,
+  };
+}
+
 function* workspace(): Operation<string> {
   const root = path.join(os.tmpdir(), `xmd-sr-${randomUUID()}`);
   yield* ensureDir(root);
@@ -90,7 +112,7 @@ function* stores(): Operation<{ name: string; store: AgentSessionRouteStore }[]>
 
 describe("Tier SR — the construction route", () => {
   it("SR1: both members round-trip through the strict reader", function* () {
-    for (const route of [acpFirst(), clientNative()]) {
+    for (const route of [acpFirst(), clientNative(), boundClientNative()]) {
       const text = serializeAgentSessionRoute(route);
       expect(parseAgentSessionRoute(JSON.parse(text))).toEqual(route);
     }
@@ -129,27 +151,17 @@ describe("Tier SR — the construction route", () => {
     const good = clientNative() as Record<string, unknown>;
     const cases: [string, unknown][] = [
       ["not an object", "session-route.v1"],
-      ["unknown schema", { ...good, schema: "session-route.v2" }],
+      ["unknown schema", { ...good, schema: "session-route.v3" }],
       ["unknown route", { ...good, route: "native-first" }],
       ["extra member", { ...good, origin: "migrated" }],
       ["missing member", (({ launcher: _l, ...rest }) => rest)(good)],
       ["empty session key", { ...good, sessionKey: "" }],
       ["short instruction digest", { ...good, instructionsDigest: "b".repeat(63) }],
       ["wrong provenance", { ...good, identityProvenance: "provider-returned" }],
-      // A build binding belongs to the deferred ACP-reattachment work. Here it
-      // is simply a member this format does not have, and an extra member is
-      // state this build cannot account for.
-      [
-        "a retained build binding",
-        {
-          ...good,
-          executableBinding: {
-            schema: "executable-build.v1",
-            reportedVersion: "2.1.235",
-            executableDigest: { algorithm: "sha256", value: "c".repeat(64) },
-          },
-        },
-      ],
+      // V1 is the released unbound form. A binding is a member that format
+      // does not have, and an extra member is state this build cannot account
+      // for — which is what keeps a V1 record from being read as a V2 one.
+      ["a retained build binding", { ...good, executableBinding: BUILD }],
       ["an executable path", { ...good, executablePath: "/usr/local/bin/claude" }],
       // The suspended branch's shape was never a released compatibility
       // boundary, so it is unknown state like any other.
@@ -383,5 +395,123 @@ describe("Tier SR — the construction route", () => {
 
   it("SR11: this host keeps durable routes", function* () {
     expect(hasDenoSessionRouteStore()).toBe(true);
+  });
+});
+
+/**
+ * Tier SV — the bound V2 client-native route
+ * (specs/native-agent-session-launch-spec.md §Construction route).
+ *
+ * V2 adds one fact V1 never had: which build accepted the identity XMD chose.
+ * It exists only for `client-native`, because ACP-first construction gained
+ * nothing — and a V1 record is never read as a V2 one, in either direction.
+ */
+describe("Tier SV — the bound construction route", () => {
+  it("SV1: a bound record carries the binding and nothing else", function* () {
+    const text = serializeAgentSessionRoute(boundClientNative());
+    expect(Object.keys(JSON.parse(text)).sort()).toEqual([
+      "agent",
+      "executableBinding",
+      "identityProvenance",
+      "instructionsDigest",
+      "launcher",
+      "nativeSessionId",
+      "provider",
+      "route",
+      "schema",
+      "sessionKey",
+    ]);
+    // No path: a path says where a build was, which stops being true, and
+    // names host layout besides.
+    expect(text).not.toContain("/");
+  });
+
+  it("SV2: there is no bound acp-first form", function* () {
+    // A second schema for a shape that gained no fact would be a version number
+    // with nothing behind it.
+    expect(parseAgentSessionRoute({ ...acpFirst(), schema: "session-route.v2" })).toBe(undefined);
+    expect(
+      parseAgentSessionRoute({
+        ...acpFirst(),
+        schema: "session-route.v2",
+        executableBinding: BUILD,
+      }),
+    ).toBe(undefined);
+  });
+
+  it("SV3: a bound record without an exact binding refuses", function* () {
+    const good = boundClientNative() as unknown as Record<string, unknown>;
+    const cases: [string, unknown][] = [
+      ["no binding at all", (({ executableBinding: _b, ...rest }) => rest)(good)],
+      ["unknown binding schema", { ...good, executableBinding: { ...BUILD, schema: "v2" } }],
+      ["extra binding member", { ...good, executableBinding: { ...BUILD, path: "/bin/claude" } }],
+      ["empty version", { ...good, executableBinding: { ...BUILD, reportedVersion: "" } }],
+      [
+        "another algorithm",
+        {
+          ...good,
+          executableBinding: {
+            ...BUILD,
+            executableDigest: { algorithm: "sha1", value: "c".repeat(64) },
+          },
+        },
+      ],
+      [
+        "uppercase digest",
+        {
+          ...good,
+          executableBinding: {
+            ...BUILD,
+            executableDigest: { algorithm: "sha256", value: "C".repeat(64) },
+          },
+        },
+      ],
+      [
+        "short digest",
+        {
+          ...good,
+          executableBinding: {
+            ...BUILD,
+            executableDigest: { algorithm: "sha256", value: "c".repeat(63) },
+          },
+        },
+      ],
+      ["binding is not a record", { ...good, executableBinding: "executable-build.v1" }],
+      ["extra member beside it", { ...good, executablePath: "/usr/local/bin/claude" }],
+    ];
+    for (const [name, value] of cases) {
+      expect([name, parseAgentSessionRoute(value)]).toEqual([name, undefined]);
+    }
+  });
+
+  it("SV4: serialization preserves the schema it was given", function* () {
+    // Nothing here upgrades a route. A V1 record read and written again is
+    // still V1, which is what keeps a build observed today from being written
+    // into a session that never recorded one.
+    for (const route of [clientNative(), boundClientNative()] as AgentSessionRoute[]) {
+      const round = parseAgentSessionRoute(JSON.parse(serializeAgentSessionRoute(route)));
+      expect(round?.schema).toBe(route.schema);
+    }
+  });
+
+  it("SV5: both stores publish a bound route create-once and adopt one winner", function* () {
+    for (const { name, store } of yield* stores()) {
+      const winner = yield* store.publish(boundClientNative());
+      expect([name, winner]).toEqual([name, boundClientNative()]);
+      // A later caller with another build does not replace the account that
+      // already describes this session; it reads it.
+      const loser = yield* store.publish(
+        boundClientNative({
+          nativeSessionId: "99999999-0000-0000-0000-000000000000",
+          executableBinding: {
+            schema: "executable-build.v1",
+            reportedVersion: "2.1.242 (Claude Code)",
+            executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+          },
+        }),
+      );
+      expect([name, loser]).toEqual([name, boundClientNative()]);
+      expect([name, yield* store.read(KEY)]).toEqual([name, boundClientNative()]);
+    }
   });
 });

@@ -46,6 +46,7 @@ import { command, installControlledLauncher, readTextFile } from "@executablemd/
 import { Test } from "@executablemd/testing";
 import { NativeLaunchObserver, useTestAgentController } from "./controller.ts";
 import type { ScenarioHandle, TestAgentControllerInternals } from "./controller.ts";
+import { createControlledExecutableObserver } from "./executable-observer.ts";
 import { createDeterministicSessionCoordinator } from "./session-coordinator.ts";
 import { TEST_AGENT_CLIENT_NATIVE, TEST_AGENT_PROVIDER, useTestAgentProvider } from "./provider.ts";
 import type { SessionRouting } from "./provider.ts";
@@ -283,6 +284,9 @@ export function* installTestAgentComponents(): Operation<void> {
           // owning two sessions and never exclude each other — and so a route
           // one test published is not an account the next test has to live with.
           coordinator: createDeterministicSessionCoordinator(),
+          // And its own build, so a client-allocated session in one test is
+          // bound to a build the next test does not share.
+          executableObserver: createControlledExecutableObserver().observer,
           routeStore: createMemorySessionRouteStore(),
         });
         return { provider, boundaryScope, scenarios, pending, bySessionKey };

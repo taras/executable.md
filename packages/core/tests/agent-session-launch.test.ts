@@ -22,7 +22,13 @@ import * as os from "node:os";
 import { execute } from "../src/execute.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { Session, SessionLaunchResult } from "../src/agent/agent-api.ts";
-import type { ExitedLaunchRecord, PreparedLaunchRecord } from "../src/agent/launch.ts";
+import type {
+  ExecutableBuildBindingV1,
+  ExitedLaunchRecord,
+  IdentityProvenance,
+  PreparedLaunchRecord,
+} from "../src/agent/launch.ts";
+import { sameExecutableBuild } from "../src/agent/launch.ts";
 import { parsePrepared } from "../src/agent/launch-journal.ts";
 import type { AgentLaunchRequest } from "../src/agent/launch-request.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
@@ -57,6 +63,10 @@ interface LaunchStub {
   fabricate?: boolean;
   /** Report that ACP ownership could not be released. */
   detachRefused?: boolean;
+  /** Who the prepared record says chose the identity. */
+  identityProvenance?: IdentityProvenance;
+  /** The build the prepared record says accepted that identity. */
+  executableBinding?: ExecutableBuildBindingV1;
 }
 
 function digest(text: string): string {
@@ -116,7 +126,7 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   sessionState: "created",
                   instructionChannel: "stub.systemPrompt",
                   instructionReconciliation: "installed",
-                  identityProvenance: "provider-returned",
+                  identityProvenance: stub.identityProvenance ?? "provider-returned",
                   instructionsDigest: digest(request.instructions),
                   instructions: request.instructions,
                   cwd: request.cwd,
@@ -124,6 +134,9 @@ function createLaunchStub(overrides: Partial<LaunchStub> = {}): LaunchStub {
                   permissionMode: request.permissionMode,
                   launcher: "stub",
                 };
+                if (stub.executableBinding !== undefined) {
+                  prepared.executableBinding = stub.executableBinding;
+                }
                 return prepared;
               },
               // deno-lint-ignore require-yield
@@ -982,26 +995,62 @@ describe("Tier FS — the final public launch surface", () => {
  * a released format that could not have been client-allocated — is pinned to
  * the weaker claim.
  */
+const BINDING: ExecutableBuildBindingV1 = {
+  schema: "executable-build.v1",
+  reportedVersion: "2.1.241 (Claude Code)",
+  executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+};
+
+/** The same build as retained data, so a parser case starts from unknown. */
+const BOUND: Record<string, Json> = {
+  schema: "executable-build.v1",
+  reportedVersion: "2.1.241 (Claude Code)",
+  executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+};
+
+function prepared(overrides: Record<string, Json> = {}): Record<string, Json> {
+  return {
+    phase: "prepared",
+    agent: "claude",
+    sessionKey: "xmd:v1:a",
+    provider: "acpx",
+    nativeSessionId: "11111111-2222-3333-4444-555555555555",
+    sessionState: "created",
+    instructionChannel: "claude.systemPromptFile",
+    instructionReconciliation: "installed",
+    instructionsDigest: "a".repeat(64),
+    instructions: "go",
+    cwd: "/repo",
+    additionalDirectories: [],
+    permissionMode: "deny-all",
+    launcher: "claude",
+    ...overrides,
+  };
+}
+
+/**
+ * Run one launch to completion and then replay it, proving the second run
+ * reaches no provider and starts no child whatever the first one retained.
+ */
+function* replayIsCold(retained: Partial<LaunchStub>): Operation<void> {
+  const stream = new InMemoryStream();
+  const stub = createLaunchStub(retained);
+  const first = yield* runDoc(LAUNCH, { stream, stub });
+  expect(first.result.ok ? "" : first.result.error.message).toBe("");
+  expect(stub.factoryActivations).toBe(1);
+  expect(first.launcher.requests.length).toBe(1);
+
+  const second = yield* runDoc(LAUNCH, { stream, stub });
+  expect(second.result.ok).toBe(true);
+  expect(second.output).toBe(first.output);
+  expect(stub.factoryActivations).toBe(1);
+  expect(stub.preparations.length).toBe(1);
+  expect(second.launcher.reserved).toBe(0);
+  expect(second.launcher.requests.length).toBe(0);
+}
+
 describe("Tier PV — identity provenance", () => {
-  function record(overrides: Record<string, Json> = {}): Record<string, Json> {
-    return {
-      phase: "prepared",
-      agent: "claude",
-      sessionKey: "xmd:v1:a",
-      provider: "acpx",
-      nativeSessionId: "11111111-2222-3333-4444-555555555555",
-      sessionState: "created",
-      instructionChannel: "claude.systemPromptFile",
-      instructionReconciliation: "installed",
-      instructionsDigest: "a".repeat(64),
-      instructions: "go",
-      cwd: "/repo",
-      additionalDirectories: [],
-      permissionMode: "deny-all",
-      launcher: "claude",
-      ...overrides,
-    };
-  }
+  const record = prepared;
 
   it("PV1: a released #518 record has no provenance and reads as provider-returned", function* () {
     // The one inference this parser makes, and it only ever infers the weaker
@@ -1025,39 +1074,124 @@ describe("Tier PV — identity provenance", () => {
     }
   });
 
-  it("PV4: state this build cannot account for refuses", function* () {
-    // An executable build binding belongs to the deferred ACP-reattachment
-    // work, not to this release. A record carrying one describes a session this
-    // build has no way to compare, so it refuses rather than reading past it.
+  it("PV4: a provider-returned record carries no build binding", function* () {
+    // A provider that names its own session owns its own session lifetime and
+    // binds no build, so a binding beside one describes a check nothing
+    // performed.
     expect(
-      parsePrepared(
-        record({
-          identityProvenance: "client-allocated",
-          executableBinding: {
-            schema: "executable-build.v1",
-            reportedVersion: "2.1.235 (Claude Code)",
-            executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
-          },
-        }),
-      ),
+      parsePrepared(record({ identityProvenance: "provider-returned", executableBinding: BOUND })),
     ).toBe(undefined);
+    // Absent provenance reads as provider-returned, so the same pairing refuses
+    // through the compatibility inference too.
+    expect(parsePrepared(record({ executableBinding: BOUND }))).toBe(undefined);
   });
 
-  it("PV5: the settled failure classes round-trip, and no other does", function* () {
+  it("PV5: the settled failure classes round-trip", function* () {
     for (const failureClass of [
       "identity-unavailable",
       "instructions-refused",
       "process-creation-failed",
       "session-busy",
       "session-recovery-required",
+      "executable-binding-refused",
     ]) {
       const parsed = parsePrepared(record({ failure: { class: failureClass, message: "why" } }));
       expect([failureClass, parsed?.failure?.class]).toEqual([failureClass, failureClass]);
     }
-    // Not a class this release settles: the build question it names is not one
-    // anything here can ask.
+  });
+});
+
+/**
+ * Tier EB — the executable build binding, read and compared strictly
+ * (specs/native-agent-session-launch-spec.md §Provider-native identity).
+ *
+ * A client-allocated identity means one thing only while the build that
+ * accepted it can be recognized later, so the binding is exact on the way in
+ * and exact on the way out. Core observes no executables: it reads what was
+ * retained and says whether two of them name the same build.
+ */
+describe("Tier EB — executable build binding", () => {
+  function bound(overrides: Record<string, Json> = {}): Record<string, Json> {
+    return prepared({ identityProvenance: "client-allocated", ...overrides });
+  }
+
+  it("EB1: a bound client-allocated preparation round-trips unchanged", function* () {
+    const parsed = parsePrepared(bound({ executableBinding: BOUND }));
+    expect(parsed?.identityProvenance).toBe("client-allocated");
+    expect(parsed?.executableBinding).toEqual(BOUND);
+  });
+
+  it("EB2: a legacy client-allocated preparation without a binding still parses", function* () {
+    // The client-allocated path was released before any build was observed.
+    // That history stays readable as the native-only session it is; whether it
+    // may still do live work is the provider's decision, not this parser's.
+    const parsed = parsePrepared(bound());
+    expect(parsed?.identityProvenance).toBe("client-allocated");
+    expect(parsed?.executableBinding).toBe(undefined);
+  });
+
+  it("EB3: an inexact binding refuses rather than being read past", function* () {
+    const cases: [string, Json][] = [
+      ["unknown schema", { ...BOUND, schema: "executable-build.v2" }],
+      ["extra member", { ...BOUND, path: "/usr/local/bin/claude" }],
+      [
+        "missing member",
+        { schema: "executable-build.v1", reportedVersion: "2.1.241 (Claude Code)" },
+      ],
+      ["empty version", { ...BOUND, reportedVersion: "" }],
+      ["non-string version", { ...BOUND, reportedVersion: 2 }],
+      [
+        "another algorithm",
+        { ...BOUND, executableDigest: { algorithm: "sha1", value: "d".repeat(64) } },
+      ],
+      [
+        "uppercase digest",
+        { ...BOUND, executableDigest: { algorithm: "sha256", value: "D".repeat(64) } },
+      ],
+      [
+        "short digest",
+        { ...BOUND, executableDigest: { algorithm: "sha256", value: "d".repeat(63) } },
+      ],
+      [
+        "extra digest member",
+        {
+          ...BOUND,
+          executableDigest: { algorithm: "sha256", value: "d".repeat(64), size: 12 },
+        },
+      ],
+      ["digest is not a record", { ...BOUND, executableDigest: "d".repeat(64) }],
+    ];
+    for (const [name, executableBinding] of cases) {
+      expect([name, parsePrepared(bound({ executableBinding }))]).toEqual([name, undefined]);
+    }
+  });
+
+  it("EB4: equality is over the retained build, and a path is not part of it", function* () {
+    // There is no path to ignore, which is the point: the same build reached
+    // through a different path compares equal because nothing about where it
+    // was ever entered the record.
+    const same: ExecutableBuildBindingV1 = {
+      schema: "executable-build.v1",
+      reportedVersion: "2.1.241 (Claude Code)",
+      executableDigest: { algorithm: "sha256", value: "d".repeat(64) },
+    };
+    expect(sameExecutableBuild(BINDING, same)).toBe(true);
     expect(
-      parsePrepared(record({ failure: { class: "executable-binding-refused", message: "why" } })),
-    ).toBe(undefined);
+      sameExecutableBuild(BINDING, { ...same, reportedVersion: "2.1.242 (Claude Code)" }),
+    ).toBe(false);
+    expect(
+      sameExecutableBuild(BINDING, {
+        ...same,
+        executableDigest: { algorithm: "sha256", value: "e".repeat(64) },
+      }),
+    ).toBe(false);
+  });
+
+  it("EB5: completed replay stays provider-cold for a bound preparation", function* () {
+    yield* replayIsCold({ identityProvenance: "client-allocated", executableBinding: BINDING });
+  });
+
+  it("EB6: completed replay stays provider-cold for a legacy unbound preparation", function* () {
+    yield* replayIsCold({ identityProvenance: "client-allocated" });
   });
 });

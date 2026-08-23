@@ -20,6 +20,7 @@ import type { Json, Workflow } from "@executablemd/durable-streams";
 import type { Operation } from "effection";
 import type {
   DetachedLaunchRecord,
+  ExecutableBuildBindingV1,
   ExitedLaunchRecord,
   IdentityProvenance,
   InstructionReconciliation,
@@ -68,6 +69,7 @@ const FAILURE_CLASSES: readonly LaunchFailureClass[] = [
   "native-exit",
   "session-busy",
   "session-recovery-required",
+  "executable-binding-refused",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -130,6 +132,62 @@ function provenance(value: unknown): IdentityProvenance | undefined {
   return value === "provider-returned" || value === "client-allocated" ? value : undefined;
 }
 
+const BINDING_MEMBERS = ["schema", "reportedVersion", "executableDigest"];
+const DIGEST_MEMBERS = ["algorithm", "value"];
+const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
+
+function exactMembers(value: Record<string, unknown>, members: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === members.length && members.every((member) => keys.includes(member));
+}
+
+/**
+ * Read a retained build binding strictly.
+ *
+ * The member set is exact rather than minimal, because a binding is compared
+ * for equality: a member this build ignores is a fact the writer thought was
+ * part of the build's identity, and comparing without it would call two
+ * different builds the same one.
+ */
+function executableBinding(value: unknown): ExecutableBuildBindingV1 | undefined {
+  if (!isRecord(value) || !exactMembers(value, BINDING_MEMBERS)) {
+    return undefined;
+  }
+  const { schema, reportedVersion, executableDigest } = value;
+  if (schema !== "executable-build.v1") {
+    return undefined;
+  }
+  if (typeof reportedVersion !== "string" || reportedVersion.length === 0) {
+    return undefined;
+  }
+  if (!isRecord(executableDigest) || !exactMembers(executableDigest, DIGEST_MEMBERS)) {
+    return undefined;
+  }
+  const { algorithm, value: digestValue } = executableDigest;
+  if (algorithm !== "sha256") {
+    return undefined;
+  }
+  if (typeof digestValue !== "string" || !LOWERCASE_SHA256.test(digestValue)) {
+    return undefined;
+  }
+  return {
+    schema: "executable-build.v1",
+    reportedVersion,
+    executableDigest: { algorithm: "sha256", value: digestValue },
+  };
+}
+
+function serializeBinding(binding: ExecutableBuildBindingV1): Json {
+  return {
+    schema: binding.schema,
+    reportedVersion: binding.reportedVersion,
+    executableDigest: {
+      algorithm: binding.executableDigest.algorithm,
+      value: binding.executableDigest.value,
+    },
+  };
+}
+
 function permissionMode(value: unknown): PermissionMode | undefined {
   if (value === "approve-all" || value === "approve-reads" || value === "deny-all") {
     return value;
@@ -155,6 +213,9 @@ function serializePrepared(record: PreparedLaunchRecord): Json {
     permissionMode: record.permissionMode,
     launcher: record.launcher,
   };
+  if (record.executableBinding !== undefined) {
+    payload.executableBinding = serializeBinding(record.executableBinding);
+  }
   if (record.requestedModel !== undefined) {
     payload.requestedModel = record.requestedModel;
   }
@@ -219,12 +280,21 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
   if (!directories || !mode || !reconciled || !provenanceValue) {
     return undefined;
   }
-  // A retained build binding is state this release cannot compare: nothing here
-  // observes an executable, so a record claiming its session was established by
-  // a particular build describes a check this build cannot perform. Resuming
-  // under it anyway would be answering a question by ignoring it.
+  // A binding says which build accepted a client-allocated identity, so a
+  // record that chose no identity cannot have one. Absence is not refused: the
+  // client-allocated path was released before any build was observed, and that
+  // history stays readable as the legacy, native-only session it is. Whether a
+  // legacy record may still do live work is the provider's decision, not this
+  // parser's — core observes no executables.
+  let binding: ExecutableBuildBindingV1 | undefined;
   if (value.executableBinding !== undefined) {
-    return undefined;
+    if (provenanceValue !== "client-allocated") {
+      return undefined;
+    }
+    binding = executableBinding(value.executableBinding);
+    if (!binding) {
+      return undefined;
+    }
   }
   const record: PreparedLaunchRecord = {
     phase: "prepared",
@@ -243,6 +313,9 @@ export function parsePrepared(value: unknown): PreparedLaunchRecord | undefined 
     permissionMode: mode,
     launcher,
   };
+  if (binding !== undefined) {
+    record.executableBinding = binding;
+  }
   if (typeof requestedModel === "string") {
     record.requestedModel = requestedModel;
   }

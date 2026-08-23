@@ -119,6 +119,11 @@
     // for one winner both reach for `Deno` directly. The runtime exclusions keep
     // the same test out of the Node and Bun execution suites.
     "packages/acp/tests/session-route.test.ts",
-    "packages/acp/tests/fixtures/session-route-publisher.ts"
+    "packages/acp/tests/fixtures/session-route-publisher.ts",
+    // The Deno executable observer's proof reads the real process environment,
+    // canonicalizes against the host filesystem and asks the exact observed
+    // path for its version through `Deno.Command`. The runtime exclusions keep
+    // the same test out of the Node and Bun execution suites.
+    "packages/runtime/tests/executable-observer.test.ts"
   ]
 }
