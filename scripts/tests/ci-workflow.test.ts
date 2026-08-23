@@ -727,3 +727,139 @@ describe("the CI workflow aggregate", () => {
     expect(commandText).not.toContain("install");
   });
 });
+
+/**
+ * CP12 — where correctness lives, now that composability no longer duplicates
+ * it.
+ *
+ * The narrowed probe is only safe because every suite it stopped running still
+ * runs somewhere that `green` requires. These read the workflow rather than
+ * trusting the change that moved them.
+ */
+describe("the correctness jobs composability no longer duplicates", () => {
+  /**
+   * How each runtime's exhaustive corpus is invoked, as of #558's sharding.
+   *
+   * These are matched literally against the workflow and against
+   * composability's own commands, so they have to be the real invocations: a
+   * stale string here would make the negative assertions below pass by never
+   * matching anything.
+   */
+  const RUNTIME_SUITES: Record<string, string> = {
+    "test-deno": "scripts/runtime-tests.ts deno ${{ matrix.shard }}",
+    "test-node": "pnpm test:node ${{ matrix.shard }}",
+    "test-bun": "bun run test:bun ${{ matrix.shard }}",
+  };
+
+  function runs(job: Job): string {
+    return job.steps.map((step) => step.run ?? "").join("\n");
+  }
+
+  it("still runs each complete runtime corpus once, in a job of its own", function* () {
+    const jobs = yield* workflow();
+
+    for (const [id, invocation] of Object.entries(RUNTIME_SUITES)) {
+      const found = jobs[id];
+      expect({ id, present: found !== undefined }).toEqual({ id, present: true });
+      expect(runs(found!)).toContain(invocation);
+      // Unconditional: a suite that can skip is a suite `green` cannot require.
+      expect({ id, condition: found!.if }).toEqual({ id, condition: undefined });
+    }
+  });
+
+  it("still requires every one of them, and composability, through green", function* () {
+    const jobs = yield* workflow();
+    const needs = green(jobs).needs ?? [];
+
+    for (const id of [...Object.keys(RUNTIME_SUITES), "composability", "lint", "site"]) {
+      expect(needs).toContain(id);
+    }
+  });
+
+  it("keeps the site check and build in the site job and nowhere else", function* () {
+    const jobs = yield* workflow();
+    const site = jobs.site;
+
+    expect(site).toBeDefined();
+    expect(runs(site!)).toContain("deno task check");
+    expect(runs(site!)).toContain("deno task build");
+  });
+
+  /**
+   * The whole point of #546: composability runs one command, and that command
+   * is not a battery. A runtime suite reappearing here is the regression.
+   */
+  it("runs one command in composability, and no suite among it", function* () {
+    const jobs = yield* workflow();
+    const composability = jobs.composability;
+
+    expect(composability).toBeDefined();
+    expect(runs(composability!)).toContain("deno task verify:clean");
+    // Sharded or not, no runtime corpus may be invoked here by any spelling.
+    for (const forbidden of Object.values(RUNTIME_SUITES)) {
+      expect(runs(composability!)).not.toContain(forbidden);
+    }
+    for (const forbidden of [
+      "runtime-tests.ts",
+      "deno task test",
+      "pnpm test:node",
+      "bun run test:bun",
+      "check:jsr",
+      "xmd test",
+      "working-directory: site",
+    ]) {
+      expect(runs(composability!)).not.toContain(forbidden);
+    }
+  });
+
+  /** All three runtimes are installed because the probe consumes all three. */
+  it("installs Deno, Node, pnpm and Bun for the probe", function* () {
+    const jobs = yield* workflow();
+    const uses = (jobs.composability?.steps ?? []).map((step) => step.uses ?? "").join("\n");
+
+    for (const tool of ["setup-deno", "setup-node", "pnpm/action-setup", "setup-bun"]) {
+      expect(uses).toContain(tool);
+    }
+  });
+});
+
+/**
+ * CP1/CP13 — what `deno task verify` is, read from the task that defines it.
+ *
+ * The battery's site applicability and its per-suite deadlines were the two
+ * things a caller could still reach for after the coordinator stopped having
+ * them, so their absence is asserted where a caller would look.
+ */
+describe("the verify tasks", () => {
+  function* tasks(): Operation<Record<string, string>> {
+    const config = JSON.parse(yield* readTextFile(new URL("../../deno.json", import.meta.url)));
+    return stringRecord(config.tasks, "deno.json tasks");
+  }
+
+  it("runs the probe through the preflight, offline and frozen", function* () {
+    const verify = (yield* tasks()).verify ?? "";
+
+    expect(verify).toContain("scripts/preflight.ts scripts/verify.ts");
+    expect(verify).toContain("--cached-only");
+    expect(verify).toContain("--frozen");
+  });
+
+  it("has no --no-site flag left to pass", function* () {
+    const config = yield* readTextFile(new URL("../../deno.json", import.meta.url));
+    const coordinator = yield* readTextFile(new URL("../lib/verify.ts", import.meta.url));
+    const adapter = yield* readTextFile(new URL("../verify.ts", import.meta.url));
+
+    for (const source of [config, coordinator, adapter]) {
+      expect(source).not.toContain("--no-site");
+    }
+  });
+
+  it("carries no per-suite deadline", function* () {
+    const coordinator = yield* readTextFile(new URL("../lib/verify.ts", import.meta.url));
+
+    for (const gone of ["TEST_TIMEOUT_MILLISECONDS", "RUNTIME_SUITE_TIMEOUT_MILLISECONDS"]) {
+      expect(coordinator).not.toContain(gone);
+    }
+    expect(coordinator).toContain("PROBE_TIMEOUT_MILLISECONDS");
+  });
+});

@@ -10,10 +10,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { descendants, emitAll, host, openSpool, SpoolSinks, useVerifyHost } from "../verify.ts";
-import type { OpenSpool, Spool, WriteBytes } from "../verify.ts";
+import type { AdapterHost, CommandSpec, OpenSpool, Spool, WriteBytes } from "../verify.ts";
 import { compareTracked, UnsupportedEntryError } from "../lib/tracked.ts";
-import type { TrackedEntry } from "../lib/tracked.ts";
-import type { CommandSpec, VerifyHost } from "../lib/verify.ts";
+import type { TrackedEntry, TrackedState } from "../lib/tracked.ts";
+import type { VerifyHost } from "../lib/verify.ts";
 
 /** A directory of this test's own. */
 function scratch(prefix: string): Operation<string> {
@@ -40,19 +40,32 @@ function* git(cwd: string, ...args: string[]): Operation<void> {
   });
 }
 
-/** A repository with one commit, so `git ls-files` has something to say. */
+/**
+ * A repository with one commit, so `git ls-files` has something to say.
+ *
+ * The lockfile is part of what `owned()` digests, so a fixture without one
+ * cannot be snapshotted at all — this is the smallest tree the adapter's own
+ * comparison can describe.
+ */
 function* repository(prefix: string): Operation<string> {
   const root = yield* scratch(prefix);
   yield* git(root, "init", "-q", "-b", "main");
   yield* writeTextFile(path.join(root, "plain.txt"), "content\n");
+  yield* writeTextFile(path.join(root, "deno.lock"), '{"version":"5"}\n');
   yield* git(root, "add", "-A");
   yield* git(root, ...COMMITTER, "commit", "-qm", "base");
   return root;
 }
 
-function* fixtureHost(root: string): Operation<{ target: VerifyHost; spools: string }> {
+function* fixtureHost(root: string): Operation<{ target: AdapterHost; spools: string }> {
   const spools = yield* scratch("verify-spools");
-  return { target: host({ spools, root, log() {} }), spools };
+  const control = yield* scratch("verify-control");
+  return { target: host({ spools, control, root, log() {} }), spools };
+}
+
+/** Every tracked path, which is one part of the snapshot `owned()` returns. */
+function* tracked(target: VerifyHost): Operation<TrackedState> {
+  return (yield* target.owned()).tracked;
 }
 
 /** Runs a Deno script, which is how these tests drive a real child process. */
@@ -71,7 +84,7 @@ describe("the spool", () => {
       "Deno.stdout.writeSync(new Uint8Array([0, 255, 254, 65, 10]));\n",
     );
 
-    expect((yield* target.run(command)).code).toEqual(0);
+    expect((yield* target.start(command)).code).toEqual(0);
     expect([...(yield* target.spool("fixture"))]).toEqual([0, 255, 254, 65, 10]);
   });
 
@@ -89,7 +102,7 @@ describe("the spool", () => {
       ].join("\n"),
     );
 
-    expect((yield* target.run(command)).code).toEqual(3);
+    expect((yield* target.start(command)).code).toEqual(3);
     const spooled = new TextDecoder().decode(yield* target.spool("fixture"));
     expect(spooled.length).toEqual(32 * 4097);
   });
@@ -108,8 +121,8 @@ describe("the spool", () => {
     const second = { ...(yield* script(root, write("b"), "b.ts")), id: "second" };
 
     yield* scoped(function* () {
-      const one = yield* spawn(() => target.run(first));
-      const two = yield* spawn(() => target.run(second));
+      const one = yield* spawn(() => target.start(first));
+      const two = yield* spawn(() => target.start(second));
       yield* one;
       yield* two;
     });
@@ -165,7 +178,7 @@ describe("the synchronous sink", () => {
       ].join("\n"),
     );
 
-    expect((yield* target.run(command)).code).toEqual(0);
+    expect((yield* target.start(command)).code).toEqual(0);
     const bytes = yield* target.spool("fixture");
     expect(bytes.length).toEqual(MIB);
     expect(bytes.every((byte) => byte === 0x61)).toBe(true);
@@ -191,12 +204,14 @@ describe("cancellation", () => {
     beats: string;
     ready: string;
     spools: string;
+    control: string;
   }
 
   /** An invocation whose command spawns a grandchild that never stops beating. */
   function* beating(name: string): Operation<Beating> {
     const root = yield* repository(`verify-${name}`);
     const spools = yield* scratch(`verify-${name}-spools`);
+    const control = yield* scratch(`verify-${name}-control`);
     const beats = path.join(root, "beats");
     const ready = path.join(root, "ready");
 
@@ -230,8 +245,9 @@ describe("cancellation", () => {
 
     const task = yield* spawn(() =>
       scoped(function* () {
-        const owned = yield* useVerifyHost({ spools, root, log() {} });
-        yield* owned.run(command);
+        const owned = yield* useVerifyHost({ spools, control, root, log() {} });
+        yield* owned.signal("producing");
+        yield* owned.start(command);
       }),
     );
 
@@ -239,7 +255,7 @@ describe("cancellation", () => {
       yield* sleep(10);
     }
     expect((yield* until(readFile(beats))).length).toBeGreaterThan(0);
-    return { task, beats, ready, spools };
+    return { task, beats, ready, spools, control };
   }
 
   /** Unchanged across several intervals; one sample cannot tell stopped from between beats. */
@@ -249,7 +265,7 @@ describe("cancellation", () => {
     expect((yield* until(readFile(beating.beats))).length).toEqual(settled);
   }
 
-  it("stops one invocation's descendants and spools, and leaves the other running", function* () {
+  it("stops one invocation's descendants, spools and controls, and leaves the other running", function* () {
     const first = yield* beating("cancel-first");
     const second = yield* beating("cancel-second");
     const beforeHalt = (yield* until(readFile(second.beats))).length;
@@ -258,16 +274,19 @@ describe("cancellation", () => {
 
     yield* stopped(first);
     expect(yield* exists(first.spools)).toBe(false);
+    expect(yield* exists(first.control)).toBe(false);
 
-    // The survivor is still beating, and still owns its spool.
+    // The survivor is still beating, and still owns its spool and its controls.
     expect((yield* until(readFile(second.beats))).length).toBeGreaterThan(beforeHalt);
     expect(yield* exists(second.spools)).toBe(true);
     expect((yield* readdir(second.spools)).length).toEqual(1);
+    expect(yield* readdir(second.control)).toEqual(["producing"]);
 
     yield* second.task.halt();
 
     yield* stopped(second);
     expect(yield* exists(second.spools)).toBe(false);
+    expect(yield* exists(second.control)).toBe(false);
   });
 });
 
@@ -283,7 +302,7 @@ describe("the fingerprint", () => {
     yield* rm(path.join(root, "gone.txt"));
 
     const { target } = yield* fixtureHost(root);
-    const state = yield* target.fingerprint();
+    const state = yield* tracked(target);
 
     expect(state.get("plain.txt")).toEqual({
       kind: "file",
@@ -304,7 +323,7 @@ describe("the fingerprint", () => {
     yield* git(root, ...COMMITTER, "commit", "-qm", "awkward");
 
     const { target } = yield* fixtureHost(root);
-    const state = yield* target.fingerprint();
+    const state = yield* tracked(target);
     expect(state.has("tab\tname.txt")).toBe(true);
     expect(state.has("new\nline.txt")).toBe(true);
   });
@@ -315,7 +334,7 @@ describe("the fingerprint", () => {
 
     let raised: unknown;
     try {
-      yield* target.fingerprint();
+      yield* tracked(target);
     } catch (error) {
       raised = error;
     }
@@ -333,7 +352,7 @@ describe("the fingerprint", () => {
 
     let raised: unknown;
     try {
-      yield* target.fingerprint();
+      yield* tracked(target);
     } catch (error) {
       raised = error;
     }
@@ -373,9 +392,9 @@ describe("cleanliness, end to end", () => {
       `Deno.writeTextFileSync(${JSON.stringify(path.join(root, "plain.txt"))}, "rewritten\\n");\n`,
     );
 
-    const before = yield* target.fingerprint();
-    yield* target.run(command);
-    const moved = compareTracked(before, yield* target.fingerprint());
+    const before = yield* tracked(target);
+    yield* target.start(command);
+    const moved = compareTracked(before, yield* tracked(target));
 
     expect(moved.length).toEqual(1);
     expect(moved[0]).toContain("plain.txt");
@@ -389,9 +408,9 @@ describe("cleanliness, end to end", () => {
       `Deno.chmodSync(${JSON.stringify(path.join(root, "plain.txt"))}, 0o755);\n`,
     );
 
-    const before = yield* target.fingerprint();
-    yield* target.run(command);
-    const moved = compareTracked(before, yield* target.fingerprint());
+    const before = yield* tracked(target);
+    yield* target.start(command);
+    const moved = compareTracked(before, yield* tracked(target));
 
     expect(moved).toEqual(["plain.txt: " + describeBoth(before.get("plain.txt")!)]);
   });
@@ -408,9 +427,9 @@ describe("cleanliness, end to end", () => {
       ].join("\n"),
     );
 
-    const before = yield* target.fingerprint();
-    expect((yield* target.run(command)).code).toEqual(1);
-    expect(compareTracked(before, yield* target.fingerprint()).length).toEqual(1);
+    const before = yield* tracked(target);
+    expect((yield* target.start(command)).code).toEqual(1);
+    expect(compareTracked(before, yield* tracked(target)).length).toEqual(1);
   });
 
   /** A worktree that was already dirty is still one nothing may move further. */
@@ -423,10 +442,10 @@ describe("cleanliness, end to end", () => {
       'Deno.stdout.writeSync(new TextEncoder().encode("quiet"));\n',
     );
 
-    const before = yield* target.fingerprint();
-    yield* target.run(command);
+    const before = yield* tracked(target);
+    yield* target.start(command);
 
-    expect(compareTracked(before, yield* target.fingerprint())).toEqual([]);
+    expect(compareTracked(before, yield* tracked(target))).toEqual([]);
   });
 });
 
@@ -534,7 +553,7 @@ describe("a conflicted worktree", () => {
     const { target } = yield* fixtureHost(root);
     let raised: unknown;
     try {
-      yield* target.fingerprint();
+      yield* tracked(target);
     } catch (error) {
       raised = error;
     }
@@ -582,6 +601,7 @@ describe("complete failure emission", () => {
 
     const target = host({
       spools: directory,
+      control: directory,
       root: Deno.cwd(),
       log: () => {},
       write: (bytes) => {
@@ -661,8 +681,9 @@ describe("descendants outside the command's process group", () => {
 
     const task = yield* spawn(() =>
       scoped(function* () {
-        const owned = yield* useVerifyHost({ spools, root, log() {} });
-        yield* owned.run(command);
+        const control = yield* scratch("verify-control");
+        const owned = yield* useVerifyHost({ spools, control, root, log() {} });
+        yield* owned.start(command);
       }),
     );
 

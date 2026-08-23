@@ -7,7 +7,7 @@
  * The chain is the claim this repository makes:
  *
  *     deno task setup → deps:target → build:web → build → the release compile
- *                     → resolution probe → verify --no-site
+ *                     → resolution probe → the interference proof
  *
  * Two claims, because a build and a check are different things.
  *
@@ -16,11 +16,13 @@
  * and `deno.lock` byte-identical — a build that fetches has installed
  * something.
  *
- * **Verification is not, and does not claim to be.** The battery resolves
- * modules no build walks — the dnt graph behind `scripts/build-npm.ts`, which
- * only a test executes — so it adds to the Deno cache, which the runtime owns.
+ * **The interference proof is not, and does not claim to be.** It resolves
+ * modules no build walks, so it adds to the Deno cache, which the runtime owns.
  * What it may never move is what this repository owns: `node_modules` and
- * `deno.lock`. That is the comparison its phases make.
+ * `deno.lock`. That is the comparison its phases make. What it proves beyond
+ * that is narrower than the battery it replaced and is the reason this job
+ * exists: that the real producer cannot corrupt or replace the state Deno, Node
+ * and Bun are resolving through while it runs.
  *
  * `deno task setup` owns the clone's `node_modules`, its lockfile, and the
  * scratch cache. `deps:target` adds one release target's npm graph to that
@@ -54,12 +56,13 @@ import {
   changes,
   hostChanges,
   hostState,
-  hostStateChanges,
   POPULATED_ROOTS,
   preparedState,
 } from "./lib/prepared-state.ts";
-import type { HostState, PreparedState } from "./lib/prepared-state.ts";
-import { writeTextFile } from "@effectionx/fs";
+import type { PreparedState } from "./lib/prepared-state.ts";
+import { trackedState } from "./lib/tracked-fingerprint.ts";
+import { movedOwned } from "./lib/verify.ts";
+import type { OwnedState } from "./lib/verify.ts";
 import { RELEASE_TARGET } from "./lib/release-targets.ts";
 import { useTempDirectory } from "./lib/temp-directory.ts";
 
@@ -86,28 +89,44 @@ export interface Phase {
 }
 
 /**
- * The four acts of the site proof, in the only order that proves anything.
+ * The three acts of the interference proof, in the only order that proves
+ * anything.
  *
  * They are parameters rather than statements so a regression can record the
- * order they happen in. The one that matters is `changeSite` before `baseline`:
- * reversed, the edit lands after the battery's opening snapshot and reads as a
- * dirtied tree instead of the state the battery was asked to preserve.
+ * order they happen in, and can put a failing probe in the middle. The order is
+ * the whole contract: the snapshot before, the probe, and the snapshot after —
+ * with nothing between the probe and the comparison that could skip it.
+ *
+ * The snapshots are `OwnedState`, the same shape and the same comparison the
+ * probe uses inside itself. `hostState()` alone would cover `node_modules` and
+ * the lockfile and say nothing about tracked files — and the probe process
+ * failing is exactly the case where its own comparison did not get to run, so
+ * this one has to describe everything that could have moved.
  */
-export interface SiteProof {
-  changeSite(): Operation<void>;
-  baseline(): Operation<HostState>;
-  battery(): Operation<boolean>;
-  after(): Operation<HostState>;
+export interface InterferenceProof {
+  baseline(): Operation<OwnedState>;
+  probe(): Operation<boolean>;
+  after(): Operation<OwnedState>;
 }
 
-/** The site-enabled battery, and what it moved. `false` when the battery failed. */
-export function* siteEnabledBattery(proof: SiteProof): Operation<string[] | false> {
-  yield* proof.changeSite();
+/** Whether the probe passed, and what it moved. Both, always. */
+export interface Interference {
+  passed: boolean;
+  moved: string[];
+}
+
+/**
+ * Run the probe between two snapshots of repository-owned state.
+ *
+ * The comparison runs whether the probe passed or not. A failed probe is
+ * exactly when a moved `node_modules` or lockfile would otherwise go
+ * unreported — the run is already going to exit non-zero, and the reason it
+ * exits is the thing worth naming completely.
+ */
+export function* interferenceProof(proof: InterferenceProof): Operation<Interference> {
   const before = yield* proof.baseline();
-  if (!(yield* proof.battery())) {
-    return false;
-  }
-  return hostStateChanges(before, yield* proof.after());
+  const passed = yield* proof.probe();
+  return { passed, moved: movedOwned(before, yield* proof.after()) };
 }
 
 /** The build phases, each exactly as a task or a workflow invokes it. */
@@ -174,15 +193,22 @@ function* step(run: Run): Operation<boolean> {
 /**
  * The repository-owned snapshot, timed like the full one so the two are
  * comparable in the log — and visibly cheaper, because it walks no cache.
+ *
+ * Tracked paths are part of it. A probe that rewrote a source file, flipped an
+ * executable bit or replaced a symlink would leave `node_modules` and the
+ * lockfile untouched, and the whole point of this comparison is that it still
+ * runs when the probe's own one did not.
  */
-function* hostStateOf(target: string, label: string): Operation<HostState> {
+function* ownedStateOf(target: string, label: string): Operation<OwnedState> {
   const started = performance.now();
-  const state = yield* hostState(target);
+  const host = yield* hostState(target);
+  const tracked = yield* trackedState(target);
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(
-    `  host state after ${label}: ${state.tree.entries.length} tree entries (${seconds}s)`,
+    `  owned state after ${label}: ${host.tree.entries.length} tree entries, ` +
+      `${tracked.size} tracked (${seconds}s)`,
   );
-  return state;
+  return { tracked, installed: host.tree.entries, lock: host.lock };
 }
 
 function* fingerprintOf(target: string, denoDir: string, label: string): Operation<PreparedState> {
@@ -310,51 +336,39 @@ main(function* () {
     }
 
     /**
-     * The battery itself, which subsumes the `tsc` that used to run here:
-     * `deno task verify` runs every applicable check beside every other one,
-     * concurrently, and fails if any of them dirties the clone's tracked tree.
+     * The interference proof: `deno task build:web` republishing the generated
+     * bundle while Deno, Node and Bun resolve and read through the same
+     * `node_modules` and import the same module.
      *
-     * Site-enabled, and once. The clone gets a real `site/` change first, so
-     * applicability selects the pair from a change rather than from a fixture
-     * and every command in the battery runs together. `siteEnabledBattery` fixes the order:
-     * the edit lands before the baseline snapshot, which is what makes it the
-     * state the battery must preserve rather than a dirty tree it would report.
-     * Running a second `--no-site` battery to cover the other branch would
-     * double the longest job in CI to prove what focused tests already cover.
+     * This is the one thing the clean checkout adds load to that focused tests
+     * cannot. It is not a second correctness suite — the complete Deno, Node
+     * and Bun suites run once each in their own CI jobs, and duplicating them
+     * here cost 26 of this job's 31 minutes to prove nothing about ownership
+     * (#546).
      *
-     * The comparison afterwards reads only what this repository owns. The
-     * battery resolves module graphs no build walks — the dnt graph behind
-     * `scripts/build-npm.ts` among them — so it legitimately adds to the
+     * The comparison afterwards reads only what this repository owns. The probe
+     * resolves module graphs no build walks, so it legitimately adds to the
      * runtime-owned cache, and `hostState` never asks where that cache is.
      */
-    const moved = yield* siteEnabledBattery({
-      *changeSite() {
-        yield* writeTextFile(
-          path.join(target, "site", "verify-clean.probe.md"),
-          "Written by `deno task verify:clean` so the site pair applies.\n",
-        );
-      },
-      baseline: () => hostStateOf(target, "the site change"),
-      battery: () =>
+    const { passed, moved } = yield* interferenceProof({
+      baseline: () => ownedStateOf(target, "the offline builds"),
+      probe: () =>
         step({
-          label: "verify (site pair included)",
+          label: "interference proof",
           command: deno,
           arguments: ["task", "verify"],
           cwd: target,
           env: { DENO_DIR: denoDir },
         }),
-      after: () => hostStateOf(target, "the battery"),
+      after: () => ownedStateOf(target, "the interference proof"),
     });
 
-    if (moved === false) {
-      return true;
-    }
     if (moved.length > 0) {
-      console.error(`\n✗ the battery changed node_modules or the lockfile:\n${moved.join("\n")}`);
-      return true;
+      console.error(
+        `\n✗ the probe changed tracked files, node_modules or the lockfile:\n${moved.join("\n")}`,
+      );
     }
-
-    return false;
+    return !passed || moved.length > 0;
   });
 
   if (failed) {

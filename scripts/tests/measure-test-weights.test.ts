@@ -18,7 +18,6 @@ import { exec } from "@effectionx/process";
 import { fileURLToPath } from "node:url";
 
 import { PROVENANCE_VARIABLES, weightsFile } from "../lib/test-weights.ts";
-import { BATTERY } from "../lib/verify.ts";
 
 const ROOT = new URL("../../", import.meta.url);
 const WORKFLOW = new URL(".github/workflows/measure-test-weights.yml", ROOT);
@@ -174,12 +173,13 @@ describe("the measurement command", () => {
     );
     expect(writers.map(([name]) => name)).toEqual(["weights:measure"]);
 
-    // And no ordinary check reaches it: the battery is what `deno task verify`
-    // runs, and a weights refresh inside it would rewrite tracked data on every
-    // verification.
-    for (const command of BATTERY) {
-      expect(command.args.join(" ")).not.toContain("weights");
-    }
+    // And no ordinary check reaches it: a weights refresh inside
+    // `deno task verify` would rewrite tracked data on every verification.
+    // #546 replaced that battery with a fixed topology whose commands are
+    // built in the adapter, so the whole adapter is what gets read — a
+    // narrower assertion could miss a command added beside the ones it knew.
+    expect(yield* readTextFile(new URL("scripts/verify.ts", ROOT))).not.toContain("weights");
+    expect(yield* readTextFile(new URL("scripts/lib/verify.ts", ROOT))).not.toContain("weights");
   });
 });
 

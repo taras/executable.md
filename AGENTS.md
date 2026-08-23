@@ -48,27 +48,25 @@ representative release target and proves the host tree and lock survived it,
 then runs every build phase offline — including a release compile for
 `x86_64-unknown-linux-gnu`, the same shape `release.yml` uses — fingerprinting
 the content and modes of `node_modules`, the cache's dependency roots, and
-`deno.lock` after each one. It then changes `site/` in that clone on purpose,
-takes the changed tree as its baseline, and runs the battery once with the site
-pair applying — every command together, selected by a real change rather
-than by a fixture.
+`deno.lock` after each one. It runs the Node resolution probe, and finishes with
+the concurrent interference proof described under Verification below.
 
 Builds and checks are held to different claims there. A build is cache-pure:
 nothing it does may move `node_modules`, the cache's dependency content, or the
-lockfile, and the comparison around a build walks all three. Verification is
-not, and does not pretend to be — the battery resolves modules no build walks,
+lockfile, and the comparison around a build walks all three. The interference
+proof is not, and does not pretend to be — it resolves modules no build walks,
 so it adds to the Deno cache, which the runtime owns. Its comparison therefore
-reads only what this repository owns, `node_modules` and `deno.lock`, and never
-looks at the cache at all: not filtered out afterwards, never asked for. What
-verification may never move is tracked files, `node_modules`, `deno.lock`, and
-another invocation's temporary state.
+reads only what this repository owns, tracked files, `node_modules` and
+`deno.lock`, and never looks at the cache at all: not filtered out afterwards,
+never asked for. What verification may never move is tracked files,
+`node_modules`, `deno.lock`, and another invocation's temporary state.
 
 It verifies the commit, so commit before running it. CI runs the same harness in
 its `composability` job — **on a `main` push, and on a `ci-main-red-fix` pull
-request**. The battery it runs spends most of its time on the three runtime
-suites, which `test-deno`, `test-node`, and `test-bun` already run in parallel on
-their own runners, so putting it on every pull request bought a 50% longer
-critical path and no new information. Run it locally before you push anything
+request**. It proves ownership and non-interference, not correctness: the
+complete runtime suites, the typecheck, lint, JSR and the site pair all run in
+jobs `green` already requires, and re-running them here cost 26 of the job's 31
+minutes for no new information (#546). Run it locally before you push anything
 that could move dependency state; on `main` it is the post-merge proof, and a
 failure there opens a `ci-main-red` issue. A labelled repair pull request runs it
 because that pull request is excused the main-health gate below, and this is what
@@ -176,11 +174,19 @@ done and what you want when debugging.
 while implementing; shards are how CI runs the exhaustive pass, not a
 replacement for choosing a smaller one.
 
-To reproduce the complete applicable battery locally, one command runs it
-concurrently:
+`deno task verify` is the interference proof, not the battery — see the
+ownership rule below for what it does and does not cover. The exhaustive checks
+keep their own task names:
 
 ```bash
-deno task verify          # add --no-site to skip the site pair
+deno task verify       # the shared-state interference proof
+deno task verify:clean # the same proof, from a clean checkout, after the offline builds
+deno task lint         # oxlint + oxfmt --check
+deno task check        # typecheck
+deno task test         # the complete Deno suite
+pnpm test:node         # the complete suite under Node
+bun run test:bun       # the complete suite under Bun
+deno task check:jsr    # JSR publishability
 ```
 
 The `green` check is the aggregate CI check required by the main branch ruleset.
@@ -225,29 +231,54 @@ still fails if it fails or is skipped. Nothing else grants the exception — not
 actor, a branch name, a commit message, or another label — and removing the label
 recomputes the check as an ordinary pull request.
 
-**The whole applicable battery is designed to run at once, after one setup.**
-That is a repository rule, not a convenience, and it has two halves:
+**Every check is designed to run beside every other, after one setup.** That is
+a repository rule, not a convenience, and it has two halves:
 
 **Builds are cache-pure.** `deno task build:web`, `deno task build`, and the
 release compile must leave `node_modules`, the Deno cache's dependency content,
 and `deno.lock` byte-identical.
 
-**Verification may populate the runtime cache** — the battery resolves module
-graphs no build walks, and that cache belongs to the runtime. What no check may
-do is modify tracked files, `node_modules`, `deno.lock`, or another
-invocation's temporary state. Temporary state a check needs belongs to that
-invocation alone.
+**Verification may populate the runtime cache** — checks resolve module graphs
+no build walks, and that cache belongs to the runtime. What no check may do is
+modify tracked files, `node_modules`, `deno.lock`, or another invocation's
+temporary state. Temporary state a check needs belongs to that invocation alone.
 
 A helper that reaches for repository-owned mutable state breaks every other
 check running beside it, which is how a `deno task build` came to break the Node
 typecheck (#279).
 
-`verify` reports every command in a fixed order however they finish, prints the
-first failure's output complete and names the rest, and fails if the battery
-moved any tracked file's content, mode, symlink target, or presence — including
-when a command failed, because that is when a dirtied tree would otherwise go
-unnoticed. **Capture a failure's first output before re-running anything**: the
-report is what you paste, and a second run can hide the first.
+**`deno task verify` proves that rule, and does not test the product.** It is
+one topology: the real `deno task build:web` republishing the generated browser
+module while Deno, Node and Bun each resolve and read a package from the pnpm
+store, the Deno store and the workspace, and import the generated module, over
+and over, for the producer's whole lifetime. An observer watches the two
+`@rjsf/validator-ajv8` manifests and the generated output from the coordinator
+itself. It fails if any of them ever sees that state missing, replaced,
+truncated or malformed — a manifest rewritten and restored is still a failure —
+if a runtime never overlapped the producer, or if tracked files, `node_modules`
+or `deno.lock` came out different from how they went in. That comparison runs
+after a participant failed too, because that is when a dirtied tree would
+otherwise go unnoticed.
+
+It is **not** a correctness check and must not be read as one. Everything it
+stopped running is still required by `green` somewhere: each runtime's complete
+corpus across the `test-deno`, `test-node` and `test-bun` shard matrices above;
+the Deno typecheck as a step of `test-deno` and the Node one as a step of
+`test-node`; `lint` and `jsr` as jobs of their own; the documentation check as a
+step of `smoke`; and the site check/build pair in `site`. Running them a second
+time here cost 26 of composability's 31 minutes while proving nothing about
+ownership (#546). Run them by their own task names when you want them.
+
+The report names every participant in a fixed order however they finish, prints
+the first failure's output complete and names the rest. **Capture a failure's
+first output before re-running anything**: the report is what you paste, and a
+second run can hide the first.
+
+`deno task verify:clean` adds the envelope around it — a clean clone of `HEAD`,
+one real setup against a private `DENO_DIR`, representative release-target
+preparation, the offline build phases with a fingerprint after each, and the
+Node resolution probe — and finishes with the same interference proof. That is
+what the `composability` job runs.
 
 If a check fails but the identical revision passes without a fix, create or
 update a dedicated issue labeled `flake`. Include the failing test or command,
@@ -255,8 +286,8 @@ runtime, run link, output, and evidence of intermittence. A green re-run restore
 health but does not close the issue; close it only after the cause is fixed and
 the regression evidence is recorded.
 
-The site pair applies when `site/` changed, judged from the branch and the
-worktree, both sides of a rename included.
+The site check and build belong to the dedicated `site` job. Nothing in
+composability runs them.
 
 The complete battery consists of:
 

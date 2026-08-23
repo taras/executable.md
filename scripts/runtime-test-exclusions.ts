@@ -74,7 +74,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
   {
     path: "scripts/tests/verify-clean.test.ts",
     reason:
-      "imports scripts/verify-clean.ts for the site proof's ordering, and that module reaches for Deno.env and Deno.execPath at import time; the ordering it asserts is host-neutral but the module carrying it is not",
+      "imports scripts/verify-clean.ts for the interference proof's ordering, and that module reaches for Deno.env and Deno.execPath at import time; the ordering it asserts is host-neutral but the module carrying it is not",
     issue: "https://github.com/taras/executable.md/issues/279",
   },
   {

@@ -418,7 +418,8 @@ and Bun resolve through that path while a build republishes it, and a direct
 write exposes a truncated file for as long as the write takes. A reader
 therefore sees the complete old module or the complete new one, never absence or
 partial text; the staged file belongs to the invocation on every exit path, so a
-halted or failed build leaves nothing beside the module.
+halted or failed build leaves nothing beside the module. `deno task verify`
+proves this with live readers rather than by inspection.
 
 A build installs nothing: `deno task build:web` runs under node-modules and
 cache modes that cannot create, relink, or fetch, and refuses on an unprepared
@@ -455,7 +456,12 @@ precede compilation inside the build job, and requires the compile to keep
 `deno task verify:clean` exercises that same sequence against a prepared clone,
 offline, for the representative `x86_64-unknown-linux-gnu` — proving the compile
 fetches nothing and changes neither dependency layout nor the lock, and that
-target preparation itself leaves the host tree and lock untouched.
+target preparation itself leaves the host tree and lock untouched. It closes
+with the concurrent interference proof: `deno task build:web` republishing the
+generated module while Deno, Node and Bun resolve and read through the same
+`node_modules` and import that module, followed by one comparison of tracked
+files, `node_modules` and `deno.lock`. It runs no application suite — those are
+the dedicated CI jobs `green` requires (AGENTS.md, #546).
 
 Host preparation is `deno task deps`, which owns `node_modules/`, the cached
 module graphs, and the `sideEffects` fact. Every job that builds, packages,

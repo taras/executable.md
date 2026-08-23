@@ -1,22 +1,22 @@
 /**
- * Run the whole applicable verification battery at once.
+ * Run the shared-state interference proof.
  *
  * Usage (through the task, which puts the preflight in front):
  *   deno task verify
- *   deno task verify --no-site
  *
- * This file is the Deno half. `scripts/lib/verify.ts` decides what runs, in
- * what order it reports, and whether the tracked tree moved; everything that
+ * This file is the Deno half. `scripts/lib/verify.ts` decides the topology, the
+ * report's order, and whether repository-owned state moved; everything that
  * touches this host — starting a process, spooling its bytes, reading the
- * index, digesting a file — is installed from here.
+ * index, digesting a file, launching the three runtimes — is installed from
+ * here.
  *
- * ## Why each command gets a file
+ * ## Why each participant gets a file
  *
  * `@effectionx/process` writes a child's stdout and stderr to *this* process as
- * they arrive, so ten concurrent commands would interleave into one terminal.
- * Middleware that never calls `next` suppresses that default, and the bytes go
- * to a spool of the command's own instead — raw, undecoded, one synchronous
- * handle each.
+ * they arrive, so four concurrent participants would interleave into one
+ * terminal. Middleware that never calls `next` suppresses that default, and the
+ * bytes go to a spool of the participant's own instead — raw, undecoded, one
+ * synchronous handle each.
  *
  * The sink is synchronous, and that is load-bearing rather than stylistic.
  * `@effectionx/node`'s `fromReadable` subscribes with `target.on("data", …)`,
@@ -38,24 +38,32 @@
  * `createPosixProcess` registers an `ensure` that signals the process group and
  * then waits on both `stdoutDone` and `stderrDone`. Closing the handle after
  * that scope exits is therefore closing it after the last byte.
+ *
+ * The consumers are launched from here for the same reason. Their loop is
+ * portable and lives in `lib/consumer-cycle.ts`; what is not portable is how
+ * each runtime starts a TypeScript entry, and Node's is the prepared
+ * workspace's own `tsx` rather than a global one.
  */
-
 import { createContext, ensure, exit, main, scoped, sleep, until } from "effection";
 import type { Context, Operation } from "effection";
-import { lstat, rm } from "@effectionx/fs";
+import { exists, lstat, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import type { Stats } from "node:fs";
-import { readFile, readlink } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 
-import { digest, FileReads, YIELD_EVERY } from "./lib/prepared-state.ts";
+import { digest, FileReads, hostState } from "./lib/prepared-state.ts";
 import type { ReadFile } from "./lib/prepared-state.ts";
-import { parseStageRecords, UnsupportedEntryError } from "./lib/tracked.ts";
-import type { TrackedEntry, TrackedState } from "./lib/tracked.ts";
+import { isNotFound, trackedState } from "./lib/tracked-fingerprint.ts";
+import { UnsupportedEntryError } from "./lib/tracked.ts";
 import { useTempDirectory } from "./lib/temp-directory.ts";
-import { verify } from "./lib/verify.ts";
-import type { CommandSpec, Settled, VerifyHost, VerifyOptions } from "./lib/verify.ts";
+import { sideEffectFreeManifests } from "./lib/side-effect-free.ts";
+import { incomplete } from "./lib/web-client-module.ts";
+import { cyclesOf, GENERATED, readyPath, signalPath } from "./lib/consumer-cycle.ts";
+import type { CycleReport, Runtime } from "./lib/consumer-cycle.ts";
+import { UNREADABLE, verify } from "./lib/verify.ts";
+import type { OwnedState, Sensitive, Settled, VerifyHost } from "./lib/verify.ts";
 
 const repoRoot = new URL("../", import.meta.url);
 const root = fileURLToPath(repoRoot);
@@ -63,6 +71,37 @@ const root = fileURLToPath(repoRoot);
 /** A spool this invocation owns; the UUID is what keeps two verifies apart. */
 function spoolPath(directory: string, id: string): string {
   return join(directory, `${id.replaceAll(":", "-")}.${crypto.randomUUID()}.spool`);
+}
+
+/**
+ * How each runtime starts the portable consumer entry.
+ *
+ * Node's is the prepared workspace's own `tsx`, not a global one: the proof is
+ * about *this* tree's dependency layout, and reaching a `tsx` from anywhere
+ * else would be consuming something the producer cannot disturb.
+ */
+function consumerCommand(runtime: Runtime, at: string, control: string): CommandSpec {
+  const entry = "scripts/verify-consumer.ts";
+  const args = [runtime, at, control];
+  if (runtime === "deno") {
+    return { id: runtime, program: "deno", args: ["run", "--allow-all", entry, ...args] };
+  }
+  if (runtime === "node") {
+    return { id: runtime, program: "tsx", args: [entry, ...args] };
+  }
+  return { id: runtime, program: "bun", args: ["run", entry, ...args] };
+}
+
+/** The producer, exactly as a task or a workflow invokes it. */
+function producerCommand(): CommandSpec {
+  return { id: "build:web", program: "deno", args: ["task", "build:web"] };
+}
+
+/** A process this host starts. Named rather than resolved. */
+export interface CommandSpec {
+  id: string;
+  program: "deno" | "tsx" | "bun";
+  args: string[];
 }
 
 export interface Spool {
@@ -159,6 +198,36 @@ function programPath(program: CommandSpec["program"]): string {
 }
 
 /**
+ * A manifest by its bytes *and* its identity on disk.
+ *
+ * Content alone is not enough: a build that rewrote the file with the same
+ * bytes still truncated it for as long as the write took, and every runtime
+ * resolving through it in that window read a broken package. The inode and the
+ * change time are what make that rewrite visible after the fact.
+ */
+function* manifestState(path: URL, read: ReadFile): Operation<string> {
+  const file = fileURLToPath(path);
+  let info: Stats;
+  try {
+    info = yield* lstat(file);
+  } catch (error) {
+    if (isNotFound(error)) {
+      return "absent";
+    }
+    throw error;
+  }
+  const bytes = yield* read(file);
+  return [
+    digest(bytes),
+    `size=${info.size}`,
+    `ino=${info.ino}`,
+    `mode=${(info.mode ?? 0).toString(8)}`,
+    `ctime=${info.ctimeMs}`,
+    `mtime=${info.mtimeMs}`,
+  ].join(" ");
+}
+
+/**
  * `pnpm`, `tsx`, and `bun` are resolved through the workspace's own bin
  * directory: this process runs under Deno, which does not put it on the path
  * the way an npm script would.
@@ -166,56 +235,6 @@ function programPath(program: CommandSpec["program"]): string {
 function environment(at: string): Record<string, string> {
   const path = Deno.env.get("PATH") ?? "";
   return { ...Deno.env.toObject(), PATH: `${join(at, "node_modules", ".bin")}:${path}` };
-}
-
-function* capture(command: string, args: string[], cwd: string): Operation<string> {
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  return yield* scoped(function* () {
-    const process = yield* exec(command, { arguments: args, cwd, env: environment(cwd) });
-    yield* process.around({
-      *stdout([bytes]) {
-        chunks.push(decoder.decode(bytes, { stream: true }));
-      },
-      *stderr() {},
-    });
-    const status = yield* process.join();
-    if (status.code !== 0) {
-      throw new Error(`\`${command} ${args.join(" ")}\` exited ${status.code}`);
-    }
-    return chunks.join("");
-  });
-}
-
-/** A missing entry, as `node:fs` reports one. */
-function isNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-function* describeEntry(at: string, path: string, read: ReadFile): Operation<TrackedEntry> {
-  const absolute = join(at, path);
-  let info: Stats;
-  try {
-    info = yield* lstat(absolute);
-  } catch (error) {
-    if (isNotFound(error)) {
-      return { kind: "absent" };
-    }
-    throw error;
-  }
-  if (info.isDirectory()) {
-    throw new UnsupportedEntryError(
-      `${path} is a directory, which this fingerprint cannot describe`,
-    );
-  }
-  if (info.isSymbolicLink()) {
-    return { kind: "symlink", target: yield* until(readlink(absolute)) };
-  }
-  return {
-    kind: "file",
-    digest: digest(yield* read(absolute)),
-    executable: ((info.mode ?? 0) & 0o111) !== 0,
-  };
 }
 
 /**
@@ -271,7 +290,9 @@ function reap(pids: number[]): void {
 export interface HostOptions {
   /** Where spools live; one directory per invocation. */
   spools: string;
-  /** The worktree being verified. */
+  /** Where readiness, phase signals and cycle reports live; one per invocation. */
+  control: string;
+  /** The worktree being proven. */
   root: string;
   log(line: string): void;
   /** Raw byte sink; standard output when absent. */
@@ -279,54 +300,76 @@ export interface HostOptions {
 }
 
 /**
- * A host that owns its spool directory.
+ * A host that owns its spool and control directories.
  *
- * Cleanup belongs to the invocation rather than to each command: the report
- * reads a failed command's spool after every command has settled, so a spool
- * removed the moment its command ended would take the output with it. The
- * directory goes when the invocation does — on success, on failure, and on a
- * halt part way through.
+ * Cleanup belongs to the invocation rather than to each participant: the report
+ * reads a failed participant's spool and every consumer's cycle report after
+ * everything has settled, so state removed the moment a process ended would
+ * take the evidence with it. Both directories go when the invocation does — on
+ * success, on failure, and on a halt part way through. Neither has a fixed
+ * name, so a concurrent invocation's state is never touched.
  */
-export function* useVerifyHost(options: HostOptions): Operation<VerifyHost> {
-  yield* ensure(() => rm(options.spools, { recursive: true }));
+/**
+ * The adapter's own surface, which is wider than the contract it satisfies.
+ *
+ * `start` is how the regressions here drive a real child of their own through
+ * the spooling, descendant cleanup and invocation-owned state this file is
+ * responsible for. The coordinator never sees it: it is handed a `VerifyHost`,
+ * whose only processes are the producer and the three consumers.
+ */
+export interface AdapterHost extends VerifyHost {
+  start(command: CommandSpec): Operation<Settled>;
+}
+
+export function* useVerifyHost(options: HostOptions): Operation<AdapterHost> {
+  yield* ensure(() => rm(options.spools, { recursive: true, force: true }));
+  yield* ensure(() => rm(options.control, { recursive: true, force: true }));
   return host(options);
 }
 
-export function host(options: HostOptions): VerifyHost {
-  const { spools, root: at, log } = options;
+export function host(options: HostOptions): AdapterHost {
+  const { spools, control, root: at, log } = options;
   const paths = new Map<string, string>();
+  const manifests = sideEffectFreeManifests(pathToFileURL(`${at}/`));
+  let observation = 0;
+
+  function* start(command: CommandSpec): Operation<Settled> {
+    const open = yield* SpoolSinks.expect();
+    const spool = open(spoolPath(spools, command.id));
+    paths.set(command.id, spool.path);
+    yield* ensure(() => spool.close());
+
+    const started = performance.now();
+    const status = yield* scoped(function* () {
+      const process = yield* exec(programPath(command.program), {
+        arguments: command.args,
+        cwd: at,
+        env: environment(at),
+      });
+      // Registered after the exec, so teardown runs it first — while the
+      // participant is still alive and its descendants are still identifiable.
+      yield* ensure(() => reap(descendants(process.pid, processTable())));
+      yield* process.around({
+        *stdout([bytes]) {
+          yield* spool.write(bytes);
+        },
+        *stderr([bytes]) {
+          yield* spool.write(bytes);
+        },
+      });
+      return yield* process.join();
+    });
+    spool.close();
+
+    return { code: status.code ?? 1, milliseconds: performance.now() - started };
+  }
 
   return {
-    *run(command: CommandSpec): Operation<Settled> {
-      const open = yield* SpoolSinks.expect();
-      const spool = open(spoolPath(spools, command.id));
-      paths.set(command.id, spool.path);
-      yield* ensure(() => spool.close());
+    start,
 
-      const started = performance.now();
-      const status = yield* scoped(function* () {
-        const process = yield* exec(programPath(command.program), {
-          arguments: command.args,
-          cwd: command.cwd ? join(at, command.cwd) : at,
-          env: environment(at),
-        });
-        // Registered after the exec, so teardown runs it first — while the
-        // command is still alive and its descendants are still identifiable.
-        yield* ensure(() => reap(descendants(process.pid, processTable())));
-        yield* process.around({
-          *stdout([bytes]) {
-            yield* spool.write(bytes);
-          },
-          *stderr([bytes]) {
-            yield* spool.write(bytes);
-          },
-        });
-        return yield* process.join();
-      });
-      spool.close();
+    produce: () => start(producerCommand()),
 
-      return { code: status.code ?? 1, milliseconds: performance.now() - started };
-    },
+    consume: (runtime) => start(consumerCommand(runtime, at, control)),
 
     *spool(id: string): Operation<Uint8Array> {
       const path = paths.get(id);
@@ -336,24 +379,63 @@ export function host(options: HostOptions): VerifyHost {
       return yield* until(readFile(path));
     },
 
-    *fingerprint(): Operation<TrackedState> {
-      const read = yield* FileReads.expect();
-      const records = parseStageRecords(yield* capture("git", ["ls-files", "--stage", "-z"], at));
-      const entries = new Map<string, TrackedEntry>();
-      for (const [index, record] of records.entries()) {
-        entries.set(record.path, yield* describeEntry(at, record.path, read));
-        if (index % YIELD_EVERY === YIELD_EVERY - 1) {
-          yield* sleep(0);
-        }
-      }
-      return entries;
+    isReady: (runtime) => exists(readyPath(control, runtime)),
+
+    cycles: (runtime): Operation<CycleReport | undefined> => cyclesOf(control, runtime),
+
+    *signal(name: string): Operation<void> {
+      yield* writeTextFile(signalPath(control, name), `${name}\n`);
     },
 
-    git: (args) => capture("git", args, at),
+    /**
+     * Read the state a producer must not disturb, the way a reader would.
+     *
+     * The generated module is parsed rather than imported. This runs every few
+     * milliseconds for the producer's whole lifetime, and evaluating 800 KB of
+     * module text at that rate would retain a module instance per reading; the
+     * three consumers do the importing, once per cycle, and check the assets
+     * against their own recorded byte counts.
+     */
+    *sensitive(): Operation<Sensitive> {
+      const read = yield* FileReads.expect();
+      const found: Record<string, string> = {};
+      for (const path of manifests) {
+        found[fileURLToPath(path).slice(at.length + 1)] = yield* manifestState(path, read);
+      }
+
+      observation++;
+      const generated = join(at, GENERATED);
+      let text: string;
+      try {
+        text = new TextDecoder().decode(yield* read(generated));
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        return {
+          manifests: found,
+          generated: `${UNREADABLE}${GENERATED} could not be read — ${why}`,
+        };
+      }
+      const wrong = incomplete(text);
+      return {
+        manifests: found,
+        generated:
+          wrong === undefined
+            ? `whole at reading ${observation} (${text.length} chars)`
+            : `${UNREADABLE}${wrong}`,
+      };
+    },
+
+    *owned(): Operation<OwnedState> {
+      const state = yield* hostState(at);
+      return { tracked: yield* trackedState(at), installed: state.tree.entries, lock: state.lock };
+    },
+
+    pause: (milliseconds) => sleep(milliseconds),
+
     log,
     emit(bytes) {
       // The report's own bytes, written where the process is about to exit:
-      // suspending here can lose a failed command's output to the exit that
+      // suspending here can lose a failed participant's output to the exit that
       // follows it.
       // oxlint-disable-next-line local/no-sync-filesystem
       emitAll(options.write ?? ((chunk) => Deno.stdout.writeSync(chunk)), bytes);
@@ -362,23 +444,22 @@ export function host(options: HostOptions): VerifyHost {
 }
 
 export function* runVerify(args: string[]): Operation<number> {
-  const options: VerifyOptions = { site: args.includes("--no-site") ? "off" : "auto" };
   for (const argument of args) {
-    if (argument !== "--no-site") {
-      console.error(`unknown argument \`${argument}\``);
-      return 1;
-    }
+    console.error(`unknown argument \`${argument}\``);
+    return 1;
   }
 
   const spools = yield* useTempDirectory("xmd-verify-");
+  const control = yield* useTempDirectory("xmd-verify-control-");
   const target = yield* useVerifyHost({
     spools,
+    control,
     root,
     log: (message) => console.log(message),
   });
 
   try {
-    return yield* verify(target, options);
+    return yield* verify(target);
   } catch (error) {
     // An entry the fingerprint cannot describe is a refusal, not a crash: the
     // path is the whole message, and a stack trace would bury it.
