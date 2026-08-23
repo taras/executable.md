@@ -179,9 +179,18 @@ export function* SessionComponent(
   // The name routes; the identity does not. `<Session name="review">` written
   // twice is two sessions, and no handler on the public chain can make them one
   // — it holds the placement, reads the name, and reaches no further.
-  const session: Session = yield* Agent.operations.session(
-    sessionPlacement(invocation.id, asString(props.name)),
-  );
+  //
+  // The issuance closes as soon as this element has placed its session, so a
+  // handler that kept the placement cannot route it for the next `<Session>`:
+  // both would otherwise resolve to this element's identity. `close()` is
+  // synchronous, so the guarantee holds however the call left.
+  const issuance = sessionPlacement(invocation.id, asString(props.name));
+  let session: Session;
+  try {
+    session = yield* Agent.operations.session(issuance.request);
+  } finally {
+    issuance.close();
+  }
   if (!(yield* hasContent())) {
     return "";
   }

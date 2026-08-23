@@ -1298,17 +1298,53 @@ current root and the first document execution together.
 
 ## Agent authority and generated XMD
 
-An Agent under the specified future `xmd workflow` command is read-only. The
-host enforces that ceiling in the permission bridge, the provider-native sandbox
-and the filesystem view; a document cannot raise it. A provider that cannot
-enforce the boundary fails before Prompt execution. `xmd run` keeps its
-caller-selected Agent permission behavior.
+A workflow Agent receives no Workspace, checkout, materialized root, host path
+or additional directory. Its process starts in a fresh empty directory the host
+owns, configured with no MCP servers. That directory is provider-owned, never
+enters logical or durable identity, and is removed with the attachment. The host
+requests an empty native tool allowlist and installs a permission path that
+denies every native request and fails the turn that asked, without reaching the
+public permission chain. This is the V1 authority ceiling; the portable proof
+that every provider exposes no ambient tool is tracked separately and does not
+widen it. `xmd run` keeps its caller-selected Agent permission behavior.
 
-Native Agent processes inspect disposable read-only materializations of the
-current logical Workspace root. Those views have no write-back path. An Agent
-proposes changes by returning XMD, and a constrained XMD evaluator performs the
-admitted components as ordinary durable effects against the authoritative
-Workspace.
+Within one run a logical Agent session is identified by the Agent/Session
+expansion identity the engine derived, and by nothing else. The authored
+`<Session name>` is descriptive, so two sibling `<Session name="review">`
+elements are two sessions. The name travels the compositional public chain,
+where a handler may observe or change it; the identity travels inside an opaque
+placement the element routes, readable only through the authority delivered to
+the installed provider. That placement is bound to the element that opened it
+and is good for one use, so a handler cannot keep the first element's placement
+and route it for the second — both would otherwise resolve to the first
+element's identity.
+
+The mapping is a row in the run's own database, committed in the run's own
+transaction: one that could commit while the run did not would describe a
+session the run never had. It records the provider, the resolved agent command
+and the fingerprint of the session policy the session was created under as
+compatibility attributes — changing any of them refuses reattachment rather than
+addressing a second mapping — together with the provider's asserted durable
+identity. Cwd and provider placement are never compatibility inputs. What stays
+beside the run on disk is the provider's own session store and one empty working
+directory per session; both are disposable.
+
+The order is provider creation, then the provider's canonical, tagged assertion
+of a durable identity, then the mapping commit, then the first Prompt. Occupancy
+of a key in the provider's own store is not an assertion: it says something is
+there, not what conversation it is.
+
+An interruption before the mapping commits is reconciled only from one canonical
+provider assertion — exactly one, for that identity. A missing assertion, an
+assertion conflicting with what is retained, one that replaced it, and more than
+one at once each refuse. Once the mapping has committed, a restart compares the
+provider's current assertion against it before continuing, and reattaches only
+when the kind and the value both still agree. No refusal substitutes a new
+session or a reconstructed transcript while claiming continuity.
+
+Cancellation owns both sides of a live step. It stops the Prompt stream,
+completes provider teardown, and removes the disposable directory before the
+attempt settles. Already committed session and Prompt records remain valid.
 
 Generated XMD is untrusted input. The evaluator preflights the complete fragment
 before its first effect and admits only explicitly allowed, already-resolved
@@ -2730,6 +2766,7 @@ Status is measured against main.
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
+| workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is provider creation, the provider's canonical tagged assertion, the mapping commit, then the first Prompt; occupancy of a provider key is not an assertion, the pre-commit window reconciles only from exactly one, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories | built on the #302 stack; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
 | read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |

@@ -170,4 +170,84 @@ describe("Tier WAP — same-named sibling Sessions", () => {
     // And each placement is its own session, not one shared by the name.
     expect(new Set(harness.ensureCalls.map((call) => call.sessionKey)).size).toBe(2);
   });
+
+  it("WAP7: a placement kept from the first Session cannot be routed for the second", function* () {
+    const harness = createFakeRuntime();
+    const placements: Array<string | undefined> = [];
+    let refusal: string | undefined;
+
+    const dir = path.join(os.tmpdir(), `xmd-acp-substitute-${randomUUID()}`);
+    yield* ensureDir(dir);
+    yield* ensure(() => rm(dir, { recursive: true, force: true }));
+    const docPath = path.join(dir, "sessions.md");
+    yield* writeTextFile(
+      docPath,
+      [
+        '<Agent name="codex">',
+        '<Session name="review">',
+        "<Prompt>first</Prompt>",
+        "</Session>",
+        "",
+        '<Session name="review">',
+        "<Prompt>second</Prompt>",
+        "</Session>",
+        "</Agent>",
+        "",
+      ].join("\n"),
+    );
+
+    yield* scoped(function* () {
+      yield* useFlatWorld(CWD);
+      yield* installAgentComponents({
+        rootProvider: {
+          factory: createAcpxProvider({
+            createRuntime: harness.create,
+            sessionStore: makeStore(),
+            agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+            sessions: {
+              // deno-lint-ignore require-yield
+              *place(context) {
+                placements.push(context.sessionIdentity);
+                return {
+                  sessionKey: `placed:${context.sessionIdentity ?? "none"}`,
+                  cwd: "/placed",
+                };
+              },
+            },
+          }),
+          options: { defaultAgent: "codex", permissionMode: "deny-all" },
+        },
+      });
+
+      // The attack: keep the first element's real placement and route it for
+      // the second. Reading it again would answer with the first element's
+      // identity, and both sessions would collapse into one.
+      let kept: unknown;
+      yield* Agent.around({
+        *session([routed], next) {
+          if (kept === undefined) {
+            kept = routed;
+            return yield* next(routed);
+          }
+          return yield* next(kept as typeof routed);
+        },
+      });
+
+      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      const subscription = yield* execution.output;
+      let next = yield* subscription.next();
+      while (!next.done) {
+        next = yield* subscription.next();
+      }
+      const outcome = yield* execution;
+      if (!outcome.ok) {
+        refusal = outcome.error.message;
+      }
+    });
+
+    // Refused before the provider placed anything for the second element: the
+    // issuance the first one opened closed when it finished placing.
+    expect(refusal).toContain("already placed its session");
+    expect(placements).toHaveLength(1);
+  });
 });
