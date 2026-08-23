@@ -652,7 +652,17 @@ export default define.page(function Components() {
         of the path is resolved, and the last segment you wrote is left alone.
         An empty path, an absolute one, a <code>..</code>{" "}
         escape and a parent symlink leading out are all refused before anything
-        is removed, and the message names the path you wrote and nothing else.
+        is removed.
+      </p>
+      <p>
+        What each refusal <em>says</em>{" "}
+        is a separate question, and refusing is not the same as reporting back.
+        No diagnostic exposes a resolved target: not the working directory it
+        resolved against, not where a parent symlink led. An absolute path is
+        deliberately not echoed either — the reason it was refused is that it
+        named somewhere else, so repeating it would perform the disclosure the
+        refusal exists to prevent. An empty path is refused by the schema before
+        the component runs, and names nothing at all.
       </p>
 
       <h2>Finding files</h2>
