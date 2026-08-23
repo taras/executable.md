@@ -2506,14 +2506,44 @@ registration leaves a claimant that answers for nothing. The claimant exists as
 the argument of that one call: not published, not named, not reachable from a
 document, and not derivable from anything a handler holds.
 
-The engine mints one issuance per invocation, carrying the authored name, the
-domain this execution gave that name, and the frame the body is about to run in.
-A claimant answers only for an issuance that satisfies all of it:
+**Which domain an invocation is in is decided by what resolution selected, not
+by the name that was asked for.** An authored name is what a document wrote, and
+what it resolves to is decided by tiers, registrations and middleware, so a
+matching name says nothing about which registration answered. What settles it is
+the selection itself, recorded where it is made:
+
+- expansion opens an **execution-private import frame** before it asks the
+  public import chain anything;
+- canonical core resolution records, inside that frame, the exact name it was
+  asked for and the exact implementation it selected — the function object this
+  execution built from the host's factory, by identity;
+- the frame yields a domain only when exactly one canonical selection happened
+  in it, for the name expansion asked, and it selected that execution's own
+  trusted implementation;
+- an import nobody delegated, one delegated for a different name, one delegated
+  more than once, one whose name a registration shadowed, and one that selected
+  any other implementation each yield no domain.
+
+Nothing about this travels on the answer or through the chain. A public
+definition, a registry answer, a Context and a contextual Api carry no
+provenance and no authority: what a handler decides is which implementation
+runs, and an implementation running where canonical resolution did not select it
+names nothing. Nested and re-entrant frames stay contained, because a frame is
+opened per import and settled the moment that import answers, however it
+answered; concurrent interleaving leaves more than one selection in a frame and
+so yields no domain, which is the safe direction; and a replay decides the same
+way, against this execution's own factory-created implementation rather than
+against anything a previous run recorded.
+
+The engine then mints one issuance per invocation, carrying that domain — or
+none — the authored name for what a refusal says, and the frame the body is
+about to run in. A claimant answers only for an issuance that satisfies all of
+it:
 
 - **its own execution's**, still running — an implementation kept past teardown,
   or built by another attachment, answers for nothing;
-- **its own component's** — an implementation kept from one component's site
-  names nothing at another's;
+- **in its own domain** — an implementation belonging to another component, or
+  running where resolution selected something else, names nothing here;
 - **live** — an issuance kept from an element that has finished names nothing;
 - **not projecting** — expanding its own content is the only way anything is
   nested inside an invocation, so an invocation names nothing while it does,
@@ -2522,11 +2552,12 @@ A claimant answers only for an issuance that satisfies all of it:
   component, running concurrently in a frame of its own, names nothing here;
 - **unspent** — one invocation names one durable operation.
 
-Forwarding the genuine issuance is ordinary delegation and stays supported.
-Everything else refuses, and none of the refusals depends on a value a handler
-can carry: middleware may replace what a name resolves to, keep an
-implementation, and hand a whole registration record back inside another
-execution, and the identity still comes from the execution that minted it.
+An import wrapper may forward the genuine invocation, which is ordinary
+delegation and stays supported. Everything else refuses, and none of the
+refusals depends on a value a handler can carry: middleware may replace what a
+name resolves to, keep an implementation, and hand a whole registration record
+back inside another execution, and what an invocation may name still comes from
+the execution that minted it and the resolution that selected it.
 
 ### Capability-backed nested execution
 
