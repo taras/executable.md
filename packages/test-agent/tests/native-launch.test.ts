@@ -15,14 +15,15 @@
  */
 import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { useTempFileCompiler } from "@executablemd/core";
+import { agentIdentityComponents, useTempFileCompiler } from "@executablemd/core";
 import { ensure, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { execute, installAgentComponents } from "@executablemd/core";
+import { installAgentComponents } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/core";
 import { API, installControlledLauncher, useHostFiles } from "@executablemd/runtime";
 import type { NativeLaunchRequest } from "@executablemd/runtime";
@@ -100,7 +101,9 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
       yield* installTestAgentComponents();
       yield* installAgentComponents();
 
-      const execution = yield* execute({ path: path.join(dir, "doc.md"), stream });
+      const execution = yield* executeInstalled({ path: path.join(dir, "doc.md"), stream }, [
+        { components: agentIdentityComponents() },
+      ]);
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {

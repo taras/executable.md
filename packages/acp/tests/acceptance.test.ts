@@ -10,7 +10,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
-import { Agent, execute, installAgentComponents } from "@executablemd/core";
+import { agentIdentityComponents, Agent, installAgentComponents } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import type { AgentSessionRequest } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import { createAcpxProvider } from "../mod.ts";
@@ -49,7 +50,11 @@ describe("Tier XA — ACPX provider through the rootProvider seam", () => {
         },
       });
 
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      // `<Session>` names durable work after its own invocation, so the host
+      // declares it to the execution rather than registering it.
+      const execution = yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
+        { components: agentIdentityComponents() },
+      ]);
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {
@@ -149,7 +154,11 @@ describe("Tier WAP — same-named sibling Sessions", () => {
         },
       });
 
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      // `<Session>` names durable work after its own invocation, so the host
+      // declares it to the execution rather than registering it.
+      const execution = yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
+        { components: agentIdentityComponents() },
+      ]);
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {
@@ -236,7 +245,11 @@ describe("Tier WAP — same-named sibling Sessions", () => {
         },
       });
 
-      const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+      // `<Session>` names durable work after its own invocation, so the host
+      // declares it to the execution rather than registering it.
+      const execution = yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
+        { components: agentIdentityComponents() },
+      ]);
       const subscription = yield* execution.output;
       let next = yield* subscription.next();
       while (!next.done) {

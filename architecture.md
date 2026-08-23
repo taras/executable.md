@@ -2485,46 +2485,48 @@ still reaches a registered modifier by name, a replaced `timeout` included.
 ### Capability-backed invocation identity
 
 A component that names a durable operation after itself decides which retained
-record a replay restores, so two sites arriving at one name each replay the
-other's work. That name never comes from a context or a contextual Api answer:
-both are replaceable by anything running above the invocation, which is the rule
-in *State across loaded copies*. The engine hands it over instead, as the second
-argument to a function component.
+record a replay restores, so two invocations arriving at one name each replay
+the other's work, and an implementation running under somebody else's identity
+commits against its own storage under their expansion. A decision like that
+never trusts replaceable state (*State across loaded copies*), and every channel
+a component could *read* one from is replaceable: a context is addressed by
+name, a contextual Api answer is composed by whoever installed a handler, and
+the registry is an answer a handler may keep from one attachment and hand back
+inside another, record and all.
 
-Handing over a plain identifier would not settle it. `importComponent` is
-public: a handler may delegate the import, receive the registered definition and
-return a wrapper that calls the original with an object of its own. So what the
-engine hands over is opaque — a private field, nothing to read, and no shape to
-copy — and a trusted host takes the identity out of it through a delivered
-reader on the host entrypoint. The issuance is minted per invocation and ended
-when that invocation returns, and the authoritative read is single-use and
-answers only for the invocation doing the naming. That last part is not implied
-by the others: a component that projects content keeps its own invocation open
-while its descendants expand, so its issuance is live and unspent for exactly as
-long as a nested component is running. What settles it is that expanding its own
-content is the only way anything is nested inside an invocation, so an
-invocation names nothing while it is doing that — state on the issuance, raised
-where every projection funnels through, rather than anything global tracking who
-is current. It is bound to which component the engine resolved as well: middleware may keep
-the implementation it was handed at a real site and call it from an invocation
-of something else, and every other check passes. So an implementation that names
-durable work mints an opaque claim domain, closes over it, and states it where
-it claims. A domain belongs to the exact registration that made it — two
-attachments registering the same component hold two, and neither answers for the
-other. Nothing a handler can carry decides which: not the definition, which any
-wrapper spreads; not the registry answer, which a handler may keep from one
-attachment and hand back inside another, record and all; not a context, which
-one scope reads and another plants. Registering records the component name and
-the registrant's own scope inside the domain, and a claim is answered only from
-inside that scope — containment is structure, not state, so no handler can move
-one attachment's invocation inside another's registration. The engine consults
-no registry to mint an invocation. A domain is not a name, and nothing a caller
-supplies structurally is authoritative.
+So nothing is read. A trusted host **declares** to the execution which of its
+components name durable work, on the terms every other trusted-host value
+travels: read once and copied before any installation runs, so what may name
+durable work is fixed before installed code, middleware or a document exists
+(*Trusted host orchestration*). The execution mints one domain per declared
+component, calls that component's factory with the domain's **claimant**, and
+registers what the factory returns through the ordinary path — validated like
+any registration, and activated only once that batch has committed, so a refused
+registration leaves a claimant that answers for nothing. The claimant exists as
+the argument of that one call: not published, not named, not reachable from a
+document, and not derivable from anything a handler holds.
 
-Forwarding the genuine issuance is ordinary delegation and stays
-supported; minting one, keeping a finished one, spending one site's at another,
-claiming a live ancestor's from inside its content, and running one component's
-implementation at another's invocation are each refusals.
+The engine mints one issuance per invocation, carrying the authored name, the
+domain this execution gave that name, and the frame the body is about to run in.
+A claimant answers only for an issuance that satisfies all of it:
+
+- **its own execution's**, still running — an implementation kept past teardown,
+  or built by another attachment, answers for nothing;
+- **its own component's** — an implementation kept from one component's site
+  names nothing at another's;
+- **live** — an issuance kept from an element that has finished names nothing;
+- **not projecting** — expanding its own content is the only way anything is
+  nested inside an invocation, so an invocation names nothing while it does,
+  which is what refuses a live ancestor's issuance routed into its content;
+- **in this frame** — an issuance belonging to another invocation of the same
+  component, running concurrently in a frame of its own, names nothing here;
+- **unspent** — one invocation names one durable operation.
+
+Forwarding the genuine issuance is ordinary delegation and stays supported.
+Everything else refuses, and none of the refusals depends on a value a handler
+can carry: middleware may replace what a name resolves to, keep an
+implementation, and hand a whole registration record back inside another
+execution, and the identity still comes from the execution that minted it.
 
 ### Capability-backed nested execution
 
@@ -2613,7 +2615,9 @@ expands, and the middleware packages composed around it.
 
 A host attaches requirements to one execution through
 `@executablemd/core/host`: `executeInstalled(options, installations)`, where an
-installation carries `admissions` and an optional `install()`. Admissions are
+installation carries `admissions`, the components whose implementations name
+durable work after their own invocation, and an optional `install()`. Admissions
+and declared components are
 copied and frozen **before** any installation runs, so what ends up
 authoritative is fixed before any installed code, any middleware and any
 document code exists. Each runs inside the execution's own journal read, on the
@@ -2627,6 +2631,17 @@ passes — not through a context, an Api, a stable name, structural metadata or
 module-scoped state — which is why a separately loaded package composes here by
 handing over a closure rather than by agreeing on a name, and why no middleware
 can read, transport or remove the collection.
+
+A declared component travels the same way and for the same reason. What the host
+supplies is a factory, not an implementation: the execution calls it with the
+claimant it minted for that component, so the authority is delivered as the
+argument of one call the execution makes, and what a document, a component or
+middleware can reach afterwards is the implementation alone (*Capability-backed
+invocation identity*). A host that declares none has no component that can name
+a durable operation after its invocation, which is the safe direction: core's
+own `<Session>` is declared this way rather than registered with the other agent
+words, so a document run by a host that never mentioned it has no `<Session>` at
+all.
 
 ### Trusted durable preparation
 
@@ -2708,6 +2723,15 @@ its value has the expected structure. They derive from execution-owned state
 established before untrusted work begins or from parsed durable records. A
 contextual observation may describe an execution; it cannot authorize it or
 name its durable effects.
+
+A private context name is not an exception to this. A descriptor built under a
+name nobody else knows — a module-local one, a name carrying a fresh identifier
+— is still a context, and reaching authority through one is still reading
+replaceable state to decide it. The same holds for a public answer that carries
+an unreadable value: a registry record whose contents a handler cannot read is
+still a record that handler can keep and hand back somewhere else, so what
+cannot be read can still be transferred. Authority that must not move is held by
+the execution and delivered as an argument, never looked up.
 
 Metadata covered by State ownership's module-evaluation exception uses a
 stable, namespaced string property when another loaded copy must read it. A

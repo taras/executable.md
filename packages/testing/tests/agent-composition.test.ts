@@ -14,6 +14,8 @@ import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
+import { agentIdentityComponents } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import { Agent, execute, installAgentComponents } from "@executablemd/core";
 import type { AgentPromptEvent, PromptOptions, Session } from "@executablemd/core";
 import { installTestingComponents } from "../mod.ts";
@@ -108,7 +110,11 @@ describe("agent + testing composition", () => {
         "",
       ].join("\n"),
     );
-    const execution = yield* execute({ path: docPath, stream: new InMemoryStream() });
+    // `<Session>` names durable work after its own invocation, so the host
+    // declares it to the execution rather than registering it.
+    const execution = yield* executeInstalled({ path: docPath, stream: new InMemoryStream() }, [
+      { components: agentIdentityComponents() },
+    ]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {

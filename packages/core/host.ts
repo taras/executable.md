@@ -66,15 +66,12 @@ export type { ExecutionInstallation, JournalAdmission } from "./src/execute.ts";
 export type { DurablePreparation } from "./src/document-request.ts";
 
 /**
- * The durable identity of the invocation a trusted host was handed. One use, and
- * only while that invocation is running — see `component-invocation.ts`.
+ * What a trusted host declares to an execution when one of its components names
+ * durable work after its own invocation — see `src/invocation-identity.ts`.
+ * The claimant is delivered to the factory and published nowhere.
  */
-export {
-  ComponentClaim,
-  componentClaim,
-  ComponentInvocationError,
-  durableIdentityOf,
-} from "./src/component-invocation.ts";
+export { ComponentInvocationError } from "./src/invocation-identity.ts";
+export type { IdentityClaimant, IdentityComponent } from "./src/invocation-identity.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 export {

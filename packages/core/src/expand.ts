@@ -58,13 +58,13 @@ import {
 import { printsErrors, usePrintErrors } from "./component-failures.ts";
 import { containedLedger, recoveringLedger } from "./component-failures.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import type { ImportAuthority } from "./components/import-authority.ts";
+import type { ExpansionAuthority } from "./components/import-authority.ts";
 import CoreTest from "./components/Test.ts";
 import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
-import { issueInvocation } from "./component-invocation.ts";
+import { issueInvocation } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -187,7 +187,7 @@ function expandChildrenScoped(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     const overrideEnv = override === undefined ? undefined : { values: override };
@@ -257,7 +257,7 @@ interface ProjectionState {
    * the invocation is (§3.6).
    */
   checkedFailures: CheckedFailures | undefined;
-  authority: ImportAuthority | undefined;
+  authority: ExpansionAuthority | undefined;
 }
 
 interface ProjectionFrame {
@@ -652,7 +652,7 @@ export function* expandSegments(
    * root, all of which start from the default here and are outside it.
    */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -1124,7 +1124,7 @@ export function* expandSegments(
 function* checkedCommandFailure(
   segment: ErrorSegment,
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<ErrorSegment> {
   // Written down before it is raised or projected, and before the error mode is
   // consulted at all: the mode decides how this is reported, never whether the
@@ -1230,7 +1230,7 @@ function* expandLet(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<ErrorSegment[]> {
   const written = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (written.some((name) => !LET_PROPS.has(name))) {
@@ -1422,7 +1422,7 @@ function* expandEach(
   path: string,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (n) => !EACH_PROPS.has(n),
@@ -1768,7 +1768,7 @@ function* expandIf(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !IF_PROPS.has(name),
@@ -1943,7 +1943,7 @@ function* expandLoop(
   path: string,
   /** Whether the enclosing region grants checked-failure recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const unknownProp = [...Object.keys(segment.props), ...Object.keys(segment.expressions)].find(
     (name) => !LOOP_PROPS.has(name),
@@ -2129,7 +2129,7 @@ function* expandPrintErrors(
   path: string,
   /** The ledger this region grants recovery on top of (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<void> {
   const names = [...Object.keys(segment.props), ...Object.keys(segment.expressions)];
   if (names.length > 0) {
@@ -2194,7 +2194,7 @@ function* expandComponent(
    * block written there would be.
    */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2226,7 +2226,8 @@ function* expandComponent(
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
-    imported = authority === undefined ? answered : authority.authorize(name, answered);
+    const imports = authority?.imports;
+    imported = imports === undefined ? answered : imports.authorize(name, answered);
   } catch (error) {
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.
@@ -2679,7 +2680,7 @@ function* expandFunctionComponent(
   path: string = "",
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2838,12 +2839,19 @@ function* expandFunctionComponent(
         // invocation names nothing while it is expanding its own content, and
         // that is the whole of how a nested component is reached.
         //
-        // The authored name travels with it, and nothing else does: which
-        // registration may name durable work here is decided by the claim
-        // domain the implementation holds and the scope it was registered in,
-        // never by an answer the registry gave — that answer is a value a
-        // handler can keep from one attachment and hand back inside another.
-        const issued = issueInvocation(expansion.id, name);
+        // The domain is this execution's own, for this authored name, from the
+        // state installation built before anything could observe it — never
+        // from a definition, a registry answer or a context, all of which a
+        // handler may keep from one attachment and hand back inside another.
+        // The frame is the one the body is about to run in, so an issuance
+        // routed into a concurrent invocation of the same component answers
+        // nothing there.
+        const issued = issueInvocation(
+          expansion.id,
+          name,
+          authority?.identities?.domainFor(name),
+          yield* useScope(),
+        );
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,
@@ -3870,7 +3878,7 @@ export function* expandBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
@@ -3964,7 +3972,7 @@ function runDocumentation(
   indexBase: number,
   /** Whether the region that caused this expansion grants recovery (§3.6). */
   checkedFailures: CheckedFailures | undefined,
-  authority: ImportAuthority | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
@@ -4029,7 +4037,7 @@ function* expandValueBody(
   path: string = "",
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
   checkedFailures?: CheckedFailures,
-  authority?: ImportAuthority,
+  authority?: ExpansionAuthority,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };

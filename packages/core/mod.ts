@@ -224,7 +224,7 @@ export type { NormalizedIssue } from "./src/validate.ts";
 export { validateParsed } from "./src/components/parse-schema.ts";
 
 // Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
-export { installAgentComponents } from "./src/agent/components.ts";
+export { agentIdentityComponents, installAgentComponents } from "./src/agent/components.ts";
 export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {

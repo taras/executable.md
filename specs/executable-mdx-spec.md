@@ -1860,7 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
-| `src/component-invocation.ts` | `ComponentInvocation`, `ComponentClaim`, `componentClaim()`, `registerClaim()`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
+| `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -2615,6 +2615,17 @@ Two registrations for one name and kind at the same scope are a configuration
 error naming both origins. Installation order is not a resolution mechanism —
 reserved and default registrations are held apart, so which one wins is decided
 by the tiers above however they were installed.
+
+**A declared component is registered by the execution, not by the host.** A
+trusted host may tell an execution that one of its components names durable work
+after its own invocation (§5.6). Such a component is not registered by the code
+that installs the rest of the host's words: the execution mints its domain,
+calls the host's factory with the claimant, and registers what comes back
+through this same path, on this same tier, once. It resolves and is overridden
+exactly as any other registered default — a repository file of that name still
+wins — and what changes is only where the implementation came from and what it
+may name. A host that declares none has no component that can name a durable
+operation after its invocation.
 
 **Registration is scope-local.** `registerComponents()` makes names resolvable
 for the installing scope and its descendants. A child scope may register a name
@@ -3652,6 +3663,13 @@ What an element can learn about its own expansion is not a Component Api
 operation, because there is no legitimate reason to intercept it: durable
 identities are derived from it. See §5.6.
 
+**Nothing on this Api carries authority to name durable work.** `registry` is a
+composable answer like every other: a handler may observe it, merge into it, and
+return a registration record it kept from somewhere else. That is a supported
+way to decide what a name resolves to, and it decides nothing about what an
+invocation may name — an execution's identity domains are its own, delivered to
+the factories it built and never read back from an answer this Api gave (§5.6).
+
 **There is no operation for claiming a name.** A component name means what §5.3
 says it means — a structural construct, a reserved registration, a repository
 file, or a registered default — and nothing installed at runtime preempts that
@@ -3809,60 +3827,29 @@ expansion identifier, never the expansion identifier alone.
 
 **The invocation a component is handed.** A function component is invoked with
 two arguments: its validated props, and the invocation the engine entered. The
-second is where a component naming a *durable* operation after itself gets the
-name, and it is deliberately not the context above: what a document can rebind
-it can rebind, and a contextual Api handler installed outside an invocation
-answers ahead of the engine's own (Tier CIV). A component that needs nothing
-from it declares one parameter and never sees it.
+second is where a component naming a *durable* operation gets the name, and it
+is deliberately not the context above: what a document can rebind it can
+rebind, and a contextual Api answer is composed by whoever installed a handler
+(Tier CIV). A component that needs nothing from it declares one parameter and
+never sees it.
 
-It is a capability, not a value. There is nothing on it to read: the identity
-sits behind a private field, and only a trusted host takes it, through
-`durableIdentityOf()` on the host entrypoint. This is what `importComponent`
-middleware makes necessary — a handler may delegate an import, receive the
-registered definition and return a wrapper that calls the original with an
-object of its own, so a structural `{ id }` would be a durable identity any
-wrapper could mint, and two sites given one minted value collapse into one
-durable name.
+It carries nothing readable. The identity behind it is answered by a
+**claimant**, and a claimant reaches only one place: the factory a trusted host
+**declared** to this execution, called once with the claimant this execution
+minted for that component (§5.3, architecture.md *Trusted host orchestration*).
+The claimant is the argument of that call — not published, not named, not
+reachable from a document, and not derivable from anything a handler holds. A
+component nobody declared cannot name a durable operation after its invocation
+at all.
 
-The engine mints one per invocation and ends it when that invocation returns,
-however it left. Being alive is not enough to name anything: a component that
-projects content keeps its own invocation open while its descendants expand, so
-an ancestor's issuance is genuine, live and unspent for exactly as long as a
-nested component is running. An invocation therefore names nothing while it is
-expanding its own content, which is the one way anything is nested inside it.
-
-It is also bound to *which component* the engine resolved. Middleware may keep
-the implementation it was handed at a real site and call it from an invocation
-of something else, handing over that element's own genuine, live, unspent
-issuance — every other check passes. So a component that names durable work
-after its invocation mints a **claim domain** with `componentClaim()`, closes
-over it, and states it where it claims; a domain answers for one component, and
-a claim made at an invocation of another is refused.
-
-A domain belongs to the exact registration that made it, never to a component
-name: two attachments registering `<Evaluate>` hold two domains, and neither
-answers for the other. Nothing anyone can carry decides which — not the
-definition, which a handler is given and may spread; not the registry answer,
-which a handler may keep from one attachment and hand back inside another,
-record and all; not a context, which one scope reads and another plants.
-
-What decides it is where the registration happened. `registerComponents` records
-the component name and the registrant's own scope in the domain, and a claim is
-answered only from inside that scope. Containment is structure rather than
-state: no handler can move one attachment's invocation inside another
-attachment's registration, and there is nothing to copy or hand back. The engine
-consults no registry to mint an invocation; it records the authored name, and
-the domain the implementation states does the rest.
-
-Forwarding the genuine issuance is ordinary delegation and stays supported.
-Everything else refuses rather than answering: a value the engine did not mint
-names no identity, an invocation running outside the registration a domain
-belongs to names none in it, one whose invocation has finished names none here, one whose
-invocation is busy expanding its content names none here, and a second
-authoritative read of one refuses. So a wrapper can neither keep the first
-site's issuance and spend it at the second, nor capture a live ancestor's and
-spend it inside its content, nor keep one component's implementation and run it
-at another's.
+A claimant answers only for the invocation the engine is running: one minted by
+the execution that minted the claimant, for the component that claimant was
+built for, still live, not expanding its own content, running in the frame the
+engine invoked it in, and not already answered. Forwarding the genuine issuance
+is ordinary delegation and stays supported; everything else refuses. None of
+that reads replaceable state, so middleware may replace what a name resolves to,
+keep an implementation, and hand a whole registration record back inside another
+execution without moving what an invocation may name.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9969,7 +9956,7 @@ perform, separately from the binding, the rendered output, and the journal.
 | FEC1–FEC2 | Diagnostic retention | A run without `--journal` performs the request and writes nothing; with one, exactly one Fetch Yield holds the normalized request and the complete response |
 | FEW1 | Workflow retention | A killed run holds one committed response, and a resume restores it without asking the server again |
 
-### Tier CIV — The invocation the engine hands a component
+### Tier CIV — The identity a host's component names its work after
 
 Defined in §5.6.
 
@@ -9978,12 +9965,19 @@ Defined in §5.6.
 | CIV1 | Distinct sites | Two invocations are handed two identities, each the engine's own for that invocation |
 | CIV2 | The Api is replaceable | A handler installed outside an invocation replaces a Component Api answer the engine would have given, which is why a durable name may not come from one |
 | CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
-| CIV4 | No minting | `importComponent` middleware that delegates and calls the original with an object of its own is refused at both sites, and takes no identity |
+| CIV4 | No forgery | Middleware that delegates an import and calls the implementation with an object of its own is refused at every site, and takes no identity |
 | CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
-| CIV6 | No live ancestor | One element's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there. The two are the same component, so the claim domain settles nothing and the projection is what refuses it |
-| CIV7 | No borrowed implementation | An implementation kept from one component's real site, called from an invocation of another with that element's own genuine issuance, is refused — and the definition the handler was given carries no domain to move |
-| CIV8 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
-| CIV9 | No borrowed registration | Two scoped registrations of one component name hold two domains: each names its own site, and the first's implementation called at the second's invocation is refused — including when registry middleware hands the first registration's whole record back inside the second |
+| CIV6 | No live ancestor | One element's issuance, captured while it is live and unspent and routed into a component inside its content, is refused there |
+| CIV7 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
+| CIV8 | No borrowed implementation | An implementation kept from one declared component, called at an invocation of another with that invocation's genuine issuance, is refused |
+| CIV9 | No borrowed execution | An implementation kept from one execution, called at another execution's own invocation of the same component, is refused |
+| CIV10 | No transplanted record | The same, with the first execution's whole registration record answered for that name inside the second: still refused |
+| CIV11 | No nested registration | A document-level registration of a declared component's name is an ordinary component, and the implementation it shadows names nothing when called from there |
+| CIV12 | No concurrent frame | An issuance belonging to another live invocation of the same component, in a frame of its own, is refused in this one |
+| CIV13 | No refused registration | A declared component whose registration is refused leaves a claimant that answers for nothing |
+| CIV14 | Lifetime | An issuance the engine has ended names nothing, claimed in its own frame |
+| CIV15 | One use | A second claim of one issuance, in its own frame, is refused |
+
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

@@ -174,7 +174,12 @@ boundary runs after the component has returned.
 - **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
   prompts. Self-closing validates only (no output).
 - **`<Session name>`** resolves a session and pins it onto nested prompts and
-  launches. Self-closing validates only.
+  launches. Self-closing validates only. It is the one agent word a host does
+  not register with the others: its implementation names durable work after its
+  own invocation, so the host **declares** it to the execution and the execution
+  builds it from the claimant it minted (executable-mdx-spec §5.6). A document
+  run by a host that declares none has no `<Session>` at all, which is why
+  `installAgentComponents()` alone leaves the name unresolved.
 - **`<Session.Launch>`** prepares one durable session from its rendered body and
   hands the provider's native UI the terminal for it, rendering nothing itself
   and returning only after that UI exits
@@ -322,6 +327,15 @@ observe or change it; the identity travels inside an opaque placement the
 `<Session>` element routes and is readable only through the authority delivered
 to the installed provider. Middleware holding the placement reads the name and
 reaches no further.
+
+Where the element gets that identity is the other half. `<Session>` does not
+read it from anywhere: the execution mints it for that invocation and answers
+for it only through the claimant it delivered to this `<Session>` factory. So an
+implementation kept from one execution's `<Session>` names nothing at another's,
+one kept from a different component names nothing here, and an issuance
+belonging to another element — finished, still projecting, or live in a frame of
+its own — names nothing either. Two attachments running side by side hold two
+claimants, and neither answers for the other.
 
 The provider and the resolved agent command are stored beside that identity as
 compatibility attributes. Changing either refuses reattachment rather than

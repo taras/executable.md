@@ -119,6 +119,10 @@ import {
   unresolvedMessage,
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
+import { registerComponents } from "./components/registration.ts";
+import { installIdentities } from "./invocation-identity.ts";
+import type { IdentityComponent } from "./invocation-identity.ts";
+import type { ExpansionAuthority } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
 import type { CodeBlockContext, CodeBlockResult, EvalEnv } from "./types.ts";
 import { readRootSource, rootSourcePath } from "./root-source.ts";
@@ -1573,7 +1577,7 @@ function* runValueRoot(
   path: string,
   /** This run's record of an unauthorized checked command failure (#441). */
   checkedFailures: CheckedFailures,
-  bundle: WorkflowImportAuthority | undefined,
+  authority: ExpansionAuthority,
 ): Operation<DocumentResult> {
   let produced: { value: Json } | undefined;
 
@@ -1602,7 +1606,7 @@ function* runValueRoot(
         path,
         0,
         checkedFailures,
-        bundle,
+        authority,
       );
       for (const resolved of expanded) {
         const text = renderSegment(resolved);
@@ -1641,7 +1645,7 @@ function* refuseCheckedFailure(checkedFailures: CheckedFailures): Operation<void
 
 function* documentWorkflow(
   props: Record<string, Json>,
-  bundle: WorkflowImportAuthority | undefined,
+  authority: ExpansionAuthority,
 ): Workflow<DocumentResult> {
   // This run's memory of a checked command failure it never authorized. Passed
   // by value into core's own expansion and reachable from nowhere else, so no
@@ -1654,7 +1658,8 @@ function* documentWorkflow(
   const root = yield* ephemeral(
     (function* (): Operation<ComponentDefinition | FunctionComponentDefinition> {
       const imported = yield* importComponent("__root__");
-      return bundle === undefined ? imported : bundle.authorize("__root__", imported);
+      const imports = authority.imports;
+      return imports === undefined ? imported : imports.authorize("__root__", imported);
     })(),
   );
 
@@ -1730,7 +1735,7 @@ function* documentWorkflow(
         streamed,
         rootPath,
         checkedFailures,
-        bundle,
+        authority,
       );
     }
 
@@ -1753,7 +1758,7 @@ function* documentWorkflow(
         selected,
         rootPath,
         checkedFailures,
-        bundle,
+        authority,
       );
       const text = selected.map(renderSegment).join("");
       // An empty buffered root emits no output event.
@@ -1779,7 +1784,7 @@ function* documentWorkflow(
         rootPath,
         0,
         checkedFailures,
-        bundle,
+        authority,
       );
 
       while (emittedThrough < produced.length) {
@@ -1891,6 +1896,7 @@ function* executeDocument(
   completions: readonly CompletionFailure[] = [],
   preparations: readonly DurablePreparation[] = [],
   bundles: readonly WorkflowComponentBundle[] = [],
+  identityComponents: readonly IdentityComponent[] = [],
 ): Operation<DocumentExecution> {
   const {
     stream,
@@ -1980,6 +1986,24 @@ function* executeDocument(
       // document already written means.
       const bundle = installedBundle(bundles, yield* Component.operations.registry);
 
+      // What this execution gives a durable identity to, from what installation
+      // declared before anything could observe or replace it. Each factory is
+      // called here, with a claimant this execution minted for that component
+      // and nothing else — delivered as the argument of this call and published
+      // nowhere. Registration goes through the ordinary path, so a refused one
+      // throws before `activate()`, and a claimant that was never activated
+      // answers for nothing.
+      const identity = installIdentities(identityComponents);
+      yield* registerComponents(identity.registrations);
+      identity.activate();
+      // The domains stop answering with the execution that minted them, so an
+      // implementation kept past teardown names nothing.
+      yield* ensure(() => identity.identities.revoke());
+      const authority: ExpansionAuthority = {
+        ...(bundle === undefined ? {} : { imports: bundle }),
+        identities: identity.identities,
+      };
+
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
       // and the root eval scope.
@@ -2036,7 +2060,7 @@ function* executeDocument(
       const returned = yield* durableRun(
         function* (): Operation<DocumentResult> {
           const issued = issueDocument<DocumentResult>(props, (claimed) =>
-            documentWorkflow(claimed, bundle),
+            documentWorkflow(claimed, authority),
           );
           try {
             return yield* beforeAnyImport(issued);
@@ -2213,6 +2237,19 @@ export interface ExecutionInstallation {
    * a host that attaches none has no nested-execution authority anywhere in it.
    */
   readonly testHarness?: TestHarnessInstaller;
+  /**
+   * The components of this host's whose implementations name durable work
+   * after their own invocation.
+   *
+   * Captured by value alongside the admissions, before any installation runs,
+   * for the reason all of these are: what may name durable work here is fixed
+   * before anything can observe or replace it. Each factory is called once,
+   * with a claimant this execution minted for that component — delivered as the
+   * argument of that call and published nowhere — and what it returns is
+   * registered through the ordinary path. A host that declares none has no
+   * component that can name a durable operation after its invocation.
+   */
+  readonly components?: readonly IdentityComponent[];
   install?(): Operation<void>;
 }
 
@@ -2523,6 +2560,25 @@ function* invoke(
   );
   yield* provideTestHarnessInstallers(harnessInstallers);
 
+  // Read once and copied entry by entry, before any installation runs and for
+  // the same reason as the rest: what may name durable work in this execution
+  // is settled before anything can observe it, and the execution closes over
+  // its own values rather than over an array a host still holds.
+  const identityComponents = Object.freeze(
+    installations.flatMap((installation) =>
+      [...(installation.components ?? [])].map((component) =>
+        Object.freeze({
+          name: component.name,
+          origin: component.origin,
+          props: component.props,
+          ...(component.returns === undefined ? {} : { returns: component.returns }),
+          ...(component.captures === undefined ? {} : { captures: [...component.captures] }),
+          factory: component.factory.bind(component),
+        }),
+      ),
+    ),
+  );
+
   for (const installation of installations) {
     if (installation.install) {
       yield* installation.install();
@@ -2559,6 +2615,7 @@ function* invoke(
     issued.completions(),
     preparations,
     bundles,
+    identityComponents,
   );
 }
 

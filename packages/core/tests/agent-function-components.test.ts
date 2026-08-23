@@ -22,6 +22,8 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { Agent } from "../src/agent/agent-api.ts";
 import type { AgentPromptEvent, PromptOptions, Session } from "../src/agent/agent-api.ts";
 import { AgentPromptError } from "../src/agent/errors.ts";
+import { executeInstalled } from "../host.ts";
+import { agentIdentityComponents } from "../src/agent/components.ts";
 import { installAgentComponents } from "../src/agent/components.ts";
 import { AgentInternal } from "../src/agent/internal.ts";
 import { installPromptFailurePolicy } from "../src/agent/permission.ts";
@@ -136,11 +138,16 @@ function* runDoc(
       yield* installPromptFailurePolicy(options.policy);
     }
 
-    const execution = yield* execute({
-      path: docPath,
-      stream: new InMemoryStream(),
-      componentDirs: [dir],
-    });
+    // `<Session>` names durable work after its own invocation, so the host
+    // declares it to the execution rather than registering it.
+    const execution = yield* executeInstalled(
+      {
+        path: docPath,
+        stream: new InMemoryStream(),
+        componentDirs: [dir],
+      },
+      [{ components: agentIdentityComponents() }],
+    );
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -339,7 +346,7 @@ describe("Tier AF — failures that end the document", () => {
 });
 
 describe("Tier AF — registered defaults a document can replace", () => {
-  const names = ["AgentProvider", "Agent", "Session", "Prompt", "ApproveAll", "AskPermission"];
+  const names = ["AgentProvider", "Agent", "Prompt", "ApproveAll", "AskPermission"];
 
   it("AF13: each name resolves to core's registration when nothing is on disk", function* () {
     yield* installAgentComponents();
@@ -350,6 +357,15 @@ describe("Tier AF — registered defaults a document can replace", () => {
         info.kind === "registered" && info.origin.kind === "registered" && info.origin.origin,
       ).toBe("@executablemd/core");
     }
+  });
+
+  it("AF13: <Session> is the execution's, not this installation's", function* () {
+    yield* installAgentComponents();
+    // It names durable work after its own invocation, so it exists only where
+    // an execution was told about it — a document run by a host that declares
+    // none has no `<Session>` at all, which is the safe direction.
+    const info = yield* inspectComponent({ name: "Session", componentDirs: [] });
+    expect(info.kind).toBe("unresolved");
   });
 
   it("AF14: a repository component overrides each of them", function* () {

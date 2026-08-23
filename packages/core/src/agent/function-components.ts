@@ -20,8 +20,9 @@ import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
 import { sessionPlacement } from "./session-request.ts";
-import { durableIdentityOf } from "../component-invocation.ts";
-import type { ComponentClaim, ComponentInvocation, FunctionComponent } from "../types.ts";
+
+import type { ComponentInvocation, FunctionComponent } from "../types.ts";
+import type { IdentityClaimant } from "../invocation-identity.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
@@ -174,13 +175,13 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
 }
 
 /**
- * `<Session>`, closed over the domain it names its placements in.
+ * `<Session>`, closed over the claimant that names its placements.
  *
- * Built per installation, because a domain belongs to the registration that
- * made it: an implementation kept from one installation's `<Session>` site
- * names nothing at another's, and nothing at some other element's invocation.
+ * Built per execution, from the claimant that execution delivered to this
+ * factory: an implementation built for one execution's `<Session>` names
+ * nothing under another's, and nothing at some other element's invocation.
  */
-export function sessionComponent(claim: ComponentClaim): FunctionComponent {
+export function sessionComponent(claim: IdentityClaimant): FunctionComponent {
   return function* SessionComponent(
     props: Record<string, Json>,
     invocation: ComponentInvocation,
@@ -193,7 +194,7 @@ export function sessionComponent(claim: ComponentClaim): FunctionComponent {
     // handler that kept the placement cannot route it for the next `<Session>`:
     // both would otherwise resolve to this element's identity. `close()` is
     // synchronous, so the guarantee holds however the call left.
-    const identity = yield* durableIdentityOf(invocation, claim);
+    const identity = yield* claim(invocation);
     const issuance = sessionPlacement(identity, asString(props.name));
     let session: Session;
     try {

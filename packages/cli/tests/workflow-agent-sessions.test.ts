@@ -21,7 +21,8 @@ import { readTextFile } from "@effectionx/fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collect, execute, retainedSource } from "@executablemd/core";
+import { agentIdentityComponents, collect, retainedSource } from "@executablemd/core";
+import { executeInstalled } from "@executablemd/core/host";
 import type { Json } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
@@ -77,10 +78,15 @@ function attach(
         database,
         scoped(function* () {
           return yield* collect(
-            yield* execute({
-              ...retainedSource("workflows/sibling-sessions.md", source),
-              stream: database.journal,
-            }),
+            yield* executeInstalled(
+              {
+                ...retainedSource("workflows/sibling-sessions.md", source),
+                stream: database.journal,
+              },
+              // `<Session>` names durable work after its own invocation, so the
+              // host declares it to the execution rather than registering it.
+              [{ components: agentIdentityComponents() }],
+            ),
           );
         }),
         {
