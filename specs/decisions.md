@@ -549,9 +549,27 @@ pass in the case it exists for. The gate therefore selects the authoritative run
 with this decision's own rules — `selectAuthoritative()`, shared with the
 reporter rather than reimplemented — and reads `main`'s head a second time after
 inspecting the run, because a head that moved in between means the verdict is
-about a commit that is no longer the base. Missing, unfinished, cancelled,
-timed-out, startup-failed and failed runs all block; only `completed` plus
-`success` passes.
+about a commit that is no longer the base. Only a `completed` run that concluded
+`success`, for a head the second read proves is still current, passes.
+
+**Waiting is what makes exactness affordable.** Answering once put the cost of
+`main`'s own build on every pull request opened during it: no verdict had
+arrived yet, so the gate failed and asked the author to re-run the job by hand.
+Absence of proof was being reported as a main-health verdict. So the gate
+converges on one instead — `when()` from `@effectionx/converge`, polling every
+fifteen seconds. Absent, queued and in-progress runs are states to wait through;
+an advancing head is followed rather than reported as a race, and every
+conclusion read about the head `main` has left is discarded, because a stale
+failure is no more current than a stale success. A completed unsuccessful run
+for the still-current head fails immediately, and a read or parse failure fails
+immediately too — neither is something a later poll improves.
+
+The job carries `timeout-minutes: 60`, which is roughly twice a full `main` run,
+and the waiter gives up just inside that so the log names what it was still
+waiting on. Reaching either bound means this pull request obtained no proof. It
+is deliberately not a `MainNotGreen` verdict: nothing about a wait that ran out
+says CI failed. The repair label is read before any of this, so a
+`ci-main-red-fix` pull request neither reads `main` nor waits on it.
 
 The gate holds `contents: read` and `actions: read` and nothing more. It decides
 a required check, so it must not be able to write an issue, a pull request, or

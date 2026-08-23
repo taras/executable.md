@@ -8,9 +8,10 @@ name: Main Health
 # Reporting is the half that reaches a person. The half that stops the damage is
 # `ci.yml`'s `main-green` job, which withholds the required `green` check from an
 # ordinary pull request until CI has completed successfully for `main`'s exact
-# current head. The two read main health by the same rules — `main-green` calls
-# this workflow's own `selectAuthoritative()` — so a gate that blocks and an
-# issue that is open cannot describe different states of `main`.
+# current head, waiting for that verdict when one has not arrived yet. The two
+# read main health by the same rules — `main-green` calls this workflow's own
+# `selectAuthoritative()` — so a gate that blocks and an issue that is open
+# cannot describe different states of `main`.
 #
 # Every completed CI run wakes a reconciliation, and none of them is filtered on
 # its own conclusion — see the job below for why that matters.

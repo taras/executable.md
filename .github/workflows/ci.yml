@@ -33,6 +33,12 @@ jobs:
   main-green:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # The gate waits for main's verdict rather than failing when one has not
+    # arrived. Main's own CI takes roughly half of this, which leaves one broad
+    # margin and stays finite while main keeps advancing. The waiter gives up
+    # inside this bound and says what it was waiting on; reaching the bound
+    # itself means the pull request obtained no proof — not that main failed.
+    timeout-minutes: 60
     permissions:
       actions: read # list main's CI runs
       contents: read
