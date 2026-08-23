@@ -2,6 +2,8 @@ import { each } from "effection";
 import type { Operation } from "effection";
 import { exists, readTextFile, toPath, walk } from "@effectionx/fs";
 import { listWorkspacePaths } from "./workspace.ts";
+import { exclusions } from "../runtime-test-exclusions.ts";
+import type { Runtime } from "../runtime-test-exclusions.ts";
 
 const EXTRA_MEMBERS = ["scripts"];
 
@@ -39,6 +41,19 @@ export function* listTestFiles(root: URL): Operation<string[]> {
     }
   }
   return files.sort();
+}
+
+/**
+ * The test files `runtime` runs: everything discovery finds, minus that
+ * runtime's recorded exclusions, still sorted.
+ *
+ * This is the one derivation all three runtimes share. Reading discovery and
+ * the manifest separately at each call site is how a runtime comes to run a
+ * corpus nobody weighed or partitioned.
+ */
+export function* applicableTestFiles(runtime: Runtime, root: URL): Operation<string[]> {
+  const skip = new Set(exclusions[runtime].map((entry) => entry.path));
+  return (yield* listTestFiles(root)).filter((file) => !skip.has(file));
 }
 
 function posix(path: string): string {

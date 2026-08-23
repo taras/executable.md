@@ -1,0 +1,70 @@
+name: Measure test weights
+
+# Dispatch only. Weights are repository data, not a build product: they change
+# when someone decides to remeasure, and a workflow that refreshed them on push
+# would make every unrelated commit a silent remeasurement.
+#
+# GitHub accepts a dispatch against a branch only once the workflow file exists
+# on the default branch, so this hook merges before anything consumes what it
+# produces.
+on:
+  workflow_dispatch:
+
+# Read-only, and nothing here commits or pushes. The measurement's product is an
+# artifact a human downloads and commits deliberately, which is what keeps the
+# provenance in the file honest about which run produced it.
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    # Every applicable file is run alone under all three runtimes, so this job
+    # is far longer than any suite: it pays a process start per file per
+    # runtime, which is exactly the cost a shard will pay.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: denoland/setup-deno@e95548e56dfa95d4e1a28d6f422fafe75c4c26fb # v2.0.3
+        with:
+          deno-version: v2.9.5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      # One preparation, in the repository's load-bearing order: `deno install`,
+      # then `pnpm install` beside it, then the browser bundle. The measured
+      # commands resolve through the same tree the CI suites resolve through, so
+      # a weight is not measuring a different module layout.
+      - name: Prepare the checkout
+        run: deno task setup
+
+      # The versions are read from the executables this job just installed, not
+      # from the pins above: a pin says what was asked for and these say what
+      # ran.
+      - name: Measure every applicable test file under every runtime
+        env:
+          WEIGHTS_COMMIT: ${{ github.sha }}
+          WEIGHTS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WEIGHTS_ATTEMPT: ${{ github.run_attempt }}
+          WEIGHTS_RUNNER: ubuntu-latest
+        run: |
+          set -euo pipefail
+          WEIGHTS_DENO="$(deno --version | head -1)" \
+          WEIGHTS_NODE="$(node --version)" \
+          WEIGHTS_BUN="$(bun --version)" \
+            deno task weights:measure
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-weights
+          path: test-weights.json
+          if-no-files-found: error
