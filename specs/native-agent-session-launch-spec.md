@@ -414,11 +414,20 @@ owner to release — what has to be settled first is which conversation this is:
     ownership and before any process exists; nothing else supplies or replaces
     it.
 11. A launch that allocated publishes the `client-native` route create-once, and
-    adopts a concurrent winner rather than replacing it — so losing that race is
-    a resume too, under the winner's identity. Either way XMD commits a prepared
-    launch record agreeing exactly with the route that governs: `created` where
-    this launch's own candidate won, `resumed` where an existing or winning
-    route named the session.
+    what it publishes against is authoritative — whoever published first
+    described the session that exists. Four outcomes, and no other:
+    - this launch's own candidate won — `created`;
+    - a compatible `client-native` route won — its identity is adopted, no
+      replacement is allocated, and the launch is `resumed` under it;
+    - an `acp-first` route won — the session already has an identity of its own,
+      so the launch refuses with `identity-unavailable`, converting nothing;
+    - a `client-native` route disagreeing about the instruction layer or the
+      launcher won — neither account repairs the other, so the launch refuses
+      the same way.
+    A refusal is retained at `prepared` and reaches no private file, no detach
+    and no spawn. Every retained outcome is built from the winning route rather
+    than from this launch's candidate, so the two accounts agree by construction
+    rather than by comparison.
 12. The prepared instructions are written to a private mode-`0600` file. Detach
     still happens as a phase — it is the point after which a spawn may happen —
     and succeeds trivially, because no ACP session was ever open.
