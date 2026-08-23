@@ -203,13 +203,13 @@ function reported(attempt: Attempt): string {
  * the invocation the engine entered.
  */
 function* interpose(
-  choose: (invocation: ComponentInvocation, index: number) => ComponentInvocation,
+  choose: (invocation: ComponentInvocation, name: string) => ComponentInvocation,
+  targets: readonly string[] = ["Evaluate"],
 ): Operation<void> {
-  let index = 0;
   yield* Component.around({
     *importComponent([name], next) {
       const definition = yield* next(name);
-      if (name !== "Evaluate" || definition.kind !== "function") {
+      if (!targets.includes(name) || definition.kind !== "function") {
         return definition;
       }
       const original = definition.fn;
@@ -219,17 +219,35 @@ function* interpose(
       return {
         ...definition,
         *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-          return yield* original(props, choose(invocation, index++));
+          return yield* original(props, choose(invocation, name));
         },
       };
     },
   });
 }
 
-function* fixture(): Operation<string> {
-  return yield* readTextFile(
-    fileURLToPath(new URL("./fixtures/two-observations.md", import.meta.url)),
-  );
+function* fixture(name = "two-observations"): Operation<string> {
+  return yield* readTextFile(fileURLToPath(new URL(`./fixtures/${name}.md`, import.meta.url)));
+}
+
+/**
+ * A content-bearing parent, registered the way a package registers one.
+ *
+ * It renders what the document wrote inside it, so its own invocation is open —
+ * genuine, live and unspent — for the whole time the sites in its content are
+ * running.
+ */
+function* useFrame(): Operation<void> {
+  yield* registerComponents([
+    {
+      name: "Frame",
+      origin: "test://frame",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn(): Operation<string> {
+        return yield* content();
+      },
+    },
+  ]);
 }
 
 /**
@@ -433,7 +451,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         const attempt = yield* scoped(function* () {
           // A structural stand-in — which is what the identity used to be, and
           // what a wrapper would mint to give both sites one durable name.
-          yield* interpose(() => ({}) as ComponentInvocation);
+          yield* interpose(() => ({}));
           return yield* runDocument(database, source, CEILING);
         });
 
@@ -495,6 +513,65 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       });
     });
 
+    it("refuses a live parent's invocation routed into the sites inside it", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture("nested-observations");
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const attempt = yield* scoped(function* () {
+          yield* useFrame();
+          // `<Frame>` is still running — it has not returned, and it never
+          // claimed anything — so its issuance is genuine, live and unspent
+          // while the sites in its content run. Routing it there is the
+          // substitution a spent or finished sibling's does not reach.
+          let parent: ComponentInvocation | undefined;
+          yield* interpose(
+            (invocation, name) => {
+              if (name === "Frame") {
+                parent = invocation;
+                return invocation;
+              }
+              return parent ?? invocation;
+            },
+            ["Frame", "Evaluate"],
+          );
+          return yield* runDocument(database, source, CEILING);
+        });
+
+        expect(reported(attempt)).toContain("expanding its own content");
+        // Refused before admission: no record was written under the parent's
+        // identity, so nothing can replay under its retained history.
+        expect(admissions(attempt.events)).toHaveLength(0);
+        expect(attempt.performed).toEqual([]);
+      });
+    });
+
+    it("keeps each site's own identity under the same live parent", function* () {
+      const root = yield* useStorageRoot();
+      const source = yield* fixture("nested-observations");
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        yield* plant(database, "alpha.md", ADMITTED_NOTE);
+
+        const attempt = yield* scoped(function* () {
+          yield* useFrame();
+          // The same document and the same parent, forwarding honestly. Being
+          // nested changes nothing about what each site is named.
+          yield* interpose((invocation) => invocation, ["Frame", "Evaluate"]);
+          return yield* runDocument(database, source, CEILING);
+        });
+
+        expect(attempt.failure).toBe(undefined);
+        const recorded = admissions(attempt.events);
+        expect(recorded).toHaveLength(2);
+        expect(new Set(recorded.map(nameOf)).size).toBe(2);
+        expect(reported(attempt)).toContain(ADMITTED_NOTE.trim());
+        expect(attempt.performed.map((call) => call.url)).toEqual([URL_ADMITTED]);
+      });
+    });
+
     it("resumes an interrupted run into each site's own record", function* () {
       const root = yield* useStorageRoot();
       const source = yield* fixture();
@@ -511,7 +588,7 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           runDocument(database, source, CEILING, function* () {
             reached.resolve();
             yield* suspend();
-          })
+          }),
         );
         yield* reached.operation;
         yield* first.halt();
@@ -543,7 +620,6 @@ describe("Tier WGAC — the registered Evaluate component", () => {
         expect(admissions(resumed.events)).toEqual(admitted);
       });
     });
-
   });
 
   it("WGAC5: the exact Fetch ceiling is the host's, and an empty one admits no request", function* () {
