@@ -1341,8 +1341,16 @@ host owns: created empty before the session is established, never written to by
 this host, never read back into the Workspace, and removed when the attachment
 ends. The runtime is created with no MCP servers, each session asks for an empty
 native tool set, and the permission mode is `deny-all` with non-interactive
-denial. A fixed session instruction layer states that boundary to the Agent in
-the same terms.
+denial.
+
+A fixed session instruction layer states that boundary to the Agent in the same
+terms, and states all of it: no native tool is authorized; retained work can be
+asked for only when the prompt being answered asks for it and only in the exact
+closed shape that prompt supplies (§8.4); and nothing the Agent returns carries
+authority, because source it writes is data this run may admit under ceilings it
+decided before the prompt was sent. Those instructions take part in the session
+policy fingerprint (§8.5), so changing them refuses a session created under the
+previous wording.
 
 A native tool permission request is denied and fails the turn it belongs to,
 with a fixed diagnostic that names nothing the request carried. It does not
@@ -1430,6 +1438,15 @@ continuation restores what was admitted without parsing the current candidate at
 all: a later caller holding different source changes nothing about what expands,
 and what expands is the source this run admitted.
 
+`File` is admitted only as core's pinned **read** identity: the self-closing
+form. `<File>` reads when it has no content and writes when it has some, so the
+two forms are two identities, and the constraint travels with the pinned one
+rather than being checked inside the component. A paired `<File>` anywhere in a
+fragment — including an empty one, which would truncate — is refused in
+preflight, so the fragment performs no read and no write at all. The
+unconstrained core `File` definition is never admitted, and a repository
+component named `File` is not the pinned identity.
+
 `Fetch` is admitted only as core's pinned identity, and only for an exact
 bounded request: the scheme, host, path, method, normalized headers and
 effective timeout must all equal one the host stated. Anything else is refused
@@ -1442,6 +1459,111 @@ whole-fragment preflight, exact invocation, the durable admission record and
 replay. The trusted workflow host owns the ceilings — which roots exist, which
 identities are admitted, and which requests are allowed — because those are
 decisions about what this run is for.
+
+#### The authored loop, and where it is written
+
+The host adds no control flow. `<Evaluate source={…} />` is the workflow host's
+component an authored document writes where an observation should happen — the
+host declares it and canonical execution registers it (below) — and everything
+around it is ordinary Markdown:
+
+```md
+<Loop name="observations" max={4}>
+<Prompt as="reply">…</Prompt>
+<Parse as="turn" schema={…}>{reply}</Parse>
+<If condition={turn.kind === "proposal"}>
+<Break />
+</If>
+<Evaluate source={turn.source} as="observation" />
+</Loop>
+```
+
+and the next iteration's `<Prompt>` renders what the last one observed:
+
+```md
+<Json value={observation} />
+```
+
+`<Prompt>` remains exactly one durable Agent turn; no hidden retry or
+observation loop is added to it, and the Agent Api gains no second operation. The
+document owns the attempt bound and the response schema. Reaching the bound is
+not the loop's failure — the document states what exhaustion means, which the
+representative flow does with a final `<Parse>` that requires a proposal. The
+completed Prompt and observation records are the evidence for exhaustion.
+
+`<Evaluate>`'s schema is closed on one required string prop, and paired content
+is refused: a `source` the element rendered is not a fragment anybody handed it.
+It answers with a detached value, not text:
+
+```json
+{
+  "observations": [{ "name": "Fetch", "value": {} }],
+  "output": ""
+}
+```
+
+Each admitted observation's own returned value, in the order the fragment invoked
+them, with whatever the fragment rendered under `output` — beside them, never
+instead of them. An admitted `<Fetch>` written without a binding renders nothing
+at all, so a result taken from the rendered fragment would answer the Agent's
+question with an empty string.
+
+It declares no `returns`, so the value binds by reference under `as` and nothing
+about it is rewritten on the way to the document. Turning it into text is the
+document's decision, made where the text is wanted: the representative flow binds
+it and renders it into the next `<Prompt>` with `<Json>`.
+
+**How it is supplied.** `<Evaluate>` is not registered by the attachment. It
+names durable work after its own invocation, so the host **declares** it to the
+execution — one entry in the installation, captured before anything else is
+installed — and canonical execution calls the host's factory once for this
+attachment with the claimant it minted, then registers what comes back
+(executable-mdx-spec §5.6). The claimant is the argument of that one call: the
+implementation closes over it, and it is published nowhere, so a document, a
+component and middleware reach the implementation and never the claimant. A run
+whose host declares none has no `<Evaluate>` at all.
+
+**How its durable operation is named.** The implementation claims on the exact
+invocation the engine handed it, in that invocation's own frame. A durable name
+never comes from an Effection Context or a contextual Api answer: a Context is
+addressed by name, so a loaded component may bind one for its descendants, and a
+handler installed outside an invocation answers ahead of the engine's own. Nor
+from anything `importComponent` middleware can supply: a handler may wrap this
+implementation, and an identity it could build — or one it captured from the
+element these sites are written inside, which is live for as long as they run —
+would be one it could give both sites. Two observation sites sharing one name
+would each replay the other's admitted fragment.
+
+What the claimant answers for is fixed by the execution that minted it and by
+what canonical resolution selected: an implementation kept from this attachment
+and run at another element's invocation, at a second attachment's own
+`<Evaluate>` site, or under a registry answer carrying the first attachment's
+whole registration record, admits nothing there. An implementation closed over
+one attachment's storage and ceilings names nothing under another's, so no
+run's database receives a record another run's expansion named.
+
+`<Evaluate>` is deliberately not a printing boundary: a refused or failed
+observation stops the authored loop unless the document places a recovery
+boundary around it, because returning a refusal as observation text would leave
+the Agent reasoning from a read that never happened.
+
+Being reachable from a trusted document is all the registration decides. It
+carries none of the authority. The component closes over the exact run storage
+and the immutable host options the declaration supplied, takes its durable
+identity from its own invocation through the claimant, reads the retained roots
+and the run's authoritative current root from that storage at invocation, and
+takes the read-only `File` identity from core. No prop, binding, Context,
+contextual API answer, component registration, generated name or middleware
+return value supplies or widens any of them.
+
+A repository component named `Evaluate` shadows this default exactly as it
+shadows any other. That can change what a trusted document does; it cannot
+recover the captured closure, and it cannot name durable work — canonical
+resolution selected it rather than the implementation this execution built, so
+an invocation of it is in no domain. Agent-generated source never resolves through the
+registration at all — the evaluator consults only its own closed table of pinned
+identities — so a fragment naming `<Evaluate>` is refused like any other
+unadmitted component, live registration or not.
 
 #### Mutation-proposal admission
 
@@ -1457,9 +1579,15 @@ grant itself Push, PullRequest, secrets or another external provider merely by
 naming a component. Trusted reusable Markdown components may be admitted
 explicitly; generated XMD admits none of them yet.
 
-The live Agent request/result loop and workflow-bundled Markdown component
-admission are also unbuilt. Directory registration is not among them: §8.1 is
-the contract, and a workflow Agent is given no directory to register.
+Workflow-bundled Markdown component admission is also unbuilt. Directory
+registration is not among them: §8.1 is the contract, and a workflow Agent is
+given no directory to register.
+
+A final proposal is the retained response of its Prompt and nothing more. It is
+returned as source data; this contract executes none of it, and a proposal that
+describes a mutation describes one nobody has made. Any later execution of those
+mutations crosses the mutation-proposal admission above rather than an Agent
+channel, and there is no writable Agent channel for it to cross instead.
 
 ### 8.5 Agent session continuity
 
@@ -2525,6 +2653,7 @@ fetch operation requires its own language and durability contract.
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
+| `<Evaluate source>` and the authored observation loop | built by #302: a workflow-host component with a closed one-prop schema, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage and core's pinned read-only `<File>`; iteration, branching and exhaustion are ordinary Markdown |
 | generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |

@@ -863,7 +863,13 @@ export function runWorkflow(
     // reaches `node:sqlite` — which Node greets with an experimental warning on
     // standard error the moment it loads. A run that opens no workflow storage
     // should not be announcing that it might have.
-    const { createSuspensionController } = yield* until(import("@executablemd/workflow/deno"));
+    // `evaluationComponents` comes through the same import, and for the same
+    // reason: `<Evaluate>` is the workflow host's component, and a run that
+    // opens no workflow storage must not load the adapter that reaches
+    // `node:sqlite` — which Bun does not have at all.
+    const { createSuspensionController, evaluationComponents } = yield* until(
+      import("@executablemd/workflow/deno"),
+    );
     const suspension = createSuspensionController({ database });
     const phase: LifecyclePhase = { state: "running" };
     yield* ensure(function* () {
@@ -914,6 +920,12 @@ export function runWorkflow(
         ...(source.value.components.length === 0
           ? []
           : [workflowBundleInstallation(source.value.components)]),
+        // `<Evaluate>` names durable work after its own invocation, so this run
+        // declares it to the execution and canonical execution builds it from
+        // the claimant it minted for this attachment. Declared where the
+        // Workspace is attached — a completed replay restores its retained
+        // output and expands nothing, so it needs no component of its own.
+        ...(completed || replay ? [] : [{ components: evaluationComponents(database) }]),
       ],
       around<T>(operation: Operation<T>): Operation<T> {
         // A completed run replays its retained output and result. Attaching a

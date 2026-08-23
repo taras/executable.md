@@ -10,8 +10,9 @@
  * path any of them resolves is relative to. Installing some without the rest
  * would leave a document resolving paths one provider cannot reach.
  *
- * A sixth is optional and belongs here for a different reason: the Agent profile
- * a host installs needs a run to keep provider sessions for, and this is the
+ * Two more belong here for a different reason: `<Evaluate>`, which admits a
+ * generated fragment under this run's retained roots, and the Agent profile a
+ * host installs, which needs a run to keep provider sessions for. This is the
  * only path that has one.
  *
  * They are installed **inside** the execution rather than at the entrypoint, so

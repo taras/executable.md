@@ -100,6 +100,7 @@ type Construct =
   | "interpolation"
   | "binding"
   | "component"
+  | "content"
   | "construct"
   | "request";
 
@@ -116,6 +117,9 @@ const CONSTRUCT: Record<Construct, string> = {
   interpolation: "a generated fragment reads a binding through interpolation, which it may not.",
   binding: "a generated fragment binds a result with `as`, which it may not.",
   component: "a generated fragment names a component this host did not admit.",
+  content:
+    "a generated fragment gives content to a component this host admitted only in its " +
+    "self-closing form.",
   construct: "a generated fragment carries a construct this evaluator does not admit.",
   request: "a generated fragment asks for a request this host did not admit.",
 };
@@ -192,6 +196,17 @@ export interface GeneratedObservation {
    * reads at all. Present only on the pinned `<Fetch>` identity.
    */
   readonly requests?: readonly GeneratedRequest[];
+  /**
+   * Whether only the self-closing form of this name is admitted.
+   *
+   * A component whose two forms do different things has two identities, and a
+   * host admitting one of them is not admitting the other. `<File>` is the case
+   * that matters: `hasContent()` is exactly `!selfClosing`, so the paired form
+   * writes. The constraint therefore travels with the pinned identity and is
+   * decided in preflight, before the first effect — not checked inside the
+   * component after earlier elements have already run.
+   */
+  readonly selfClosing?: boolean;
 }
 
 /**
@@ -222,6 +237,33 @@ export function pinnedFetch(requests: readonly GeneratedRequest[]): GeneratedObs
 }
 
 /**
+ * The pinned core `<File>` identity, constrained to its read form.
+ *
+ * Core's own default definition, and only its self-closing spelling. `<File>`
+ * reads when it has no content and writes when it has some, so admitting the
+ * unconstrained definition would admit a write — which is why this constructor
+ * exists rather than a caller reaching for `CORE_REGISTRY` and hoping. The
+ * identity says so too, so a run that later admitted the unconstrained `File`
+ * would be stating a different policy and a retained admission would refuse it.
+ *
+ * An admitted read invokes the ordinary `<File>` component and therefore the
+ * installed Files provider, which under a workflow run is the transaction-bound
+ * one. There is no second filesystem path here.
+ */
+export function pinnedFileRead(): GeneratedObservation {
+  const definition = CORE_REGISTRY.get("File")?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new GeneratedXmdError("core supplies no File component to admit.");
+  }
+  return {
+    name: "File",
+    identity: `${CORE_ORIGIN}#File:read`,
+    definition,
+    selfClosing: true,
+  };
+}
+
+/**
  * One host-registered function observation component, by the exact definition
  * the host holds.
  */
@@ -231,6 +273,40 @@ export function pinnedComponent(
   definition: FunctionComponentDefinition,
 ): GeneratedObservation {
   return { name, identity, definition };
+}
+
+/**
+ * What one admitted observation produced.
+ *
+ * The value is the component's own return, kept whatever the fragment rendered.
+ * Which pinned identity produced it is not here: the admission record already
+ * retains the identities the fragment named, and a second copy on the result
+ * would be a second thing to keep true.
+ * An admitted `<Fetch>` written without `as` renders nothing at all — a
+ * component returning a non-string has nowhere to render — so a result taken
+ * from the rendered text would hand the Agent an empty answer to the question it
+ * asked.
+ */
+export interface GeneratedObservationValue {
+  readonly name: string;
+  readonly value: Json;
+}
+
+/**
+ * What one admitted fragment produced, detached from its expansion.
+ *
+ * Deterministic: the observations appear in the order the fragment invoked them,
+ * each under the name the fragment invoked it by. Which pinned identity produced
+ * one is not here — the admission record retains that — so the value a document
+ * binds is the name and the return, and nothing else. The rendered text is kept
+ * beside them rather than instead of them: a fragment whose elements render
+ * prose still has prose, and a fragment whose elements render nothing still has
+ * its values.
+ */
+export interface GeneratedObservationResult {
+  readonly observations: readonly GeneratedObservationValue[];
+  /** What the fragment rendered, beside the values rather than instead of them. */
+  readonly output: string;
 }
 
 /** What a trusted host asks this evaluator to admit. */
@@ -288,9 +364,15 @@ type RetainedAdmission =
 class GeneratedImportAuthority implements ImportAuthority {
   readonly #observations: ReadonlyMap<string, GeneratedObservation>;
   readonly #imports = new CanonicalImports();
+  readonly #values: GeneratedObservationValue[] = [];
 
   constructor(observations: ReadonlyMap<string, GeneratedObservation>) {
     this.#observations = observations;
+  }
+
+  /** What each admitted observation returned, in invocation order. */
+  get values(): GeneratedObservationValue[] {
+    return this.#values;
   }
 
   /** The answer canonical execution produces for this name. */
@@ -300,10 +382,30 @@ class GeneratedImportAuthority implements ImportAuthority {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
     const copy = retain(pinned.definition);
-    if (copy === undefined) {
+    if (copy === undefined || copy.kind !== "function" || typeof copy.fn !== "function") {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
-    return this.#imports.issue(name, copy);
+    const implementation = copy.fn;
+    // The value is taken where the component produced it. Reading it back from
+    // the rendered fragment would lose every observation that renders nothing,
+    // which is most of them.
+    const values = this.#values;
+    const observed: FunctionComponentDefinition = {
+      ...copy,
+      *fn(props, invocation) {
+        const value = yield* implementation(props, invocation);
+        values.push({
+          name: pinned.name,
+          // Parsed rather than asserted: this value is retained and handed back
+          // to a trusted host, and a component that returned something with no
+          // JSON shape has broken the contract an observation runs under. A
+          // component that returned nothing observed nothing, which is `null`.
+          value: value === undefined ? null : parseJson(value),
+        });
+        return value;
+      },
+    };
+    return this.#imports.issue(name, observed);
   }
 
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
@@ -331,6 +433,14 @@ function admitted(
       throw new GeneratedXmdError(
         "a generated-XMD allowlist admitted a definition that is not a function component. " +
           "Slice 1 admits host and core observation components only.",
+      );
+    }
+    if (typeof observation.definition.fn !== "function") {
+      // The `<Test>` harness marker is a definition whose `fn` is data rather
+      // than an implementation. Nothing invokes it here, and an observation
+      // whose value cannot be produced is not one.
+      throw new GeneratedXmdError(
+        "a generated-XMD allowlist admitted a definition with no invocable implementation.",
       );
     }
     if (table.has(name)) {
@@ -605,6 +715,9 @@ function* walk(
         if ("as" in segment.props) {
           throw new Refusal("binding");
         }
+        if (observation.selfClosing === true && !segment.selfClosing) {
+          throw new Refusal("content");
+        }
         const ceiling = ceilings.get(segment.name);
         if (ceiling !== undefined) {
           const candidate = yield* admitCandidateRequest(segment.props);
@@ -730,7 +843,7 @@ function expand(
   id: string,
   segments: Segment[],
   table: ReadonlyMap<string, GeneratedObservation>,
-): Operation<string> {
+): Operation<GeneratedObservationResult> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
     const authority = new GeneratedImportAuthority(table);
@@ -757,7 +870,7 @@ function expand(
       // own, and what it may invoke is this table and nothing else.
       { imports: authority },
     );
-    return renderSegments(expanded);
+    return { observations: authority.values, output: renderSegments(expanded) };
   });
 }
 
@@ -769,7 +882,9 @@ function expand(
  * restores the admission and every observation that already committed rather
  * than performing them again.
  */
-export function* evaluateGeneratedXmd(request: GeneratedXmdRequest): Workflow<string> {
+export function* evaluateGeneratedXmd(
+  request: GeneratedXmdRequest,
+): Workflow<GeneratedObservationResult> {
   const table = admitted(request.observations);
   const ceilings = yield* ephemeral(normalizedCeilings(table));
   const policy = currentPolicy(request, table, ceilings);

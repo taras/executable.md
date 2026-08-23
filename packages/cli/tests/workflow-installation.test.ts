@@ -287,12 +287,28 @@ describe("Tier WFI — what a run hands to canonical core", () => {
     );
     expect(preparing.length).toEqual(1);
     expect(preparing[0]?.admissions?.length).toEqual(1);
-    // Every installation this run was given contributes an admission, and none
-    // of them is a second execution: one `executeInstalled()`, not one per
-    // phase.
+    // Every installation this run was given is one of two things, and neither
+    // is a second execution: one `executeInstalled()`, not one per phase.
+    // A run-contract installation carries its admission; the declaration of the
+    // components that name durable work carries components and nothing else.
     for (const candidate of execution?.installations ?? []) {
-      expect(candidate.admissions?.length).toEqual(1);
+      if (candidate.components === undefined) {
+        expect(candidate.admissions?.length).toEqual(1);
+        continue;
+      }
+      expect(candidate.admissions).toBe(undefined);
+      expect(candidate.prepare).toBe(undefined);
     }
+    // And there is exactly one declaration, naming `<Evaluate>`: a live or
+    // partial run has that component because this run told the execution about
+    // it, and nothing else declares one.
+    const declared = (execution?.installations ?? []).filter(
+      (candidate) => candidate.components !== undefined,
+    );
+    expect(declared).toHaveLength(1);
+    expect((declared[0]?.components ?? []).map((component) => component.name)).toEqual([
+      "Evaluate",
+    ]);
   });
 
   it("WFI2: a completed run is given no Workspace to attach", function* () {

@@ -26,7 +26,11 @@
  */
 
 import { evaluateGeneratedXmd, pinnedFetch } from "@executablemd/core/host";
-import type { GeneratedObservation, GeneratedRequest } from "@executablemd/core/host";
+import type {
+  GeneratedObservation,
+  GeneratedObservationResult,
+  GeneratedRequest,
+} from "@executablemd/core/host";
 import type { Workflow } from "@executablemd/durable-streams";
 
 /** A generated fragment this run will not admit under its own ceilings. */
@@ -57,7 +61,11 @@ function observations(policy: GeneratedObservationPolicy): GeneratedObservation[
 
 /**
  * Admit one generated fragment under this run's ceilings and perform what it
- * asks for.
+ * asks for, answering with what the admitted observations produced.
+ *
+ * The values rather than the rendering: an admitted `<Fetch>` written without a
+ * binding renders nothing at all, and a result taken from the rendered fragment
+ * would answer the Agent's question with an empty string.
  *
  * The root selection is decided before the candidate is read, because a run
  * that cannot say which retained root an observation addresses has no ceiling
@@ -68,7 +76,7 @@ export function* observeGeneratedXmd(
   id: string,
   source: string,
   policy: GeneratedObservationPolicy,
-): Workflow<string> {
+): Workflow<GeneratedObservationResult> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
     throw new GeneratedObservationPolicyError(

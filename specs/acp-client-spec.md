@@ -299,8 +299,17 @@ caller path or ACP `additionalDirectories`. Its process runs in a directory the
 host owns: created empty before the session is established, never written to by
 this host, never read back, and removed when the attachment ends. The runtime is
 created with `mcpServers: []`, each session with `allowedTools: []`, and the
-permission mode is `deny-all` with non-interactive denial. A fixed session
-instruction layer states that boundary to the Agent in the same terms.
+permission mode is `deny-all` with non-interactive denial.
+
+A fixed session instruction layer states that boundary to the Agent in the same
+terms, and states all of it: that no native tool is authorized; that retained
+work can be asked for only when the prompt being answered asks for it and only
+in the exact closed shape that prompt supplies; and that nothing the Agent
+returns carries authority — source it writes is data this run may admit under
+ceilings decided before the prompt was sent. Those instructions are part of the
+policy fingerprint below, so changing them refuses a session created under the
+previous wording rather than continuing it under new terms the session never
+received.
 
 `allowedTools` and `mcpServers` are stated as empty arrays rather than omitted:
 omission is ACPX's own default, and this host is making a different statement.

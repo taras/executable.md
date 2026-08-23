@@ -324,6 +324,34 @@ export function setCurrentWorkspaceRoot(
   }
 }
 
+/**
+ * Every Workspace root this run retains, in one deterministic order.
+ *
+ * The set a ceiling is stated over — and the order is load-bearing rather than
+ * cosmetic. A generated-XMD admission retains the roots it was granted under and
+ * a continuation compares them *positionally*, so a query whose row order SQLite
+ * is free to choose would let a resumed run refuse an admission nothing about it
+ * had changed. `root_id` is the only stable ordering this table has, and it is
+ * stable across processes because it is content.
+ *
+ * `lifecycle.ts` derives forkability from the same table through its own read;
+ * that one answers a set membership question on a read-only connection, and this
+ * one belongs to a live run.
+ */
+export function retainedWorkspaceRoots(database: DatabaseSync): string[] {
+  const roots: string[] = [];
+  for (const row of reading(
+    database,
+    "SELECT root_id FROM workspace_roots ORDER BY root_id",
+  ).all()) {
+    const rootId = row["root_id"];
+    if (typeof rootId === "string") {
+      roots.push(rootId);
+    }
+  }
+  return roots;
+}
+
 export function currentWorkspaceRoot(database: DatabaseSync, databasePath: string): string {
   const rows = reading(database, "SELECT singleton_id, current_root_id FROM workspace_state").all();
   const row = rows[0];

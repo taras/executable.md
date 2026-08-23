@@ -1856,7 +1856,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedComponent()`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam (workflow-workspace-spec §8.4) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedComponent()`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam, including the read-only `<File>` identity a paired form is refused against, and answering with each admitted observation's own value rather than the fragment's rendering (workflow-workspace-spec §8.4) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -3692,6 +3692,24 @@ default, which a repository file of the same name overrides, while one marked
 or security invariant. Reserving is a property of the registration, declared
 where it is installed and visible to inspection — not something a name acquires
 by being handled first.
+
+**What a host supplies, and how.** A host contributes ordinary components with
+`registerComponents`, on the terms above. One that names durable work after its
+own invocation is supplied differently: the host declares it to the execution,
+which calls the host's factory once with the claimant it minted and registers
+what comes back (§5.3, §5.6). The workflow host supplies
+`<Evaluate source={…} />` that way, for a live or partial run — the operation an
+authored workflow document writes where an Agent's proposed fragment should be
+admitted and performed. Its schema is closed on one required string prop and
+paired content is refused. It declares no `returns` and answers with a detached
+value — `{ observations: [{ name, value }], output }`, each observation's own
+returned value under the name the fragment invoked it by — so it renders nothing
+where it is written; an ordinary `as` captures it by reference, and an authored
+`<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+the registration decides; the ceilings it runs under come from values the host
+captured before any document existed, and no prop, binding or middleware return
+value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
+§8.4 is the contract.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.
@@ -9505,6 +9523,36 @@ document against a real run database.
 | WSR1 | Restart | After an interruption, two same-named `<Session>` sites hold two committed rows carrying the tagged identities the provider store actually asserted; a new attachment establishes exactly those two sites and leaves both rows unchanged. Removing the mapping commit fails it |
 | WSR2 | Recorded run | A fully recorded run restores both sites without entering the provider at all |
 
+### Tier WGAC — Generated `<File>` reads and the `<Evaluate>` boundary
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
+
+| # | Test | Verify |
+|---|------|--------|
+| WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
+| WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
+| WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source`, and refuses a missing one |
+| WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
+| WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
+| WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
+| WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
+| WGAC8 | The result shape | The result carries each observation's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
+
+### Tier WAL — The workflow Agent observation loop
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
+
+| # | Test | Verify |
+|---|------|--------|
+| WAL1 | The loop | Two observations then a proposal across three turns in one provider session, each observation reaching the next turn, with no Workspace or caller path in provider setup |
+| WAL2 | Completed replay | The same document over its own journal restores identical output, journals nothing new, and never enters the provider |
+| WAL3 | Partial replay | An interrupted run resumes, asks only for the turn it never finished, repeats no committed observation or read, and reattaches the same session |
+| WAL4 | Exhaustion | Reaching the authored bound fails at the document's own final gate, with every completed turn and admission retained |
+| WAL5 | Inert proposal | A mutation-shaped proposal comes back exactly, is admitted nowhere, and performs no file effect |
+| WAL6 | Denied tool | A denied native tool becomes the retained Prompt failure, carrying nothing the request named |
+| WAL7 | No Agent | A workflow naming no Agent enters no runtime and allocates no provider-session sidecar |
+| WAL8 | An observed response reaches the next turn | An admitted `<Fetch>`'s complete retained response — name, status, headers and body — is rendered into the next `<Prompt>` with `<Json>`, and a completed replay restores it without asking the server or the agent again |
+
 ### Tier WFX — A killed run resumes from its frontier
 
 | # | Test | Verify |
@@ -10151,3 +10199,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
+| 103 | A declared `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate source={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. The host does not register it: it declares it to the execution, which calls the host's factory with the claimant it minted and registers what comes back — so the registration is canonical execution's, and what it provides is availability, never authority. Every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |

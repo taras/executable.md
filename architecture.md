@@ -1308,6 +1308,48 @@ public permission chain. This is the V1 authority ceiling; the portable proof
 that every provider exposes no ambient tool is tracked separately and does not
 widen it. `xmd run` keeps its caller-selected Agent permission behavior.
 
+The only thing a workflow Agent receives is the rendered content of an authored
+`<Prompt>`. It proposes an observation by returning XMD. The trusted workflow
+host passes that exact response to the constrained generated-XMD evaluator, which
+performs admitted components as ordinary durable effects against the
+authoritative Workspace.
+
+What it answers with is each admitted observation's own returned value, in the
+order the fragment invoked them and under the name the fragment invoked it by,
+with whatever the fragment rendered kept beside them rather than instead of
+them. Which pinned identity produced one is not in that value — the retained
+admission record holds the identities the fragment named, and a second copy on
+the result would be a second thing to keep true. That distinction is the whole point: an admitted `<Fetch>` written without
+a binding renders nothing at all — a component returning a non-string has nowhere
+to render — so a result taken from the rendered fragment would answer the Agent's
+question with an empty string. `<Evaluate>` answers with that as a value —
+`{ observations: [{ name, value }], output }` — rather than as text, so turning
+it into prompt text stays the document's decision, made with `<Json>` where the
+text is wanted for the same logical Agent session.
+
+An observation names its durable operation after the invocation the engine
+handed it, through the claimant this attachment's execution delivered to the
+`<Evaluate>` factory it built (*Capability-backed invocation identity*). Nothing
+else carries authority: an Effection Context is addressed by name, a contextual
+Api handler installed outside an invocation answers ahead of the engine's own,
+and a definition or registry answer is a value a handler may keep from one
+attachment and hand back inside another. Two observation sites sharing one
+durable name would each replay the other's admitted fragment, and an
+implementation running under another attachment's identity would commit against
+its own run's storage under that attachment's expansion.
+
+`<Prompt>` is one Agent turn. The host hides no Agent loop inside it. Ordinary
+authored Markdown owns iteration with `<Loop max>`, branches on whether a reply
+is another observation proposal or a final proposal, and makes exhaustion an
+explicit document failure. `<Evaluate source={…} />` is the workflow host's
+component that invokes the evaluator, and the host does not register it: it
+**declares** it to the execution, which mints the domain, calls the host's
+factory once per attachment with that domain's claimant, and registers what
+comes back. Being reachable from a trusted document is all registration decides;
+every ceiling comes from values the host captured before any document existed,
+and what an invocation may name comes from the execution that minted the
+claimant and the resolution that selected the implementation it was built for.
+
 Within one run a logical Agent session is identified by the Agent/Session
 expansion identity the engine derived, and by nothing else. The authored
 `<Session name>` is descriptive, so two sibling `<Session name="review">`
@@ -1343,9 +1385,13 @@ provider's current assertion against it before continuing, and reattaches only
 when the kind and the value both still agree. No refusal substitutes a new
 session or a reconstructed transcript while claiming continuity.
 
-Cancellation owns both sides of a live step. It stops the Prompt stream,
-completes provider teardown, and removes the disposable directory before the
-attempt settles. Already committed session and Prompt records remain valid.
+Cancellation owns both sides of a live step. It stops the Prompt stream or the
+generated-XMD evaluation, completes provider and evaluator teardown, and removes
+the disposable directory before the attempt settles. Already committed session,
+Prompt, admission and observation records remain valid; an uncommitted
+observation may run again under the same retained admission. A final proposal is
+the retained result of its Prompt. Any later execution of its mutations crosses
+the separate mutation-proposal admission rather than an Agent channel.
 
 Generated XMD is untrusted input. The evaluator preflights the complete fragment
 before its first effect and admits only explicitly allowed, already-resolved
@@ -1403,9 +1449,15 @@ exactly; anything else is refused before `API.Fetch` is reached. A repository
 component that takes the name `Fetch` is not that identity and acquires no
 admission from it.
 
-Mutation-proposal admission, the live Agent request/result loop,
-`<Agent.AddDir>` and workflow-bundled Markdown component admission remain
-unbuilt.
+`<File>` is admitted only in its self-closing read form. The component reads
+when it has no content and writes when it has some, so the two forms are two
+identities and the constraint travels with the pinned one, decided in the
+whole-fragment preflight rather than inside the component after earlier elements
+have run.
+
+Mutation-proposal admission and workflow-bundled Markdown component admission
+remain unbuilt. Directory registration is not among them: a workflow Agent is
+given no directory to register.
 
 ## Local Workspace topology
 
@@ -2867,7 +2919,8 @@ Status is measured against main.
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | generated-XMD observation admission | admits one Agent-generated fragment through the trusted-host seam: the complete source is preflighted inside one `generated_xmd` durable effect before its first observation, only the pinned observation identities the host supplied execute, and the admitted source, selected root, identities and normalized request policy are retained in that effect's own result — so a continuation restores the decision without reading the current candidate, refuses a run whose ceilings have moved, and expands only the retained source; each observation is retained by its own ordinary effect | built on the #369 stack; core owns the mechanics and the workflow policy wrapper is internal |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is provider creation, the provider's canonical tagged assertion, the mapping commit, then the first Prompt; occupancy of a provider key is not an assertion, the pre-commit window reconciles only from exactly one, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories | built on the #302 stack; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |
-| read-only workflow Agent / generated mutation proposals | lets an Agent inspect a derived view and propose constrained executable changes | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2, #302) |
+| `<Evaluate source>` | the workflow host's component an authored document writes where an observation should happen. The host does not register it: it **declares** it to the execution through `ExecutionInstallation.components`, captured before any installation runs, and canonical execution calls its factory once for that attachment with the claimant it minted and registers what comes back. Registration provides availability only — a name a trusted document may write — and carries none of the authority. Its schema is closed on one required string and paired content is refused. It declares no `returns` and answers with a detached value — `{ observations: [{ name, value }], output }`, each admitted observation's own returned value under the name the fragment invoked it by, in invocation order, with whatever the fragment rendered under `output` rather than instead of them, and the pinned identity that produced one left in the retained admission rather than copied here — so an admitted `<Fetch>`, which renders nothing at all, still reaches the document. An ordinary `as` captures that value by reference, and an authored `<Json>` renders it into the next `<Prompt>`: deciding how a value becomes text is the document's. Every ceiling comes from values the host captured at installation — the run's retained roots and its authoritative current root read from the run's own storage at invocation, core's pinned read-only `<File>`, and `<Fetch>` only when the captured request ceiling is non-empty — and no prop, binding, context or middleware return value supplies or widens one. Its durable operation is named through that claimant, on the exact invocation the engine handed it and in that invocation's own frame — not from a context a document could rebind, a contextual Api answer, a definition, or a registry answer. Generated source never resolves through the registration: the evaluator consults only its own closed table of pinned identities. It is deliberately not wrapped in `printErrors`, so a refused observation stops the authored loop rather than becoming text the next turn could read as a read that happened | built on the #302 stack |
+| generated mutation proposals | lets an Agent propose constrained executable changes that a separate admission may then perform | defined in `specs/workflow-workspace-spec.md`, unbuilt (#369 slice 2). Agent inspection itself is built: a workflow Agent observes through XMD rather than through a derived view, and returns a proposal that carries no authority |
 | Deno-local DOFS provider | owns one authoritative SQLite/DOFS connection per run path, captures arbitrary canonical retained roots, privately restores them, and atomically coordinates one Workspace mutation with its filtered Yield | built on the #365 stack; public document filesystem effects and the CLI lifecycle route to it on the #366 stack |
 | scoped Worker Shell | executes `just-bash` through the Workspace adapter inside a Deno Worker | containment and effect-transaction POCs complete (#351, #357); production integration unbuilt |
 | `<Retry max timeout>` | retry a region until it completes | defined, unbuilt |

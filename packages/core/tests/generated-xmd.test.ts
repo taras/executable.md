@@ -28,7 +28,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { rm, writeTextFile } from "@effectionx/fs";
-import { API } from "@executablemd/runtime";
+import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
@@ -43,9 +43,15 @@ import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { useSecretScannerFactory } from "../src/secrets/policy.ts";
 import { createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
-import { evaluateGeneratedXmd, pinnedComponent, pinnedFetch } from "../host.ts";
+import { evaluateGeneratedXmd, pinnedComponent, pinnedFetch, pinnedFileRead } from "../host.ts";
 import { executeInstalled } from "../host.ts";
-import type { ExecutionInstallation, GeneratedObservation, GeneratedXmdRequest } from "../host.ts";
+import type {
+  ExecutionInstallation,
+  GeneratedObservation,
+  GeneratedObservationResult,
+  GeneratedObservationValue,
+  GeneratedXmdRequest,
+} from "../host.ts";
 import type { FunctionComponentDefinition, Json } from "../src/types.ts";
 
 const ROOT_PATH = "workflows/agent.md";
@@ -146,6 +152,8 @@ function request(
 interface Attempt {
   /** What the fragment rendered, when it was admitted. */
   output?: string;
+  /** What each admitted observation returned, in invocation order. */
+  values?: readonly GeneratedObservationValue[];
   /** What the root document execution settled to, when it settled. */
   rendered?: Json;
   /** Why it was refused, when it was not. */
@@ -171,10 +179,10 @@ function evaluate(
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
-    const captured: { output?: string } = {};
+    const captured: { result?: GeneratedObservationResult } = {};
     const installation: ExecutionInstallation = {
       *prepare() {
-        captured.output = yield* evaluateGeneratedXmd(candidate);
+        captured.result = yield* evaluateGeneratedXmd(candidate);
       },
     };
     const execution = yield* executeInstalled(
@@ -188,7 +196,12 @@ function evaluate(
     const result = yield* execution;
     const events = yield* stream.readAll();
     if (result.ok) {
-      return { output: captured.output ?? "", rendered: result.value, events };
+      return {
+        output: captured.result?.output ?? "",
+        values: captured.result?.observations ?? [],
+        rendered: result.value,
+        events,
+      };
     }
     return { failure: result.error.message, events };
   });
@@ -1069,5 +1082,180 @@ describe("Tier GX — the secret gate covers what is retained", () => {
     expect(attempt.failure).toContain("secret detection rejected content");
     expect(persisted(attempt.events)).not.toContain(CANARY);
     expect(transport.performed).toHaveLength(0);
+  });
+});
+
+/**
+ * Tier WGAC — the pinned read-only `<File>` identity
+ * (specs/workflow-workspace-spec.md §8.4).
+ *
+ * `<File>` reads when it has no content and writes when it has some —
+ * `hasContent()` is exactly `!selfClosing`. So the two forms are two identities,
+ * and a host admitting the read is not admitting the write. These prove the
+ * constraint is part of the pinned identity and of the whole-fragment preflight,
+ * rather than a check inside the component after earlier elements have run.
+ */
+
+function isRecord(value: unknown): value is Record<string, Json> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A Files provider over one real directory, and what it was asked to read. */
+interface Reads {
+  readonly performed: string[];
+}
+
+function* useWorkspaceFiles(root: string): Operation<Reads> {
+  const performed: string[] = [];
+  yield* API.Env.around(
+    {
+      // deno-lint-ignore require-yield
+      *cwd(): Operation<string> {
+        return root;
+      },
+    },
+    { at: "min" },
+  );
+  yield* useHostFiles();
+  yield* API.Files.around({
+    *readTextFile([input], next) {
+      performed.push(input.path);
+      return yield* next(input);
+    },
+    *writeTextFile([input], next) {
+      // Recorded as a read would be, so a test asserting "zero reads" would also
+      // notice a write nobody admitted.
+      performed.push(`write:${input.path}`);
+      return yield* next(input);
+    },
+  });
+  return { performed };
+}
+
+describe("Tier WGAC — the pinned read-only File", () => {
+  it("WGAC1: a self-closing File reads through the ordinary Files provider", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const attempt = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(request(`<File path="notes.md" />\n`, [pinnedFileRead()]));
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toBe(undefined);
+    expect(attempt.evaluated.output).toContain("the retained note");
+    // The ordinary component, and therefore the installed provider — not a
+    // second filesystem path of the evaluator's own.
+    expect(attempt.reads).toEqual(["notes.md"]);
+    expect(admittedFragments(attempt.evaluated.events)).toHaveLength(1);
+  });
+
+  it("WGAC1: the read identity is not the unconstrained File identity", function* () {
+    // A retained admission resumes only under the identity it was granted with,
+    // and the comparison is on this string.
+    expect(pinnedFileRead().identity).not.toBe("@executablemd/core#File");
+    expect(pinnedFileRead().selfClosing).toBe(true);
+  });
+
+  it("WGAC8: the result carries each observation's value, in order, beside the rendering", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    const transport = yield* useTransport(() => ({ status: 200, body: "answered" }));
+
+    // One admitted read that renders its value, one that renders nothing at all:
+    // `<Fetch>` returns a record, and a component returning a non-string has
+    // nowhere to render. A result taken from the rendering would keep the first
+    // and lose the second.
+    const source = `<File path="notes.md" />\n\n<Fetch url="${URL_ONE}" />\n`;
+
+    const attempt = yield* scoped(function* () {
+      yield* useWorkspaceFiles(root);
+      return yield* evaluate(request(source, [pinnedFileRead(), pinnedFetch([ADMITTED_REQUEST])]));
+    });
+
+    expect(attempt.failure).toBe(undefined);
+    expect(transport.performed.map((call) => call.url)).toEqual([URL_ONE]);
+
+    const values = attempt.values ?? [];
+    // Invocation order, and the exact field names a host reads.
+    expect(values.map((observation) => observation.name)).toEqual(["File", "Fetch"]);
+    // The identities live in the retained admission, which is where a run is
+    // held to them — not on the result, which would be a second copy of the
+    // same fact.
+    const admitted = admittedFragments(attempt.events)[0];
+    const named =
+      admitted?.type === "yield" && admitted.result.status === "ok"
+        ? admitted.result.value
+        : undefined;
+    expect(JSON.stringify(named)).toContain(pinnedFileRead().identity);
+    expect(JSON.stringify(named)).toContain(pinnedFetch([ADMITTED_REQUEST]).identity);
+    expect(values[0]?.value).toBe("the retained note\n");
+    const response = values[1]?.value;
+    expect(isRecord(response)).toBe(true);
+    expect(isRecord(response) ? response.status : undefined).toBe(200);
+    expect(isRecord(response) ? response.body : undefined).toBe("answered");
+
+    // And the rendering, kept separately rather than standing in for them: the
+    // File read renders its text, the Fetch renders nothing.
+    expect(attempt.output).toContain("the retained note");
+    expect(attempt.output).not.toContain("answered");
+  });
+
+  it("WGAC2: a paired File anywhere in a mixed fragment performs no read and no write", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const source =
+      `<File path="notes.md" />\n\n` + `<File path="proposed.md">the agent wrote this</File>\n`;
+
+    const attempt = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(request(source, [pinnedFileRead()]));
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toContain("self-closing form");
+    // The safe element before it performed nothing either: the whole fragment is
+    // read before the first effect.
+    expect(attempt.reads).toEqual([]);
+    expect(refusals(attempt.evaluated.events)).toHaveLength(1);
+    expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
+    // Nothing of the generated source reaches the record.
+    expect(persisted(attempt.evaluated.events)).not.toContain("the agent wrote this");
+    expect(persisted(attempt.evaluated.events)).not.toContain("proposed.md");
+  });
+
+  it("WGAC2: an empty paired File is refused too — content is the element's shape", function* () {
+    const root = yield* useWorkspace();
+    const attempt = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(
+        request(`<File path="truncated.md"></File>\n`, [pinnedFileRead()]),
+      );
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    // `<File path="x"></File>` renders empty content and would truncate the
+    // file. It is not self-closing, which is the only thing that decides this.
+    expect(attempt.evaluated.failure).toContain("self-closing form");
+    expect(attempt.reads).toEqual([]);
+  });
+
+  it("WGAC2: an unadmitted component after an admitted read performs zero reads", function* () {
+    const root = yield* useWorkspace();
+    yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+
+    const source = `<File path="notes.md" />\n\n<Glob pattern="**/*" />\n`;
+
+    const attempt = yield* scoped(function* () {
+      const reads = yield* useWorkspaceFiles(root);
+      const evaluated = yield* evaluate(request(source, [pinnedFileRead()]));
+      return { evaluated, reads: [...reads.performed] };
+    });
+
+    expect(attempt.evaluated.failure).toContain("did not admit");
+    expect(attempt.reads).toEqual([]);
+    expect(admittedFragments(attempt.evaluated.events)).toHaveLength(0);
   });
 });

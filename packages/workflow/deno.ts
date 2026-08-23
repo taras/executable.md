@@ -52,6 +52,13 @@ export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 // none of that crosses this entrypoint; the suites that need it import from
 // source, inside the package.
 export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
+/**
+ * What a host declares to the execution so an authored workflow document has
+ * `<Evaluate>`: its implementation names durable work after its own invocation,
+ * so canonical execution builds it from the claimant it minted.
+ */
+export { evaluationComponents } from "./src/deno/workspace/evaluate.ts";
+export type { GeneratedEvaluationOptions } from "./src/deno/workspace/evaluate.ts";
 export type { WorkflowWorkspaceOptions } from "./src/deno/workspace/published.ts";
 export type { WorkflowAgentAttachment, WorkflowAgentInstaller } from "./src/deno/workspace/host.ts";
 export {
