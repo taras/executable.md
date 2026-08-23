@@ -18,7 +18,7 @@ import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
-import { bindClaimComponent } from "../component-invocation.ts";
+import { registration as registrationRecord } from "../component-invocation.ts";
 import type { ComponentClaim } from "../component-invocation.ts";
 import type {
   ComponentRegistry,
@@ -67,11 +67,10 @@ export interface ComponentRegistration {
    * The claim domain this implementation names durable work in.
    *
    * Only a component that takes a durable identity from its invocation needs
-   * one, and it mints its own with `componentClaim()`. Registering it is what
-   * binds the domain to this name, inside the domain itself — it is not stored
-   * on the definition, in the registry or in a context, so there is nothing for
-   * middleware to read or move. A domain offered for a second component is
-   * refused here.
+   * one, and it mints its own with `componentClaim()`. It is kept on the record
+   * this call builds, behind a private field: the registry travels through a
+   * public handler, so what a handler may hold is the record, and what it may
+   * not do is read the domain out of it or put it on a record of its own.
    */
   claim?: ComponentClaim;
   /**
@@ -231,16 +230,6 @@ export function* registerComponents(
       yield* compileReturnsSchema(returns);
     }
     assertUsableCaptures(name, registration.captures, props);
-    if (claim !== undefined) {
-      const bound = bindClaimComponent(claim, name);
-      if (bound !== undefined) {
-        throw new ComponentRegistrationError(
-          `the registration for "${name}" offers the claim domain of "${bound}": a domain names ` +
-            "durable work for one component, and lending it is how one component's work gets " +
-            "named after another's",
-        );
-      }
-    }
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
@@ -256,7 +245,9 @@ export function* registerComponents(
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
     };
-    batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
+    // The record, not the definition, is what carries the domain: a definition
+    // is spread by any handler that wraps it, and this is not.
+    batch.set(name, { ...batch.get(name), [kind]: registrationRecord(definition, origin, claim) });
     additions.set(name, { ...additions.get(name), [kind]: origin });
   }
 

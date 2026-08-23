@@ -51,8 +51,11 @@ interface Seen {
   readonly refusals: string[];
 }
 
-/** What `<Probe>` names its identities in. One implementation, one domain. */
+/** What `<Probe>` names its identities in. One registration, one domain. */
 const PROBE_CLAIM: ComponentClaim = componentClaim();
+
+/** `<Elsewhere />`'s own domain, so a refusal there is a mismatch, not a gap. */
+const ELSEWHERE_CLAIM: ComponentClaim = componentClaim();
 
 function useProbe(): Operation<Seen> {
   const seen: Seen = { taken: [], context: [], api: [], refusals: [] };
@@ -65,6 +68,7 @@ function useProbe(): Operation<Seen> {
           // from.
           name: "Elsewhere",
           origin: "test://elsewhere",
+          claim: ELSEWHERE_CLAIM,
           props: { type: "object", properties: {}, additionalProperties: false },
           // deno-lint-ignore require-yield
           *fn(): Operation<string> {
@@ -108,12 +112,6 @@ function run(source: string, install: () => Operation<void>): Operation<Seen> {
 
 // deno-lint-ignore require-yield
 function* nothing(): Operation<void> {}
-
-/** A component body with nothing in it, for registrations under test. */
-// deno-lint-ignore require-yield
-function* silent(): Operation<string> {
-  return "";
-}
 
 describe("Tier CIV — the invocation the engine hands a component", () => {
   it("CIV1: two sites are handed two identities", function* () {
@@ -298,7 +296,7 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(carried).toHaveLength(1);
     expect(carried[0]).not.toContain("claim");
     expect(seen.refusals[0]).toContain("invocation of <Elsewhere />");
-    expect(seen.refusals[0]).toContain("claimed for <Probe />");
+    expect(seen.refusals[0]).toContain("another registration supplied it");
   });
 
   it("CIV8: an issuance kept from the first site cannot be spent at the second", function* () {
@@ -336,24 +334,79 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(seen.refusals[0]).toMatch(/already been taken|has finished/);
   });
 
-  it("CIV9: a domain cannot be registered for a second component", function* () {
-    // The other half of the same rule, and the reason nothing needs to carry a
-    // domain around: registering is what binds one, and it binds once.
-    let refusal: string | undefined;
-    yield* scoped(function* () {
-      const claim = componentClaim();
-      const props = { type: "object", properties: {}, additionalProperties: false } as const;
-      yield* registerComponents([
-        { name: "First", origin: "test://first", claim, props, fn: silent },
-      ]);
-      try {
+  it("CIV9: an implementation kept from one registration names nothing at another's", function* () {
+    // Two registrations of the same component name, in scopes of their own —
+    // what two live attachments are. Each mints its own domain and closes its
+    // implementation over it.
+    const first = componentClaim();
+    const second = componentClaim();
+    const taken: string[] = [];
+    const refusals: string[] = [];
+    let kept: FunctionComponent | undefined;
+
+    function attachment(claim: ComponentClaim, borrow: boolean): Operation<void> {
+      return scoped(function* () {
         yield* registerComponents([
-          { name: "Second", origin: "test://second", claim, props, fn: silent },
+          {
+            name: "Owned",
+            origin: "test://owned",
+            claim,
+            props: { type: "object", properties: {}, additionalProperties: false },
+            *fn(_props: Record<string, Json>, invocation: ComponentInvocation) {
+              try {
+                taken.push(durableIdentityOf(invocation, claim));
+              } catch (error) {
+                refusals.push(error instanceof Error ? error.message : String(error));
+              }
+              return "";
+            },
+          },
         ]);
-      } catch (error) {
-        refusal = error instanceof Error ? error.message : String(error);
-      }
-    });
-    expect(refusal).toContain(`offers the claim domain of "First"`);
+        if (borrow) {
+          yield* Component.around({
+            *importComponent([name], next) {
+              const definition = yield* next(name);
+              if (name !== "Owned" || definition.kind !== "function") {
+                return definition;
+              }
+              const original = definition.fn;
+              if (typeof original !== "function") {
+                return definition;
+              }
+              if (kept === undefined) {
+                kept = original;
+                return definition;
+              }
+              return {
+                ...definition,
+                // The first attachment's implementation, at this attachment's
+                // own `<Owned />` — same name, same props, and the genuine
+                // issuance the engine minted here.
+                *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+                  return yield* (kept ?? original)(props, invocation);
+                },
+              };
+            },
+          });
+        }
+        yield* collect(
+          yield* execute({ ...inlineSource("<Owned />\n"), stream: new InMemoryStream() }),
+        );
+      });
+    }
+
+    // Honest first: each attachment's own implementation names its own site.
+    yield* attachment(first, false);
+    yield* attachment(second, false);
+    expect(taken).toHaveLength(2);
+    expect(refusals).toEqual([]);
+
+    // Then the borrow, in a third scope registered like the first two.
+    yield* attachment(first, true);
+    yield* attachment(second, true);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain("as another registration supplied it");
+    // Three honest invocations named themselves; the borrowed one named nothing.
+    expect(taken).toHaveLength(3);
   });
 });

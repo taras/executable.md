@@ -41,6 +41,7 @@ import {
   handleFailure,
   importComponent,
   raise,
+  registry,
 } from "./component-api.ts";
 import {
   attributeCause,
@@ -64,7 +65,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
-import { issueInvocation } from "./component-invocation.ts";
+import { claimOfRegistration, issueInvocation } from "./component-invocation.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -2836,10 +2837,18 @@ function* expandFunctionComponent(
         const enclosing = yield* ActiveProjection.get();
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
-        // that is the whole of how a nested component is reached. The authored
-        // name travels with it, because a durable identity is claimed in the
-        // domain of one component and this is the component being invoked.
-        const issued = issueInvocation(expansion.id, name);
+        // that is the whole of how a nested component is reached.
+        //
+        // The domain comes from the registration this name resolves to here,
+        // read off the record rather than off the answer the import chain
+        // returned — a wrapper spreads a definition, and two attachments that
+        // registered the same name are two registrations with two domains.
+        const supplier = (yield* registry).get(name);
+        const issued = issueInvocation(
+          expansion.id,
+          name,
+          claimOfRegistration(supplier?.reserved ?? supplier?.default),
+        );
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,
