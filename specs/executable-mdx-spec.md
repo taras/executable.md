@@ -2686,22 +2686,6 @@ called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
 ahead of any other package's registration. Nothing core supplies claims a name a
 document cannot take back.
 
-A host may supply defaults of its own on the same terms. The workflow host
-supplies `<Evaluate source={…} />` for a live or partial run: the operation an
-authored workflow document writes where an Agent's proposed fragment should be
-admitted and performed. It names durable work after its own invocation, so the
-host declares it to the execution rather than registering it (§5.3, §5.6): the
-execution calls the host's factory once per attachment with the claimant it
-minted, and registers what comes back. Its schema is closed on one required
-string prop and paired content is refused. It declares no `returns` and answers
-with a detached value — `{ observations: [{ name, value }], output }` — so it
-renders nothing where it is written; an ordinary `as` captures it by reference,
-and an authored `<Json>` turns it into the text a next `<Prompt>` carries. Being
-reachable from a trusted document is all the registration decides; the ceilings
-it runs under come from values the host captured before any document existed,
-and no prop, binding or middleware return value supplies or widens one.
-[Workflow workspaces](./workflow-workspace-spec.md) §8.4 is the contract.
-
 The definitions are module-resident and reused — one object per component for
 the life of the process. That is not what varies between runs. What each
 `<TempDir>` invocation creates fresh is the directory (§6.11); the component
@@ -3708,6 +3692,24 @@ default, which a repository file of the same name overrides, while one marked
 or security invariant. Reserving is a property of the registration, declared
 where it is installed and visible to inspection — not something a name acquires
 by being handled first.
+
+**What a host supplies, and how.** A host contributes ordinary components with
+`registerComponents`, on the terms above. One that names durable work after its
+own invocation is supplied differently: the host declares it to the execution,
+which calls the host's factory once with the claimant it minted and registers
+what comes back (§5.3, §5.6). The workflow host supplies
+`<Evaluate source={…} />` that way, for a live or partial run — the operation an
+authored workflow document writes where an Agent's proposed fragment should be
+admitted and performed. Its schema is closed on one required string prop and
+paired content is refused. It declares no `returns` and answers with a detached
+value — `{ observations: [{ name, value }], output }`, each observation's own
+returned value under the name the fragment invoked it by — so it renders nothing
+where it is written; an ordinary `as` captures it by reference, and an authored
+`<Json>` turns it into the text a next `<Prompt>` carries. Availability is all
+the registration decides; the ceilings it runs under come from values the host
+captured before any document existed, and no prop, binding or middleware return
+value supplies or widens one. [Workflow workspaces](./workflow-workspace-spec.md)
+§8.4 is the contract.
 
 `env`, `evalScope`, and `persistent` are value operations — read without
 invocation (`yield* env`); a provider is middleware returning the value.
@@ -9534,7 +9536,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC5 | Host-owned requests | An empty ceiling admits no `<Fetch>` at all, an exact one admits only the request it names, and neither performs anything else |
 | WGAC6 | Distinct sites | Two `<Evaluate>` sites keep distinct durable names under a component that rebinds what a component can |
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
-| WGAC8 | The result shape | The result carries each observation's name, pinned identity and value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway |
+| WGAC8 | The result shape | The result carries each observation's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
 
 ### Tier WAL — The workflow Agent observation loop
 
@@ -10197,4 +10199,4 @@ must preserve the trace for diagnosis or remove it before starting a new run.
 | 100 | `<Let>` → `<Json>` → `<Parse>` is the explicit JSON direction | A document names a value, renders it as text, and validates text back into a value at three boundaries a reader can see. `{binding}` interpolation keeps its ordinary string coercion — there is no hidden JSON conversion — and `<Json>` takes no `indent`, `pretty`, replacer, sorting, canonicalization or newline option, so nothing about the format has to be agreed on per invocation. A file that must end in a newline authors that newline at the point it is written, rather than buying an option every other caller then has to reason about |
 | 101 | A capture is delivered from the authored expression | The scanner resolves a `{…}` prop whose text reads as JSON, but it runs before a name resolves and so cannot know the prop is a capture. Keeping the authored text beside the reading lets expansion decide with the selected definition in hand: a captured prop gets what its expression produced, every other prop gets the reading it always had, and an overriding repository file is an ordinary component either way. Without it `value={undefined}` reached a capturing component as `null`, which is the projection a capture exists to avoid |
 | 102 | A successful `undefined` omits an ordinary prop | Absence is the fact an author has to be able to state: an optional identity that a preceding result will supply is not there yet, and there is no value that means "not there" — `null` is a value, and a second element written for the other case duplicates the invocation. The omission is decided in the one resolver both component kinds pass through, before validation, so the schema answers it: optional stays unset, a `default` applies, a required prop fails as missing. It stops at the root and at that boundary — nested members keep native `JSON.stringify` normalization, failures stay failures, and captures and `<Let>` keep binding the exact value — and it puts `undefined` nowhere durable, because a prop that was never there is nothing to record |
-| 103 | A registered `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate source={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A registered component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check — and registration is availability, never authority: every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |
+| 103 | A declared `<Evaluate>` and an authored loop, not hidden `<Prompt>` behavior | A workflow Agent's request/result exchange is written in the document: `<Loop max>` owns the bound, `<Parse>` and `<If>` own the branch, and `<Evaluate source={…} />` is where a generated fragment is admitted and performed. `<Prompt>` stays exactly one durable turn, with no hidden retry, schema repair or observation loop inside it, and the Agent Api gains no second operation. A component rather than a new execution primitive, because the operation needs a name a trusted document can write and a schema a reader can check. The host does not register it: it declares it to the execution, which calls the host's factory with the claimant it minted and registers what comes back — so the registration is canonical execution's, and what it provides is availability, never authority. Every ceiling comes from values the host captured before any document existed. Exhaustion is therefore the document's own failure, stated where the bound is, with the turns that produced it retained |

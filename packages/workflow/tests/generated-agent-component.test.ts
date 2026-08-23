@@ -681,8 +681,12 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const root = yield* useStorageRoot();
       const source = yield* fixture();
       yield* withStorage(root, function* () {
-        // Two live attachments: separate runs, separate databases, separate
-        // Workspaces. Each registers `<Evaluate>` and mints its own domain.
+        // Two attachments, live at the same moment: separate runs, separate
+        // databases, separate Workspaces, each declaring `<Evaluate>` to its own
+        // execution. The first is held inside its own document — at the request
+        // its second site performs — so its execution is still running, and the
+        // claimant it was built from is still active, while the second attempts
+        // to name work with its implementation.
         const owner = yield* createRun();
         const other = yield* createRun({ runId: "release-1.5" });
         yield* plant(owner, "alpha.md", ADMITTED_NOTE);
@@ -733,30 +737,56 @@ describe("Tier WGAC — the registered Evaluate component", () => {
           });
         }
 
-        const first = yield* scoped(function* () {
-          yield* interposeAcross(false);
-          return yield* runDocument(owner, source, CEILING);
+        // A barrier, not a delay: the first attachment tells this test where it
+        // is, and stays there until it is let go.
+        const held = withResolvers<void>();
+        const release = withResolvers<void>();
+        const first = yield* spawn(function* () {
+          return yield* scoped(function* () {
+            yield* interposeAcross(false);
+            return yield* runDocument(owner, source, CEILING, function* () {
+              held.resolve();
+              yield* release.operation;
+            });
+          });
         });
+        yield* held.operation;
+
+        // The first attachment is inside its own second site now: one admission
+        // committed, and the request it is holding not yet performed.
+        const heldRecords = admissions(yield* owner.journal.readAll());
+        expect(heldRecords).toHaveLength(2);
+        expect(record).not.toBe(undefined);
+        expect(kept).not.toBe(undefined);
+
         const second = yield* scoped(function* () {
           yield* interposeAcross(true);
           return yield* runDocument(other, source, CEILING);
         });
-        const runs = { first, second };
 
-        expect(runs.first.failure).toBe(undefined);
-        const owned = admissions(runs.first.events);
+        // Refused because this invocation belongs to another installation —
+        // not because the first attachment had gone. It is still running: its
+        // claimant is active, and the refusal says so by naming the domain
+        // rather than the execution.
+        expect(reported(second)).toContain("as this execution installed it");
+        expect(reported(second)).not.toContain("is not running this");
+        // Neither attachment admitted anything the other's expansion named, and
+        // the borrowed implementation performed no request.
+        expect(admissions(second.events)).toHaveLength(0);
+        expect(second.performed).toEqual([]);
+        expect(admissions(yield* owner.journal.readAll())).toEqual(heldRecords);
+
+        // Let the first attachment finish, on its own terms.
+        release.resolve();
+        const completed = yield* first;
+        expect(completed.failure).toBe(undefined);
+        expect(completed.performed.map((call) => call.url)).toEqual([URL_ADMITTED]);
+        const owned = admissions(completed.events);
         expect(owned).toHaveLength(2);
-
-        // The borrowed call named nothing, so the second attachment admitted
-        // nothing and reached no transport.
-        expect(record).not.toBe(undefined);
-        expect(reported(runs.second)).toContain("is not running this");
-        expect(admissions(runs.second.events)).toHaveLength(0);
-        expect(runs.second.performed).toEqual([]);
-
-        // And nothing landed in the first attachment's database under the
-        // second attachment's identities: its journal is what its own run left.
-        expect(admissions(yield* owner.journal.readAll())).toEqual(owned);
+        expect(new Set(owned.map(nameOf)).size).toBe(2);
+        // And what the second attachment's database holds is nothing at all:
+        // no admission, and no record named by the first attachment's run.
+        expect(admissions(yield* other.journal.readAll())).toEqual([]);
       });
     });
 

@@ -1462,9 +1462,10 @@ decisions about what this run is for.
 
 #### The authored loop, and where it is written
 
-The host adds no control flow. `<Evaluate source={…} />` is the registered
-workflow-host component an authored document writes where an observation should
-happen, and everything around it is ordinary Markdown:
+The host adds no control flow. `<Evaluate source={…} />` is the workflow host's
+component an authored document writes where an observation should happen — the
+host declares it and canonical execution registers it (below) — and everything
+around it is ordinary Markdown:
 
 ```md
 <Loop name="observations" max={4}>
@@ -2652,7 +2653,7 @@ fetch operation requires its own language and durability contract.
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD observation admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal |
-| `<Evaluate source>` and the authored observation loop | built by #302: a registered workflow-host component with a closed one-prop schema, whose ceilings come from the run's own storage and core's pinned read-only `<File>`; iteration, branching and exhaustion are ordinary Markdown |
+| `<Evaluate source>` and the authored observation loop | built by #302: a workflow-host component with a closed one-prop schema, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage and core's pinned read-only `<File>`; iteration, branching and exhaustion are ordinary Markdown |
 | generated-XMD mutation-proposal admission | defined here; unbuilt (#369 slice 2) |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |

@@ -296,8 +296,10 @@ export interface GeneratedObservationValue {
  * What one admitted fragment produced, detached from its expansion.
  *
  * Deterministic: the observations appear in the order the fragment invoked them,
- * each carrying the pinned identity that produced it. The rendered text is kept
- * beside them rather than instead of them — a fragment whose elements render
+ * each under the name the fragment invoked it by. Which pinned identity produced
+ * one is not here — the admission record retains that — so the value a document
+ * binds is the name and the return, and nothing else. The rendered text is kept
+ * beside them rather than instead of them: a fragment whose elements render
  * prose still has prose, and a fragment whose elements render nothing still has
  * its values.
  */
