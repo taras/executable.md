@@ -2561,6 +2561,38 @@ registration leaves a claimant that answers for nothing. The claimant exists as
 the argument of that one call: not published, not named, not reachable from a
 document, and not derivable from anything a handler holds.
 
+**The invocation carries one readable fact, for the same reason.** How the
+element was written — `<C />` against `<C>…</C>` and `<C></C>` — is a property
+of the invocation rather than of the surroundings it runs in, and a component
+whose two spellings select different *effects* is choosing with it. The
+contextual `Component.hasContent()` answers the same question through the
+composable chain, where the outermost handler answers first and may answer
+differently on each call; a caller that checks it and then invokes something
+which asks again has verified nothing, because the two are separate dispatches.
+So `ComponentInvocation` reports the authored form directly: synchronous,
+immutable, projecting nothing and spending no identity, held as owner-kept state
+inside canonical core and reachable only through the object the engine minted.
+There is no context, map, registry entry or exported lookup beside it, and
+implementing the method does not make an object an invocation — durable identity
+remains the private field a claimant recognizes.
+
+Core's `<File>` and the workflow package's `<Dir>` select their effect from that
+fact and have no fallback to the contextual answer. Both are irreversible in one
+direction: a `<File />` reported as content-bearing renders an empty string over
+the file the document wrote a read for.
+
+The contextual operation stays exported and composable, and every other
+component still reads it. That is not a statement that the remaining readers are
+safe. Eleven of them branch on it today, and the branch decides more than how to
+render: `<Issue>` selects a read against an external upsert, `<Repository>`,
+`<Worktree>`, `<TempDir>` and `<IssueTracker>` decide whether a context or a
+working directory is installed for their descendants at all, `<Git.Add>`,
+`<Git.Push>`, `<Git.Switch>` and `<Json>` turn a content-bearing invocation into
+a refusal, and `<Git.Commit>` and `<PullRequest>` decide what body is committed
+or published. Each is reachable by the same middleware on the same terms.
+Moving them to the invocation is a follow-up rather than part of this boundary,
+and until it happens the rule they are held to is the weaker one.
+
 **Which domain an invocation is in is decided by what resolution selected, not
 by the name that was asked for.** An authored name is what a document wrote, and
 what it resolves to is decided by tiers, registrations and middleware, so a

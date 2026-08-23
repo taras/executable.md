@@ -489,8 +489,11 @@ describe("Tier WGAC — the registered Evaluate component", () => {
 
         const attempt = yield* scoped(function* () {
           // A structural stand-in — which is what the identity used to be, and
-          // what a wrapper would mint to give both sites one durable name.
-          yield* interpose(() => ({}));
+          // what a wrapper would mint to give both sites one durable name. It
+          // answers the authored form too: implementing the whole public shape
+          // is exactly what a forger would do, and identity is the private
+          // field rather than the shape.
+          yield* interpose(() => ({ hasContent: () => false }));
           return yield* runDocument(database, source, CEILING);
         });
 

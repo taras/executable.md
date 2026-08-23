@@ -2864,7 +2864,18 @@ function* expandFunctionComponent(
         // The frame is the one the body is about to run in, so an issuance
         // routed into a concurrent invocation of the same component answers
         // nothing there.
-        const issued = issueInvocation(expansion.id, name, selected, yield* useScope());
+        //
+        // The authored shape travels with it, taken from the scan the same way
+        // the contextual answer below is. Both report it; only this one is
+        // beyond reach of the chain that reports it, which is what a component
+        // choosing an effect from it needs.
+        const issued = issueInvocation(
+          expansion.id,
+          name,
+          selected,
+          yield* useScope(),
+          !selfClosing,
+        );
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,

@@ -21,7 +21,8 @@
  */
 
 import { API, cwd } from "@executablemd/runtime";
-import { content, hasContent } from "@executablemd/core";
+import { content } from "@executablemd/core";
+import type { ComponentInvocation } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 
@@ -38,13 +39,27 @@ export class DirInvocationError extends Error {
   override name = "DirInvocationError";
 }
 
-export default function* Dir(props: Record<string, Json>): Operation<string> {
+export default function* Dir(
+  props: Record<string, Json>,
+  invocation: ComponentInvocation,
+): Operation<string> {
   const path = props.path;
   if (typeof path !== "string" || path === "") {
     throw new DirInvocationError("<Dir> needs a non-empty path.");
   }
 
-  if (!(yield* hasContent())) {
+  // From the invocation the engine issued, not from the composable chain: which
+  // form this was written as decides whether a working directory is installed
+  // at all, and a handler answering that question could validate a self-closing
+  // `<Dir />` the document never wrote children for.
+  if (typeof invocation?.hasContent !== "function") {
+    throw new DirInvocationError(
+      `<Dir path=${JSON.stringify(path)}> was called without the invocation the engine issued, ` +
+        "so which form it was written as cannot be established.",
+    );
+  }
+
+  if (!invocation.hasContent()) {
     throw new DirInvocationError(
       `<Dir path=${JSON.stringify(path)} /> is invalid: Dir installs a working directory for ` +
         `its content, and a self-closing invocation has none. Write it as <Dir path=` +
