@@ -424,10 +424,13 @@ owner to release — what has to be settled first is which conversation this is:
     - a `client-native` route disagreeing about the instruction layer or the
       launcher won — neither account repairs the other, so the launch refuses
       the same way.
-    A refusal is retained at `prepared` and reaches no private file, no detach
-    and no spawn. Every retained outcome is built from the winning route rather
-    than from this launch's candidate, so the two accounts agree by construction
-    rather than by comparison.
+    A `created` or `resumed` record is built from the compatible winning route
+    rather than from this launch's candidate, so the two accounts agree by
+    construction rather than by comparison. A refusal is not: it prepared no
+    identity, so it retains the failure the authoritative winner produced
+    without mirroring that route's identity or provenance — no session id, and
+    the weaker provenance claim, because nobody chose one. It is retained at
+    `prepared` and reaches no private file, no detach and no spawn.
 12. The prepared instructions are written to a private mode-`0600` file. Detach
     still happens as a phase — it is the point after which a spawn may happen —
     and succeeds trivially, because no ACP session was ever open.
