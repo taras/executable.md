@@ -22,9 +22,9 @@ import { expect } from "@executablemd/test-support/expect";
 import { createContext, scoped } from "effection";
 import type { Context, Operation } from "effection";
 import { collect, Component, content, execute, inlineSource, registerComponents } from "../mod.ts";
-import { durableIdentityOf } from "../host.ts";
+import { componentClaim, durableIdentityOf } from "../host.ts";
 import { getExpansion } from "../src/expansion.ts";
-import type { ComponentInvocation, Json } from "../src/types.ts";
+import type { ComponentClaim, ComponentInvocation, FunctionComponent, Json } from "../src/types.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
 
 /**
@@ -51,16 +51,36 @@ interface Seen {
   readonly refusals: string[];
 }
 
+/** What `<Probe>` names its identities in. One implementation, one domain. */
+const PROBE_CLAIM: ComponentClaim = componentClaim();
+
 function useProbe(): Operation<Seen> {
   const seen: Seen = { taken: [], context: [], api: [], refusals: [] };
   return {
     *[Symbol.iterator]() {
       yield* registerComponents([
         {
+          // Self-closing, registered on its own terms, and naming nothing
+          // durable: it exists to be somewhere else for the wrapper to call
+          // from.
+          name: "Elsewhere",
+          origin: "test://elsewhere",
+          props: { type: "object", properties: {}, additionalProperties: false },
+          // deno-lint-ignore require-yield
+          *fn(): Operation<string> {
+            return "";
+          },
+        },
+        {
           // A content-bearing parent: its own invocation stays open — live and
           // unspent — for as long as the content it projects is running.
           name: "Around",
           origin: "test://around",
+          // The same domain as `<Probe>`, deliberately: two components one host
+          // registered together. The claim domain therefore settles nothing
+          // here, and what refuses the nested claim is that this element is
+          // expanding its content.
+          claim: PROBE_CLAIM,
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn(): Operation<string> {
             return yield* content();
@@ -69,10 +89,11 @@ function useProbe(): Operation<Seen> {
         {
           name: "Probe",
           origin: "test://probe",
+          claim: PROBE_CLAIM,
           props: { type: "object", properties: {}, additionalProperties: false },
           *fn(_props: Record<string, Json>, invocation: ComponentInvocation): Operation<string> {
             try {
-              seen.taken.push(durableIdentityOf(invocation));
+              seen.taken.push(durableIdentityOf(invocation, PROBE_CLAIM));
             } catch (error) {
               seen.refusals.push(error instanceof Error ? error.message : String(error));
             }
@@ -241,7 +262,48 @@ describe("Tier CIV — the invocation the engine hands a component", () => {
     expect(seen.refusals[0]).toContain("expanding its own content");
   });
 
-  it("CIV7: an issuance kept from the first site cannot be spent at the second", function* () {
+  it("CIV7: an implementation kept from one component names nothing at another", function* () {
+    // The definition `importComponent` handed out at the real `<Probe />` site,
+    // kept and called from an invocation of something else.
+    let kept: FunctionComponent | undefined;
+    const seen = yield* run("<Probe />\n\n<Elsewhere />\n", function* () {
+      yield* Component.around({
+        *importComponent([name], next) {
+          const definition = yield* next(name);
+          if (definition.kind !== "function") {
+            return definition;
+          }
+          const original = definition.fn;
+          if (typeof original !== "function") {
+            return definition;
+          }
+          if (name === "Probe") {
+            kept = original;
+            return definition;
+          }
+          if (name !== "Elsewhere") {
+            return definition;
+          }
+          return {
+            ...definition,
+            *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+              // `<Elsewhere />`'s own issuance: genuine, live, unspent, and
+              // projecting nothing. Every other check passes.
+              return yield* (kept ?? original)(props, invocation);
+            },
+          };
+        },
+      });
+    });
+
+    // The real site named itself. The other one refused rather than admitting
+    // `<Probe>`'s work under `<Elsewhere />`'s identity.
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("invocation of something else");
+  });
+
+  it("CIV8: an issuance kept from the first site cannot be spent at the second", function* () {
     let kept: ComponentInvocation | undefined;
     const seen = yield* run("<Probe />\n\n<Probe />\n", function* () {
       yield* Component.around({

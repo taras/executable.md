@@ -1860,7 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
-| `src/component-invocation.ts` | `ComponentInvocation`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
+| `src/component-invocation.ts` | `ComponentInvocation`, `ComponentClaim`, `componentClaim()`, `issueInvocation()`, `durableIdentityOf()`, `ComponentInvocationError` — the opaque one-use capability the engine mints for one invocation and answers only inside it, which is where a durable name comes from when a context would be replaceable (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -3831,13 +3831,26 @@ an ancestor's issuance is genuine, live and unspent for exactly as long as a
 nested component is running. An invocation therefore names nothing while it is
 expanding its own content, which is the one way anything is nested inside it.
 
+It is also bound to *which component* the engine resolved. Middleware may keep
+the implementation it was handed at a real site and call it from an invocation
+of something else, handing over that element's own genuine, live, unspent
+issuance — every other check passes. So a component that names durable work
+after its invocation mints a **claim domain** with `componentClaim()`, closes
+over it, and attaches it to the registration; the engine records that domain on
+the invocations it resolves to it, and the implementation states the domain it
+is naming in. The domain is an opaque object, never a name: a look-alike is not
+one, and middleware wrapping a definition keeps it, because it is wrapping that
+component.
+
 Forwarding the genuine issuance is ordinary delegation and stays supported.
 Everything else refuses rather than answering: a value the engine did not mint
-names no identity, an issuance whose invocation has finished names none here,
-one whose invocation is busy expanding its content names none here, and a second
+names no identity, an issuance belonging to an invocation of another component
+names none here, one whose invocation has finished names none here, one whose
+invocation is busy expanding its content names none here, and a second
 authoritative read of one refuses. So a wrapper can neither keep the first
 site's issuance and spend it at the second, nor capture a live ancestor's and
-spend it inside its content.
+spend it inside its content, nor keep one component's implementation and run it
+at another's.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9955,8 +9968,9 @@ Defined in §5.6.
 | CIV3 | The Context is bindable | Binding `expand.current` takes effect where nothing republishes over it, for the same reason |
 | CIV4 | No minting | `importComponent` middleware that delegates and calls the original with an object of its own is refused at both sites, and takes no identity |
 | CIV5 | Delegation | Middleware forwarding the genuine issuance is answered, and each site keeps its own identity |
-| CIV6 | No live ancestor | A content-bearing parent's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there |
-| CIV7 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
+| CIV6 | No live ancestor | A content-bearing parent's issuance — captured while it is live and unspent, and routed into a component inside its content — is refused there, under a parent sharing the same claim domain so nothing else can be what refused it |
+| CIV7 | No borrowed implementation | An implementation kept from one component's real site, called from an invocation of another with that element's own genuine issuance, is refused |
+| CIV8 | No spent sibling | The first site's issuance, routed at the second, is refused rather than answered with the first site's identity |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

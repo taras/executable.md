@@ -2837,7 +2837,7 @@ function* expandFunctionComponent(
         // Minted before the handle, because the handle is what raises it: an
         // invocation names nothing while it is expanding its own content, and
         // that is the whole of how a nested component is reached.
-        const issued = issueInvocation(expansion.id);
+        const issued = issueInvocation(expansion.id, definition.claim);
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,

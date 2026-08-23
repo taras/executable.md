@@ -2505,9 +2505,18 @@ long as a nested component is running. What settles it is that expanding its own
 content is the only way anything is nested inside an invocation, so an
 invocation names nothing while it is doing that — state on the issuance, raised
 where every projection funnels through, rather than anything global tracking who
-is current. Forwarding the genuine issuance is ordinary delegation and stays
+is current. It is bound to which component the engine resolved as well: middleware may keep
+the implementation it was handed at a real site and call it from an invocation
+of something else, and every other check passes. So an implementation that names
+durable work mints an opaque claim domain, closes over it, and attaches it to
+its registration; the engine records that domain on the invocations it resolves
+to it, and the implementation states the domain it names in. A domain is not a
+name, and nothing a caller supplies structurally is authoritative.
+
+Forwarding the genuine issuance is ordinary delegation and stays
 supported; minting one, keeping a finished one, spending one site's at another,
-and claiming a live ancestor's from inside its content are each refusals.
+claiming a live ancestor's from inside its content, and running one component's
+implementation at another's invocation are each refusals.
 
 ### Capability-backed nested execution
 

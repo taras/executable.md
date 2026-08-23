@@ -20,8 +20,8 @@ import { content, hasContent, raise } from "../component-api.ts";
 import { getExpansion } from "../expansion.ts";
 
 import { sessionPlacement } from "./session-request.ts";
-import { durableIdentityOf } from "../component-invocation.ts";
-import type { ComponentInvocation } from "../types.ts";
+import { componentClaim, durableIdentityOf } from "../component-invocation.ts";
+import type { ComponentClaim, ComponentInvocation } from "../types.ts";
 import { cwd, flushOutput, parseDuration, reserveTerminal } from "@executablemd/runtime";
 import type { Json, PropsSchema } from "../types.ts";
 import type { Expansion } from "../expansion.ts";
@@ -173,6 +173,15 @@ export function* AgentComponent(props: Record<string, Json>): Operation<Json> {
   return yield* content();
 }
 
+/**
+ * The domain `<Session>` names its placements in.
+ *
+ * Minted here beside the implementation and attached where it is registered, so
+ * an implementation kept from a `<Session>` site names nothing at some other
+ * element's invocation.
+ */
+export const SESSION_CLAIM: ComponentClaim = componentClaim();
+
 export function* SessionComponent(
   props: Record<string, Json>,
   invocation: ComponentInvocation,
@@ -185,7 +194,10 @@ export function* SessionComponent(
   // handler that kept the placement cannot route it for the next `<Session>`:
   // both would otherwise resolve to this element's identity. `close()` is
   // synchronous, so the guarantee holds however the call left.
-  const issuance = sessionPlacement(durableIdentityOf(invocation), asString(props.name));
+  const issuance = sessionPlacement(
+    durableIdentityOf(invocation, SESSION_CLAIM),
+    asString(props.name),
+  );
   let session: Session;
   try {
     session = yield* Agent.operations.session(issuance.request);

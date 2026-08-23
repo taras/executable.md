@@ -19,6 +19,7 @@ import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
+  ComponentClaim,
   ComponentRegistry,
   FunctionComponent,
   FunctionComponentDefinition,
@@ -61,6 +62,15 @@ export interface ComponentRegistration {
    * a default a repository file overrides.
    */
   reserved?: boolean;
+  /**
+   * The claim domain this implementation names durable work in.
+   *
+   * Only a component that takes a durable identity from its invocation needs
+   * one, and it mints its own with `componentClaim()`. The engine records it on
+   * the invocations it resolves to this registration, so the identity answers
+   * for this implementation and no other.
+   */
+  claim?: ComponentClaim;
   /**
    * Opt-in validation: the return is a validated JSON record. Without it the
    * return binds by reference under `as`, unchecked.
@@ -206,7 +216,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures } = registration;
+    const { name, origin, fn, props, returns, captures, claim } = registration;
     assertUsableName(name);
     if (origin.length === 0) {
       throw new ComponentRegistrationError(
@@ -232,6 +242,7 @@ export function* registerComponents(
       fn,
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
+      ...(claim === undefined ? {} : { claim }),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });

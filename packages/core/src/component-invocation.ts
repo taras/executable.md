@@ -25,8 +25,16 @@
  * so its issuance is live and unspent for the whole time a nested component
  * runs: live and unspent is not the same as current.
  *
- * What settles it is that a nested component is reachable exactly one way — the
- * enclosing invocation expanding its own content. So an invocation names
+ * "Another" also includes another component. Middleware may keep the
+ * implementation it was handed at a real `<Evaluate>` site and call it from an
+ * invocation of something else, handing over that element's own genuine, live,
+ * unspent issuance — so the issuance carries the claim domain of the component
+ * the engine resolved, and an implementation states which domain it is naming
+ * in. A domain is an opaque object core mints for whoever registers the
+ * implementation; nothing about it is a name, and a look-alike is not one.
+ *
+ * As for nesting, what settles it is that a nested component is reachable
+ * exactly one way — the enclosing invocation expanding its own content. So an invocation names
  * nothing while it is doing that, and an ancestor's issuance routed into
  * something inside its content is refused. The engine raises and lowers that
  * around the one place every projection funnels through, and it is state on the
@@ -52,6 +60,38 @@ export interface ComponentInvocation {
   readonly [Invocation]?: never;
 }
 
+/**
+ * Which implementation an invocation's identity is for.
+ *
+ * Minted by core for whoever registers a component that names durable work
+ * after itself, closed over by that implementation, and attached to the
+ * registration so the engine records it on the invocation it resolves. Object
+ * identity is the whole of it: there is nothing to read, nothing to compare by
+ * value, and nothing a look-alike can be built to match.
+ */
+let isClaim: (value: unknown) => boolean;
+
+export class ComponentClaim {
+  readonly #minted: boolean;
+
+  constructor() {
+    this.#minted = true;
+    Object.freeze(this);
+  }
+
+  static {
+    // A private field is the test, as everywhere else here: it appears in no
+    // key list and no copy, so an object this file did not construct has none.
+    isClaim = (value) =>
+      typeof value === "object" && value !== null && #minted in value && value.#minted;
+  }
+}
+
+/** Mint one claim domain. A trusted host does this once, where it registers. */
+export function componentClaim(): ComponentClaim {
+  return new ComponentClaim();
+}
+
 /** A durable identity that cannot be issued, or one spent twice. */
 export class ComponentInvocationError extends Error {
   override name = "ComponentInvocationError";
@@ -69,6 +109,8 @@ let stateOf: (value: unknown) => Issuance | undefined;
 
 interface Issuance {
   readonly id: string;
+  /** The claim domain of the component the engine resolved here, if any. */
+  readonly claim: ComponentClaim | undefined;
   live: boolean;
   spent: boolean;
   /** How many projections of this invocation's own content are in flight. */
@@ -107,8 +149,8 @@ export interface IssuedInvocation {
 }
 
 /** Mint one invocation identity. Only the engine calls this. */
-export function issueInvocation(id: string): IssuedInvocation {
-  const issuance: Issuance = { id, live: true, spent: false, projecting: 0 };
+export function issueInvocation(id: string, claim: ComponentClaim | undefined): IssuedInvocation {
+  const issuance: Issuance = { id, claim, live: true, spent: false, projecting: 0 };
   return {
     invocation: new EngineInvocation(issuance),
     projecting(): () => void {
@@ -134,14 +176,20 @@ export function issueInvocation(id: string): IssuedInvocation {
  * The durable identity of the invocation this is being claimed inside, for a
  * trusted host.
  *
- * One use, from that invocation and no other. Anything this module did not
- * mint, an issuance whose invocation has finished, one belonging to an
- * invocation that is busy expanding its own content, and a second read of a
+ * One use, from that invocation and no other, in the domain that invocation
+ * resolved to. Anything this module did not mint, an issuance belonging to an
+ * invocation of another component, one whose invocation has finished, one
+ * whose invocation is busy expanding its own content, and a second read of a
  * genuine one are each refused rather than answered — answering would hand a caller an
  * identity that is not its own, and a durable operation named after somebody
  * else's invocation admits and replays under their retained history.
  */
-export function durableIdentityOf(invocation: ComponentInvocation): string {
+export function durableIdentityOf(invocation: ComponentInvocation, claim: ComponentClaim): string {
+  if (!isClaim(claim)) {
+    throw new ComponentInvocationError(
+      "a durable identity is claimed in a domain core minted, and this is not one",
+    );
+  }
   const issuance = stateOf(invocation);
   if (issuance === undefined) {
     throw new ComponentInvocationError(
@@ -152,6 +200,12 @@ export function durableIdentityOf(invocation: ComponentInvocation): string {
     throw new ComponentInvocationError(
       "this invocation has finished — an issuance kept from another element names no durable " +
         "identity here",
+    );
+  }
+  if (issuance.claim !== claim) {
+    throw new ComponentInvocationError(
+      "this invocation is an invocation of something else — an implementation kept from one " +
+        "component's site names no durable identity at another's",
     );
   }
   if (issuance.projecting > 0) {

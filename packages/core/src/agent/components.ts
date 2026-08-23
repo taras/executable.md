@@ -46,6 +46,7 @@ import {
   PROMPT_PROPS,
   SESSION_LAUNCH_PROPS,
   SESSION_PROPS,
+  SESSION_CLAIM,
   SessionComponent,
   SessionLaunch,
 } from "./function-components.ts";
@@ -85,7 +86,13 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
   yield* registerComponents([
     { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
     { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
-    { name: "Session", origin: CORE_ORIGIN, fn: SessionComponent, props: SESSION_PROPS },
+    {
+      name: "Session",
+      origin: CORE_ORIGIN,
+      fn: SessionComponent,
+      props: SESSION_PROPS,
+      claim: SESSION_CLAIM,
+    },
     {
       name: "Session.Launch",
       origin: CORE_ORIGIN,

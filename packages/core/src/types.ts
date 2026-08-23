@@ -8,7 +8,7 @@
 import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
-import type { ComponentInvocation } from "./component-invocation.ts";
+import type { ComponentClaim, ComponentInvocation } from "./component-invocation.ts";
 
 export type Json = DurableJson;
 
@@ -238,6 +238,7 @@ export type ComponentExecution<T> = Operation<T>;
  * compatibility alias with the same behavior.
  */
 export type { ComponentInvocation } from "./component-invocation.ts";
+export { ComponentClaim } from "./component-invocation.ts";
 
 export interface FunctionComponent {
   (props: Record<string, Json>, invocation: ComponentInvocation): ComponentExecution<unknown>;
@@ -264,6 +265,15 @@ export interface FunctionComponentDefinition {
    */
   returns?: ReturnsSchema;
   fn: FunctionComponent | TestHarnessComponentDefinition;
+  /**
+   * Which implementation this definition's durable identities are for.
+   *
+   * Carried by a component that names durable work after its own invocation, so
+   * an implementation kept from one component's site cannot name anything at
+   * another's (`component-invocation.ts`). Middleware wrapping a definition
+   * keeps it, because it is wrapping that component.
+   */
+  claim?: ComponentClaim;
 }
 
 /**
