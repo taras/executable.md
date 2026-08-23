@@ -1860,7 +1860,7 @@ run but are absent from the diagnostic trace.
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
-| `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
+| `src/invocation-identity.ts` | `ComponentInvocation`, `IdentityComponent`, `IdentityClaimant`, `ImportSelection`, `installIdentities()`, `issueInvocation()`, `ComponentInvocationError` — what a trusted host declares to an execution, the domains that execution mints for it, and the one-use issuance a claimant answers for (§5.6) |
 | `src/projection.ts` | `ProjectionHandle`, `ProjectionRequest`, `ActiveProjection` — content projection (§6.3) |
 | `src/eval-env.ts` | `evaluationEnv()`, `commitExports()` — per-evaluation binding snapshot and commit (§4.3) |
 | `src/live-env.ts` | execution-owned live binding overlay, collision validation and atomic export commit (§4.3) |
@@ -2626,6 +2626,18 @@ exactly as any other registered default — a repository file of that name still
 wins — and what changes is only where the implementation came from and what it
 may name. A host that declares none has no component that can name a durable
 operation after its invocation.
+
+**What resolution selected is recorded where it is selected.** An invocation is
+in a declared component's identity domain when *this* resolution selected the
+implementation that execution built for it — the exact function object, by
+identity, at the tier that answered. The engine opens a frame around one import
+before it asks, resolution records what it selected, and the engine settles the
+frame as soon as that import answers. Nothing about it travels on the answer or
+through the chain, so an import nobody delegated, one delegated for a different
+name, one delegated twice, and one answered with a definition of the handler's
+own each settle to nothing: what a handler decides is which implementation runs,
+and an implementation running where resolution did not select it names nothing
+(§5.6, Tier CIV).
 
 **Registration is scope-local.** `registerComponents()` makes names resolvable
 for the installing scope and its descendants. A child scope may register a name
@@ -3843,13 +3855,20 @@ component nobody declared cannot name a durable operation after its invocation
 at all.
 
 A claimant answers only for the invocation the engine is running: one minted by
-the execution that minted the claimant, for the component that claimant was
-built for, still live, not expanding its own content, running in the frame the
-engine invoked it in, and not already answered. Forwarding the genuine issuance
-is ordinary delegation and stays supported; everything else refuses. None of
-that reads replaceable state, so middleware may replace what a name resolves to,
-keep an implementation, and hand a whole registration record back inside another
-execution without moving what an invocation may name.
+the execution that minted the claimant, in the domain *resolution selected for
+that invocation*, still live, not expanding its own content, running in the
+frame the engine invoked it in, and not already answered.
+
+Which domain an invocation is in is never the authored name. It is the
+registration canonical resolution selected — recognized there by the identity of
+the implementation this execution built, carried to the issuance through the
+engine's own import frame (§5.3), and settled to nothing when resolution did not
+happen, happened twice, or answered for a name the engine did not ask.
+Forwarding the genuine issuance is ordinary delegation and stays supported;
+everything else refuses. None of it reads replaceable state, so middleware may
+short-circuit an import, redirect a name, replace a definition, shadow a
+registration, keep an implementation, and hand a whole registration record back
+inside another execution without moving what an invocation may name.
 
 `Expansion` and `getExpansion()` belong to `@executablemd/core`, so ordinary
 document execution receives expansion identity with no extension installed.
@@ -9958,7 +9977,7 @@ perform, separately from the binding, the rendered output, and the journal.
 
 ### Tier CIV — The identity a host's component names its work after
 
-Defined in §5.6.
+Defined in §5.6, with the selection rule in §5.3.
 
 | # | Test | Verify |
 |---|------|--------|
@@ -9972,12 +9991,14 @@ Defined in §5.6.
 | CIV8 | No borrowed implementation | An implementation kept from one declared component, called at an invocation of another with that invocation's genuine issuance, is refused |
 | CIV9 | No borrowed execution | An implementation kept from one execution, called at another execution's own invocation of the same component, is refused |
 | CIV10 | No transplanted record | The same, with the first execution's whole registration record answered for that name inside the second: still refused |
-| CIV11 | No nested registration | A document-level registration of a declared component's name is an ordinary component, and the implementation it shadows names nothing when called from there |
+| CIV11 | No shadowed registration | With `<Nest><Probe /></Nest>` authored in a fixture, the declared implementation is retained at its own site and run at a site whose name a nested registration shadowed: refused, and the case fails if authority is restored by authored-name equality |
 | CIV12 | No concurrent frame | An issuance belonging to another live invocation of the same component, in a frame of its own, is refused in this one |
 | CIV13 | No refused registration | A declared component whose registration is refused leaves a claimant that answers for nothing |
 | CIV14 | Lifetime | An issuance the engine has ended names nothing, claimed in its own frame |
 | CIV15 | One use | A second claim of one issuance, in its own frame, is refused |
-
+| CIV16 | No short circuit | An import answered without delegating selects nothing, so the implementation running there names nothing |
+| CIV17 | No redirected name | An import delegated for a different name selects nothing for the name the engine asked, and what that name resolved to names nothing here |
+| CIV18 | One selection | An import delegated twice settles to nothing |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

@@ -25,11 +25,36 @@
  * engine minted for a component in this domain, still live, not expanding its
  * own content, running in the frame the engine invoked it in, and not already
  * answered. Everything else refuses.
+ *
+ * ## Which invocation is in the domain
+ *
+ * Not the one whose authored name matches: a name is what a document wrote, and
+ * what it resolves to is decided by tiers, registrations and middleware. An
+ * invocation is in a domain when *canonical resolution selected that domain's
+ * own implementation for it* — the function object this execution built from
+ * the host's factory, recognized by identity where core resolves the import and
+ * carried to the issuance through this module's own state.
+ *
+ * The carrying is a frame around one import: the engine opens one before it
+ * asks, canonical resolution records what it selected, and the engine settles it
+ * immediately afterwards. A resolution that never happened, one that happened
+ * more than once, and one that answered for a different name than the engine
+ * asked all settle to nothing. Nothing travels on the answer, so a handler that
+ * short-circuits the import, redirects the name, replaces the definition, wraps
+ * it, or hands back a registration record from somewhere else moves no
+ * authority: what it can change is which implementation runs, and an
+ * implementation running where canonical resolution did not select it names
+ * nothing.
  */
 
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
-import type { FunctionComponent, PropsSchema, ReturnsSchema } from "./types.ts";
+import type {
+  FunctionComponent,
+  FunctionComponentDefinition,
+  PropsSchema,
+  ReturnsSchema,
+} from "./types.ts";
 
 /**
  * What a function component receives beside its props.
@@ -92,10 +117,33 @@ export interface IdentityDomain {
  * document, component or middleware can reach it, replace it, or add to it.
  */
 export interface InvocationIdentities {
-  /** The domain this execution minted for `name`, if it minted one. */
-  domainFor(name: string): IdentityDomain | undefined;
+  /**
+   * Open the frame for one import the engine is about to ask for.
+   *
+   * The engine settles it as soon as that import answers, whatever the answer
+   * was, so nothing a handler does in between decides what the frame holds.
+   */
+  beginImport(name: string): ImportSelection;
+  /**
+   * Record what canonical resolution selected. Only core's own resolver calls
+   * this, from inside the import the frame above was opened for.
+   */
+  select(name: string, definition: FunctionComponentDefinition): void;
   /** Answer for nothing, from here on. Called when the execution is torn down. */
   revoke(): void;
+}
+
+/** One import's frame: what canonical resolution selected, once. */
+export interface ImportSelection {
+  /**
+   * The domain of the registration canonical resolution selected here, if it
+   * selected one of this execution's own.
+   *
+   * Answers `undefined` unless exactly one canonical resolution happened inside
+   * this frame, for the name the engine asked, selecting the implementation
+   * this execution built for that domain.
+   */
+  settle(): IdentityDomain | undefined;
 }
 
 /** What the engine holds for one invocation: the value, and the end of it. */
@@ -190,6 +238,8 @@ export function issueInvocation(
 
 /** One domain, and the claimant that is the only way to spend it. */
 interface Minted {
+  /** The implementation this execution built for it, by identity. */
+  implementation?: FunctionComponent;
   readonly domain: IdentityDomain;
   readonly claim: IdentityClaimant;
   /** Answer nothing until the registration this belongs to has committed. */
@@ -298,18 +348,63 @@ export function installIdentities(components: readonly IdentityComponent[]): Ide
     }
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
+    // Built here, and held by identity: this exact function is what canonical
+    // resolution has to have selected for an invocation to be in this domain.
+    const implementation = component.factory(domain.claim);
+    domain.implementation = implementation;
     registrations.push({
       name: component.name,
       origin: component.origin,
       props: component.props,
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
-      fn: component.factory(domain.claim),
+      fn: implementation,
     });
   }
+
+  /**
+   * The import frames the engine has open, innermost last.
+   *
+   * A stack rather than a slot, because a handler may expand something of its
+   * own while an import is in flight. Anything that leaves two selections in
+   * one frame — a handler delegating twice, or two expansions interleaving —
+   * settles to nothing, which is the safe direction.
+   */
+  const frames: { asked: string; selected: Minted | undefined; count: number }[] = [];
+
   return {
     identities: {
-      domainFor: (name) => minted.get(name)?.domain,
+      beginImport(asked: string): ImportSelection {
+        const frame = { asked, selected: undefined as Minted | undefined, count: 0 };
+        frames.push(frame);
+        return {
+          settle(): IdentityDomain | undefined {
+            const index = frames.lastIndexOf(frame);
+            if (index >= 0) {
+              frames.splice(index, 1);
+            }
+            return frame.count === 1 && frame.selected !== undefined
+              ? frame.selected.domain
+              : undefined;
+          },
+        };
+      },
+      select(name: string, definition: FunctionComponentDefinition): void {
+        const frame = frames.at(-1);
+        if (frame === undefined) {
+          return;
+        }
+        frame.count += 1;
+        // The name canonical resolution answered for has to be the one the
+        // engine asked: a handler that delegates a different name selects a
+        // registration the element never named.
+        const domain = frame.asked === name ? minted.get(name) : undefined;
+        // And the implementation has to be the one this execution built. A
+        // repository file, a nested registration and another execution's
+        // component all resolve to a different function.
+        frame.selected =
+          domain !== undefined && domain.implementation === definition.fn ? domain : undefined;
+      },
       revoke: () => {
         for (const domain of minted.values()) {
           domain.revoke();

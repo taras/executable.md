@@ -27,8 +27,18 @@ import type { ExecutionInstallation, IdentityClaimant, IdentityComponent } from 
 import { getExpansion } from "../src/expansion.ts";
 import { installIdentities, issueInvocation } from "../src/invocation-identity.ts";
 import type { IdentityDomain } from "../src/invocation-identity.ts";
-import type { ComponentInvocation, ComponentRegistry, Json, RegistryEntry } from "../src/types.ts";
+import type {
+  ComponentDefinition,
+  ComponentInvocation,
+  ComponentRegistry,
+  FunctionComponent,
+  FunctionComponentDefinition,
+  Json,
+  RegistryEntry,
+} from "../src/types.ts";
 import { InMemoryStream } from "@executablemd/durable-streams";
+import { readTextFile } from "@effectionx/fs";
+import { fileURLToPath } from "node:url";
 
 /**
  * The engine's expansion context, addressed by the name it publishes under.
@@ -136,9 +146,22 @@ function* seam(): Operation<{ claim: IdentityClaimant; domain: IdentityDomain }>
     },
   ]);
   installed.activate();
-  const domain = installed.identities.domainFor("Both");
-  if (claim === undefined || domain === undefined) {
+  // The engine's own two steps, in order: open the frame for the import,
+  // record what canonical resolution selected, settle it.
+  const registration = installed.registrations[0];
+  if (claim === undefined || registration === undefined) {
     throw new Error("the seam produced no claimant");
+  }
+  const frame = installed.identities.beginImport("Both");
+  installed.identities.select("Both", {
+    kind: "function",
+    name: "Both",
+    props: NO_PROPS,
+    fn: registration.fn,
+  });
+  const domain = frame.settle();
+  if (domain === undefined) {
+    throw new Error("canonical selection produced no domain");
   }
   return { claim, domain };
 }
@@ -481,48 +504,86 @@ describe("Tier CIV — the identity a host's component names its work after", ()
   it("CIV11: a nested registration of the same name borrows nothing", function* () {
     const seen = record();
     let kept: unknown;
-    // The execution gives `<Probe />` its domain. A document-level registration
-    // of the same name is an ordinary component: it has no claimant, and the
-    // implementation it shadows names nothing when it is called from there.
-    yield* run("<Nest />\n", [probe(seen)], function* () {
-      yield* Component.around({
-        *importComponent([name], next) {
-          const definition = yield* next(name);
-          if (name === "Probe" && definition.kind === "function") {
-            kept = definition.fn;
-          }
-          return definition;
-        },
-      });
+    let shadowed: RegistryEntry | undefined;
+    const nested: string[] = [];
+    // The authored structure is the fixture's: the declared site first, then
+    // `<Nest><Probe /></Nest>`. The harness only installs the adversary — it
+    // retains the declared implementation at the first site's own resolution,
+    // then registers the name again so the nested site resolves to that
+    // registration, and runs what it retained there with the nested site's own
+    // genuine invocation.
+    const source = yield* readTextFile(
+      fileURLToPath(
+        new URL("./fixtures/invocation-identity/nested-registration.md", import.meta.url),
+      ),
+    );
+    yield* run(source, [probe(seen)], function* () {
       yield* registerComponents([
         {
           name: "Nest",
           origin: "test://nest",
           props: NO_PROPS,
           *fn(): Operation<string> {
-            // A nested registration shadowing the installed name, whose body
-            // runs the implementation the execution built.
-            return yield* scoped(function* () {
-              yield* registerComponents([
-                {
-                  name: "Probe",
-                  origin: "test://nested-probe",
-                  props: NO_PROPS,
-                  *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
-                    const borrowed = kept;
-                    return typeof borrowed === "function" ? yield* borrowed(props, invocation) : "";
-                  },
-                },
-              ]);
-              return yield* content();
-            });
+            return yield* content();
           },
         },
       ]);
+      yield* Component.around({
+        // The nested registration, once the declared implementation is in hand.
+        registry: (_args, next): ComponentRegistry => {
+          const answer = next();
+          return shadowed === undefined ? answer : new Map([...answer, ["Probe", shadowed]]);
+        },
+        *importComponent([name], next) {
+          const definition = yield* next(name);
+          if (name !== "Probe" || definition.kind !== "function") {
+            return definition;
+          }
+          if (kept === undefined) {
+            kept = definition.fn;
+            // Registered again under the same name, so canonical resolution
+            // stops selecting the execution's own component for it.
+            shadowed = {
+              default: {
+                definition: {
+                  kind: "function",
+                  name: "Probe",
+                  props: NO_PROPS,
+                  // deno-lint-ignore require-yield
+                  *fn(): Operation<string> {
+                    nested.push("the nested registration ran");
+                    return "";
+                  },
+                },
+                origin: "test://nested-probe",
+              },
+            };
+            return definition;
+          }
+          return {
+            ...definition,
+            *fn(props: Record<string, Json>, invocation: ComponentInvocation) {
+              const borrowed = kept;
+              if (typeof borrowed !== "function") {
+                nested.push("nothing retained");
+                return "";
+              }
+              return yield* borrowed(props, invocation);
+            },
+          };
+        },
+      });
     });
 
-    expect(seen.taken).toEqual([]);
-    expect(seen.refusals).toEqual([]);
+    // The declared site named itself. The nested site ran the retained
+    // implementation with its own genuine invocation and named nothing:
+    // canonical resolution selected the nested registration there, so that
+    // invocation is in no domain. Restoring authority by authored-name equality
+    // would put a second identity in `taken` and fail this.
+    expect(seen.taken).toHaveLength(1);
+    expect(nested).toEqual([]);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("this claimant answers for <Probe />");
   });
 
   it("CIV12: another live invocation's issuance names nothing in this frame", function* () {
@@ -594,6 +655,91 @@ describe("Tier CIV — the identity a host's component names its work after", ()
     });
     expect(taken).toEqual(["once"]);
     expect(refusal).toContain("already been taken");
+  });
+
+  /**
+   * Two sites, and an adversary at the second.
+   *
+   * The first resolves honestly, so the declared implementation is in hand;
+   * `answer` decides what canonical resolution does at the second, and what the
+   * engine is handed there. Whatever runs at that site runs with the genuine
+   * invocation the engine minted for it.
+   */
+  function twoSites(
+    seen: Seen,
+    answer: (
+      next: (name: string) => Operation<ComponentDefinition | FunctionComponentDefinition>,
+      kept: FunctionComponent,
+    ) => Operation<ComponentDefinition | FunctionComponentDefinition>,
+  ): Operation<void> {
+    let kept: FunctionComponent | undefined;
+    // `<Elsewhere />` is declared as well, so a handler redirecting the name has
+    // a real registration to redirect to.
+    return run("<Probe />\n\n<Probe />\n", [probe(seen), probe(seen, "Elsewhere")], function* () {
+      yield* Component.around({
+        *importComponent([name], next) {
+          if (name !== "Probe") {
+            return yield* next(name);
+          }
+          if (kept === undefined) {
+            const definition = yield* next(name);
+            if (definition.kind === "function" && typeof definition.fn === "function") {
+              kept = definition.fn;
+            }
+            return definition;
+          }
+          return yield* answer(next, kept);
+        },
+      });
+    });
+  }
+
+  it("CIV16: an import nobody delegated selects nothing, so it names nothing", function* () {
+    const seen = record();
+    // Answered without delegating: canonical resolution never ran for this
+    // site, so there is nothing for the frame to have selected.
+    // deno-lint-ignore require-yield
+    yield* twoSites(seen, function* (_next, kept) {
+      return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
+    });
+
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("this claimant answers for <Probe />");
+  });
+
+  it("CIV17: a redirected name selects nothing for the name the engine asked", function* () {
+    const seen = record();
+    yield* twoSites(seen, function* (next, kept) {
+      // Delegated, but for a different name, and answered with what that name
+      // resolved to: canonical resolution selected a registration this element
+      // never named, and the implementation running here is that one's.
+      const other = yield* next("Elsewhere");
+      const redirected =
+        other.kind === "function" && typeof other.fn === "function" ? other.fn : kept;
+      return { kind: "function", name: "Probe", props: NO_PROPS, fn: redirected };
+    });
+
+    // `<Elsewhere />`'s implementation ran at a `<Probe />` site and named
+    // nothing: the frame settles only for the name the engine asked.
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
+    expect(seen.refusals[0]).toContain("this claimant answers for <Elsewhere />");
+  });
+
+  it("CIV18: two canonical selections in one import settle to nothing", function* () {
+    const seen = record();
+    yield* twoSites(seen, function* (next, kept) {
+      // Delegated twice. Which of the two answers the engine was handed is not
+      // a question the frame can settle, so it settles to nothing.
+      yield* next("Probe");
+      const again = yield* next("Probe");
+      void again;
+      return { kind: "function", name: "Probe", props: NO_PROPS, fn: kept };
+    });
+
+    expect(seen.taken).toHaveLength(1);
+    expect(seen.refusals).toHaveLength(1);
   });
 
   it("CIV13: a refused registration leaves a claimant that answers for nothing", function* () {

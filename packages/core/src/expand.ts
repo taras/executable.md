@@ -65,6 +65,7 @@ import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
 import { issueInvocation } from "./invocation-identity.ts";
+import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
 import { ActiveProjection } from "./projection.ts";
@@ -2218,6 +2219,12 @@ function* expandComponent(
   }
 
   let imported: ComponentDefinition | FunctionComponentDefinition;
+  // Opened before the ask and settled the moment it answers, however it
+  // answered: what canonical resolution selected here is what decides whether
+  // this invocation is in one of this execution's identity domains, and nothing
+  // on the answer or in the chain carries it (`invocation-identity.ts`).
+  const selection = authority?.identities?.beginImport(name);
+  let selected: IdentityDomain | undefined;
   try {
     // The public chain answers, and canonical execution decides whether the
     // answer is one it produced. In a closed execution — a workflow holding a
@@ -2226,9 +2233,11 @@ function* expandComponent(
     // it returns is invoked. Without an authority the answer is whatever the
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
+    selected = selection?.settle();
     const imports = authority?.imports;
     imported = imports === undefined ? answered : imports.authorize(name, answered);
   } catch (error) {
+    selection?.settle();
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.
     const fatal = fatalCause(error);
@@ -2267,6 +2276,7 @@ function* expandComponent(
       path,
       checkedFailures,
       authority,
+      selected,
     );
   }
 
@@ -2681,6 +2691,14 @@ function* expandFunctionComponent(
   /** This work's checked-failure ledger, inherited from the invoking element. */
   inherited?: CheckedFailures,
   authority?: ExpansionAuthority,
+  /**
+   * The identity domain canonical resolution selected for this invocation.
+   *
+   * Absent unless this execution built the implementation that resolution
+   * chose, which is what puts an invocation in a domain at all
+   * (`invocation-identity.ts`).
+   */
+  selected?: IdentityDomain,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2846,12 +2864,7 @@ function* expandFunctionComponent(
         // The frame is the one the body is about to run in, so an issuance
         // routed into a concurrent invocation of the same component answers
         // nothing there.
-        const issued = issueInvocation(
-          expansion.id,
-          name,
-          authority?.identities?.domainFor(name),
-          yield* useScope(),
-        );
+        const issued = issueInvocation(expansion.id, name, selected, yield* useScope());
         const handle = createProjectionHandle({
           invocation,
           projecting: issued.projecting,

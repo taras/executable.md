@@ -138,8 +138,16 @@ components.
 
 ## Components
 
-`installAgentComponents()` registers seven components for the installing scope
-(§5.3). They are ordinary function components and non-reserved **defaults**: a
+`installAgentComponents()` registers six components for the installing scope
+(§5.3): `<AgentProvider>`, `<Agent>`, `<Session.Launch>`, `<Prompt>`,
+`<ApproveAll>` and `<AskPermission>`. `<Session>` is the seventh agent word and
+is supplied separately, because its implementation names durable work after its
+own invocation: a host declares it to the execution through the identity-bearing
+installation described in executable-mdx-spec §5.6, and the execution builds it
+from the claimant it minted. `agentIdentityComponents()` is what a host declares;
+a host that declares none has no `<Session>` at all.
+
+All seven are ordinary function components and non-reserved **defaults**: a
 repository component with one of these names is chosen ahead of them, and the
 engine owns their expression props, schema validation, `as` capture, content
 projection and invocation lifetime exactly as it does for any other `.ts`

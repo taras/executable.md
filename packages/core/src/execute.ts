@@ -2021,6 +2021,13 @@ function* executeDocument(
               position,
               bundle,
             );
+            // Canonical selection, recorded where it is made. This is the only
+            // thing that puts an invocation in one of this execution's identity
+            // domains: not the name, not the answer that comes back, and
+            // nothing a handler above this can hold (`invocation-identity.ts`).
+            if (definition.kind === "function") {
+              identity.identities.select(name, definition);
+            }
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does
             // to the value in between is visible rather than authoritative.

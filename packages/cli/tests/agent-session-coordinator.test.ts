@@ -130,6 +130,10 @@ function collectingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
  */
 function performingAuthority(records: LaunchRecord[]): AgentProviderAuthority {
   return {
+    // As above: these suites route launches, never a `<Session>` placement.
+    sessionIdentity: () => {
+      throw new Error("this stub authority routes no session placement");
+    },
     *perform(_request, phases) {
       const prepared = yield* phases.prepare();
       records.push(prepared);
