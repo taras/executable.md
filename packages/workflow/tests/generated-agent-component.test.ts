@@ -163,6 +163,19 @@ function reads(events: DurableEvent[]): DurableEvent[] {
   );
 }
 
+/** Every Workspace deletion this run actually performed. */
+function deletions(events: DurableEvent[]): DurableEvent[] {
+  return reads(events).filter((event) => nameOf(event).startsWith("delete:"));
+}
+
+/** What one Workspace file effect recorded, as the journal holds its result. */
+function outcomeOf(event: DurableEvent): Json | undefined {
+  if (event.type !== "yield" || event.result.status !== "ok") {
+    return undefined;
+  }
+  return event.result.value;
+}
+
 /** The fragment one admission recorded, as the journal holds its result. */
 function admittedSource(event: DurableEvent): string | undefined {
   const result: unknown = event.result;
@@ -175,6 +188,15 @@ function admittedSource(event: DurableEvent): string | undefined {
   }
   const source: unknown = (value as { source: unknown }).source;
   return typeof source === "string" ? source : undefined;
+}
+
+/** The pinned identities one admission recorded for the elements it named. */
+function recordedNames(event: DurableEvent): Json | undefined {
+  const value = outcomeOf(event);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return value.named;
 }
 
 /** The durable name one admission was recorded under. */
@@ -993,10 +1015,24 @@ describe("Tier WGAC — the standard write table", () => {
       // of the mutation. The evaluator adds no receipt of its own.
       expect(reads(attempt.events).length).toBeGreaterThanOrEqual(1);
 
-      // Two identities, each for the form its element was written in.
+      // The standard table, whole and in the order the policy retains — which
+      // is load-bearing rather than cosmetic: a continuation compares the
+      // entries position by position, so what this profile installs is what a
+      // resumed run is held to.
       const policy = policyOf(admissions(attempt.events)[0]!);
-      expect(JSON.stringify(policy)).toContain("File:write");
-      expect(JSON.stringify(policy)).toContain("@executablemd/workflow/composition#Dir");
+      expect(policy?.allowed).toEqual([
+        { name: "File", identity: "@executablemd/core#File:write", forms: ["paired"] },
+        {
+          name: "Dir",
+          identity: "@executablemd/workflow/composition#Dir",
+          forms: ["paired"],
+        },
+        {
+          name: "File.Delete",
+          identity: "@executablemd/core#File.Delete",
+          forms: ["self-closing"],
+        },
+      ]);
     });
   });
 
@@ -1012,6 +1048,81 @@ describe("Tier WGAC — the standard write table", () => {
 
       expect(reported(attempt)).toContain("did not admit");
       expect(reads(attempt.events)).toEqual([]);
+    });
+  });
+
+  it("WGAC14: an admitted deletion removes the file through the run's own transaction", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "obsolete.md", "what an earlier step left\n");
+      const planted = reads(yield* database.journal.readAll()).length;
+
+      const attempt = yield* runDocument(
+        database,
+        `<Evaluate source={${JSON.stringify(`<File.Delete path="obsolete.md" />`)}} ` +
+          `allow={["write"]} as="applied" />\n\n<Json value={applied} />\n`,
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      // The run's own Workspace, read back through its own transaction rather
+      // than from the records under test.
+      expect(yield* stored(database, "/obsolete.md")).toBe(undefined);
+      // One ordinary `workspace_file` effect, which is the authoritative
+      // account of the removal. The evaluator adds no receipt beside it.
+      const performed = deletions(attempt.events);
+      expect(performed).toHaveLength(1);
+      expect(outcomeOf(performed[0]!)).toEqual({ kind: "deleted" });
+      expect(reads(attempt.events)).toHaveLength(planted + 1);
+
+      // Admitted as the exact self-closing identity, and named by the fragment
+      // as the element was written.
+      const admission = admissions(attempt.events)[0]!;
+      expect(policyOf(admission)?.allowed).toContainEqual({
+        name: "File.Delete",
+        identity: "@executablemd/core#File.Delete",
+        forms: ["self-closing"],
+      });
+      expect(recordedNames(admission)).toEqual([
+        {
+          name: "File.Delete",
+          identity: "@executablemd/core#File.Delete",
+          form: "self-closing",
+        },
+      ]);
+      // A mutation contributes nothing: the shape a document binds is the same
+      // one every selection binds, and a deletion puts no result in it.
+      expect(JSON.parse(reported(attempt))).toEqual({ observations: [], output: "" });
+    });
+  });
+
+  it("WGAC15: a later unadmitted construct keeps the earlier deletion from running", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "obsolete.md", "what an earlier step left\n");
+      const planted = reads(yield* database.journal.readAll()).length;
+
+      const attempt = yield* runDocument(
+        database,
+        evaluates(`<File.Delete path="obsolete.md" />\n\n\`\`\`bash exec\nprintf ran\n\`\`\`\n`, [
+          "write",
+        ]),
+      );
+
+      // Whole-fragment preflight wins: the construct after the admitted element
+      // is read before the element ahead of it runs.
+      //
+      // The second construct is a code block rather than an unadmitted
+      // component, and that is what makes this discriminating. A refusal names
+      // its class and nothing else, so "did not admit" would read the same
+      // whether the block was refused or the deletion itself was never in the
+      // table — and a fragment whose first element was refused would prove
+      // nothing about preflight reaching past it.
+      expect(reported(attempt)).toContain("executable code block");
+      expect(yield* stored(database, "/obsolete.md")).toBe("what an earlier step left\n");
+      expect(deletions(attempt.events)).toEqual([]);
+      expect(reads(attempt.events)).toHaveLength(planted);
     });
   });
 

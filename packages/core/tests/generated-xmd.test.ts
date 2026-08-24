@@ -32,11 +32,12 @@ import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Component, content, hasContent } from "../src/component-api.ts";
+import { CORE_REGISTRY } from "../src/components/registry.ts";
 import { collect } from "../src/collect.ts";
 import { retainedSource } from "../src/root-source.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
@@ -47,6 +48,7 @@ import {
   evaluateGeneratedXmd,
   pinnedComponent,
   pinnedFetch,
+  pinnedFileDelete,
   pinnedFileRead,
   pinnedFileWrite,
   pinnedMutation,
@@ -1138,6 +1140,10 @@ function* useWorkspaceFiles(root: string): Operation<Reads> {
       performed.push(`write:${input.path}`);
       return yield* next(input);
     },
+    *deleteFile([input], next) {
+      performed.push(`delete:${input.path}`);
+      return yield* next(input);
+    },
   });
   return { performed };
 }
@@ -1166,6 +1172,24 @@ describe("Tier WGAC — the pinned read-only File", () => {
     // and the comparison is on this string.
     expect(pinnedFileRead().identity).not.toBe("@executablemd/core#File");
     expect(pinnedFileRead().selfClosing).toBe(true);
+  });
+
+  it("WGAC13: the pinned deletion is core's own definition, in its one form", function* () {
+    const deletion = pinnedFileDelete();
+
+    expect(deletion.name).toBe("File.Delete");
+    // What a retained admission is compared against, and what a continuation
+    // that selected the write table is held to.
+    expect(deletion.identity).toBe("@executablemd/core#File.Delete");
+    // One name, one identity: the component answers the self-closing spelling
+    // and refuses the paired one, so this states what the identity is rather
+    // than narrowing it — and stating it is what decides a paired spelling in
+    // preflight, before the fragment's first effect.
+    expect(deletion.form).toBe("self-closing");
+    // The exact object core's registry holds, not one shaped like it. Expansion
+    // invokes a copy of this, and a same-shaped substitute is a different
+    // implementation behind a name the host already granted.
+    expect(deletion.definition).toBe(CORE_REGISTRY.get("File.Delete")?.default?.definition);
   });
 
   it("WGAC8: the result carries each observation's value, in order, beside the rendering", function* () {
@@ -1513,20 +1537,29 @@ describe("Tier GXC — a name is not a form", () => {
     });
   }
 
-  it("GXC5: neither form is answered by a same-name repository component", function* () {
+  it("GXC5: no admitted name is answered by a same-name repository component", function* () {
     const workspace = yield* useWorkspace();
     yield* writeTextFile(join(workspace, "File.md"), "the repository File ran.\n");
     yield* writeTextFile(join(workspace, "Nest.md"), "the repository Nest ran.\n");
+    // A dotted name is a nested path to selection, so this is where a
+    // repository component called `File.Delete` would be found.
+    yield* until(mkdir(join(workspace, "File"), { recursive: true }));
+    yield* writeTextFile(join(workspace, "File", "Delete.md"), "the repository File.Delete ran.\n");
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
+    yield* writeTextFile(join(root, "stale.md"), "the note an earlier step left\n");
 
     const attempt = yield* scoped(function* () {
       const files = yield* useWorkspaceFiles(root);
       const evaluated = yield* evaluate(
         selecting(
-          `<File path="notes.md" />\n\n<File path="proposed.md">written</File>\n\n<Nest>held</Nest>\n`,
+          `<File path="notes.md" />\n\n<File path="proposed.md">written</File>\n\n` +
+            `<Nest>held</Nest>\n\n<File.Delete path="stale.md" />\n`,
           [pinnedFileRead()],
-          { allow: ["read", "write"], mutations: [pinnedFileWrite(), nest()] },
+          {
+            allow: ["read", "write"],
+            mutations: [pinnedFileWrite(), nest(), pinnedFileDelete()],
+          },
         ),
         { componentDirs: [workspace] },
       );
@@ -1536,7 +1569,11 @@ describe("Tier GXC — a name is not a form", () => {
     expect(attempt.evaluated.failure).toBe(undefined);
     expect(attempt.evaluated.output).not.toContain("the repository File ran");
     expect(attempt.evaluated.output).not.toContain("the repository Nest ran");
-    expect(attempt.files).toEqual(["notes.md", "write:proposed.md"]);
+    expect(attempt.evaluated.output).not.toContain("the repository File.Delete ran");
+    expect(attempt.files).toEqual(["notes.md", "write:proposed.md", "delete:stale.md"]);
+    // The pinned component removed the file; the repository one would have
+    // rendered prose and removed nothing.
+    expect(yield* exists(join(root, "stale.md"))).toBe(false);
   });
 
   const EXCLUDED: Array<[string, string]> = [
@@ -1544,7 +1581,6 @@ describe("Tier GXC — a name is not a form", () => {
     ["a Git-host pull request", `<PullRequest title="t" body="b" />`],
     ["an issue upsert", `<Issue title="t" body="b" />`],
     ["a repository", `<Repository name="api" />`],
-    ["a file deletion", `<File.Delete path="notes.md" />`],
     ["a glob", `<Glob pattern="**/*" />`],
   ];
 
