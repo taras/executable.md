@@ -27,12 +27,12 @@ import { beforeAll, describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, resource, scoped, sleep, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
-import { mkdir, mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1543,7 +1543,7 @@ describe("Tier GXC — a name is not a form", () => {
     yield* writeTextFile(join(workspace, "Nest.md"), "the repository Nest ran.\n");
     // A dotted name is a nested path to selection, so this is where a
     // repository component called `File.Delete` would be found.
-    yield* until(mkdir(join(workspace, "File"), { recursive: true }));
+    yield* ensureDir(join(workspace, "File"));
     yield* writeTextFile(join(workspace, "File", "Delete.md"), "the repository File.Delete ran.\n");
     const root = yield* useWorkspace();
     yield* writeTextFile(join(root, "notes.md"), "the retained note\n");
