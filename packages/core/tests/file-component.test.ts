@@ -25,7 +25,8 @@ import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
-import { selectForm, useFormSelections } from "../src/invocation-identity.ts";
+import { installFormSelections } from "../src/invocation-identity.ts";
+import { createContext } from "effection";
 import { registerComponents } from "../src/components/registration.ts";
 import { hasContent } from "../src/content-context.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
@@ -197,7 +198,9 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     const failures: DocumentationError[] = [];
 
     yield* useWorkspaceCwd(fixture);
-    yield* useFormSelections();
+    // This expansion's own frames, held here the way an execution holds its
+    // own. They are handed to `expandSegments` by value below.
+    const forms = installFormSelections();
     yield* Component.around({
       *raise([error], next) {
         raised.push(error);
@@ -216,12 +219,13 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     });
     yield* Component.around(
       {
+        // deno-lint-ignore require-yield
         *importComponent([name], _next) {
           if (name === definition.name) {
             // Recorded where it is resolved, which is what makes this canonical
             // resolution rather than a handler answering with a definition it
             // was holding.
-            yield* selectForm(definition.fn);
+            forms.select(name, definition);
             return definition;
           }
           if (name === "Broken") {
@@ -237,7 +241,18 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     let segments: Segment[] = [];
     let thrown: unknown;
     try {
-      segments = yield* expandSegments(scanSegments(source), {}, {}, new Set());
+      segments = yield* expandSegments(
+        scanSegments(source),
+        {},
+        {},
+        new Set(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { forms },
+      );
     } catch (error) {
       thrown = error;
     }
@@ -1424,6 +1439,77 @@ describe("Tier FL — the authored form decides the effect", () => {
     expect(calls).toEqual(["read:notes.md", "write:out.md"]);
     expect(String(rendered)).toContain("the authored note");
     expect(yield* readTextFile(join(fixture.workspace, "out.md"))).toBe("the authored bytes");
+  });
+
+  // FL38: the selection frames are the execution's, not a name anybody can
+  // reach. They were briefly held in an Effection Context, and Effection stores
+  // context values under the context's *name* — so public code creating a
+  // same-named Context held the same cell and could rewrite the active frame.
+  //
+  // This drives the whole supported public surface: ordinary `execute()`,
+  // `Component.importComponent` middleware, a same-named Context built from the
+  // public API, and core's own `<File>`. The wrapper resolves `<File>` normally
+  // to retain its dispatcher, then answers `<Other>` with that retained
+  // definition while trying to make the frame say it was selected. If the
+  // frames were reachable, the second element would enter `<File>`'s hidden
+  // read body for an import canonical resolution never selected it for.
+  it("FL38: middleware cannot name the frames that decide which body runs", function* () {
+    const fixture = yield* useFixture();
+    yield* writeTextFile(join(fixture.workspace, "payload.txt"), "SECRET");
+    const calls: string[] = [];
+    const answered: string[] = [];
+
+    const rendered = yield* runWith(
+      fixture,
+      '<File path="payload.txt" />\n\n<Other path="payload.txt" />\n',
+      new InMemoryStream(),
+      function* () {
+        yield* useFileCalls(calls);
+        let retained: FunctionComponentDefinition | undefined;
+        // Built from the public API, with the name core used while this state
+        // lived in a Context. Whatever it holds must not be the frames.
+        const impostor = createContext<unknown>("executablemd.core.form-selection", undefined);
+        yield* Component.around({
+          *importComponent([name, position], next) {
+            if (name === "Other" && retained !== undefined) {
+              // Everything a handler can reach, aimed at the frame the engine
+              // is about to settle for this import.
+              const held: unknown = yield* impostor.get();
+              const frames = Array.isArray(held) ? held : [];
+              for (const frame of frames) {
+                if (typeof frame === "object" && frame !== null) {
+                  Reflect.set(frame, "selected", retained.fn);
+                  Reflect.set(frame, "count", 1);
+                }
+              }
+              yield* impostor.set([{ selected: retained.fn, count: 1 }]);
+              answered.push(name);
+              return retained;
+            }
+            const definition = yield* next(name, position);
+            if (name === "File" && definition.kind === "function") {
+              retained = definition;
+            }
+            return definition;
+          },
+        });
+      },
+    );
+
+    const output = String(rendered);
+    // The attack ran: the wrapper retained core's own `<File>` definition and
+    // answered `<Other>` with it. Without this the assertions below would also
+    // hold for an unresolved `<Other>`, which is not what is under test.
+    expect(answered).toEqual(["Other"]);
+    // And it reached the dispatcher, which refused it — rather than being
+    // refused earlier as an unresolved name.
+    expect(output).toContain("without the invocation the engine issued");
+
+    // The authored `<File />` read, once. The redirected `<Other />` did not:
+    // it never entered the hidden body, so there is one read and one secret.
+    expect(calls).toEqual(["read:payload.txt"]);
+    expect(output.split("SECRET").length - 1).toBe(1);
+    expect(yield* read(fixture, "payload.txt")).toBe("SECRET");
   });
 
   it("FL37: a look-alike invocation selects no branch and reaches no provider", function* () {

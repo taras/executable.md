@@ -47,7 +47,7 @@
  * nothing.
  */
 
-import { createContext, useScope } from "effection";
+import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
 import type {
@@ -166,7 +166,7 @@ export interface InvocationIdentities {
    * Record what canonical resolution selected. Only core's own resolver calls
    * this, from inside the import the frame above was opened for.
    */
-  select(name: string, definition: FunctionComponentDefinition): void;
+  select(name: string, definition: object, dispatcher?: unknown): void;
   /** Answer for nothing, from here on. Called when the execution is torn down. */
   revoke(): void;
 }
@@ -434,76 +434,73 @@ function unusable(_props: Record<string, Json>, form: InvocationForm | undefined
 }
 
 /**
- * The dispatcher canonical resolution selected for one import.
+ * What canonical resolution selected, for the components whose authored form
+ * selects an effect.
  *
- * The same shape the identity frame above uses, and open for the same reason:
- * what the engine records is what canonical resolution produced *inside* this
- * import, not what came back from the chain. A frame holding two selections —
- * a handler that delegated twice, or two expansions interleaving — settles to
- * nothing, which refuses rather than guesses.
+ * Owned by the execution, in a closure, handed to core's own expansion by value
+ * beside the identities. **Not a Context.** Effection stores context values
+ * under the context's *name*, so a context is reachable to anything that can
+ * spell the name — public code creating a same-named one holds the same cell,
+ * and a loaded copy creating it holds it too. State that decides which body may
+ * run cannot live somewhere a document, a component or middleware can name.
  *
- * Held in a context an execution installs, not in this module. A module-scoped
- * stack would be one stack for every run in the process, so two executions
- * importing at once would push and pop each other's frames — the identity
- * frames beside this live in `installIdentities()`'s closure for the same
- * reason.
+ * The record is the exact definition object canonical resolution produced,
+ * together with the name it was asked for. Not a frame the engine opens around
+ * an import: that made the answer depend on when a resolution happened relative
+ * to other imports, and an import performed outside such a frame — the same
+ * component resolved again on another path — recorded into nothing and left a
+ * genuine invocation unselected. An identity is timing-free; a stack top is not.
  */
-interface SelectionFrame {
-  selected: FunctionComponent | undefined;
-  count: number;
+export interface FormSelections {
+  /**
+   * Record what canonical resolution produced for the name it was asked.
+   *
+   * Only core's own resolvers call this. The name travels with the definition
+   * because a name is half of what was selected: the same definition answered
+   * for a different name is a redirected import, not this one.
+   */
+  select(name: string, definition: object, dispatcher?: unknown): void;
+  /**
+   * The dispatcher this exact answer carries, when canonical resolution
+   * produced this exact definition for this exact name.
+   *
+   * A definition a handler built, copied, or kept from another import answers
+   * `undefined`, and the dispatcher then refuses rather than entering a body.
+   */
+  dispatcherFor(name: string, definition: unknown): FunctionComponent | undefined;
 }
-
-const FormSelections = createContext<SelectionFrame[]>("executablemd.core.form-selection");
 
 /**
- * Give this execution its own selection stack.
+ * Give one execution its own record of what it selected.
  *
- * Installed once per execution, before anything imports. An expansion running
- * without one records no selection, so a form-sensitive component refuses
- * rather than running unselected — the safe direction, and the reason this is
- * not defaulted to a shared array.
+ * An expansion running without one selects nothing, so a form-sensitive
+ * component refuses rather than running unselected — the safe direction, and
+ * the reason there is no ambient fallback to reach for.
  */
-export function* useFormSelections(): Operation<void> {
-  yield* FormSelections.set([]);
-}
-
-export interface FormSelection {
-  settle(): FunctionComponent | undefined;
-}
-
-/** Open the frame for one import the engine is about to ask for. */
-export function* beginFormSelection(): Operation<FormSelection> {
-  const stack = yield* FormSelections.get();
-  const frame: SelectionFrame = { selected: undefined, count: 0 };
-  stack?.push(frame);
+export function installFormSelections(): FormSelections {
+  // Keyed on the definition object itself, so what is recognized is the answer
+  // canonical resolution produced rather than anything about its shape. Held
+  // here for this execution's lifetime and reachable from nowhere else.
+  const canonical = new WeakMap<object, { name: string; dispatcher: FunctionComponent }>();
   return {
-    settle(): FunctionComponent | undefined {
-      const index = stack?.lastIndexOf(frame) ?? -1;
-      if (index >= 0) {
-        stack?.splice(index, 1);
+    select(name: string, definition: object, dispatcher?: unknown): void {
+      // The dispatcher is named explicitly where the answer is not the
+      // dispatcher itself: a trusted host that wraps a pinned definition to
+      // collect what it returned is still the answer to the import, and the
+      // form authority is the canonical dispatcher underneath its wrapper.
+      const authority = dispatcher ?? Reflect.get(definition, "fn");
+      if (isFormDispatcher(authority)) {
+        canonical.set(definition, { name, dispatcher: authority as FunctionComponent });
       }
-      return frame.count === 1 ? frame.selected : undefined;
+    },
+    dispatcherFor(name: string, definition: unknown): FunctionComponent | undefined {
+      if (typeof definition !== "object" || definition === null) {
+        return undefined;
+      }
+      const recorded = canonical.get(definition);
+      return recorded?.name === name ? recorded.dispatcher : undefined;
     },
   };
-}
-
-/**
- * Record what canonical resolution selected. Only core's own resolvers call
- * this, from inside the import the frame above was opened for.
- *
- * What it records is the **dispatcher**, wherever it sits. A trusted wrapper
- * that collects what a component returned is still the answer to the import,
- * but it is not the form authority: what the invocation is bound to is the
- * canonical dispatcher underneath it.
- */
-export function* selectForm(fn: unknown): Operation<void> {
-  const stack = yield* FormSelections.get();
-  const frame = stack?.at(-1);
-  if (frame === undefined) {
-    return;
-  }
-  frame.count += 1;
-  frame.selected = isFormDispatcher(fn) ? (fn as FunctionComponent) : undefined;
 }
 
 /**

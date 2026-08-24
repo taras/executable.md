@@ -76,7 +76,7 @@ import {
 import type { DocumentOutline, DocumentTargetFailure } from "./document-targets.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
-  expandSegments,
+  expandSegmentsWithin,
   expandBody,
   bodyHasOutput,
   isTopLevelReturn,
@@ -122,10 +122,9 @@ import { installedBundle } from "./components/bundle.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
   formDispatcher,
+  installFormSelections,
   installIdentities,
   parseFormDeclaration,
-  selectForm,
-  useFormSelections,
 } from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import type { ExpansionAuthority } from "./components/import-authority.ts";
@@ -1608,7 +1607,7 @@ function* runValueRoot(
         produced = { value: yield* resolveReturnValue("__root__", returns, segment) };
         continue;
       }
-      const expanded = yield* expandSegments(
+      const expanded = yield* expandSegmentsWithin(
         [segment],
         root.meta,
         validatedProps,
@@ -1786,7 +1785,7 @@ function* documentWorkflow(
     // has still handed over what it rendered — the root emits that before the
     // failure is reported, exactly as a buffered root does.
     for (const segment of root.bodySegments) {
-      yield* expandSegments(
+      yield* expandSegmentsWithin(
         [segment],
         root.meta,
         validatedProps,
@@ -2011,16 +2010,19 @@ function* executeDocument(
       // The domains stop answering with the execution that minted them, so an
       // implementation kept past teardown names nothing.
       yield* ensure(() => identity.identities.revoke());
+      // This execution's own selection frames, held here and handed to core's
+      // expansion by value. Nothing a document, a component or middleware can
+      // name reaches them.
+      const forms = installFormSelections();
       const authority: ExpansionAuthority = {
         ...(bundle === undefined ? {} : { imports: bundle }),
         identities: identity.identities,
+        forms,
       };
 
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
       // and the root eval scope.
-      // This execution's own selection stack, before anything imports.
-      yield* useFormSelections();
       yield* Component.around(
         {
           *importComponent([name, position], _next) {
@@ -2045,7 +2047,7 @@ function* executeDocument(
               // decides here: which dispatcher — if any — this import selected.
               // A dispatcher a handler kept from another import reaches no body
               // without it.
-              yield* selectForm(definition.fn);
+              forms.select(name, definition);
             }
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does

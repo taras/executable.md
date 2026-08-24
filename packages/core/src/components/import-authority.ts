@@ -19,7 +19,7 @@
  */
 
 import type { ComponentDefinition, FunctionComponentDefinition } from "../types.ts";
-import type { InvocationIdentities } from "../invocation-identity.ts";
+import type { FormSelections, InvocationIdentities } from "../invocation-identity.ts";
 
 /** A definition an import may answer with. */
 export type ImportedDefinition = ComponentDefinition | FunctionComponentDefinition;
@@ -49,6 +49,15 @@ export interface ExpansionAuthority {
   readonly imports?: ImportAuthority;
   /** The domains this execution minted, for the components it gave one. */
   readonly identities?: InvocationIdentities;
+  /**
+   * What canonical resolution selected for each import, for the components
+   * whose authored form selects an effect.
+   *
+   * Held by the execution and handed here by value, like the identities beside
+   * it: an expansion reaching this object is core's own, and nothing a document,
+   * a component or middleware can name reaches it.
+   */
+  readonly forms?: FormSelections;
 }
 
 /** Why an answer is not the one canonical execution produced for this name. */

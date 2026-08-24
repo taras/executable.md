@@ -105,7 +105,7 @@ import { CanonicalImports, retain } from "./components/import-authority.ts";
 import type { ImportAuthority, ImportedDefinition } from "./components/import-authority.ts";
 import { isComponentName } from "./components/registration.ts";
 import { CORE_ORIGIN, CORE_REGISTRY } from "./components/registry.ts";
-import { createBlockCounter, expandSegments } from "./expand.ts";
+import { createBlockCounter, expandSegmentsWithin } from "./expand.ts";
 import { extendPath } from "./expansion.ts";
 import { parseRequestRecord, prepareFetchRequest, requestRecord } from "./fetch-request.ts";
 import { timeoutFetch } from "@executablemd/runtime";
@@ -114,7 +114,8 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
-import { invocationForm, selectForm } from "./invocation-identity.ts";
+import { installFormSelections, invocationForm } from "./invocation-identity.ts";
+import type { FormSelections } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { FunctionComponentDefinition, Json, JsonObject, Segment } from "./types.ts";
 
@@ -569,6 +570,16 @@ class GeneratedImportAuthority implements ImportAuthority {
   readonly #planned: Map<string, Planned[]>;
   readonly #imports = new CanonicalImports();
   readonly #values: GeneratedObservationValue[] = [];
+  /**
+   * This fragment's own selection frames.
+   *
+   * A generated fragment resolves its imports here rather than through the
+   * document's resolver, so it records what it selected here too — the same
+   * boundary, owned by the same object that owns the admission.
+   */
+  readonly #forms = installFormSelections();
+  /** The form authority under each admitted name's wrapper. */
+  readonly #dispatchers = new Map<string, unknown>();
 
   constructor(named: readonly Planned[]) {
     const planned = new Map<string, Planned[]>();
@@ -589,7 +600,7 @@ class GeneratedImportAuthority implements ImportAuthority {
   }
 
   /** The answer canonical execution produces for this name. */
-  *issue(name: string): Operation<ImportedDefinition> {
+  issue(name: string): ImportedDefinition {
     // Imports happen once per element and in the order the walk read them, so
     // the head of this name's queue is the entry preflight selected for the
     // element being expanded. An import the plan does not account for is an
@@ -608,7 +619,7 @@ class GeneratedImportAuthority implements ImportAuthority {
     // it is the form authority. Recording the dispatcher is what binds the
     // invocation to it — a wrapper that collected results is trusted host code
     // and takes no part in deciding which form-specific body runs.
-    yield* selectForm(implementation);
+
     // The value is taken where the component produced it. Reading it back from
     // the rendered fragment would lose every observation that renders nothing,
     // which is most of them. A mutation collects nothing: its own durable
@@ -633,15 +644,31 @@ class GeneratedImportAuthority implements ImportAuthority {
         return value;
       },
     };
+    // The wrapper above is the answer to the import; the dispatcher underneath
+    // it is the form authority. Remembered by name so `authorize` can record it
+    // against core's own copy — the object expansion actually invokes — because
+    // a trusted collection wrapper takes no part in deciding which
+    // form-specific body runs.
+    this.#dispatchers.set(name, implementation);
     return this.#imports.issue(name, admitted);
   }
 
+  /** The frames this fragment's own imports record into. */
+  get forms(): FormSelections {
+    return this.#forms;
+  }
+
   authorize(name: string, answer: ImportedDefinition): ImportedDefinition {
-    return this.#imports.authorize(
+    const canonical = this.#imports.authorize(
       name,
       answer,
       (refusal) => new GeneratedXmdError(WITNESS[refusal]),
     );
+    // Recorded here rather than at issue, because this is the object expansion
+    // invokes: `authorize` answers with core's own copy of the definition
+    // rather than the one the chain handed back.
+    this.#forms.select(name, canonical, this.#dispatchers.get(name));
+    return canonical;
   }
 }
 
@@ -1258,13 +1285,14 @@ function expand(
     const authority = new GeneratedImportAuthority(named);
     yield* Component.around(
       {
+        // deno-lint-ignore require-yield
         *importComponent([name], _next) {
-          return yield* authority.issue(name);
+          return authority.issue(name);
         },
       },
       { at: "min" },
     );
-    const expanded = yield* expandSegments(
+    const expanded = yield* expandSegmentsWithin(
       segments,
       {},
       {},
@@ -1275,8 +1303,11 @@ function expand(
       0,
       undefined,
       // No identity domains: a generated fragment names no durable work of its
-      // own, and what it may invoke is this table and nothing else.
-      { imports: authority },
+      // own, and what it may invoke is this table and nothing else. The
+      // selection frames are this fragment's own, so what its admitted imports
+      // select is not the enclosing document's business and cannot be reached
+      // from it.
+      { imports: authority, forms: authority.forms },
     );
     return { observations: authority.values, output: renderSegments(expanded) };
   });
