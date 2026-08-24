@@ -6934,6 +6934,15 @@ separate append that crosses the policy on its own — so a rejection never
 implies an empty journal. There is no allowlist, sanitization, repair, or
 approval: a finding is a code or data-flow defect to fix.
 
+Rendered output is held to the same policy before it leaves the execution. A
+live chunk the execution's scanner cannot clear — a finding, or a scan that
+fails — is withheld from the output stream in full; earlier cleared chunks
+remain observable and become the stream's partial close value. Withholding
+decides nothing about the run: the journal gate remains the rejection
+authority, and the rejected event stays absent. A replayed execution restores
+its retained output without rescanning it — the journal it replays crossed the
+gate when it was written.
+
 Findings and scanner failures carry positions and rule identities, never the
 matched value, the scanned content, or the detector's own error.
 

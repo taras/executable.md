@@ -214,6 +214,37 @@ export function* scanSecrets(content: string): Operation<SecretFinding[]> {
 }
 
 /**
+ * Whether `content` may leave the execution as live output.
+ *
+ * An emit-or-withhold answer for the execution's own output bridge, and
+ * nothing more: it makes no durable decision and supplies no error, because
+ * the journal gate remains the authority that fails the run. Doubt withholds —
+ * findings, a scanner that fails, and an absent or unauthentic policy all
+ * answer `false`. Only an execution whose host explicitly disabled detection
+ * clears everything, without a scanner existing to invoke.
+ *
+ * Package-private: the one caller is the output bridge `execute()` owns, and
+ * exporting it publicly would advertise a screen whose answer is worth nothing
+ * outside that bridge.
+ */
+export function* clearsLiveOutput(content: string): Operation<boolean> {
+  let detection: ExecutionDetection;
+  try {
+    detection = yield* currentDetection();
+  } catch {
+    return false;
+  }
+  if (!(detection instanceof EnabledDetection)) {
+    return true;
+  }
+  try {
+    return (yield* detection.scanner.scan(content)).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Apply the normalized policy to `stream`, and install it for this execution.
  *
  * `undefined` normalizes to enabled; only an explicit `false` from the trusted
