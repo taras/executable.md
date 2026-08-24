@@ -23,8 +23,13 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, spawn } from "effection";
+import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
+import { rm, writeTextFile } from "@effectionx/fs";
+import { API, useHostFiles } from "@executablemd/runtime";
+import { mkdtemp, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { forEach } from "@effectionx/stream-helpers";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
@@ -165,6 +170,30 @@ describe("Tier WB — a bundled name resolves to its pinned source", () => {
     );
 
     expect(output).toContain("ok: 7");
+  });
+
+  // WB3's `<Parse>` is form-insensitive, so it cannot show this: a
+  // form-sensitive core component's invocation is bound to the exact definition
+  // object expansion invokes, and under a bundle that object is the retained
+  // copy closed authorization answers with — not the one the resolver produced.
+  // A selection recorded against only the resolver's object leaves a genuine
+  // bundled `<File />` refused as unselected.
+  it("WB21: a form-sensitive core component still reads underneath the bundle", function* () {
+    const workspace = yield* until(realpath(yield* until(mkdtemp(join(tmpdir(), "wb-file-")))));
+    yield* ensure(() => rm(workspace, { recursive: true, force: true }));
+    yield* writeTextFile(join(workspace, "payload.txt"), "SECRET");
+    yield* API.Env.around(
+      {
+        // deno-lint-ignore require-yield
+        *cwd() {
+          return workspace;
+        },
+      },
+      { at: "min" },
+    );
+    yield* useHostFiles();
+
+    expect(yield* run('<File path="payload.txt" />\n')).toContain("SECRET");
   });
 
   it("WB4: an undeclared name resolves to nothing at all", function* () {

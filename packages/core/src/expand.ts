@@ -2280,8 +2280,20 @@ function* expandComponent(
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
     selected = selection?.settle();
-    const imports = authority?.imports;
-    imported = imports === undefined ? answered : imports.authorize(name, answered);
+    if (authority?.imports === undefined) {
+      imported = answered;
+    } else {
+      imported = authority.imports.authorize(name, answered);
+      // Closed authorization answers with core's retained copy rather than the
+      // object the resolver recorded, and the copy is what this expansion
+      // invokes — so the selection is recorded against it too. Only here: an
+      // open execution's answer travelled through public middleware, and
+      // nothing it hands back is canonical resolution's product. The record
+      // takes its dispatcher from the copy's own `fn`, identical by retention;
+      // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
+      // an authority recorded explicitly is never displaced.
+      authority.forms?.select(name, imported);
+    }
     // Read off the answer rather than from a frame the engine opened: what is
     // recognized is the exact definition canonical resolution produced for this
     // exact name, whenever it produced it.
