@@ -413,6 +413,32 @@ A request the command refuses rather than runs — bad grammar, a missing run, a
 incompatible reuse, damaged storage, an unsupported host — exits 1 and publishes
 no status line.
 
+**What an execution reports.** `start`, `resume` and `fork` each publish two
+lines on standard error: the run identity once the run exists, and the status
+once it is retained.
+
+```text
+workflow run: <run-id>
+workflow status: <status>
+```
+
+A **suspended** outcome reports a third line between them, because it is the one
+outcome whose continuation needs a second identifier — `xmd workflow answer`
+names the run and the wait:
+
+```text
+workflow run: <run-id>
+workflow suspension: <suspension-id>
+workflow status: suspended
+```
+
+The suspension line is published on the same terms as the status line: after the
+settlement transition commits, never before. A wait nothing retained is not one
+a caller can answer, and a refused settlement publishes neither line. The
+identifier is the one the retained `suspension_request` event carries, so what
+the caller is told to answer and what the run is waiting on are the same
+suspension. The status line stays the closing word on every outcome.
+
 **A status line says what was retained**, so a lifecycle transition storage
 refused publishes none. Finishing the document-execution record and publishing
 the run state are one transaction; no command observes one without the other.

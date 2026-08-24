@@ -1028,18 +1028,35 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     // The process return a caller reads: suspension is its own outcome.
     expect(started.exitCode).toBe(2);
 
-    // Both identifiers reach standard error, and the run id is the one the
-    // storage holds rather than something this suite chose.
+    // Every identifier reaches standard error, in the order the contract gives
+    // them: the run, the wait, then the status as the closing word.
     const runLine = started.written.err.find((line) => line.startsWith("workflow run: "));
     expect(runLine).toBeDefined();
     const runId = String(runLine).slice("workflow run: ".length).trim();
-    expect(started.written.err).toContain("workflow status: suspended");
+
+    const suspensionLine = started.written.err.find((line) =>
+      line.startsWith("workflow suspension: "),
+    );
+    expect(suspensionLine).toBeDefined();
+    const reported = String(suspensionLine).slice("workflow suspension: ".length).trim();
+
+    // Exactly these three, and nothing else: a caller reads the pair it needs
+    // for `xmd workflow answer` without parsing past anything.
+    expect(started.written.err).toEqual([
+      `workflow run: ${runId}`,
+      `workflow suspension: ${reported}`,
+      "workflow status: suspended",
+    ]);
 
     const path = workflowRunPath(root, runId);
     const suspended = retained(path);
     expect(suspended.status).toBe("suspended");
     expect(suspended.requests).toHaveLength(1);
     expect(suspended.rootCloses).toBe(0);
+
+    // The wait the caller was told to answer is the wait the run retained —
+    // read back from the journal rather than from the line that announced it.
+    expect(reported).toBe(suspended.requests[0]);
 
     // The stop reason names the retained request rather than repeating it.
     const settled = suspended.executions.filter((execution) => execution.status === "suspended");

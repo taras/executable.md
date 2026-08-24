@@ -374,6 +374,19 @@ function reportRun(runId: string): void {
   report(`workflow run: ${runId}`);
 }
 
+/**
+ * The wait this run settled on, named so a caller can answer it.
+ *
+ * A suspended run is the one outcome whose continuation needs a second
+ * identifier: `xmd workflow answer` takes the run *and* the suspension, and
+ * without this line the only way to learn the second one is to read the
+ * journal. Reported after the settlement commits, for the same reason the
+ * status line is — a wait nothing retained is not one to answer.
+ */
+function reportSuspension(suspensionId: string): void {
+  report(`workflow suspension: ${suspensionId}`);
+}
+
 function reportStatus(status: WorkflowRunStatus): void {
   report(`workflow status: ${status}`);
 }
@@ -979,6 +992,8 @@ export function runWorkflow(
         return { exitCode: 1 };
       }
       phase.state = "settled";
+      // Before the status line, which stays the closing word on every outcome.
+      reportSuspension(settlement.notice.suspensionId);
       reportStatus("suspended");
       return { exitCode: EXIT_BY_STATUS.suspended };
     }
