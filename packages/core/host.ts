@@ -21,10 +21,12 @@
  * A third act of infrastructure sits beside them. **Generated XMD** is source
  * an Agent produced, and `evaluateGeneratedXmd()` is how a trusted host runs it:
  * the complete fragment is preflighted before its first effect, only the pinned
- * observation identities the host admitted may execute, and what was admitted is
- * recorded as one ordinary durable event before the first observation. It is
- * reached from a preparation, because what it performs belongs in the run's
- * journal.
+ * identity the host admitted for that name *and* that authored form may
+ * execute, and what was admitted is recorded as one ordinary durable event
+ * before the first generated effect. The host states a `read` table and a
+ * `write` table and the caller selects between them, so admitting an
+ * observation is not admitting a mutation. It is reached from a preparation,
+ * because what it performs belongs in the run's journal.
  *
  * Both stop at the first refusal, and a refusal stops only what has not
  * happened yet: durable effects an earlier preparation completed stay
@@ -80,8 +82,13 @@ export {
   pinnedComponent,
   pinnedFetch,
   pinnedFileRead,
+  pinnedFileWrite,
+  pinnedMutation,
 } from "./src/generated-xmd.ts";
 export type {
+  GeneratedComponentForm,
+  GeneratedEffectClass,
+  GeneratedMutation,
   GeneratedObservation,
   GeneratedObservationResult,
   GeneratedObservationValue,

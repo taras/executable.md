@@ -883,3 +883,220 @@ describe("Tier WGAC — the registered Evaluate component", () => {
     });
   });
 });
+
+/**
+ * Tier WGAC — the effect classes `<Evaluate>` selects between
+ * (specs/workflow-workspace-spec.md §8.4).
+ *
+ * The same seam, asked for a class rather than only for a fragment. What these
+ * add to the core matrix is the production assembly: the real `<File>` and the
+ * real `<Dir>` this package registers, the run's own transaction-bound Files
+ * provider, and the run's authoritative current root — so an admitted write
+ * lands where the run keeps its Workspace and nowhere else.
+ */
+
+/** What the run's Workspace holds at one logical path, read back independently. */
+function* stored(database: WorkflowRunDatabase, path: string): Operation<string | undefined> {
+  const read = yield* transactWorkspaceRoots(database, function* (workspace) {
+    return yield* workspace.filesystem.readFile(path);
+  });
+  return read.ok ? new TextDecoder().decode(read.value) : undefined;
+}
+
+/** One generated fragment, quoted into an expression prop the way a document writes one. */
+function evaluates(fragment: string, allow?: readonly string[]): string {
+  const selection = allow === undefined ? "" : ` allow={${JSON.stringify([...allow])}}`;
+  return `<Evaluate source={${JSON.stringify(fragment)}}${selection} />\n`;
+}
+
+const WRITES = `<Dir path="nested">\n\n<File path="out.md">the fragment wrote this</File>\n\n</Dir>\n`;
+
+describe("Tier WGAC — the classes an authored element may select", () => {
+  const REFUSED: Array<[string, string]> = [
+    ["an empty selection", `<Evaluate source="text" allow={[]} />\n`],
+    ["one class twice", `<Evaluate source="text" allow={["read", "read"]} />\n`],
+    ["a class this host does not have", `<Evaluate source="text" allow={["execute"]} />\n`],
+    ["a selection that is not an array", `<Evaluate source="text" allow="write" />\n`],
+  ];
+
+  for (const [what, source] of REFUSED) {
+    it(`WGAC9: ${what} is refused before any admission`, function* () {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const attempt = yield* runDocument(database, source);
+
+        expect(reported(attempt)).toMatch(/allow/i);
+        expect(admissions(attempt.events)).toHaveLength(0);
+      });
+    });
+  }
+
+  const ACCEPTED: Array<[string, readonly string[]]> = [
+    ["read alone", ["read"]],
+    ["write alone", ["write"]],
+    ["both, in either order", ["write", "read"]],
+  ];
+
+  for (const [what, allow] of ACCEPTED) {
+    it(`WGAC9: a selection of ${what} is admitted`, function* () {
+      const root = yield* useStorageRoot();
+      yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const attempt = yield* runDocument(
+          database,
+          evaluates("nothing to perform here.\n", allow),
+        );
+
+        expect(attempt.failure).toBe(undefined);
+        const recorded = admissions(attempt.events);
+        expect(recorded).toHaveLength(1);
+        // Canonical order, whatever the document wrote: a continuation compares
+        // this, and two documents asking for the same classes ask for one grant.
+        expect(policyOf(recorded[0]!)?.allow).toEqual([...allow].sort());
+      });
+    });
+  }
+
+  it("WGAC9: omitting `allow` still admits exactly the read table", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "notes.md", "the retained note\n");
+
+      const attempt = yield* runDocument(database, evaluates(`<File path="notes.md" />`));
+
+      expect(attempt.failure).toBe(undefined);
+      const recorded = admissions(attempt.events);
+      expect(policyOf(recorded[0]!)?.allow).toEqual(["read"]);
+      // And the write table is not in the retained policy at all, so a run that
+      // changed it has not changed what this admission was granted under.
+      expect(JSON.stringify(policyOf(recorded[0]!))).not.toContain("File:write");
+    });
+  });
+});
+
+describe("Tier WGAC — the standard write table", () => {
+  it("WGAC10: an admitted write lands in the run's own Workspace", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const attempt = yield* runDocument(database, evaluates(WRITES, ["write"]));
+
+      expect(attempt.failure).toBe(undefined);
+      // The run's Workspace, beneath the directory the fragment installed —
+      // read back through the run's own transaction rather than from the record
+      // under test.
+      expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+      // Through the ordinary `<File>` effect, which is the authoritative account
+      // of the mutation. The evaluator adds no receipt of its own.
+      expect(reads(attempt.events).length).toBeGreaterThanOrEqual(1);
+
+      // Two identities, each for the form its element was written in.
+      const policy = policyOf(admissions(attempt.events)[0]!);
+      expect(JSON.stringify(policy)).toContain("File:write");
+      expect(JSON.stringify(policy)).toContain("@executablemd/workflow/composition#Dir");
+    });
+  });
+
+  it("WGAC10: nothing outside the write table is admitted with it", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const attempt = yield* runDocument(
+        database,
+        evaluates(`<Git.Push remote="origin" />\n`, ["write"]),
+      );
+
+      expect(reported(attempt)).toContain("did not admit");
+      expect(reads(attempt.events)).toEqual([]);
+    });
+  });
+
+  it("WGAC10: a self-closing File is not admitted by the write table", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "notes.md", "the retained note\n");
+      const planted = reads(yield* database.journal.readAll()).length;
+
+      const attempt = yield* runDocument(
+        database,
+        evaluates(`<File path="notes.md" />\n`, ["write"]),
+      );
+
+      expect(reported(attempt)).toContain("paired form");
+      expect(reads(attempt.events)).toHaveLength(planted);
+    });
+  });
+});
+
+describe("Tier WGAC — what a selection binds", () => {
+  it("WGAC11: a write-only evaluation binds no observation and no output", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      const attempt = yield* runDocument(
+        database,
+        `<Evaluate source={${JSON.stringify(WRITES)}} allow={["write"]} as="applied" />\n\n` +
+          `<Json value={applied} />\n`,
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      // `as` binds the same shape for every selection, and an admitted write
+      // puts nothing in it.
+      expect(reported(attempt)).toContain('"observations": []');
+      expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+    });
+  });
+
+  it("WGAC11: a mixed evaluation binds the read and not the write", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* plant(database, "notes.md", "the retained note\n");
+
+      const fragment = `<File path="notes.md" />\n\n<File path="proposed.md">the fragment wrote this</File>\n`;
+      const attempt = yield* runDocument(
+        database,
+        `<Evaluate source={${JSON.stringify(fragment)}} allow={["read", "write"]} as="applied" />\n\n` +
+          `<Json value={applied} />\n`,
+      );
+
+      expect(attempt.failure).toBe(undefined);
+      const bound = reported(attempt);
+      expect(bound).toContain('"name": "File"');
+      expect(bound).toContain("the retained note");
+      // One entry, not two: the write is accounted for by its own effect.
+      expect(bound.match(/"name": "File"/g)).toHaveLength(1);
+      expect(yield* stored(database, "/proposed.md")).toBe("the fragment wrote this");
+    });
+  });
+});
+
+describe("Tier WGAC — a committed mutation is not repeated", () => {
+  it("WGAC12: a completed replay restores the run and writes nothing again", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const document = evaluates(WRITES, ["write"]);
+
+      const first = yield* runDocument(database, document);
+      expect(first.failure).toBe(undefined);
+      const committed = first.events.length;
+      const written = reads(first.events).length;
+
+      const again = yield* runDocument(database, document);
+
+      expect(again.failure).toBe(undefined);
+      // Nothing new was journaled and no second mutation happened; the retained
+      // content is what the first attempt left.
+      expect(again.events.length).toBe(committed);
+      expect(reads(again.events).length).toBe(written);
+      expect(yield* stored(database, "/nested/out.md")).toBe("the fragment wrote this");
+    });
+  });
+});

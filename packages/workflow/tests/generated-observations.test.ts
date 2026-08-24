@@ -21,14 +21,14 @@ import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { retainedSource } from "@executablemd/core";
-import { executeInstalled } from "@executablemd/core/host";
+import { executeInstalled, pinnedFileRead } from "@executablemd/core/host";
 import type {
   GeneratedObservationResult,
   GeneratedObservationValue,
 } from "@executablemd/core/host";
 import type { ExecutionInstallation } from "@executablemd/core/host";
-import { observeGeneratedXmd } from "../src/generated-observations.ts";
-import type { GeneratedObservationPolicy } from "../src/generated-observations.ts";
+import { evaluateGeneratedFragment } from "../src/generated-observations.ts";
+import type { GeneratedEvaluationPolicy } from "../src/generated-observations.ts";
 
 const ROOT_PATH = "workflows/agent.md";
 const ROOT_SOURCE = "The run admitted a generated fragment.\n";
@@ -76,13 +76,13 @@ interface Attempt {
  * Run one fragment under one policy, from the position a trusted host records
  * durable work from.
  */
-function evaluate(source: string, policy: GeneratedObservationPolicy): Operation<Attempt> {
+function evaluate(source: string, policy: GeneratedEvaluationPolicy): Operation<Attempt> {
   return scoped(function* () {
     const stream = new InMemoryStream();
     const captured: { result?: GeneratedObservationResult } = {};
     const installation: ExecutionInstallation = {
       *prepare() {
-        captured.result = yield* observeGeneratedXmd("turn-1", source, policy);
+        captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy);
       },
     };
     const execution = yield* executeInstalled(
@@ -131,11 +131,14 @@ function observations(events: DurableEvent[]): DurableEvent[] {
 
 const ADMITTED: readonly Record<string, Json>[] = [{ url: URL_ONE }];
 
-function policy(overrides: Partial<GeneratedObservationPolicy> = {}): GeneratedObservationPolicy {
+function policy(overrides: Partial<GeneratedEvaluationPolicy> = {}): GeneratedEvaluationPolicy {
   return {
     workspaceRoots: [PRIMARY, SECONDARY],
     selectedRoot: PRIMARY,
     requests: ADMITTED,
+    // What the real host always states, so an empty `requests` here is a run
+    // admitting no `<Fetch>` rather than a run admitting nothing at all.
+    reads: [pinnedFileRead()],
     ...overrides,
   };
 }

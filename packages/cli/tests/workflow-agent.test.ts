@@ -96,8 +96,10 @@ function runFixture(
      * forgot rather than a process that restarted.
      */
     readonly sessionStore?: AgentProfileOptions["sessionStore"];
-    /** What this host admits a generated fragment under, beyond the read-only File. */
+    /** What this host admits a generated fragment under, beyond the standard profile. */
     readonly evaluation?: { readonly requests?: readonly Record<string, Json>[] };
+    /** The root props this run was started with. */
+    readonly props?: Record<string, Json>;
     /** Answers one admitted HTTP read, and counts what was asked for. */
     readonly transport?: { readonly performed: string[] };
   } = {},
@@ -149,6 +151,7 @@ function runFixture(
               {
                 ...retainedSource("workflows/observation-loop.md", source),
                 stream: database.journal,
+                ...(options.props === undefined ? {} : { props: options.props }),
               },
               // Both words this document writes name durable work after their
               // own invocations, so the host declares them to the execution and
@@ -551,6 +554,59 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(retained).toContain("native tool");
       // Nothing the request carried reached the record.
       expect(retained).not.toContain(marker);
+    });
+  });
+
+  it("WAL9: an approved proposal is applied, and a refused one is not", function* () {
+    const source = yield* readTextFile(join(FIXTURES, "approved-proposal.md"));
+    const change = `<Dir path="nested">\n\n<File path="out.md">the agent's change</File>\n\n</Dir>\n`;
+
+    const approved = yield* useStorageRoot();
+    yield* withStorage(approved, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal(change));
+
+      const attempt = yield* runFixture(approved, database, source, {
+        createRuntime: fake.create,
+        props: { approved: true },
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      // The standard profile admitted it: one record, naming both write
+      // identities and the classes the document selected.
+      const recorded = admitted(attempt.events);
+      expect(recorded).toHaveLength(1);
+      const policy = JSON.stringify(recorded[0]);
+      expect(policy).toContain("File:write");
+      expect(policy).toContain("@executablemd/workflow/composition#Dir");
+      expect(policy).toContain('"allow":["write"]');
+      // And the change is in the run's own Workspace, where an ordinary read
+      // beneath the fragment's own directory finds it. Anchored on the
+      // document's own sentence: the proposal is echoed further up, so a bare
+      // substring would be satisfied by the echo rather than by the read.
+      expect(reported(attempt)).toMatch(/now holds:\s*the agent's change/);
+      expect(typed(attempt.events, "workspace_file").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const refused = yield* useStorageRoot();
+    yield* withStorage(refused, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal(change));
+
+      const attempt = yield* runFixture(refused, database, source, {
+        createRuntime: fake.create,
+        props: { approved: false },
+      });
+
+      expect(attempt.failure).toBe(undefined);
+      // The same proposal, the same host, and the branch that reaches
+      // `<Evaluate>` never taken: no admission exists, so no mutation does.
+      expect(reported(attempt)).toContain("Nobody approved it");
+      expect(admitted(attempt.events)).toHaveLength(0);
+      expect(typed(attempt.events, "generated_xmd")).toHaveLength(0);
+      expect(typed(attempt.events, "workspace_file")).toHaveLength(0);
     });
   });
 
