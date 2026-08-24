@@ -43,6 +43,7 @@ import { scoped, type Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { useCompositionComponents } from "../../composition/installation.ts";
+import { useWorkflowElicitation } from "../../suspension/elicitation.ts";
 import {
   useGitComposition,
   useRepositoryComposition,
@@ -151,6 +152,10 @@ export function withWorkflowWorkspace<T>(
         yield* useGitHubIssues(options.gitHubIssues);
       }
       yield* useCompositionComponents();
+      // After the composition components and inside this attachment: a
+      // completed replay never reaches here, so it registers no second `Elicit`
+      // and installs no provider for work that is not going to happen.
+      yield* useWorkflowElicitation();
       if (options.agent !== undefined) {
         yield* options.agent({ runId: database.record.runId, database });
       }

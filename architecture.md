@@ -829,6 +829,20 @@ authority: middleware may refuse or suppress the route for its descendants, but
 no value it returns is a suspension answer and it cannot make `suspendFor()`
 continue past an unanswered wait.
 
+The shipped caller is the Elicitation provider the workflow host installs, so a
+document asks for a durable wait by writing the `<Elicit>` it would write
+anywhere. Two consequences follow from where that call has to sit. A workflow
+run resolves `Elicit` to a registration of the host's own, which asks the
+question and writes no durable record: the wait must be the outermost durable
+operation at its position, because a request published inside an enclosing
+durable operation takes the journal slot that operation never settles, and the
+resumed execution replays the coroutine and finds the wrong entry waiting. And
+the answer is therefore retained once, by the suspension protocol, rather than
+twice. Public Elicitation middleware — an `<Answers>` region, or anything else
+installed nearer — may answer the question or refuse it, and in both cases the
+run it affected never suspended; continuation of a suspended run is retained
+delivery state and nothing else.
+
 The retained request at the execution's exact current durable position is what
 authorizes entry. The controller derives the identifier for the position
 immediately behind the caller's own, requires the presented one to equal it,

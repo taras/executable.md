@@ -13,6 +13,13 @@
  * `xmd workflow answer` runs through the same module the CLI dispatches to, so
  * what is observed of a delivery is what a caller sees: one stdout line, no
  * status line, and a run whose lifecycle the delivery did not touch.
+ *
+ * Tier CKX below drives the same executor with the wait a *document* reaches:
+ * an ordinary `<Elicit>`, resolved to the workflow host's registration and
+ * answered by the suspending provider. That the production attachment installs
+ * that pair is Tier CK's claim, in the workflow package; what is under test
+ * here is that a question asked in Markdown settles, delivers and resumes on
+ * exactly the terms a `suspendFor()` written by hand already does.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -35,7 +42,13 @@ import {
   useWorkflowRunHost,
 } from "@executablemd/workflow/deno";
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
-import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
+import {
+  Git,
+  SUSPENSION_REQUEST,
+  suspendFor,
+  useWorkflowElicitation,
+  WorkflowLifecycle,
+} from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { runWorkflow } from "../src/workflow.ts";
@@ -709,5 +722,220 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
         (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
       ),
     ).toHaveLength(0);
+  });
+});
+
+/** The question a document asks, and the effect that must not run twice. */
+const CHECKPOINT_SCHEMA =
+  `{"type":"object","properties":{"proceed":{"type":"boolean"}},"required":["proceed"]}`;
+
+const CHECKPOINT = `<Prior />
+<Elicit schema={${CHECKPOINT_SCHEMA}} as="decision">
+Proceed with the change?
+</Elicit>
+
+decision: {decision.proceed}
+`;
+
+/** One durable effect ahead of the question, so a repeat would be visible. */
+function usePriorEffect(performed: string[]): Operation<void> {
+  return registerComponents([
+    {
+      name: "Prior",
+      origin: "tier-ckx",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      *fn() {
+        yield* durableCall("prior", function* () {
+          performed.push("performed-prior-effect");
+          return "done";
+        });
+        return "";
+      },
+    },
+  ]);
+}
+
+/**
+ * The same host, with the workflow's elicitation pair installed in its
+ * attachment — where `withWorkflowWorkspace` installs it in production.
+ */
+function elicitingHost(root: string, events: string[] = []): WorkflowHost {
+  const inner = host(root, events);
+  return {
+    ...inner,
+    attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
+      return inner.attach(
+        database,
+        scoped(function* () {
+          yield* useWorkflowElicitation();
+          return yield* operation;
+        }),
+      );
+    },
+  };
+}
+
+/** The checkpoint document, as this run's root. */
+function checkpointBody(rendered: string[]): (execution: WorkflowExecution) => Operation<Result<void>> {
+  return function* (execution): Operation<Result<void>> {
+    return yield* execution.around(
+      call(function* (): Operation<Result<void>> {
+        try {
+          rendered.push(
+            String(
+              yield* collect(
+                yield* executeInstalled(
+                  { ...inlineSource(CHECKPOINT), stream: execution.stream },
+                  execution.installations,
+                ),
+              ),
+            ),
+          );
+          return Ok(undefined);
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        }
+      }),
+    );
+  };
+}
+
+describe("Tier CKX — a checkpoint a document asked for", () => {
+  it("CK1/CK3/CK4: an <Elicit> suspends, a delivery executes nothing, and a resume spends it", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useFixture();
+    yield* useGit(fixture);
+
+    const runId = yield* createRun(root, fixture);
+    const performed: string[] = [];
+    const rendered: string[] = [];
+    const attachments: string[] = [];
+    yield* usePriorEffect(performed);
+
+    // CK1 — the question settles the run rather than blocking it.
+    const first = yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      elicitingHost(root, attachments),
+      checkpointBody(rendered),
+    );
+    expect(first.exitCode).toBe(2);
+
+    const path = workflowRunPath(root, runId);
+    const suspended = retained(path);
+    expect(suspended.status).toBe("suspended");
+    expect(suspended.requests).toHaveLength(1);
+    expect(suspended.rootCloses).toBe(0);
+    expect(suspended.priorEffects).toBe(1);
+
+    // The stop reason names the retained request, and the executor lock is
+    // free — acquisition refuses outright while one is held, so acquiring is
+    // the proof it was released.
+    const settled = suspended.executions.filter((execution) => execution.status === "suspended");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.reasonEventId).toBe(suspended.requestEventId);
+    yield* scoped(function* () {
+      yield* useWorkflowLifecycle({ root });
+      const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+      expect(acquired.ok).toBe(true);
+    });
+
+    // Nothing rendered: the document never reached its own end.
+    expect(rendered).toEqual([]);
+
+    // CK3 — the delivery retains a value and moves nothing.
+    const suspensionId = suspended.requests[0] ?? "";
+    const delivered = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      elicitingHost(root),
+    );
+    expect(delivered.exitCode).toBe(0);
+    expect(delivered.written.out).toEqual([`workflow answer: ${runId} (${suspensionId})`]);
+    expect(delivered.written.err).toEqual([]);
+    expect(retained(path)).toEqual(suspended);
+    expect(performed).toEqual(["performed-prior-effect"]);
+
+    // CK4 — the resume spends it, the answer reaches the document as the bound
+    // value, and the effect ahead of the question is restored rather than
+    // performed a second time.
+    const resumed = yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      elicitingHost(root, attachments),
+      checkpointBody(rendered),
+    );
+    expect(resumed.exitCode).toBe(0);
+
+    const completed = retained(path);
+    expect(completed.status).toBe("completed");
+    expect(completed.priorEffects).toBe(1);
+    expect(completed.requests).toHaveLength(1);
+    expect(completed.requests[0]).toBe(suspended.requests[0]);
+    expect(performed).toEqual(["performed-prior-effect"]);
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]).toContain("decision: true");
+    expect(answers(path)[0]?.state).toBe("consumed");
+
+    // Every attachment opened was released before its settlement.
+    expect(attachments).toEqual(["attached", "released", "attached", "released"]);
+  });
+
+  it("CK5: a second delivery and a schema-invalid one are refused, and retain nothing", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useFixture();
+    yield* useGit(fixture);
+
+    const runId = yield* createRun(root, fixture);
+    const performed: string[] = [];
+    yield* usePriorEffect(performed);
+
+    yield* runWorkflow(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      elicitingHost(root),
+      checkpointBody([]),
+    );
+
+    const path = workflowRunPath(root, runId);
+    const suspensionId = retained(path).requests[0] ?? "";
+    expect(suspensionId).not.toBe("");
+
+    // An answer the retained response schema rejects, before anything is
+    // written: `proceed` is declared boolean and required.
+    const invalid = yield* manage(
+      {
+        action: "answer",
+        runId,
+        suspensionId,
+        value: { proceed: "yes" },
+        secretDetection: true,
+      },
+      elicitingHost(root),
+    );
+    expect(invalid.exitCode).not.toBe(0);
+    // Refused by the schema the *document* compiled and the request retained,
+    // rather than by anything delivery reconstructed: `proceed` is the field
+    // `<Elicit>` declared, and this is the shape its schema gives it.
+    expect(invalid.written.err.join(" ")).toContain("does not satisfy the response schema");
+    expect(invalid.written.err.join(" ")).toContain("/proceed must be boolean");
+    expect(answers(path)).toEqual([]);
+
+    const accepted = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      elicitingHost(root),
+    );
+    expect(accepted.exitCode).toBe(0);
+    const afterFirst = answers(path);
+    expect(afterFirst).toHaveLength(1);
+
+    // The wait is no longer pending, so a second delivery has nothing to
+    // answer — and leaves what the first retained exactly as it was.
+    const duplicate = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: false }, secretDetection: true },
+      elicitingHost(root),
+    );
+    expect(duplicate.exitCode).not.toBe(0);
+    expect(duplicate.written.err.join(" ")).toContain("already has an answer waiting");
+    expect(answers(path)).toEqual(afterFirst);
   });
 });

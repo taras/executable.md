@@ -365,6 +365,11 @@ export {
   WorkflowTransactionError,
 } from "./src/storage/errors.ts";
 
+export {
+  ELICITATION_REQUEST_KIND,
+  SUSPENSION_ORIGIN,
+  useWorkflowElicitation,
+} from "./src/suspension/elicitation.ts";
 export { SUSPENSION_REQUEST, suspendFor, suspensionId } from "./src/suspension/suspend.ts";
 export {
   parseSuspensionRequest,

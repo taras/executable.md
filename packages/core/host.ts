@@ -74,6 +74,17 @@ export type { DurablePreparation } from "./src/document-request.ts";
  */
 export { ComponentInvocationError } from "./src/invocation-identity.ts";
 export type { IdentityClaimant, IdentityComponent } from "./src/invocation-identity.ts";
+/**
+ * Core's own `<Elicit>` schema, for a host that registers a second one.
+ *
+ * A workflow run resolves `Elicit` to a registration of its own, which asks the
+ * same question and reaches the same Elicitation Api but writes no durable
+ * record of its own. What it must not do is declare a *different* component:
+ * two hand-written copies of one props schema are two schemas, and no test
+ * catches the day they stop agreeing. So the second registration takes core's,
+ * the way the pinned generated identities take core's definitions.
+ */
+export { props as elicitProps, returns as elicitReturns } from "./src/components/Elicit.ts";
 export { WorkflowBundleError } from "./src/components/bundle.ts";
 export type { WorkflowBundleComponent, WorkflowComponentBundle } from "./src/components/bundle.ts";
 export {

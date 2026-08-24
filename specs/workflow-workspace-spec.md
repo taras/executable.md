@@ -299,9 +299,17 @@ report the run ID and reason on standard error and return control to the caller.
 No Agent,
 process or Workspace attachment remains alive.
 
-Pending input belongs to the suspending operation. For example, an Elicitation
-provider records a schema-validated response. `resume` accepts neither
-replacement root props nor an untyped generic answer. The host may schedule
+Pending input belongs to the suspending operation, and the shipped one is the
+Elicitation provider. A workflow run resolves `Elicit` to a registration the
+host installs beside the composition components, for a live or partial
+attachment only; it asks the same question core's does and writes no durable
+record of its own, because a durable wait cannot sit inside another durable
+operation. The host's provider calls `suspendFor()` with the rendered message as
+the request and the compiled schema as the response schema, so what is retained
+is what the person was asked, and a delivered value is judged against the schema
+the document itself compiled. An `<Answers>` region installs nearer and answers
+first, so a document that already knows the answer never suspends. `resume`
+accepts neither replacement root props nor an untyped generic answer. The host may schedule
 resumption when input arrives, or a caller may invoke `resume`. If input remains
 absent, replay restores the same request event, performs no earlier effect,
 publishes no duplicate request, and returns incomplete again after teardown.
