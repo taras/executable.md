@@ -54,12 +54,6 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
-    path: "scripts/tests/component-form-dispatch.test.ts",
-    reason:
-      "drives the compiled `dist/xmd` executable, which only `deno compile` produces — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise",
-    issue: DERIVED_SCOPE,
-  },
-  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
@@ -464,16 +458,39 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
 ];
 
 /**
+ * A suite whose subject is the compiled binary, which no test shard builds.
+ *
+ * The test jobs run source. `dist/xmd` exists only where something compiled it,
+ * and the `smoke` job is the one that does — deliberately, through the README's
+ * own Build target — so that is where a suite driving the binary belongs. This
+ * one ran in the Deno shards until now only because a Deno-only build test
+ * happened to sort into the same shard and left `dist/xmd` behind as a side
+ * effect. That is not a dependency any partition preserves: adding a single
+ * test file anywhere re-weights the corpus and can separate the two, which is
+ * exactly what happened.
+ */
+const COMPILED_BINARY: RuntimeExclusion[] = [
+  {
+    path: "scripts/tests/component-form-dispatch.test.ts",
+    reason:
+      "drives the compiled `dist/xmd`, which only `deno compile` produces and which no test shard builds — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise, and one the Deno shards saw only while an unrelated Deno-only build test happened to share a shard and leave the binary behind. The `smoke` job builds through README.md#Build and runs it there, beside the other suites whose subject is the binary",
+    issue: "https://github.com/taras/executable.md/issues/567",
+  },
+];
+
+/**
  * Node and Bun are keyed separately because they diverge — Bun imports a data:
  * URI that Node's tsx loader rejects, for one. They happen to agree today.
  *
- * Deno is keyed too, and its list is empty: every runtime now derives its
- * corpus through the same subtraction, so the runtime that excludes nothing has
- * to say so rather than be absent. An absent key reads as an unmeasured
- * runtime, which is what the weights and the partition must never see.
+ * Deno is keyed too, and until now its list was empty: every runtime derives
+ * its corpus through the same subtraction, so the runtime that excludes nothing
+ * had to say so rather than be absent. An absent key reads as an unmeasured
+ * runtime, which is what the weights and the partition must never see. Deno now
+ * excludes one file, for a reason that is not portability at all — the shards
+ * run source, and that suite's subject is the compiled binary.
  */
 export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
-  deno: [],
-  node: DENO_ONLY_TOOLING,
-  bun: DENO_ONLY_TOOLING,
+  deno: COMPILED_BINARY,
+  node: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
+  bun: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
 };
