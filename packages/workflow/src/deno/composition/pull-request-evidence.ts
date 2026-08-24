@@ -51,16 +51,13 @@ import type {
   CommentEvidence,
   PullRequestEvidence,
   PullRequestReadKind,
+  PullRequestReadResult,
   ReviewEvidence,
 } from "../../composition/pull-request-read-records.ts";
 
 /** What one read produced, or that it could not be completed. */
 export type EvidenceReading =
-  | {
-      readonly state: "read";
-      readonly headSha: string | null;
-      readonly evidence: PullRequestEvidence[];
-    }
+  | { readonly state: "read"; readonly result: PullRequestReadResult }
   | { readonly state: "unavailable" }
   | { readonly state: "protocol-invalid" };
 
@@ -102,7 +99,7 @@ function refusal(error: Error): EvidenceReading {
   return { state: error instanceof EvidenceUnreadable ? error.state : "unavailable" };
 }
 
-type Collected = Result<PullRequestEvidence[]>;
+type Collected<T> = Result<T[]>;
 
 /** The identifier a provider returned, as the decimal string a record holds. */
 function identifier(value: unknown): string | undefined {
@@ -141,10 +138,10 @@ function reviewSide(value: unknown): "left" | "right" | null {
  * `Link` relation while it stays on the endpoint's own origin, and answer
  * `undefined` rather than a short list when it cannot be finished.
  */
-function* collect(
+function* collect<T>(
   access: GitHubAccess,
   first: string,
-  read: (payload: unknown) => PullRequestEvidence | undefined,
+  read: (payload: unknown) => T | undefined,
   /**
    * The member holding the page's items, for an endpoint that wraps them.
    *
@@ -153,12 +150,12 @@ function* collect(
    * where the items are is not.
    */
   envelope?: string,
-): Operation<Collected> {
+): Operation<Collected<T>> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
     return unavailable();
   }
-  const gathered: PullRequestEvidence[] = [];
+  const gathered: T[] = [];
   let url = first;
   for (let page = 0; page < PAGE_LIMIT; page += 1) {
     let response;
@@ -439,7 +436,7 @@ function* readCombinedStatus(
   access: GitHubAccess,
   name: GitHubRepositoryName,
   headSha: string,
-): Operation<Collected> {
+): Operation<Collected<CheckEvidence>> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
     return unavailable();
@@ -465,7 +462,7 @@ function* readCombinedStatus(
   if (!Array.isArray(listed)) {
     return invalid();
   }
-  const gathered: PullRequestEvidence[] = [];
+  const gathered: CheckEvidence[] = [];
   for (const candidate of listed) {
     const item = readCommitStatus(headSha, candidate);
     if (item === undefined) {
@@ -490,7 +487,7 @@ export function* readPullRequestEvidence(
       (payload) => readReview(number, payload),
     );
     return reviews.ok
-      ? { state: "read", headSha: null, evidence: reviews.value }
+      ? { state: "read", result: { kind: "reviews", items: reviews.value } }
       : refusal(reviews.error);
   }
 
@@ -515,8 +512,7 @@ export function* readPullRequestEvidence(
     }
     return {
       state: "read",
-      headSha: null,
-      evidence: [...conversation.value, ...inline.value],
+      result: { kind: "comments", items: [...conversation.value, ...inline.value] },
     };
   }
 
@@ -541,5 +537,8 @@ export function* readPullRequestEvidence(
   if (!statuses.ok) {
     return refusal(statuses.error);
   }
-  return { state: "read", headSha, evidence: [...runs.value, ...statuses.value] };
+  return {
+    state: "read",
+    result: { kind: "checks", headSha, items: [...runs.value, ...statuses.value] },
+  };
 }

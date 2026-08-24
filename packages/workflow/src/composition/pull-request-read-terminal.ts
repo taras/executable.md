@@ -19,19 +19,17 @@
  */
 
 import type { PullRequestReadKind, PullRequestReadRequest } from "./pull-request-read-records.ts";
-import type { RepositoryRecord } from "./records.ts";
+import type { GitPushRepositoryIdentity } from "./git-push-records.ts";
 
 class IssuedReadRequest implements PullRequestReadRequest {
   readonly #invocation: string;
-  readonly repository: RepositoryRecord;
-  readonly workingDirectory: string;
+  readonly repository: GitPushRepositoryIdentity;
   readonly number: number;
   readonly kind: PullRequestReadKind;
 
   constructor(invocation: string, request: PullRequestReadRequest) {
     this.#invocation = invocation;
     this.repository = Object.freeze({ ...request.repository });
-    this.workingDirectory = request.workingDirectory;
     this.number = request.number;
     this.kind = request.kind;
     Object.freeze(this);

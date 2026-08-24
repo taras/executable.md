@@ -40,10 +40,6 @@ import type {
   PullRequestOutcome,
   PullRequestRequest,
 } from "../../composition/pull-request-records.ts";
-import type {
-  PullRequestReadRequest,
-  PullRequestReadResult,
-} from "../../composition/pull-request-read-records.ts";
 import type { RepositoryRecord, WorktreeRecord } from "../../composition/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
@@ -66,7 +62,6 @@ import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
 import { createGitPush } from "./push.ts";
 import { upsertPullRequest } from "./pull-request.ts";
-import { readPullRequestReads } from "./pull-request-reads.ts";
 import type { GitHubSource } from "./github.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
@@ -261,13 +256,6 @@ export function useGitComposition(
       *upsertPullRequest([request]: [PullRequestRequest]): Operation<PullRequestOutcome> {
         observe.effect?.("git", "pull-request");
         return yield* upsertPullRequest(database, host, request, options.gitHub);
-      },
-
-      *readPullRequestEvidence([request]: [
-        PullRequestReadRequest,
-      ]): Operation<PullRequestReadResult> {
-        observe.effect?.("git", `pull-request-${request.kind}`);
-        return yield* readPullRequestReads(database, request, options.gitHub);
       },
     },
     { at: "min" },

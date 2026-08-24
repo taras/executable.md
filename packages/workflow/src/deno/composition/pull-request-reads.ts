@@ -16,6 +16,20 @@
  * document are two effects — which is what lets a revision loop read the
  * reviews again after it pushed a new head, instead of restoring the answer the
  * previous iteration got.
+ *
+ * ## Nothing public reaches this
+ *
+ * There is no Api operation for it. The three components are built over this
+ * terminal by the host that has the run's storage and its Git-host source, and
+ * the closure they capture is the only route to it. An operation on a public
+ * Api would be one anything in scope could answer without delegating, and the
+ * fabricated collection it answered with would be what a document bound and the
+ * journal retained.
+ *
+ * The attachment arrives here directly from the component and stops here. The
+ * whole Repository record and the working directory are what select a checkout
+ * and resolve a locator; neither is part of a request, so neither is ever
+ * offered to middleware.
  */
 
 import { getExpansion, sourceDescription } from "@executablemd/core";
@@ -30,10 +44,11 @@ import { parseJsonValue } from "../../storage/members.ts";
 import { PullRequestReadError } from "../../composition/errors.ts";
 import {
   parsePullRequestReadResult,
-  pullRequestReadInputsJson,
-  readInputs,
+  pullRequestReadEnvelopeJson,
+  pullRequestReadRequestJson,
 } from "../../composition/pull-request-read-records.ts";
 import type {
+  PullRequestReadAttachment,
   PullRequestReadRequest,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
@@ -42,6 +57,17 @@ import { parseGitHubRepository } from "./github.ts";
 import type { GitHubSource } from "./github.ts";
 import { denoGitHubSource } from "./github.ts";
 import { readPullRequestEvidence as readEvidence } from "./pull-request-evidence.ts";
+import { formDispatcher } from "@executablemd/core";
+import type { FunctionComponent, PropsSchema, ReturnsSchema } from "@executablemd/core";
+import {
+  checksReturns,
+  commentsReturns,
+  props as pullRequestReadProps,
+  pullRequestReadForms,
+  reviewsReturns,
+} from "../../composition/components/PullRequestReads.ts";
+import type { PullRequestReadTerminal } from "../../composition/components/PullRequestReads.ts";
+import { COMPOSITION_ORIGIN } from "../../composition/definitions.ts";
 
 /** The durable effect type one evidence read is retained under. */
 export const PULL_REQUEST_READ = "pull_request_read";
@@ -66,7 +92,7 @@ const ELEMENT: Readonly<Record<PullRequestReadRequest["kind"], string>> = Object
  */
 function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
-  const inputs = readInputs(request);
+  const inputs = request;
   const configuration = gitOperationFingerprint([
     inputs.repository.name,
     inputs.repository.locatorFingerprint,
@@ -80,7 +106,7 @@ function* describeRead(request: PullRequestReadRequest): Operation<EffectDescrip
   return {
     type: PULL_REQUEST_READ,
     name: `${expansion.id}:${inputs.repository.name}:${configuration}`,
-    input: pullRequestReadInputsJson(inputs),
+    input: pullRequestReadRequestJson(inputs),
     configuration,
     ...sourceDescription(expansion.position),
   };
@@ -93,10 +119,12 @@ function* describeRead(request: PullRequestReadRequest): Operation<EffectDescrip
  * fingerprint that already named it, the collection, the number and the
  * normalized evidence.
  */
-export function readPullRequestReads(
+function readEvidenceFor(
   database: WorkflowRunDatabase,
+  source: GitHubSource,
+  invocation: string,
   request: PullRequestReadRequest,
-  source: GitHubSource = denoGitHubSource(),
+  attachment: PullRequestReadAttachment,
 ): Operation<PullRequestReadResult> {
   const element = ELEMENT[request.kind];
 
@@ -106,7 +134,7 @@ export function readPullRequestReads(
     // rebuilt from the same members, one another invocation issued, or one a
     // handler kept from an earlier read is not it, and performing under one
     // would be letting a caller choose whose evidence a document binds.
-    if (!isReadRequestFor((yield* getExpansion()).id, request)) {
+    if (!isReadRequestFor(invocation, request)) {
       throw new PullRequestReadError(
         "protocol",
         element,
@@ -124,7 +152,10 @@ export function readPullRequestReads(
     // credential is read. The transaction closes before anything is sent; a
     // network round trip must never hold the run's database.
     const located = yield* transactWorkspaceRoots(database, function* (workspace) {
-      return selectGitCheckout(workspace.metadata, element, admitted).repository.locator;
+      return selectGitCheckout(workspace.metadata, element, {
+        repository: attachment.repository,
+        workingDirectory: attachment.workingDirectory,
+      }).repository.locator;
     });
     if (!located.ok) {
       throw located.error;
@@ -163,11 +194,7 @@ export function readPullRequestReads(
               "answer.",
           );
         }
-        return {
-          kind: admitted.kind,
-          headSha: reading.headSha,
-          evidence: reading.evidence.map((item) => ({ ...item })),
-        };
+        return pullRequestReadEnvelopeJson(reading.result);
       },
     );
 
@@ -192,4 +219,40 @@ export function readPullRequestReads(
     }
     return result;
   });
+}
+
+/**
+ * The three components, built over this host's terminal.
+ *
+ * Registered by the attachment rather than by the provider-neutral installer,
+ * because the terminal needs the run's storage and its Git-host source. Nothing
+ * else can reach it: what the components capture is a closure, not a name.
+ */
+export function pullRequestReadComponents(
+  database: WorkflowRunDatabase,
+  source: GitHubSource = denoGitHubSource(),
+): readonly {
+  readonly name: string;
+  readonly origin: string;
+  readonly props: PropsSchema;
+  readonly returns: ReturnsSchema;
+  readonly fn: FunctionComponent;
+}[] {
+  const terminal: PullRequestReadTerminal = {
+    read(invocation, request, attachment) {
+      return readEvidenceFor(database, source, invocation, request, attachment);
+    },
+  };
+  const forms = pullRequestReadForms(terminal);
+  return [
+    { name: "PullRequest.Reviews", returns: reviewsReturns, form: forms.reviews },
+    { name: "PullRequest.Comments", returns: commentsReturns, form: forms.comments },
+    { name: "PullRequest.Checks", returns: checksReturns, form: forms.checks },
+  ].map((entry) => ({
+    name: entry.name,
+    origin: COMPOSITION_ORIGIN,
+    props: pullRequestReadProps,
+    returns: entry.returns,
+    fn: formDispatcher(entry.form),
+  }));
 }

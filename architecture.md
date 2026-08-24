@@ -1285,11 +1285,15 @@ What such a read must not do is answer partially. A collection the host
 completed and a collection nobody could finish reading are opposite facts, and
 only one of them is `[]`; a truncated list would report the first while meaning
 the second, so an incomplete walk fails the read and retains no array at all.
-The request crosses a public request-only route, so middleware may see it,
-refuse it, or narrow what a run may read; the evidence crosses no public route
-at all. What that route answers with is a request, and the terminal behind it
-admits only the exact request object the host minted for the invocation now
-running.
+The structural request crosses a public request-only route, so middleware may
+see it, refuse it, or narrow what a run may read — refusal being the whole of
+narrowing. The evidence crosses no public route at all: there is no operation on
+any public Api that returns it, because one would be an operation anything in
+scope could answer without delegating. The components are built by the trusted
+host over a terminal they capture in their closure, the terminal admits only the
+exact request object minted for the invocation now running, and the attachment a
+provider needs — the Repository record and the working directory — never appears
+in a request at all.
 
 An external effect is judged by its retained record rather than by its type. A
 completed Git-host reconciliation record replays without contacting a provider,

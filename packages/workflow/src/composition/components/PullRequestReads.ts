@@ -26,6 +26,23 @@
  * `as` is required. These read to be rendered, and an uncaptured one would
  * perform requests nobody reads.
  *
+ * ## Where the evidence comes from
+ *
+ * Not from any public Api. The structural request — the retained Repository
+ * identity, the number and the collection — crosses the public request-only
+ * route, where middleware may see it, refuse it, or narrow which reads a run
+ * performs. The evidence crosses no public surface at all: the host builds
+ * these components closed over a terminal, and the terminal is the only thing
+ * that can author a result.
+ *
+ * An operation on a public Api would undo that. Anything installed on it could
+ * answer with a fabricated collection without delegating, and what a document
+ * bound and the journal retained would be that answer rather than a host's.
+ *
+ * The attachment — the whole Repository record and the working directory — goes
+ * straight from here to the terminal and is never part of a request. A provider
+ * needs it; middleware has no business seeing a checkout path.
+ *
  * ## The form is declared, not asked about
  *
  * Each is self-closing only, and that is a declaration the engine turns into
@@ -53,11 +70,15 @@ import type {
 } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
 import { currentRepository } from "../context.ts";
 import { PullRequestReadError } from "../errors.ts";
-import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
-import type { PullRequestReadKind } from "../pull-request-read-records.ts";
+import { pullRequestReadResultJson, readRequest } from "../pull-request-read-records.ts";
+import type {
+  PullRequestReadAttachment,
+  PullRequestReadKind,
+  PullRequestReadRequest,
+  PullRequestReadResult,
+} from "../pull-request-read-records.ts";
 import { PullRequestEvidence } from "../pull-request-evidence-api.ts";
 import { mintReadRequest } from "../pull-request-read-terminal.ts";
 import { getExpansion } from "@executablemd/core";
@@ -191,7 +212,21 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-function read(kind: PullRequestReadKind, element: string) {
+/**
+ * What authors evidence for one invocation.
+ *
+ * Implemented by the host that has the run's storage and its Git-host source,
+ * and reachable only through the closure these components capture.
+ */
+export interface PullRequestReadTerminal {
+  read(
+    invocation: string,
+    request: PullRequestReadRequest,
+    attachment: PullRequestReadAttachment,
+  ): Operation<PullRequestReadResult>;
+}
+
+function read(kind: PullRequestReadKind, element: string, terminal: PullRequestReadTerminal) {
   return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
     // The props schema is what refuses a missing, fractional or non-positive
     // number, before this function is entered and therefore before a credential
@@ -219,29 +254,31 @@ function read(kind: PullRequestReadKind, element: string) {
     // Minted here, so the object the provider admits is the one this
     // invocation issued and nothing a handler can reconstruct.
     const expansion = yield* getExpansion();
-    const issued = mintReadRequest(expansion.id, {
-      repository,
-      workingDirectory: yield* cwd(),
-      number,
-      kind,
-    });
+    const issued = mintReadRequest(expansion.id, readRequest(repository, number, kind));
 
-    // Request-only. Middleware installed in scope sees exactly what is about to
-    // be read and may refuse it by throwing, or delegate; what it answers with
-    // is a request, so there is nothing here it could answer with instead of
-    // the evidence. A request it did not receive from this invocation is not
-    // one the terminal will act on.
+    // Request-only, and structural. Middleware sees what is about to be read
+    // and may refuse it by raising, or delegate; what it answers with is a
+    // request, so there is nothing here it could answer with instead of the
+    // evidence. A request it did not receive from this invocation is not one
+    // the terminal acts on.
     const asked = yield* PullRequestEvidence.operations.read(issued);
 
-    const result = yield* GitComposition.operations.readPullRequestEvidence(asked);
+    const result = yield* terminal.read(expansion.id, asked, {
+      repository,
+      workingDirectory: yield* cwd(),
+    });
     return pullRequestReadResultJson(result);
   };
 }
 
-function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
+function declare(
+  kind: PullRequestReadKind,
+  element: string,
+  terminal: PullRequestReadTerminal,
+): FormDeclaration {
   return {
     forms: "self-closing",
-    fn: read(kind, element),
+    fn: read(kind, element, terminal),
     refuse: (_props: Record<string, Json>, written: InvocationForm | undefined) =>
       new PullRequestReadError(
         "unexpected-content",
@@ -255,6 +292,15 @@ function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
   };
 }
 
-export const reviewsForm: FormDeclaration = declare("reviews", REVIEWS_ELEMENT);
-export const commentsForm: FormDeclaration = declare("comments", COMMENTS_ELEMENT);
-export const checksForm: FormDeclaration = declare("checks", CHECKS_ELEMENT);
+/** The three declarations, built over one host terminal. */
+export function pullRequestReadForms(terminal: PullRequestReadTerminal): {
+  readonly reviews: FormDeclaration;
+  readonly comments: FormDeclaration;
+  readonly checks: FormDeclaration;
+} {
+  return {
+    reviews: declare("reviews", REVIEWS_ELEMENT, terminal),
+    comments: declare("comments", COMMENTS_ELEMENT, terminal),
+    checks: declare("checks", CHECKS_ELEMENT, terminal),
+  };
+}

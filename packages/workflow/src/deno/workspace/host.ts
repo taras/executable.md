@@ -43,6 +43,8 @@ import { scoped, type Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { useCompositionComponents } from "../../composition/installation.ts";
+import { pullRequestReadComponents } from "../composition/pull-request-reads.ts";
+import { registerComponents } from "@executablemd/core";
 import { useWorkflowElicitation } from "../../suspension/elicitation.ts";
 import {
   useGitComposition,
@@ -152,6 +154,10 @@ export function withWorkflowWorkspace<T>(
         yield* useGitHubIssues(options.gitHubIssues);
       }
       yield* useCompositionComponents();
+      // Built here rather than by the provider-neutral installer: their
+      // terminal needs this run's storage and Git-host source, and a closure is
+      // the only route to it.
+      yield* registerComponents([...pullRequestReadComponents(database, composition.gitHub)]);
       // After the composition components and inside this attachment: a
       // completed replay never reaches here, so it registers no second `Elicit`
       // and installs no provider for work that is not going to happen.

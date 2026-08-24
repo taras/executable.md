@@ -1389,17 +1389,32 @@ three separate remote collections, three durable effects, three independent
 replays and failures. One component returning three lists would make a partial
 answer indistinguishable from a complete one.
 
-**The request crosses a public route; the evidence does not.** The read passes
-through a contextual Api named `executablemd.workflow.pull-request-evidence`,
-which carries the request outward and answers with a request. Middleware in
-scope may inspect what is about to be read, refuse it by raising, narrow which
-reads a run may perform, or delegate — and has nothing it could answer with in
-place of the evidence, because no evidence crosses that route. Behind it sits an
-exact-invocation terminal: the request object is minted by the host for one
-invocation, and a request rebuilt from the same members, one another invocation
-issued, or one a handler kept from an earlier read is refused before anything is
-sent. Structural equality is not identity — two elements reading the same number
-produce equal requests, and one must not be able to stand in for the other.
+**The request crosses a public route; the evidence crosses none.** The
+structural request — the retained Repository identity, the number and the
+collection — passes through a contextual Api named
+`executablemd.workflow.pull-request-evidence`, which answers with a request.
+Middleware in scope may inspect what is about to be read, refuse it by raising,
+narrow which reads a run may perform, or delegate. Refusal is the whole of
+narrowing: a handler may reject a subset of reads and may not reshape a request.
+
+There is **no public operation that returns evidence**, on this Api or any
+other. The three components are built by the trusted host over a terminal and
+capture it in their closure, so the only thing that can author a result is the
+host itself. An operation on a public Api would be one anything in scope could
+answer without delegating, and the collection it fabricated would be what a
+document binds and the journal retains.
+
+Behind the route sits an exact-invocation terminal. The request object is minted
+for one invocation and branded so no other can present it: a request rebuilt
+from the same members, one another invocation issued, and one a handler kept
+from an earlier read are each refused before anything is sent. Structural
+equality is not identity — two elements reading the same number produce equal
+requests, and one must not stand in for the other.
+
+The **attachment** — the whole Repository record and the working directory —
+never appears in a request. It goes from the component to the terminal directly:
+a provider needs it to select a checkout and resolve a locator, and middleware
+has no business seeing a host path.
 
 **A read is not a reconciled effect.** §7.5's upsert reconciles because it
 mutates a remote and must adopt an interrupted attempt rather than repeat it.
@@ -1438,8 +1453,16 @@ working directory stay live provider-private attachment data: the provider needs
 them to select a checkout and resolve a locator, and neither belongs in a
 journal.
 
-A read that could not be completed retains its refusal and no array. There is
-never a partial collection in the journal for a continuation to restore.
+A read that could not be completed retains its refusal and no array, and one
+interrupted in flight retains no successful result at all — the access session
+unwinds with the scope that opened it and a continuation performs the whole
+collection. There is never a partial collection in the journal for a
+continuation to restore.
+
+The retained result is a discriminated envelope: `{ kind: "reviews", items }`,
+`{ kind: "comments", items }`, or `{ kind: "checks", headSha, items }`. Only a
+checks result has a head, so the other two carry no member a reader must know to
+ignore. Only `items` becomes the component's binding.
 
 The records are closed and provider-neutral. Bodies and provider messages are
 retained byte-for-byte, because a reviewer reading a summary of an objection has

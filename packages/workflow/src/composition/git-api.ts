@@ -93,24 +93,6 @@ export interface GitCompositionApi {
    * moves only the four fields the request names.
    */
   upsertPullRequest(request: PullRequestRequest): Operation<PullRequestOutcome>;
-
-  /**
-   * Read one collection of existing evidence about a numbered pull request.
-   *
-   * Routed here with the other five because a document names a checkout the
-   * same way for all of them. What separates this one is that it changes
-   * nothing: there is no natural key, no pre-state and nothing to adopt, so it
-   * is an ordinary durable read rather than a reconciled effect. An
-   * interruption before its result commits may repeat the requests, which is
-   * safe for a read in the way it would not be for a write, and a completed one
-   * restores its retained array without opening a session or sending anything.
-   *
-   * The three collections are three reads. One `kind` per invocation, so
-   * completing one manufactures neither of the others and each fails and
-   * replays alone — a single call returning all three would make a partial
-   * answer indistinguishable from a complete one.
-   */
-  readPullRequestEvidence(request: PullRequestReadRequest): Operation<PullRequestReadResult>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -131,10 +113,6 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *pushCurrentBranch(_request: GitPushRequest): Operation<GitPushOutcome> {
       throw new GitCompositionProviderError("<Git.Push>");
-    },
-    // deno-lint-ignore require-yield
-    *readPullRequestEvidence(_request: PullRequestReadRequest): Operation<PullRequestReadResult> {
-      throw new GitCompositionProviderError("<PullRequest.Reviews>");
     },
     // deno-lint-ignore require-yield
     *upsertPullRequest(_request: PullRequestRequest): Operation<PullRequestOutcome> {

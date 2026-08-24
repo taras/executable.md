@@ -184,48 +184,53 @@ export const REVIEW_STATES: readonly ReviewEvidence["state"][] = [
 ];
 
 /**
- * One read, as the component asks for it.
+ * One read, structurally: which collection of which pull request, in which
+ * retained Repository.
  *
- * Live provider-private attachment data. The whole Repository record and the
- * working directory are here because the provider needs them to select a
- * checkout and resolve a locator, and neither belongs in the journal: a
- * checkout path is this machine's, and the locator the fingerprint already
- * names is the one thing a retained record must not repeat.
+ * This is the whole of what a request is. It is what crosses the public
+ * request-only route, what the effect retains as its input, and what its
+ * fingerprint is taken over — so a document edited to read another number in
+ * the same place is a different effect rather than one replaying the first
+ * answer.
+ *
+ * The Repository identity is the one Push retains, without its Workspace
+ * checkout path. What is deliberately absent is everything a provider needs and
+ * nobody else may see: the whole Repository record and the working directory
+ * are attachment data, held in the terminal's own closure and never offered to
+ * middleware.
  */
 export interface PullRequestReadRequest {
-  /** The whole Repository record the component observed, to be compared. */
-  readonly repository: RepositoryRecord;
-  /** The logical working directory the component observed. */
-  readonly workingDirectory: string;
-  readonly number: number;
-  readonly kind: PullRequestReadKind;
-}
-
-/**
- * The same read, filtered to what durable JSON may carry.
- *
- * The Repository identity Push retains, without its Workspace checkout path,
- * plus the two things that say which collection of which pull request this is.
- * This is what the effect's input holds and what its fingerprint is taken over,
- * so a document edited to read another number in the same place is a different
- * effect rather than one replaying the first's answer.
- */
-export interface PullRequestReadInputs {
   readonly repository: GitPushRepositoryIdentity;
   readonly number: number;
   readonly kind: PullRequestReadKind;
 }
 
-/** The durable inputs one live request reduces to. */
-export function readInputs(request: PullRequestReadRequest): PullRequestReadInputs {
+/**
+ * The live state a read needs and no public surface receives.
+ *
+ * Built by the component, handed straight to the terminal, and never part of a
+ * request: a checkout path is this machine's, and the locator the fingerprint
+ * already names is the one thing a retained record must not repeat.
+ */
+export interface PullRequestReadAttachment {
+  readonly repository: RepositoryRecord;
+  readonly workingDirectory: string;
+}
+
+/** The structural request one Repository record and number reduce to. */
+export function readRequest(
+  repository: RepositoryRecord,
+  number: number,
+  kind: PullRequestReadKind,
+): PullRequestReadRequest {
   return Object.freeze({
-    repository: filteredRepositoryIdentity(request.repository),
-    number: request.number,
-    kind: request.kind,
+    repository: filteredRepositoryIdentity(repository),
+    number,
+    kind,
   });
 }
 
-export function pullRequestReadInputsJson(inputs: PullRequestReadInputs): JsonObject {
+export function pullRequestReadRequestJson(inputs: PullRequestReadRequest): JsonObject {
   return {
     repository: gitPushRepositoryIdentityJson(inputs.repository),
     number: inputs.number,
@@ -234,7 +239,7 @@ export function pullRequestReadInputsJson(inputs: PullRequestReadInputs): JsonOb
 }
 
 /** The retained inputs, read back rather than asserted. */
-export function parsePullRequestReadInputs(value: Json): PullRequestReadInputs | undefined {
+export function parsePullRequestReadRequest(value: Json): PullRequestReadRequest | undefined {
   if (!isJsonObject(value) || !exactMembers(value, ["repository", "number", "kind"])) {
     return undefined;
   }
@@ -263,23 +268,37 @@ function exactMembers(value: JsonObject, names: readonly string[]): boolean {
   return present.length === names.length && names.every((name) => present.includes(name));
 }
 
-/** What one completed read holds. */
-export interface PullRequestReadResult {
-  readonly kind: PullRequestReadKind;
-  /**
-   * The head the checks describe, retained beside the array.
-   *
-   * Null for the two collections that do not depend on a revision. An empty
-   * checks array still says which head was read, which "no checks" alone
-   * cannot.
-   */
-  readonly headSha: string | null;
-  readonly evidence: readonly PullRequestEvidence[];
-}
+/**
+ * What one completed read holds, discriminated by the collection it read.
+ *
+ * Three shapes rather than one with a nullable member: only a checks result has
+ * a head, and a `headSha: null` on the other two would be a member every reader
+ * has to know to ignore. An empty checks array still says which head was read,
+ * which "no checks" alone cannot.
+ *
+ * Only `items` becomes the component's binding.
+ */
+export type PullRequestReadResult =
+  | { readonly kind: "reviews"; readonly items: readonly ReviewEvidence[] }
+  | { readonly kind: "comments"; readonly items: readonly CommentEvidence[] }
+  | {
+      readonly kind: "checks";
+      readonly headSha: string;
+      readonly items: readonly CheckEvidence[];
+    };
 
 /** The evidence a document binds: the array, and nothing else. */
+/** The binding a document receives: the items, and nothing about the envelope. */
 export function pullRequestReadResultJson(result: PullRequestReadResult): Json {
-  return result.evidence.map((item) => evidenceJson(item));
+  return result.items.map((item) => evidenceJson(item));
+}
+
+/** The envelope the journal retains. */
+export function pullRequestReadEnvelopeJson(result: PullRequestReadResult): JsonObject {
+  const items = result.items.map((item) => evidenceJson(item));
+  return result.kind === "checks"
+    ? { kind: "checks", headSha: result.headSha, items }
+    : { kind: result.kind, items };
 }
 
 function evidenceJson(item: PullRequestEvidence): JsonObject {
@@ -290,48 +309,56 @@ function evidenceJson(item: PullRequestEvidence): JsonObject {
   return record;
 }
 
-/** The retained result, read back rather than asserted. */
+/** The retained envelope, read back rather than asserted. */
 export function parsePullRequestReadResult(value: Json): PullRequestReadResult | undefined {
   if (!isJsonObject(value)) {
     return undefined;
   }
   const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
-  if (kind === undefined) {
+  const listed = value.items;
+  if (kind === undefined || !Array.isArray(listed)) {
     return undefined;
+  }
+  const names = kind === "checks" ? ["kind", "headSha", "items"] : ["kind", "items"];
+  if (!exactMembers(value, names)) {
+    return undefined;
+  }
+
+  // Parsed into the collection's own item type rather than into the union and
+  // narrowed afterwards: a union that had to be narrowed back would be a second
+  // description of the same discrimination.
+  if (kind === "reviews") {
+    const items = collectItems(listed, parseReviewItem);
+    return items === undefined ? undefined : { kind, items };
+  }
+  if (kind === "comments") {
+    const items = collectItems(listed, parseCommentItem);
+    return items === undefined ? undefined : { kind, items };
   }
   const headSha = value.headSha;
-  if (headSha !== null && typeof headSha !== "string") {
+  if (typeof headSha !== "string" || headSha === "") {
     return undefined;
   }
-  const evidence = value.evidence;
-  if (!Array.isArray(evidence)) {
-    return undefined;
-  }
-  if (!exactMembers(value, ["kind", "headSha", "evidence"])) {
-    return undefined;
-  }
-  const items: PullRequestEvidence[] = [];
-  for (const entry of evidence) {
-    const item = parseEvidence(kind, entry);
+  const items = collectItems(listed, parseCheckItem);
+  return items === undefined ? undefined : { kind, headSha, items };
+}
+
+function collectItems<T>(
+  listed: readonly Json[],
+  read: (value: JsonObject) => T | undefined,
+): T[] | undefined {
+  const items: T[] = [];
+  for (const entry of listed) {
+    if (!isJsonObject(entry)) {
+      return undefined;
+    }
+    const item = read(entry);
     if (item === undefined) {
       return undefined;
     }
     items.push(item);
   }
-  return { kind, headSha, evidence: items };
-}
-
-function parseEvidence(kind: PullRequestReadKind, value: Json): PullRequestEvidence | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  if (kind === "reviews") {
-    return parseReview(value);
-  }
-  if (kind === "comments") {
-    return parseComment(value);
-  }
-  return parseCheck(value);
+  return items;
 }
 
 function text(value: Json | undefined): string | undefined {
@@ -410,7 +437,7 @@ const COMMIT_STATUS_MEMBERS = [
   "updatedAt",
 ];
 
-function parseReview(value: JsonObject): ReviewEvidence | undefined {
+function parseReviewItem(value: JsonObject): ReviewEvidence | undefined {
   if (!exactMembers(value, REVIEW_MEMBERS)) {
     return undefined;
   }
@@ -434,7 +461,7 @@ function parseReview(value: JsonObject): ReviewEvidence | undefined {
   return { id, author, state: known, body, submittedAt, commitSha, url };
 }
 
-function parseComment(value: JsonObject): CommentEvidence | undefined {
+function parseCommentItem(value: JsonObject): CommentEvidence | undefined {
   const id = text(value.id);
   const body = text(value.body);
   const createdAt = text(value.createdAt);
@@ -499,7 +526,7 @@ function parseComment(value: JsonObject): CommentEvidence | undefined {
   };
 }
 
-function parseCheck(value: JsonObject): CheckEvidence | undefined {
+function parseCheckItem(value: JsonObject): CheckEvidence | undefined {
   const id = text(value.id);
   const headSha = text(value.headSha);
   const name = text(value.name);

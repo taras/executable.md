@@ -12,7 +12,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { resource, scoped } from "effection";
+import { call, race, resource, scoped, suspend, withResolvers } from "effection";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
 import {
@@ -31,6 +31,7 @@ import { raised, runWorkflowDocument } from "./support/composition.ts";
 import { fixture, published, REMOTE } from "./support/pull-requests.ts";
 import type { BareRemote } from "./support/git-remotes.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
+import { GitComposition } from "../src/composition/git-api.ts";
 import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-reads.ts";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -164,9 +165,25 @@ function* reads(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
 
 /** The discriminator, for the two collections that carry one. */
 function kinds(reading: EvidenceReading): string[] {
-  return reading.state === "read"
-    ? reading.evidence.map((item) => ("kind" in item ? item.kind : "review-evidence"))
-    : [];
+  return items(reading).map((item) => String(item.kind ?? "review-evidence"));
+}
+
+/**
+ * The items a completed read holds, whatever collection it read.
+ *
+ * `JsonObject` rather than the union: every case here asks whether a member is
+ * present and what it holds, which is a question about the record the provider
+ * produced rather than about which arm of the union it is.
+ */
+function items(reading: EvidenceReading): readonly Record<string, unknown>[] {
+  return reading.state === "read" ? reading.result.items.map((item) => ({ ...item })) : [];
+}
+
+/** The head a completed checks read names. */
+function headOf(reading: EvidenceReading): string | undefined {
+  return reading.state === "read" && reading.result.kind === "checks"
+    ? reading.result.headSha
+    : undefined;
 }
 
 describe("Tier PRR — pull-request evidence", () => {
@@ -249,7 +266,7 @@ describe("Tier PRR — pull-request evidence", () => {
 
     const reviews = yield* read(host, "reviews");
     expect(reviews.state).toBe("read");
-    expect(reviews.state === "read" && reviews.evidence).toEqual([
+    expect(items(reviews)).toEqual([
       {
         id: "1",
         author: "reviewer",
@@ -263,19 +280,18 @@ describe("Tier PRR — pull-request evidence", () => {
 
     const comments = yield* read(host, "comments");
     expect(kinds(comments)).toEqual(["conversation", "review"]);
-    expect(
-      comments.state === "read" &&
-        comments.evidence.every((item) => "body" in item && item.body === body),
-    ).toBe(true);
+    expect(comments.state === "read" && items(comments).every((item) => item.body === body)).toBe(
+      true,
+    );
 
     const checks = yield* read(host, "checks");
-    expect(checks.state === "read" && checks.headSha).toBe(HEAD);
+    expect(headOf(checks)).toBe(HEAD);
     expect(kinds(checks)).toEqual(["check-run", "commit-status"]);
     // `error` is a commit-status word and stays one. Mapped onto `failure` it
     // would tell a reviewer a check ran and failed.
-    const status = checks.state === "read" ? checks.evidence[1] : undefined;
-    expect(status && "state" in status && status.state).toBe("error");
-    expect(status && "description" in status && status.description).toBe(body);
+    const status = items(checks)[1];
+    expect(status?.state).toBe("error");
+    expect(status?.description).toBe(body);
   });
 
   it("PRR4: a three-page collection returns every item once, in order", function* () {
@@ -295,11 +311,7 @@ describe("Tier PRR — pull-request evidence", () => {
     });
 
     const reading = yield* read(host, "reviews");
-    expect(reading.state === "read" && reading.evidence.map((item) => item.id)).toEqual([
-      "1",
-      "2",
-      "3",
-    ]);
+    expect(items(reading).map((item) => item.id)).toEqual(["1", "2", "3"]);
     expect(host.requests).toHaveLength(3);
   });
 
@@ -313,13 +325,13 @@ describe("Tier PRR — pull-request evidence", () => {
 
     const reviews = yield* read(host, "reviews");
     expect(reviews.state).toBe("read");
-    expect(reviews.state === "read" && reviews.evidence).toEqual([]);
+    expect(items(reviews)).toEqual([]);
 
     const checks = yield* read(host, "checks");
     expect(checks.state).toBe("read");
-    expect(checks.state === "read" && checks.evidence).toEqual([]);
+    expect(items(checks)).toEqual([]);
     // An empty array that still says which revision it is empty about.
-    expect(checks.state === "read" && checks.headSha).toBe(HEAD);
+    expect(headOf(checks)).toBe(HEAD);
   });
 
   it("PRR6: every unreadable answer is unavailable, and none of them truncates", function* () {
@@ -475,13 +487,13 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(reading.state).toBe("read");
     // Both survive: one pending review must not cost the reviewer every other
     // review in the collection.
-    expect(reading.state === "read" && reading.evidence).toHaveLength(2);
-    const pending = reading.state === "read" ? reading.evidence[0] : undefined;
-    expect(pending && "state" in pending && pending.state).toBe("pending");
-    expect(pending && "submittedAt" in pending && pending.submittedAt).toBe(null);
-    expect(pending && "commitSha" in pending && pending.commitSha).toBe(null);
+    expect(items(reading)).toHaveLength(2);
+    const pending = items(reading)[0];
+    expect(pending?.state).toBe("pending");
+    expect(pending?.submittedAt).toBe(null);
+    expect(pending?.commitSha).toBe(null);
     // A deleted account is an absent author, not an unreadable item.
-    expect(pending && "author" in pending && pending.author).toBe(null);
+    expect(pending?.author).toBe(null);
   });
 
   it("PRR1: no credential is no read, and the credential never reaches a record", function* () {
@@ -724,9 +736,9 @@ describe("Tier PRR — pull-request evidence", () => {
 
     const reading = yield* read(host, "checks");
     expect(reading.state).toBe("read");
-    const [run, status] = reading.state === "read" ? reading.evidence : [];
-    expect(run && "url" in run && run.url).toBe("https://github.test/runs/1");
-    expect(status && "url" in status && status.url).toBe("https://github.test/deploy/2");
+    const [run, status] = items(reading);
+    expect(run?.url).toBe("https://github.test/runs/1");
+    expect(status?.url).toBe("https://github.test/deploy/2");
   });
 
   it("PRR16: an inline comment outside a review keeps a null review id", function* () {
@@ -759,8 +771,8 @@ describe("Tier PRR — pull-request evidence", () => {
 
     const reading = yield* read(host, "comments");
     expect(reading.state).toBe("read");
-    const comment = reading.state === "read" ? reading.evidence[0] : undefined;
-    expect(comment && "reviewId" in comment && comment.reviewId).toBe(null);
+    const comment = items(reading)[0];
+    expect(comment?.reviewId).toBe(null);
   });
 
   it("PRR17: an identifier that cannot be held exactly is refused", function* () {
@@ -868,7 +880,6 @@ describe("Tier PRR — pull-request evidence", () => {
       // the retained journal could build one.
       reconstructed: (issued) => ({
         repository: { ...issued.repository },
-        workingDirectory: issued.workingDirectory,
         number: issued.number,
         kind: issued.kind,
       }),
@@ -1100,5 +1111,132 @@ describe("Tier PRR — pull-request evidence", () => {
     // credential held open past the invocation that acquired it is the thing
     // this boundary exists to prevent.
     expect(events).toEqual(["open", "close"]);
+  });
+
+  it("PRR25: no public Api carries evidence, so none can be answered for", function* () {
+    // The structural check first: there is no operation on the public
+    // composition Api that returns evidence, so there is nothing for middleware
+    // to intercept. This is the shape of the defect that made the previous
+    // revision bypassable.
+    const operations: Record<string, unknown> = GitComposition.operations;
+    expect(Object.keys(operations)).not.toContain("readPullRequestEvidence");
+
+    // And behaviourally: middleware on that Api sees no read at all.
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const remote = yield* useBareRemote(REMOTE);
+    const base = composed(remote, host);
+    const seen: string[] = [];
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runWorkflowDocument(
+        database,
+        published(
+          `<PullRequest.Reviews number={7} as="reviews" />`,
+          "",
+          "{reviews.length} reviews",
+        ),
+        base,
+        function* (run) {
+          return yield* scoped(function* () {
+            yield* GitComposition.around({
+              *upsertPullRequest([request], next) {
+                seen.push("pull-request");
+                return yield* next(request);
+              },
+            });
+            return yield* run();
+          });
+        },
+      );
+      expect(String(output)).toContain("1 reviews");
+    });
+
+    // The read happened, and the public Git-host Api never carried it.
+    expect(host.requests).toHaveLength(1);
+    expect(seen).toEqual([]);
+  });
+
+  it("PRR26: an interruption in flight unwinds and retains no result", function* () {
+    const entered = withResolvers<void>();
+    const sessions: string[] = [];
+    const remote = yield* useBareRemote(REMOTE);
+
+    // A transport that reaches the wire and never comes back.
+    const hanging: GitHubSource = {
+      endpoint: ENDPOINT,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          try {
+            yield* provide({
+              endpoint: ENDPOINT,
+              // deno-lint-ignore require-yield
+              *token(): Operation<string | undefined> {
+                return "t";
+              },
+              *send(): Operation<GitHubHttpResponse> {
+                entered.resolve();
+                yield* suspend();
+                throw new Error("unreachable");
+              },
+            });
+          } finally {
+            sessions.push("close");
+          }
+        });
+      },
+    };
+
+    const base = composed(remote, server({}));
+    const document = published(
+      `<PullRequest.Reviews number={7} as="reviews" />`,
+      "",
+      "{reviews.length} reviews",
+    );
+
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      // Halt the run the moment the request is on the wire.
+      yield* race([
+        call(function* () {
+          yield* raised(
+            runWorkflowDocument(database, document, {
+              ...base,
+              composition: { ...base.composition, gitHub: hanging },
+            }),
+          );
+        }),
+        call(function* () {
+          yield* entered.operation;
+        }),
+      ]);
+
+      // The session unwound with the scope that opened it.
+      expect(sessions).toEqual(["open", "close"]);
+
+      // Nothing succeeded, so nothing is retained to restore: no completed read
+      // and no partial array.
+      const retained = yield* reads(database);
+      expect(retained.every((event) => event.result?.status !== "ok")).toBe(true);
+      expect(JSON.stringify(retained)).not.toContain('"items"');
+
+      // No root close to drop: the halt left the root open, which is what
+      // makes the run continuable in the first place.
+
+      // A continuation performs the whole collection.
+      const working = server({
+        [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+      });
+      const output = yield* runWorkflowDocument(database, document, composed(remote, working));
+      expect(String(output)).toContain("1 reviews");
+      expect(working.requests).toHaveLength(1);
+    });
   });
 });
