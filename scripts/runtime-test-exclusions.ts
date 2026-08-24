@@ -384,6 +384,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/300",
   },
   {
+    path: "packages/workflow/tests/workflow-checkpoint.test.ts",
+    reason:
+      "settles and inspects a real node:sqlite run database through the Deno lifecycle adapter, which takes the run's advisory lock through the Deno runtime; the one portable case here — that ordinary execution still reaches core's `<Elicit>` and its journal — needs no workflow run at all and is the same contract elicit-component.test.ts covers on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/301",
+  },
+  {
     path: "packages/cli/tests/workflow-suspension.test.ts",
     reason:
       "suspends and resumes a real run store through `runWorkflow()`, reading the node:sqlite database it settles; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
