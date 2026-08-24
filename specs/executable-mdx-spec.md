@@ -9898,7 +9898,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | IS3 | Self-closing has none | `<C />` reports none |
 | IS4 | Asking does not project | A component that only calls `hasContent()` never expands the invocation content it reports on |
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
-| IS6 | Contextual, and composable | The operation stays exported, delegable and overridable; what it may not decide is an effect-selecting branch, which reads `invocation.hasContent()` instead (§5.6) |
+| IS6 | Contextual, and composable | The operation stays exported, delegable and overridable, and both it and `invocation.hasContent()` stay observation — cross-copy readable, and neither one effect authority. What decides an effect-selecting branch is engine-owned invocation-form dispatch (§5.6), which no handler and no object a caller passes takes part in |
 
 ### Tier RT — Retained resources
 
@@ -10372,7 +10372,7 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV19 | The authored form | The invocation reports `false` for `<C />` and `true` for `<C>…</C>` and `<C></C>`, agreeing with the contextual answer while nothing interferes; asking it twice expands no content and runs no child |
 | CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
 | CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
-| CIV22 | Only the engine's own invocation | `authoredForm()` answers for a genuine invocation and answers `undefined` for a structural look-alike implementing `hasContent()`, for a descriptor-for-descriptor clone, and for an object built on the prototype — each of which the method itself answers perfectly well |
+| CIV22 | Only the engine's own invocation enters a body | The dispatcher enters a form-specific body for a genuine, live, selected invocation of the form it answers, and refuses every other call before the body: a structural look-alike implementing `hasContent()`, a descriptor-for-descriptor clone, an object built on the prototype, an issuance canonical resolution selected nothing for, one selected for another dispatcher, and a closed one. Each look-alike's own `hasContent()` answers plausibly, which is why none of them is asked |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

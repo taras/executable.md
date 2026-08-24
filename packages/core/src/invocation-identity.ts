@@ -89,13 +89,19 @@ export interface ComponentInvocation {
    * fact, and a component that reaches nothing else — no import, no context, no
    * helper of its own copy — reads it by calling what it received.
    *
-   * **Calling it is not authentication.** A component receives whatever its
-   * caller passed, and a wrapper can pass an object literal with a method of
-   * this name; there is no shape a forger cannot copy, because a shape is what
-   * a forger copies. So a component whose branch merely decides *how to render*
-   * may call this, while one whose branch selects an irreversible **effect**
-   * reads {@link authoredForm} instead, which answers only for an invocation
-   * this engine issued.
+   * **Observation only.** Calling it is not authentication: a component
+   * receives whatever its caller passed, and a wrapper can pass an object
+   * literal with a method of this name — there is no shape a forger cannot
+   * copy, because a shape is what a forger copies. Nor can a component
+   * authenticate it for itself; a reader recognizing the invocation by private
+   * state would recognize only the copy of core it was imported with, and a
+   * component can be loaded beside its own copy.
+   *
+   * So a branch that decides *how to render* may call this, and a branch that
+   * selects an irreversible **effect** does not read the form at all. Such a
+   * component declares its forms and canonical {@link formDispatcher} enters
+   * the one the scan recorded, so the choice is the engine's before the body
+   * runs.
    *
    * `Component.hasContent()` is weaker again: it answers through the composable
    * chain, where a handler installed anywhere outside the invocation answers

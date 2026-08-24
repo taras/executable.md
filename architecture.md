@@ -1446,14 +1446,17 @@ definitions under one name are a malformed host table rather than an ambiguity
 settled by table order.
 
 Which identity was admitted is preflight's and is not answerable by anything
-else, and the branch the admitted component takes inside itself is held to that
-same decision. A component reads its own form from the invocation the engine
-issued (*Capability-backed invocation identity*), and every admitted invocation
-is checked against that fact before the component runs, refusing before any
-provider is reached when it is not the form its identity was chosen for. Neither
-read consults `Component.hasContent()`, so an admitted `File:read` does not
-become a write and an admitted `File:write` does not become a read, however many
-times something is asked.
+else, and the body the admitted component runs is held to that same decision by
+the same mechanism an authored element is: canonical invocation-form dispatch
+(*Capability-backed invocation identity*) enters the body for the form the scan
+recorded, and the admitted invocation is checked against the form its identity
+was chosen for before the component runs, refusing before any provider is
+reached when the two disagree. That check reads the engine's own account of the
+element — not `Component.hasContent()`, not the method on the object the
+component was handed, and not the trusted wrapper the evaluator answers the
+import with, which collects what a read returned and is not form authority. So
+an admitted `File:read` does not become a write and an admitted `File:write`
+does not become a read, however many times something is asked.
 
 The standard Deno workflow profile's write table is core's paired `File:write`
 and the workflow package's lexical `Dir`, the latter built from the same
