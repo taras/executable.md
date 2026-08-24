@@ -66,11 +66,17 @@ effect whose completion is unknown (#297).
 ## The journal is evidence, and the evidence is witnessed
 
 Journal events reach storage already filtered, through the pre-persistence
-secret gate. Storage adds no second policy: a rejected gate leaves nothing
-behind, and a record is retained exactly as the protocol produced it and parsed
-back through the matching reader. Making that gate default-on for execution, with
-its CLI opt-out and warning, is
-[#199](https://github.com/taras/executable.md/issues/199).
+secret gate, and that gate is **default-on** (#199, delivered by #573 and #575).
+Offline detection is installed before the first live event. An offending durable
+event is refused before persistence; a rendered chunk the scanner cannot clear is
+withheld whole, while an earlier cleared prefix stays observable. Withholding
+carries no settlement authority of its own — the journal gate owns rejection, and
+the execution settles failed with the filtered `SecretDetectedError` after
+teardown, so the journal retains only the safe preceding events and the safe root
+`Close(err)`. Diagnostics name the rule and never the matched value, and replay
+restores already-filtered output without rescanning it. `--no-secret-detection`
+is a host-only, invocation-wide diagnostic escape hatch that warns before
+execution; it is not a document prop and not a middleware permission.
 
 Filtering is also where a subtle authority question lives, and it is answered
 explicitly. `JournalProvenance` is a non-operational, equality-only witness that

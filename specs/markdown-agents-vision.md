@@ -216,13 +216,16 @@ judgment:
 
 Agent calls analyze evidence and propose changes; they do not perform them. Under
 a workflow run an Agent reaches no checkout at all, and a proposal reaches the
-Workspace as generated XMD that a constrained evaluator preflights completely
-and expands as ordinary durable effects. That evaluator is built for observation
-(#497) — pinned identities, exact request ceilings, one retained admission — and
-what is still owed is admission for a mutating fragment, the bounded
-request/result loop an Agent observes the repository through (#302), and the
-public component a document writes to reach either (#369). Deterministic components apply approved
-environmental changes and provide exact required content to the next call.
+Workspace as generated XMD that a constrained evaluator preflights completely and
+expands as ordinary durable effects. The component a document writes to admit one
+is `<Evaluate source allow>`, and the whole path is built: the bounded
+request/result loop an Agent observes the repository through (#302, delivered by
+#549 and #550), and admission for a mutating fragment by effect class and
+authored form (#369, delivered by #572 and #574). What stays outside the admitted
+class is every effect reaching past the Workspace — Git, the Git host, issues,
+processes, execution, credentials and external writes — which documents perform
+themselves. Deterministic components apply approved environmental changes and
+provide exact required content to the next call.
 Generated files are optional exports rather than the handoff protocol. This
 removes manual copying between agent-owned transcripts, plan files, and working
 directories.

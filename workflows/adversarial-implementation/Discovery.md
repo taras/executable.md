@@ -65,9 +65,12 @@ What the planner reasons over is what this prompt renders, and nothing else.
 exact repository-relative paths and contents, `InstructionFiles` captured that
 result, and the caller passes the captured text in as a prop — so the planner
 sees the instruction files as data it was handed rather than as a directory it
-was let into. General repository observation is the bounded request/result loop
-#302 and #369 still owe; until it exists, a stage that needs more evidence must
-be given it as a value.
+was let into. General repository observation is shipped: an Agent
+names a read in the source it returns, `<Evaluate>` performs exactly that read
+under the host's own table, and the detached value comes back into the next
+prompt (#302, #549, #550). **This stage deliberately does not invoke it.** What
+it needs is the instruction text its caller already holds, and a stage that asks
+for what it was handed would be asking twice.
 
 The prompt sits outside `<Output>`, so it runs under the `throw` error mode:
 `throwOnError` turns a failed prompt into a failure the mode then ends the
