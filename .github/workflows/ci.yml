@@ -208,6 +208,13 @@ jobs:
       - name: Smoke test metadata from a separately loaded core
         run: deno run --allow-all --frozen scripts/smoke-loaded-copy.ts
 
+      # The same two-copies shape, asserted rather than smoked: which form a
+      # component runs when the binary minted the invocation and a file on the
+      # search path supplied the implementation. It lives here because its
+      # subject is `dist/xmd`, and this is the job that builds one.
+      - name: Form dispatch across the compiled binary's loaded copies
+        run: deno test --allow-all --frozen scripts/tests/component-form-dispatch.test.ts
+
       # `<Fetch>` resolves from core's registry, requests through the contextual
       # Fetch adapter, and detaches the response before binding it. All three
       # live in the module graph, so only the binary shows they survived

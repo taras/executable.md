@@ -71,9 +71,16 @@ describe("path normalization", () => {
 });
 
 describe("runtime exclusions", () => {
-  it("keys every supported runtime, including the one that excludes nothing", function* () {
+  it("keys every supported runtime, and Deno excludes only the binary's suite", function* () {
     expect(Object.keys(exclusions).sort()).toEqual([...RUNTIMES].sort());
-    expect(exclusions.deno).toEqual([]);
+
+    // Deno's list is not empty and not portability-shaped. The shards run
+    // source; one suite's subject is the compiled `dist/xmd`, which only the
+    // `smoke` job builds. Anything else appearing here means a Deno test was
+    // dropped for a reason this manifest has not stated.
+    expect(exclusions.deno.map((entry) => entry.path)).toEqual([
+      "scripts/tests/component-form-dispatch.test.ts",
+    ]);
   });
 
   it("lists each path once per runtime", function* () {
@@ -126,8 +133,11 @@ describe("the applicable corpus", () => {
     }
   });
 
-  it("gives Deno the whole discovered corpus", function* () {
-    expect(yield* applicableTestFiles("deno", ROOT)).toEqual(yield* listTestFiles(ROOT));
+  it("gives Deno the whole discovered corpus but its own manifest", function* () {
+    const excluded = new Set(exclusions.deno.map((entry) => entry.path));
+    expect(yield* applicableTestFiles("deno", ROOT)).toEqual(
+      (yield* listTestFiles(ROOT)).filter((file) => !excluded.has(file)),
+    );
   });
 
   /**
