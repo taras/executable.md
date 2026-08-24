@@ -1856,7 +1856,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read and the paired `<File>` write among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none (workflow-workspace-spec §8.4) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none (workflow-workspace-spec §8.4) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -6766,9 +6766,18 @@ and Deno and `EFAULT` under Bun, and the pinned Workspace filesystem removes one
 outright. Classifying the target before removing it is what makes those
 differences invisible.
 
-Generated XMD does not receive `<File.Delete>`: an Agent-generated fragment
-cannot invoke it, and no pinned identity names it (workflow-workspace-spec
-§8.4).
+Generated XMD receives `<File.Delete>` through the standard Deno workflow
+profile's write table, as the exact self-closing identity
+`@executablemd/core#File.Delete` (workflow-workspace-spec §8.4). A write-enabled
+fragment therefore removes one file by writing this component, and it is this
+component that runs: an admitted deletion crosses `API.Files` into the run's
+transaction-bound provider and is retained by the ordinary `workspace_file`
+effect described above. The evaluator collects nothing from it — a mutation
+contributes no observation, and a deletion has no outcome for one to carry — so
+a fragment that only deletes still answers `{ observations: [], output: "" }`.
+The paired spelling is refused in whole-fragment preflight, before the
+fragment's first effect, because the identity is admitted for the self-closing
+form alone.
 
 ---
 
@@ -9841,7 +9850,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | GXC1 | The selection | Omitting `allow` and stating `read` produce one identical retained policy; a mixed selection is retained in canonical class order, with the read table's entries before the write table's and host order inside each |
 | GXC2 | Unstateable policy | An empty selection, one class twice, a selected class with no table or an empty one, and a host table holding one name with overlapping forms or two definitions each fail before the candidate is parsed — with a deliberately unparseable candidate, no `generated_xmd` record and nothing of the candidate retained |
 | GXC3–GXC4 | Name and form | A self-closing and a paired `<File>` in one fragment resolve to the read and the write identity and are retained with their forms; the opposite form under a single-class selection is refused with no read and no write |
-| GXC5–GXC6 | Authority | Neither form is answered by a same-name repository component, and Git push, pull request, issue, repository, `<File.Delete>`, glob and an executable block are outside the tables whatever the selection |
+| GXC5–GXC6 | Authority | No admitted name — `<File>` in either form, `<Dir>` or the self-closing `<File.Delete>` — is answered by a same-name repository component, the dotted one included; and Git push, pull request, issue, repository, glob and an executable block are outside the tables whatever the selection |
 | GXC7 | The result | A write-only fragment observes nothing and renders nothing; a mixed one collects the read's value and not the write's |
 | GXC8 | Preflight | An unadmitted sibling after an admitted write, an unadmitted child under an admitted parent, and an unadmitted form after an admitted write each perform no write at all |
 | GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's value collected, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
@@ -9854,6 +9863,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | # | Test | Verify |
 |---|------|--------|
 | WGAC1 | The read identity | A self-closing `<File>` reads through the ordinary Files provider, and its pinned identity is not the unconstrained one |
+| WGAC13 | The deletion identity | The pinned `<File.Delete>` entry is `@executablemd/core#File.Delete`, admitted for the self-closing form alone, and carries the exact definition object core's registry holds rather than one shaped like it |
 | WGAC2 | Preflight | A paired `<File>` — empty or not — and an unadmitted component anywhere in a mixed fragment each perform zero reads and zero writes, and nothing of the source reaches the record |
 | WGAC3 | Closed schema | `<Evaluate>` refuses content, refuses every prop but `source` and `allow`, and refuses a missing `source` |
 | WGAC4 | Host-owned roots | The stated ceiling is the run's retained roots and the root it is on, following the run as it moves, in a deterministic order; generated source cannot reach the component even while it is live |
@@ -9862,7 +9872,9 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC7 | The import boundary | Through public `importComponent` middleware: calling the implementation with an invocation it built, with the first site's routed at the second, with a live content-bearing parent's routed into the sites inside it, by keeping the declared implementation and running it at another element's invocation, and by keeping one attachment's implementation — with that attachment's whole registration record answered for the name inside a second, simultaneously live attachment — and running it at the second attachment's own `<Evaluate>` site, are each refused. Nothing is admitted and no request performed under an identity the author wrote no observation at, and neither run's database receives a record the other's expansion named: a redirected registry answer carries behavior, never the claimant this execution delivered. Honest delegation, forwarding the genuine invocation, admits each site under its own name, nested or not; and an interrupted run resumes into each site's own record — the retained observation restored without re-reading, the interrupted request performed |
 | WGAC8 | The result shape | The result carries each admitted read's name and returned value in invocation order, with the fragment's rendering under `output` — an admitted `<Fetch>` renders nothing and its response survives anyway. Which pinned identity produced one is not in the value: the retained admission holds that |
 | WGAC9 | The class selection | An empty, repeated, unknown or non-array `allow` is refused before any admission; `read`, `write` and both in either order are admitted and retained in canonical order; omitting it retains exactly `read`, and the write table is not in that policy at all |
-| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` lands in the run's own Workspace at the nested logical path, through the ordinary file effect, under core's `File:write` and the composition package's `Dir` identities; a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC10 | The standard write table | An admitted paired `<File>` beneath a generated `<Dir>` lands in the run's own Workspace at the nested logical path, through the ordinary file effect; the retained policy holds all three standard entries with their forms, in the order the profile states them — core's paired `File:write`, the composition package's paired `Dir`, then core's self-closing `File.Delete` — and a `<Git.Push>` and a self-closing `<File />` are each refused under the same selection with no effect |
+| WGAC14 | The admitted deletion | A write-only fragment holding one self-closing `<File.Delete>` removes the file from the run's own Workspace, read back through the run's own transaction; it performs exactly one further `workspace_file` effect, whose outcome is `{ kind: "deleted" }`; it is retained under `@executablemd/core#File.Delete` in the self-closing form; and the document binds exactly `{ observations: [], output: "" }` with no receipt of any kind |
+| WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
 | WGAC11 | What a selection binds | A write-only evaluation binds `observations: []`, and a mixed one binds exactly the read's entry while the write lands in the Workspace |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
 

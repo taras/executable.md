@@ -20,8 +20,9 @@
  *   from the captured run storage, read at invocation;
  * - the read-only `<File>` observation comes from core's pinned constructor;
  * - `<Fetch>` is admitted only when the captured request ceiling is non-empty;
- * - the write table is core's paired `<File>` and workflow's own lexical
- *   `<Dir>`, built from the same definition the ordinary registration owns; and
+ * - the write table is core's paired `<File>`, workflow's own lexical `<Dir>`
+ *   built from the same definition the ordinary registration owns, and core's
+ *   self-closing `<File.Delete>`; and
  * - any further read or write comes from the captured host option.
  *
  * No prop, binding, context, contextual API answer, middleware return value or
@@ -35,9 +36,15 @@
  * `allow` names an effect *class*, and the class resolves to the table this
  * host installed before any document existed. Omitting it asks for `read`,
  * which is what this component has always done. Asking for `write` reaches
- * core's paired `<File>` and workflow's `<Dir>` and nothing else — no Git, no
- * Git host, no Issue, no process, no credential — and a host that installed no
- * write table refuses the selection before the candidate is parsed.
+ * core's paired `<File>`, workflow's `<Dir>` and core's self-closing
+ * `<File.Delete>` and nothing else — no Git, no Git host, no Issue, no process,
+ * no credential — and a host that installed no write table refuses the
+ * selection before the candidate is parsed.
+ *
+ * A deletion is admitted on the same terms as the other two, and accounted for
+ * the same way: it invokes the ordinary component, crosses the run's existing
+ * effect transaction, and is retained by the `workspace_file` effect that
+ * transaction publishes. Nothing about it reaches the value below.
  *
  * `allow` and `as` are independent. `as` grants nothing: it is the ordinary
  * caller-owned binding for the value this component returns, and that value has
@@ -67,7 +74,12 @@
 
 import type { Operation } from "effection";
 import { hasContent } from "@executablemd/core";
-import { pinnedFileRead, pinnedFileWrite, pinnedMutation } from "@executablemd/core/host";
+import {
+  pinnedFileDelete,
+  pinnedFileRead,
+  pinnedFileWrite,
+  pinnedMutation,
+} from "@executablemd/core/host";
 import type {
   GeneratedEffectClass,
   GeneratedMutation,
@@ -219,16 +231,23 @@ function createEvaluate(
   // invocation is bounded by, whatever happens to the object it passed.
   const requests: GeneratedRequest[] = [...(options.requests ?? [])];
   // The standard profile, captured with them. Core's read-only `<File>` is the
-  // read table; core's paired `<File>` and workflow's own lexical `<Dir>` are
-  // the write table, and the Dir identity is built from the same definition the
-  // ordinary registration owns so the two cannot drift. Both tables are stated
-  // whether or not a document asks for the class — `allow` selects from what
-  // this host already installed, and can add nothing to it.
+  // read table; core's paired `<File>`, workflow's own lexical `<Dir>` and
+  // core's self-closing `<File.Delete>` are the write table, and the Dir
+  // identity is built from the same definition the ordinary registration owns so
+  // the two cannot drift. Both tables are stated whether or not a document asks
+  // for the class — `allow` selects from what this host already installed, and
+  // can add nothing to it.
+  //
+  // The order is the retained policy, so it is stated once and kept: a
+  // continuation compares what it was granted under against what this profile
+  // holds now, and a host extension arriving last is what keeps a profile that
+  // took none comparable to itself.
   const dir = dirDefinition();
   const reads: GeneratedObservation[] = [pinnedFileRead(), ...(options.reads ?? [])];
   const writes: GeneratedMutation[] = [
     pinnedFileWrite(),
     pinnedMutation(dir.name, `${COMPOSITION_ORIGIN}#Dir`, dir, "paired"),
+    pinnedFileDelete(),
     ...(options.writes ?? []),
   ];
 

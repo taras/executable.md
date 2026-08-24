@@ -400,6 +400,38 @@ export function pinnedFileWrite(): GeneratedMutation {
 }
 
 /**
+ * The pinned core `<File.Delete>` identity, in the one form it has.
+ *
+ * Core's own default definition, and its self-closing spelling. One name, one
+ * identity: unlike `<File>`, whose two spellings do different things, this
+ * component answers the self-closing form and refuses the paired one, so the
+ * form stated here names what the identity is rather than narrowing it to part
+ * of it. Stating it anyway is what puts the decision in preflight, before the
+ * first effect of the fragment — a paired spelling costs an earlier admitted
+ * element nothing.
+ *
+ * An admitted deletion invokes the ordinary `<File.Delete>` component and
+ * therefore the installed Files provider, which under a workflow run is the
+ * transaction-bound one, so the removal crosses the run's ordinary effect
+ * transaction rather than a path of the evaluator's own. What it did is
+ * retained by the `workspace_file` effect it publishes there, and the evaluator
+ * collects nothing beside it: a mutation contributes no observation, and a
+ * deletion has no outcome for one to carry.
+ */
+export function pinnedFileDelete(): GeneratedMutation {
+  const definition = CORE_REGISTRY.get("File.Delete")?.default?.definition;
+  if (definition === undefined || definition.kind !== "function") {
+    throw new GeneratedXmdError("core supplies no File.Delete component to admit.");
+  }
+  return {
+    name: "File.Delete",
+    identity: `${CORE_ORIGIN}#File.Delete`,
+    definition,
+    form: "self-closing",
+  };
+}
+
+/**
  * One host-owned mutation component, by the exact definition the host holds and
  * the exact form it admits.
  */

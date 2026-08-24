@@ -1496,15 +1496,19 @@ form the selected tables hold no exact entry for, refuse the whole fragment
 before its first effect.
 
 Which branch the admitted component then takes inside itself is held to the same
-decision. A component reads the form it was written as from the invocation the
-engine issued (executable-mdx-spec §5.6), and every admitted invocation is
-checked against that same fact before the component runs, refusing when it is
-not the form its identity was chosen for. Neither read consults
+decision, and the component does not make it. A component declares the forms it
+answers and canonical engine dispatch enters the body for the form the scan
+recorded, before the body runs (executable-mdx-spec §5.6); every admitted
+invocation is checked against that same fact beforehand too, refusing when it is
+not the form its identity was chosen for. Neither decision consults
 `Component.hasContent()`, whose outermost handler answers first and may answer
-differently on each call, so an admitted `File:read` does not become a write and
-an admitted `File:write` does not become a read, however many times something is
-asked. A refusal there lands before any provider is reached, and the fragment
-performs nothing.
+differently on each call, nor a `hasContent()` method on whatever invocation
+object a caller handed over — a caller can mint that object, and it cannot mint
+the engine's issuance. So an admitted `File:read` does not become a write and an
+admitted `File:write` does not become a read, however many times something is
+asked, and an admitted self-closing `File.Delete` is the only spelling of that
+name that reaches a provider at all. A refusal there lands before any provider is
+reached, and the fragment performs nothing.
 
 #### The authored loop, and where it is written
 
@@ -1633,16 +1637,26 @@ unadmitted component, live registration or not.
 #### Mutation-proposal admission
 
 Mutation admission is the same boundary asked for the other class. The standard
-Deno workflow profile's write table holds exactly two identities: core's paired
-`File:write` and this package's lexical `Dir`, the latter built from the same
-implementation and schema the ordinary registration owns so the two cannot
-drift. The profile supplies no external-write and no execution table.
+Deno workflow profile's write table holds exactly three identities, in the order
+it states them: core's paired `File:write`, this package's lexical `Dir` — built
+from the same implementation and schema the ordinary registration owns so the two
+cannot drift — and core's self-closing `File.Delete`. A host's own extensions
+come after them, and the profile supplies no external-write and no execution
+table.
 
-An admitted mutation runs as the ordinary component it is. A paired `<File>`
-crosses `API.Files`, which under a workflow run is the transaction-bound
-provider, so the mutation, the published logical root and the filtered journal
-result commit in the run's one effect transaction (§10.1); `<Dir>` installs a
-lexical working directory for its content and creates nothing of its own.
+That order is retained identity. A continuation compares the entries position by
+position (§8.4, *A resumed run is held to its ceilings*), so a run admitted under
+a table with fewer entries is refused before any generated effect rather than
+resumed under the wider one. A read-only admission never selected the write table
+and is unaffected by a change to it.
+
+An admitted mutation runs as the ordinary component it is. A paired `<File>` and
+a self-closing `<File.Delete>` each cross `API.Files`, which under a workflow run
+is the transaction-bound provider, so the mutation, the published logical root
+and the filtered journal result commit in the run's one effect transaction
+(§10.1) — a generated deletion is the same `workspace_file` effect an authored
+one publishes, carrying `{ kind: "deleted" }`; `<Dir>` installs a lexical working
+directory for its content and creates nothing of its own.
 Generated source receives no special mutation API, and the evaluator adds none:
 it owns admission, and the component's own contract owns atomicity, failure and
 cancellation.
@@ -1655,11 +1669,9 @@ at all.
 The write table is authority, not prompting guidance. Generated source cannot
 grant itself Push, PullRequest, an issue upsert, a repository, a process, an
 eval or exec block, a native command, a credential or an arbitrary network write
-merely by naming a component; the initial table excludes local Git even though
-those effects are also Workspace-local. `<File.Delete>` and its pinned identity
-are not admitted here — #567 owns the ordinary component and its later addition
-to this table. Trusted reusable Markdown components may be admitted explicitly;
-generated XMD admits none of them.
+merely by naming a component; the table excludes local Git even though those
+effects are also Workspace-local. Trusted reusable Markdown components may be
+admitted explicitly; generated XMD admits none of them.
 
 **Approval is authored, and it is ordinary.** `<Evaluate>` neither prompts nor
 approves. A workflow that requires approval reaches a branch, an elicitation, a
@@ -1854,7 +1866,10 @@ otherwise remove. It renders nothing and returns nothing.
 
 Each deletion is one `workspace_file` effect, named by the expansion, the
 operation and the resolved logical target, and its retained outcome is exactly
-`{ kind: "deleted" }` — including the no-op. That is provider-facing protocol
+`{ kind: "deleted" }` — including the no-op. A deletion an admitted generated
+fragment performs is that same effect: the standard write table admits the
+ordinary component (§8.4), so there is one account of the removal and the
+evaluator adds nothing beside it. That is provider-facing protocol
 data rather than a value a document can read. A refusal retains the same
 `{ kind: "refused", phase, reason }` form every other file effect uses.
 
@@ -2787,7 +2802,7 @@ fetch operation requires its own language and durability contract.
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
 | `<Evaluate source allow>` and the authored loop | built by #302 and #369: a workflow-host component with a closed schema of one required `source` and one optional `allow`, declared to the execution rather than registered by the attachment — canonical execution calls the host's factory with the claimant it minted and registers what comes back, which provides availability only. Its ceilings come from the run's own storage, core's pinned `<File>` read and write identities and this package's lexical `<Dir>`; iteration, branching, approval and exhaustion are ordinary Markdown |
-| generated-XMD mutation-proposal admission | built by #369: the standard Deno profile's write table is core's paired `File:write` and this package's lexical `Dir`, admitted mutations run as the ordinary components they are through the run's effect transactions, the evaluator adds no receipt or result entry, and approval is authored control flow before the element. `<File.Delete>` joins the table with #567; local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
+| generated-XMD mutation-proposal admission | built by #369 and #567: the standard Deno profile's write table is core's paired `File:write`, this package's lexical `Dir` and core's self-closing `File.Delete`, in that retained order and followed by any host extension; admitted mutations run as the ordinary components they are through the run's effect transactions, a generated deletion publishing the same `workspace_file` effect an authored one does; the evaluator adds no receipt or result entry, so a write-only fragment still binds `{ observations: [], output: "" }`; and approval is authored control flow before the element. Local Git, Git-host, issue, process, execution, credential and external-write effects are outside the class |
 | Deno-local DOFS persistence | POC proven by #349 / PR #350 |
 | scoped Deno Worker Shell | containment proven by #351 / PR #353 and transactions by #357 / PR #362; production integration unbuilt |
 | Worker JavaScript | deferred |

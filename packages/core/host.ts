@@ -81,6 +81,7 @@ export {
   GeneratedXmdError,
   pinnedComponent,
   pinnedFetch,
+  pinnedFileDelete,
   pinnedFileRead,
   pinnedFileWrite,
   pinnedMutation,
