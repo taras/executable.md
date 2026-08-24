@@ -151,6 +151,7 @@ function useFiles(handler: {
   checkFilePath?: (input: FilePathInput) => Operation<Result<void>>;
   readTextFile?: (input: FilePathInput) => Operation<Result<string>>;
   writeTextFile?: (input: FileWriteInput) => Operation<Result<FileWriteSuccess>>;
+  deleteFile?: (input: FilePathInput) => Operation<Result<void>>;
   globFiles?: (input: {
     cwd: string;
     include: string[];
@@ -178,6 +179,13 @@ function useFiles(handler: {
       : {
           *writeTextFile([input], next) {
             return yield* (handler.writeTextFile ?? next)(input);
+          },
+        }),
+    ...(handler.deleteFile === undefined
+      ? {}
+      : {
+          *deleteFile([input], next) {
+            return yield* (handler.deleteFile ?? next)(input);
           },
         }),
     ...(handler.globFiles === undefined
@@ -250,11 +258,14 @@ describe("Tier FF — Files infrastructure failure", () => {
   });
 
   // FF2: the same for every other form. Each stops at its first Files call.
-  it("FF2: read, Glob and TempDir all stop at their first provider call", function* () {
+  it("FF2: read, delete, Glob and TempDir all stop at their first provider call", function* () {
     const dir = yield* useFixture();
 
     for (const source of [
       '<File path="notes.md" />\n\nAFTER',
+      // Deletion has no preliminary check to fail at, so its first and only
+      // provider call is the one that lands here.
+      '<File.Delete path="notes.md" />\n\nAFTER',
       '<Glob include={["**/*"]} as="found" />\n\nAFTER',
       "<TempDir>INSIDE</TempDir>\n\nAFTER",
       // The self-closing form acquires through `retain()`, which owns the

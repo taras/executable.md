@@ -35,6 +35,25 @@
  * has nothing to resolve, and `rename` replaces the link rather than following
  * it wherever it points.
  *
+ * ## Deletions
+ *
+ * A deletion is the mirror image of a write in the one place that matters: the
+ * final path segment is deliberately *not* resolved. A write follows an
+ * internal link to the file it names, because replacing the link would be the
+ * surprising outcome; a deletion removes the link itself, because following it
+ * would remove something the document never named — possibly outside the
+ * working directory entirely. So resolution stops at the parent prefix, which
+ * still catches a directory link leading out, and the authored last segment is
+ * put back onto it unresolved.
+ *
+ * What is then removed is decided by an explicit `lstat` rather than by the
+ * platform. A directory is refused whether or not it is empty, and every
+ * runtime this ships to reports a nonrecursive removal of one differently.
+ * Absence is success on both sides of that classification: a path that already
+ * names nothing was already what the document asked for. The removal is the
+ * single commit point, and nothing is acquired around it, so cancellation
+ * before it changes nothing and there is no cleanup to fail.
+ *
  * ## What crosses the boundary
  *
  * Nothing from a caught platform error. An errno code *selects* a
@@ -49,7 +68,7 @@ import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { realpath, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
@@ -76,7 +95,7 @@ import type {
  * observable rather than merely stated.
  */
 export interface HostFilesEvent {
-  readonly operation: "read" | "write" | "glob";
+  readonly operation: "read" | "write" | "delete" | "glob";
   readonly phase: "target" | "access" | "parents" | "temporary" | "commit" | "cleanup" | "read-dir";
 }
 
@@ -228,6 +247,41 @@ function* destination(input: FilePathInput): Operation<Destination> {
   try {
     const base = (yield* API.Fs.operations.realpath(input.cwd)) ?? input.cwd;
     const path = yield* resolveExisting(resolve(input.cwd, input.path));
+    if (!within(base, path)) {
+      return { reason: "resolved-escape" };
+    }
+    return { path };
+  } catch (error) {
+    return { reason: reasonOf(error) };
+  }
+}
+
+/**
+ * The path a removal would act on, with the final segment left alone.
+ *
+ * Deletion is the one operation whose target must *not* be resolved. A final
+ * symbolic link is the entry the document named, and following it would remove
+ * something the document never mentioned — possibly outside the working
+ * directory entirely. So only the parent prefix is resolved, and the authored
+ * last segment is put back onto it unresolved. Resolving the parent is what
+ * still catches a directory link leading out; leaving the last segment is what
+ * keeps a link a link.
+ *
+ * The working directory names itself — `.`, or anything that normalizes onto it
+ * — and that case cannot go through the parent at all: the parent of `cwd` is
+ * outside `cwd`, so the same comparison would report the working directory as
+ * an escape. It is classified directly instead, and target classification then
+ * refuses it for what it is.
+ */
+function* removalDestination(input: FilePathInput): Operation<Destination> {
+  try {
+    const base = (yield* API.Fs.operations.realpath(input.cwd)) ?? input.cwd;
+    const named = resolve(input.cwd, input.path);
+    if (named === resolve(input.cwd)) {
+      return { path: base };
+    }
+    const parent = yield* resolveExisting(dirname(named));
+    const path = join(parent, basename(named));
     if (!within(base, path)) {
       return { reason: "resolved-escape" };
     }
@@ -422,6 +476,76 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
   }
 
   /**
+   * Remove one regular file or one final symbolic link.
+   *
+   * Classification comes first and it is `lstat`, so what is judged is the
+   * entry the document named rather than whatever it leads to. A directory is
+   * refused whether or not it is empty: `<File.Delete>` names one file, and the
+   * platforms disagree about what removing an empty directory nonrecursively
+   * even reports — one answers `EISDIR`, another `EFAULT`. Deciding it here is
+   * what makes that disagreement invisible.
+   *
+   * Absence is success, in both places it can appear. A path that already names
+   * nothing was already what the document asked for, and a path that stops
+   * existing between the classification and the removal is the same answer
+   * arrived at by a different route — the removal is this operation's single
+   * commit point, and it has no earlier state to restore.
+   */
+  function* deleteFile(input: FilePathInput): Operation<Result<void>> {
+    const lexical = inadmissible(input);
+    if (lexical !== undefined) {
+      return nonWriteFailure("delete", "lexical", lexical);
+    }
+
+    const target = yield* removalDestination(input);
+    if ("reason" in target) {
+      return nonWriteFailure("delete", "resolution", target.reason);
+    }
+
+    notify(observe, { operation: "delete", phase: "target" });
+    let wasSymbolicLink = false;
+    try {
+      const info = yield* API.Fs.operations.lstat(target.path);
+      if (!info.exists) {
+        return Ok(undefined);
+      }
+      if (info.isDirectory) {
+        return nonWriteFailure("delete", "target", "directory");
+      }
+      if (!info.isFile && !info.isSymbolicLink) {
+        return nonWriteFailure("delete", "target", "special-file");
+      }
+      wasSymbolicLink = info.isSymbolicLink;
+    } catch (error) {
+      return nonWriteFailure("delete", "target", reasonOf(error));
+    }
+
+    notify(observe, { operation: "delete", phase: "access" });
+    try {
+      yield* API.Fs.operations.remove(target.path, { recursive: false });
+    } catch (error) {
+      const reason = reasonOf(error);
+      if (reason === "missing") {
+        return Ok(undefined);
+      }
+      // Windows removes a symbolic link to a directory with RemoveDirectory,
+      // and not every runtime's `rm` falls back to it. The entry was classified
+      // a link above, so removing it as a directory still removes only the
+      // link. A fallback that fails leaves the original refusal in force.
+      if (wasSymbolicLink) {
+        try {
+          yield* until(rmdir(target.path));
+          return Ok(undefined);
+        } catch {
+          return nonWriteFailure("delete", "access", reason);
+        }
+      }
+      return nonWriteFailure("delete", "access", reason);
+    }
+    return Ok(undefined);
+  }
+
+  /**
    * The regular files under `cwd` that `include` selects and `exclude` does not.
    *
    * Traversal is `API.Fs`'s: it reports directories and symbolic links too, and
@@ -499,7 +623,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     });
   }
 
-  return { checkFilePath, readTextFile, writeTextFile, globFiles, temporaryDirectory };
+  return { checkFilePath, readTextFile, writeTextFile, deleteFile, globFiles, temporaryDirectory };
 }
 
 /**
@@ -563,6 +687,9 @@ export function useHostFiles(options: HostFilesOptions = {}): Operation<void> {
       },
       *writeTextFile([input]) {
         return yield* handler.writeTextFile(input);
+      },
+      *deleteFile([input]) {
+        return yield* handler.deleteFile(input);
       },
       *globFiles([input]) {
         return yield* handler.globFiles(input);

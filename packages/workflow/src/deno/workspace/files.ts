@@ -152,6 +152,7 @@ function lexicalReason(error: Error): FilesReason {
 type FileEffectOutcome<Phase extends string> =
   | { readonly kind: "content"; readonly content: string }
   | { readonly kind: "written" }
+  | { readonly kind: "deleted" }
   | { readonly kind: "paths"; readonly paths: string[] }
   | { readonly kind: "refused"; readonly phase: Phase; readonly reason: FilesReason };
 
@@ -174,6 +175,7 @@ function refused<Phase extends string>(
 const OUTCOME_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ["content", ["kind", "content"]],
   ["written", ["kind"]],
+  ["deleted", ["kind"]],
   ["paths", ["kind", "paths"]],
   ["refused", ["kind", "phase", "reason"]],
 ]);
@@ -232,6 +234,9 @@ function parseOutcome<Phase extends string>(
   }
   if (kind === "written") {
     return { kind: "written" };
+  }
+  if (kind === "deleted") {
+    return { kind: "deleted" };
   }
   if (kind === "paths") {
     const paths = readPaths(record.paths);
@@ -310,6 +315,17 @@ function* statPath(
   }
 }
 
+function* lstatPath(
+  filesystem: DenoWorkspaceFilesystem,
+  path: string,
+): Operation<Result<DenoWorkspaceStat>> {
+  try {
+    return Ok(yield* filesystem.lstat(path));
+  } catch (error) {
+    return Err(asRefusal(error));
+  }
+}
+
 function* readOutcome(
   filesystem: DenoWorkspaceFilesystem,
   path: string,
@@ -383,6 +399,50 @@ function* writeOutcome(
     return refused("transaction", refusalReason(asRefusal(error)));
   }
   return { kind: "written" };
+}
+
+/**
+ * Remove one file, or find that there is nothing to remove.
+ *
+ * `lstat` rather than `stat`, so a final symbolic link is classified as the
+ * entry the document named and removed as itself: `remove` here resolves its
+ * target without following a final link, and neither the link's target nor the
+ * bytes it holds are touched.
+ *
+ * Every directory is refused explicitly, before anything is attempted. The
+ * pinned DOFS `rm` removes an *empty* directory even when `recursive` is false,
+ * so relying on it to refuse one would make `<File.Delete>` mean something
+ * different here than it means on a host — where the same call fails. Deciding
+ * it above the filesystem is what keeps the two providers saying the same
+ * thing.
+ *
+ * Absence is success on both sides of the classification. Nothing runs
+ * concurrently inside this transaction, so a removal that reports `ENOENT`
+ * after a successful `lstat` is not a race this run can produce — reporting it
+ * as the same success rather than as a condition is what stops that
+ * unreachable branch from becoming a second meaning for "there is no file
+ * there".
+ */
+function* deleteOutcome(
+  filesystem: DenoWorkspaceFilesystem,
+  path: string,
+): Operation<FileEffectOutcome<FilesPhase>> {
+  const info = yield* lstatPath(filesystem, path);
+  if (!info.ok) {
+    const reason = refusalReason(info.error);
+    return reason === "missing" ? { kind: "deleted" } : refused("resolution", reason);
+  }
+  if (info.value.kind === "directory") {
+    return refused("target", "directory");
+  }
+
+  try {
+    yield* filesystem.remove(path, { recursive: false });
+  } catch (error) {
+    const reason = refusalReason(asRefusal(error));
+    return reason === "missing" ? { kind: "deleted" } : refused("access", reason);
+  }
+  return { kind: "deleted" };
 }
 
 const SUBTREE = "/**";
@@ -517,6 +577,7 @@ export interface WorkflowFilesHandler {
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
   readTextFile(input: FilePathInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
+  deleteFile(input: FilePathInput): Operation<Result<void>>;
   globFiles(input: GlobInput): Operation<Result<string[]>>;
   temporaryDirectory(): Operation<Result<string>>;
 }
@@ -588,6 +649,35 @@ export function workflowFilesHandler(database: WorkflowRunDatabase): WorkflowFil
       return Ok(fileWriteSuccess("transaction-staged"));
     },
 
+    *deleteFile(input: FilePathInput): Operation<Result<void>> {
+      const resolved = resolveLogicalPath(input.cwd, input.path);
+      if (!resolved.ok) {
+        return Err(
+          filesFailure({
+            operation: "delete",
+            phase: "lexical",
+            reason: lexicalReason(resolved.error),
+          }),
+        );
+      }
+      const path = resolved.value;
+      const outcome = yield* performed(
+        database,
+        yield* describeFileEffect("delete", path, { path: input.path, cwd: input.cwd }),
+        parseFilesPhase,
+        (filesystem) => deleteOutcome(filesystem, path),
+      );
+      if (outcome.kind === "refused") {
+        return Err(
+          filesFailure({ operation: "delete", phase: outcome.phase, reason: outcome.reason }),
+        );
+      }
+      if (outcome.kind !== "deleted") {
+        throw new FilesInvariantError("protocol");
+      }
+      return Ok(undefined);
+    },
+
     *globFiles(input: GlobInput): Operation<Result<string[]>> {
       const directory = logicalDirectory(input.cwd);
       const include = [...input.include];
@@ -643,6 +733,9 @@ export function useWorkflowFiles(database: WorkflowRunDatabase): Operation<void>
       },
       *writeTextFile([input]) {
         return yield* handler.writeTextFile(input);
+      },
+      *deleteFile([input]) {
+        return yield* handler.deleteFile(input);
       },
       *globFiles([input]) {
         return yield* handler.globFiles(input);

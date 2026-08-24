@@ -16,6 +16,7 @@
 import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type {
+  FunctionComponent,
   Segment,
   TextSegment,
   ErrorSegment,
@@ -200,7 +201,7 @@ function expandChildrenScoped(
     if (scope) {
       yield* provideEvalScope(scope);
     }
-    return yield* expandSegments(
+    return yield* expandSegmentsWithin(
       segments,
       meta,
       props,
@@ -391,7 +392,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
           }
           yield* ActiveProjection.set(options.inner);
           yield* ActiveLoop.set(options.loop);
-          yield* expandSegments(
+          yield* expandSegmentsWithin(
             options.segments,
             options.meta,
             options.props,
@@ -497,7 +498,7 @@ function createProjectionHandle(state: ProjectionState): ProjectionHandle {
             // Dynamic markdown is the component's own text, so it is not written
             // where the caller's loop is and cannot break it.
             yield* ActiveLoop.set(request.kind === "markdown" ? undefined : state.callerLoop);
-            yield* expandSegments(
+            yield* expandSegmentsWithin(
               project(segments),
               frame.meta,
               frame.props,
@@ -605,16 +606,59 @@ const ESCAPED_BRACE_PLACEHOLDER = "\uE000";
  * delivered contextually through the Component Api — install providers with
  * `Component.around(..., { at: "min" })` before expanding.
  *
+ * This is the one entry for expansion driven directly — a test, a tool
+ * describing a document — and the one place an expansion legitimately starts
+ * without an `ExpansionAuthority`. A form-sensitive component under such an
+ * expansion refuses rather than running unselected. Everything an execution
+ * causes recurses through `expandSegmentsWithin`, where the authority is not
+ * optional.
+ *
  * @param counter - Optional block ID counter. If omitted, a local counter
  *   is created. For per-segment emission (§9), pass a shared counter so
  *   IDs are stable across calls.
  */
-export function* expandSegments(
+export function expandSegments(
   segments: Segment[],
   parentMeta: Record<string, unknown>,
   parentProps: Record<string, Json>,
   hideSet: Set<string>,
   counter: BlockCounter = createBlockCounter(),
+  owner?: Segment[],
+  path: string = "",
+  indexBase: number = 0,
+  checkedFailures?: CheckedFailures,
+  authority?: ExpansionAuthority,
+): Operation<Segment[]> {
+  return expandSegmentsWithin(
+    segments,
+    parentMeta,
+    parentProps,
+    hideSet,
+    counter,
+    owner,
+    path,
+    indexBase,
+    checkedFailures,
+    authority,
+  );
+}
+
+/**
+ * The recursion inside an expansion already under way.
+ *
+ * Every parameter travels by hand and none is optional, so an internal caller
+ * that drops the authority — or the ledger, or the path — fails to compile
+ * rather than silently expanding without it. What `execute()` causes must
+ * carry the same `ExpansionAuthority` through every recursion that can invoke
+ * a component: regions, branches, iterations, captures, answers, component
+ * bodies, and projected content alike.
+ */
+export function* expandSegmentsWithin(
+  segments: Segment[],
+  parentMeta: Record<string, unknown>,
+  parentProps: Record<string, Json>,
+  hideSet: Set<string>,
+  counter: BlockCounter,
   /**
    * The output owner: the accumulator belonging to the region whose text
    * renders into the document. Expansion appends as it goes, so a caller
@@ -622,24 +666,24 @@ export function* expandSegments(
    * which is how a failing `<Output>` region keeps what it rendered first, and
    * how a `<Test>` keeps its output when its body stops partway.
    *
-   * A call site that produces a binding, a value, or a string passes nothing.
+   * A call site that produces a binding, a value, or a string passes none.
    * Its buffer is private and never merges into an owner, so a failure cannot
    * promote content the document was not going to render (§6.9).
    */
-  owner?: Segment[],
+  owner: Segment[] | undefined,
   /**
    * The structural path that reached these segments (§5.6). Expansion driven
    * directly — a test, a tool describing a document — starts from the empty
    * path, so identity works with no execution and no journal around it.
    */
-  path: string = "",
+  path: string,
   /**
    * Where `segments` starts in the list it was taken from. A caller that
    * expands one segment at a time — body chunking — would otherwise hand every
    * one of them index 0, and the positionless fallback would stop telling them
    * apart (§5.6).
    */
-  indexBase: number = 0,
+  indexBase: number,
   /**
    * Whether these segments are work the region of a `<PrintErrors>` element
    * caused, that element being the one construct that may keep a checked
@@ -652,8 +696,8 @@ export function* expandSegments(
    * nothing else — a sibling after `</PrintErrors>`, a later invocation, or a
    * root, all of which start from the default here and are outside it.
    */
-  checkedFailures?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   // An execution opens the table its printed errors record their causes in.
   // Expansion driven directly — a test, a tool describing a document — has no
@@ -662,7 +706,7 @@ export function* expandSegments(
   if ((yield* SegmentCauses.get()) === undefined) {
     return yield* scoped(function* () {
       yield* useSegmentCauses();
-      return yield* expandSegments(
+      return yield* expandSegmentsWithin(
         segments,
         parentMeta,
         parentProps,
@@ -865,7 +909,7 @@ export function* expandSegments(
             ...(yield* expandAnswers(
               segment,
               (inner, into, frame) =>
-                expandSegments(
+                expandSegmentsWithin(
                   inner,
                   parentMeta,
                   parentProps,
@@ -1301,7 +1345,7 @@ function* expandLet(
   // The region's foreground commands write their stdout into this binding
   // rather than to the reader; stderr stays diagnostic and is displayed (#441).
   const expandedChildren = yield* withRouting({ stdout: "capture", stderr: "forward" }, () =>
-    expandSegments(
+    expandSegmentsWithin(
       segment.children,
       parentMeta,
       parentProps,
@@ -1833,7 +1877,7 @@ function* expandIf(
           ),
         );
 
-  yield* expandSegments(
+  yield* expandSegmentsWithin(
     selected ? structure.whenTrue : structure.whenFalse,
     parentMeta,
     parentProps,
@@ -1996,7 +2040,7 @@ function* expandLoop(
       for (let iteration = 0; iteration < bound.value; iteration++) {
         yield* recordIteration(identity, iteration);
         started = iteration + 1;
-        yield* expandSegments(
+        yield* expandSegmentsWithin(
           segment.children,
           parentMeta,
           parentProps,
@@ -2147,7 +2191,7 @@ function* expandPrintErrors(
     // The element the document was written with is the origin of the authority
     // to print a checked command failure and continue. It is handed to this
     // body's expansion by hand, so nothing outside the document can hold it.
-    return yield* expandSegments(
+    return yield* expandSegmentsWithin(
       segment.children,
       parentMeta,
       parentProps,
@@ -2156,9 +2200,10 @@ function* expandPrintErrors(
       owner,
       path,
       0,
-      // The region grants authority for the work it causes, and a failure it
+      // The region grants recovery for the work it causes, and a failure it
       // recovers is not one the run suffered.
       recoveringLedger(),
+      authority,
     );
   });
 }
@@ -2173,29 +2218,29 @@ function* expandComponent(
   selfClosing: boolean,
   hideSet: Set<string>,
   counter: BlockCounter,
-  projectedEnv?: EvalEnv,
-  position?: SourcePosition,
+  projectedEnv: EvalEnv | undefined,
+  position: SourcePosition | undefined,
   /** The invoking frame's meta and props, for content this element projects. */
-  callerMeta: Record<string, unknown> = {},
-  callerProps: Record<string, Json> = {},
+  callerMeta: Record<string, unknown>,
+  callerProps: Record<string, Json>,
   /**
    * The caller's output owner, when this invocation renders into it. An
    * invocation captured with `as` produces a binding rather than output and
    * passes none, so what its body rendered before failing stays out of the
    * document (§6.9).
    */
-  owner?: Segment[],
-  path: string = "",
+  owner: Segment[] | undefined,
+  path: string,
   /**
    * Whether the element that invoked this sits inside a `<PrintErrors>` region.
    *
-   * The authority travels with the invocation because the element is the
+   * The recovery travels with the invocation because the element is the
    * region's own text: a component written inside the region is part of what
    * the region asked to print, and its body's commands are covered exactly as a
    * block written there would be.
    */
-  checkedFailures?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   // Cycle detection — Prosser's algorithm
   if (hideSet.has(name)) {
@@ -2225,6 +2270,7 @@ function* expandComponent(
   // on the answer or in the chain carries it (`invocation-identity.ts`).
   const selection = authority?.identities?.beginImport(name);
   let selected: IdentityDomain | undefined;
+  let dispatcher: FunctionComponent | undefined;
   try {
     // The public chain answers, and canonical execution decides whether the
     // answer is one it produced. In a closed execution — a workflow holding a
@@ -2234,8 +2280,24 @@ function* expandComponent(
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
     selected = selection?.settle();
-    const imports = authority?.imports;
-    imported = imports === undefined ? answered : imports.authorize(name, answered);
+    if (authority?.imports === undefined) {
+      imported = answered;
+    } else {
+      imported = authority.imports.authorize(name, answered);
+      // Closed authorization answers with core's retained copy rather than the
+      // object the resolver recorded, and the copy is what this expansion
+      // invokes — so the selection is recorded against it too. Only here: an
+      // open execution's answer travelled through public middleware, and
+      // nothing it hands back is canonical resolution's product. The record
+      // takes its dispatcher from the copy's own `fn`, identical by retention;
+      // a wrapper whose `fn` is no dispatcher records nothing, so a dispatcher
+      // an authority recorded explicitly is never displaced.
+      authority.forms?.select(name, imported);
+    }
+    // Read off the answer rather than from a frame the engine opened: what is
+    // recognized is the exact definition canonical resolution produced for this
+    // exact name, whenever it produced it.
+    dispatcher = authority?.forms?.dispatcherFor(name, imported);
   } catch (error) {
     selection?.settle();
     // Import is a durable effect, so it is the other place a stale journal
@@ -2277,6 +2339,7 @@ function* expandComponent(
       checkedFailures,
       authority,
       selected,
+      dispatcher,
     );
   }
 
@@ -2675,22 +2738,22 @@ function* expandFunctionComponent(
   definition: FunctionComponentDefinition,
   hideSet: Set<string>,
   counter: BlockCounter,
-  projectedEnv?: EvalEnv,
-  position?: SourcePosition,
+  projectedEnv: EvalEnv | undefined,
+  position: SourcePosition | undefined,
   /** The invoking frame's meta and props, for content this component projects. */
-  callerMeta: Record<string, unknown> = {},
-  callerProps: Record<string, Json> = {},
+  callerMeta: Record<string, unknown>,
+  callerProps: Record<string, Json>,
   /**
    * The caller's output owner, when this invocation renders into it. What the
    * projected content rendered before a failure the component did not recover
    * from goes here, and nowhere else: an invocation captured with `as` produces
    * a binding rather than output and passes none (§6.9).
    */
-  callerOwner?: Segment[],
-  path: string = "",
+  callerOwner: Segment[] | undefined,
+  path: string,
   /** This work's checked-failure ledger, inherited from the invoking element. */
-  inherited?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  inherited: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
   /**
    * The identity domain canonical resolution selected for this invocation.
    *
@@ -2698,7 +2761,15 @@ function* expandFunctionComponent(
    * chose, which is what puts an invocation in a domain at all
    * (`invocation-identity.ts`).
    */
-  selected?: IdentityDomain,
+  selected: IdentityDomain | undefined,
+  /**
+   * The dispatcher canonical resolution selected for this invocation.
+   *
+   * Absent unless resolution answered with a form dispatcher this copy of core
+   * built, which is what a dispatcher requires before it will enter one of its
+   * form-specific bodies (`invocation-identity.ts`).
+   */
+  dispatcher: FunctionComponent | undefined,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2875,6 +2946,7 @@ function* expandFunctionComponent(
           selected,
           yield* useScope(),
           !selfClosing,
+          dispatcher,
         );
         const handle = createProjectionHandle({
           invocation,
@@ -3898,15 +3970,15 @@ export function* expandBody(
    * it produced; an invocation captured with `as` produces a binding rather
    * than output and passes none.
    */
-  owner?: Segment[],
-  path: string = "",
+  owner: Segment[] | undefined,
+  path: string,
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
-  checkedFailures?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Segment[]> {
   if (!bodyHasOutput(bodySegments)) {
     const substituted = substituteContent(bodySegments, children, callerEnv, claim);
-    return yield* expandSegments(
+    return yield* expandSegmentsWithin(
       substituted,
       meta,
       props,
@@ -3927,7 +3999,7 @@ export function* expandBody(
     const chunkPath = chunk.path ?? path;
     const chunkBase = chunk.indexBase ?? 0;
     if (chunk.declaration) {
-      yield* expandSegments(
+      yield* expandSegmentsWithin(
         chunk.segments,
         meta,
         props,
@@ -3942,7 +4014,7 @@ export function* expandBody(
     } else if (chunk.output) {
       yield* scoped(function* () {
         yield* ErrorMode.set("output");
-        return yield* expandSegments(
+        return yield* expandSegmentsWithin(
           chunk.segments,
           meta,
           props,
@@ -3959,7 +4031,7 @@ export function* expandBody(
       // Documentation: execute for side effects, discard rendered output.
       yield* scoped(function* () {
         yield* ErrorMode.set("throw");
-        return yield* expandSegments(
+        return yield* expandSegmentsWithin(
           chunk.segments,
           meta,
           props,
@@ -4000,7 +4072,7 @@ function runDocumentation(
 ): Operation<Segment[]> {
   return scoped(function* () {
     yield* ErrorMode.set("throw");
-    return yield* expandSegments(
+    return yield* expandSegmentsWithin(
       segments,
       meta,
       props,
@@ -4058,10 +4130,10 @@ function* expandValueBody(
   counter: BlockCounter,
   callerEnv: EvalEnv | undefined,
   claim: ClaimFn = passthroughClaim,
-  path: string = "",
+  path: string,
   /** Whether the invoking element sits inside a `<PrintErrors>` region. */
-  checkedFailures?: CheckedFailures,
-  authority?: ExpansionAuthority,
+  checkedFailures: CheckedFailures | undefined,
+  authority: ExpansionAuthority | undefined,
 ): Operation<Json> {
   const slots = partitionBySlot(children);
   const state: SubstitutionState = { errorsEmitted: false };

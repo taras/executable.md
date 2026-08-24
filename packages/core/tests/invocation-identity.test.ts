@@ -25,7 +25,7 @@ import { collect, Component, content, inlineSource, registerComponents } from ".
 import { executeInstalled } from "../host.ts";
 import type { ExecutionInstallation, IdentityClaimant, IdentityComponent } from "../host.ts";
 import { getExpansion } from "../src/expansion.ts";
-import { installIdentities, issueInvocation } from "../src/invocation-identity.ts";
+import { formDispatcher, installIdentities, issueInvocation } from "../src/invocation-identity.ts";
 import type { IdentityDomain } from "../src/invocation-identity.ts";
 import type {
   ComponentDefinition,
@@ -938,5 +938,94 @@ describe("Tier CIV — the authored form on the invocation", () => {
     expect(seen.authored).toEqual([false]);
     expect(reachable).not.toContain("hasContent");
     expect(reachable).not.toContain("content");
+  });
+
+  // CIV22: what a dispatcher requires before it enters a form-specific body.
+  //
+  // The method on the object stays readable and stays honest, which is CIV21's
+  // contract. What it is not is authority: a component is handed whatever its
+  // caller passes, and every check expressible against the shape is one a
+  // forger satisfies by construction. So the dispatcher asks this copy of core
+  // instead — the same private field a claim is recognized by — and also asks
+  // that the issuance is live, is running in its own frame, and is the one
+  // canonical resolution selected this dispatcher for.
+  it("CIV22: only a selected dispatcher's own live invocation enters a form body", function* () {
+    const entered: string[] = [];
+    const refusals: string[] = [];
+    const refuse = (_props: Record<string, Json>, form: string | undefined) =>
+      new Error(`refused:${form ?? "no-invocation"}`);
+    // deno-lint-ignore require-yield
+    const dispatch = formDispatcher({
+      forms: "self-closing",
+      *fn(): Operation<string> {
+        entered.push("body");
+        return "";
+      },
+      refuse,
+    });
+
+    function* attempt(invocation: ComponentInvocation): Operation<void> {
+      try {
+        yield* dispatch({}, invocation);
+      } catch (error) {
+        refusals.push(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    const frame = yield* useScope();
+    const issued = issueInvocation("e1", "Probing", undefined, frame, false, dispatch);
+
+    // The genuine, selected, live, self-closing case is the only one that runs.
+    yield* attempt(issued.invocation);
+    expect(entered).toEqual(["body"]);
+    expect(refusals).toEqual([]);
+    // And the method it carries still answers, for anyone observing rather than
+    // selecting an effect.
+    expect(issued.invocation.hasContent()).toBe(false);
+
+    // A structural look-alike carrying the whole public shape.
+    const lookAlike: ComponentInvocation = {
+      hasContent() {
+        return false;
+      },
+    };
+    expect(lookAlike.hasContent()).toBe(false);
+    yield* attempt(lookAlike);
+
+    // A genuine invocation canonical resolution selected nothing for.
+    const unselected = issueInvocation("e2", "Probing", undefined, frame, false);
+    yield* attempt(unselected.invocation);
+
+    // A genuine invocation selected for a different dispatcher.
+    // deno-lint-ignore require-yield
+    const other = formDispatcher({
+      forms: "either",
+      *fn(): Operation<string> {
+        return "";
+      },
+    });
+    const elsewhere = issueInvocation("e3", "Probing", undefined, frame, false, other);
+    yield* attempt(elsewhere.invocation);
+
+    // And one whose issuance has ended.
+    const finished = issueInvocation("e4", "Probing", undefined, frame, false, dispatch);
+    finished.close();
+    yield* attempt(finished.invocation);
+
+    // None of the four reached the body, and each was refused as an invocation
+    // that could not be established rather than as a form.
+    expect(entered).toEqual(["body"]);
+    expect(refusals).toEqual([
+      "refused:no-invocation",
+      "refused:no-invocation",
+      "refused:no-invocation",
+      "refused:no-invocation",
+    ]);
+
+    // The form it will not run is refused as a form, and still never enters.
+    const paired = issueInvocation("e5", "Probing", undefined, frame, true, dispatch);
+    yield* attempt(paired.invocation);
+    expect(entered).toEqual(["body"]);
+    expect(refusals.at(-1)).toEqual("refused:paired");
   });
 });

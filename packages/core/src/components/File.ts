@@ -64,7 +64,7 @@ import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData, FileWriteFailureData, FilesReason } from "@executablemd/runtime";
 import { content } from "../component-api.ts";
-import type { ComponentInvocation } from "../invocation-identity.ts";
+import type { FormDeclaration } from "../invocation-identity.ts";
 import { ContentError, DocumentationError, ProjectedContentError } from "../errors.ts";
 import { checkFilePath, readFileText, writeFileText } from "../files.ts";
 import type { Json } from "../types.ts";
@@ -87,63 +87,50 @@ export class FileAccessError extends Error {
   }
 }
 
-export default printErrors(function* (
-  props: Record<string, Json>,
-  invocation: ComponentInvocation,
-): Operation<string> {
+/** The self-closing body: it reads, and there is no path from here to a write. */
+const read = printErrors(function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
-  // Which of the two things this element is comes from the invocation the
-  // engine handed this call, and from nowhere else. `Component.hasContent()`
-  // answers the same question through the composable chain, so a handler
-  // installed outside this invocation answers ahead of the engine — and one
-  // that answers per call reports one shape to a caller checking and the other
-  // here. Either would render an empty string over a file the document wrote
-  // `<File path="…" />` to read.
-  const writing = authoredContent(invocation, requested);
   const directory = yield* cwd();
+  const text = yield* readFileText({ cwd: directory, path: requested });
+  if (!text.ok) {
+    throw new FileAccessError(refusal(requested, "read", parseFilesFailure(text.error)));
+  }
+  return text.value;
+});
 
-  if (writing) {
-    const admitted = yield* checkFilePath({ cwd: directory, path: requested });
-    if (!admitted.ok) {
-      throw new FileAccessError(refusal(requested, "write", parseFilesFailure(admitted.error)));
-    }
-
-    // The children run only once the path is known to be usable, and the
-    // destination is resolved only once they are done.
-    const text = yield* rendered(requested);
-    const failure = yield* writeFileText({ cwd: directory, path: requested, content: text });
-    if (failure !== undefined) {
-      throw new FileAccessError(report(requested, failure));
-    }
-    return "";
+/** The paired body: it writes, and there is no path from here to a read. */
+const write = printErrors(function* (props: Record<string, Json>): Operation<string> {
+  const requested = String(props.path);
+  const directory = yield* cwd();
+  const admitted = yield* checkFilePath({ cwd: directory, path: requested });
+  if (!admitted.ok) {
+    throw new FileAccessError(refusal(requested, "write", parseFilesFailure(admitted.error)));
   }
 
-  const read = yield* readFileText({ cwd: directory, path: requested });
-  if (!read.ok) {
-    throw new FileAccessError(refusal(requested, "read", parseFilesFailure(read.error)));
+  // The children run only once the path is known to be usable, and the
+  // destination is resolved only once they are done.
+  const text = yield* rendered(requested);
+  const failure = yield* writeFileText({ cwd: directory, path: requested, content: text });
+  if (failure !== undefined) {
+    throw new FileAccessError(report(requested, failure));
   }
-  return read.value;
+  return "";
 });
 
 /**
- * How this element was written, from the invocation the engine issued.
+ * The two bodies, and the fact that this component never chooses between them.
  *
- * There is no fallback to the contextual answer. A call arriving without a
- * genuine invocation is not one the engine made — a handler holding this
- * implementation and calling it somewhere else is the case that matters — and
- * this component chooses between reading a file and writing over it, so it
- * refuses rather than guessing. The refusal happens before `cwd()`, before the
- * children, and therefore before any provider is reached.
+ * Which one runs is canonical dispatch's, decided from the scan before either
+ * is entered (§5.6). That is what makes the two irreversible directions
+ * unreachable from each other: a self-closing `<File />` cannot enter the write
+ * body however the contextual chain answers and whatever object a wrapper hands
+ * over, because the read body is the only one it is dispatched to.
  */
-function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
-  if (typeof invocation?.hasContent !== "function") {
-    throw new FileAccessError(
-      `<File path=${JSON.stringify(requested)} /> was called without the invocation the engine ` +
-        "issued, so which form it was written as cannot be established.",
-    );
-  }
-  return invocation.hasContent();
-}
+export const form: FormDeclaration = {
+  forms: "both",
+  "self-closing": read,
+  paired: write,
+};
 
 /**
  * The rendered children, or a failure if anything went wrong producing them.

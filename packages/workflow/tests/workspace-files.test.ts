@@ -15,7 +15,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { createContext, scoped, type Operation } from "effection";
+import { createContext, race, scoped, sleep, suspend, type Operation } from "effection";
 import { type Api, createApi } from "@effectionx/context-api";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import type { Json } from "@executablemd/durable-streams";
@@ -133,6 +133,21 @@ function runDocument(database: WorkflowRunDatabase, source: string): Operation<R
   });
 }
 
+/**
+ * What one run said, whether it printed it or failed with it.
+ *
+ * A refusal the component owns is printed into the output; one the engine makes
+ * before the component runs — prop validation — fails the execution instead. A
+ * table covering both reads the sentence from wherever it landed.
+ */
+function* reportedBy(database: WorkflowRunDatabase, source: string): Operation<string> {
+  try {
+    return String((yield* runDocument(database, source)).output);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** The same document again, replaying the journal the first execution wrote. */
 function replayDocument(database: WorkflowRunDatabase, source: string): Operation<Run> {
   return runDocument(database, source);
@@ -194,6 +209,66 @@ function refusingWrite(
         );
       }
       yield* filesystem.writeFile(path, content, mode);
+    },
+  });
+}
+
+/**
+ * A Workspace filesystem that records every removal it performs.
+ *
+ * Counting the low-level call is what distinguishes "replay restored the
+ * outcome" from "the deletion simply happened again and found nothing" — the
+ * Workspace looks the same either way.
+ */
+function countingRemoves(
+  removed: string[],
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *remove(path, options) {
+      removed.push(path);
+      yield* filesystem.remove(path, options);
+    },
+  });
+}
+
+/**
+ * A Workspace filesystem that stops one removal after it has happened.
+ *
+ * The suspension sits between the mutation and the transaction's commit, which
+ * is the one window where a Workspace holds a change nothing has published yet.
+ */
+function suspendingRemove(
+  target: string,
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *remove(path, options) {
+      yield* filesystem.remove(path, options);
+      if (path === target) {
+        yield* suspend();
+      }
+    },
+  });
+}
+
+/**
+ * A Workspace filesystem whose removal succeeds and then fails the run.
+ *
+ * Not a documented condition, so it is never journaled: what it produces is an
+ * infrastructure failure after the mutation and before publication, which is
+ * the case the outer transaction's rollback exists for.
+ */
+function faultAfterRemove(
+  target: string,
+): (filesystem: DenoWorkspaceFilesystem) => DenoWorkspaceFilesystem {
+  return (filesystem) => ({
+    ...filesystem,
+    *remove(path, options) {
+      yield* filesystem.remove(path, options);
+      if (path === target) {
+        throw new Error("planted failure after the removal");
+      }
     },
   });
 }
@@ -270,6 +345,25 @@ function namesEffect(record: unknown, operation: string, target: string): boolea
     name.startsWith(`${operation}:`) &&
     name.endsWith(`:${target}`)
   );
+}
+
+/**
+ * How many committed journal rows record `operation` on `target`.
+ *
+ * Counted through a second connection, so what it reports is what a
+ * transaction published rather than what this handle is holding — the same
+ * observation `committedEventCount` makes, narrowed to one effect.
+ */
+function committedEffects(path: string, operation: string, target: string): number {
+  let found = 0;
+  tamper(path, (database) => {
+    for (const row of database.prepare("SELECT record FROM journal_events").all()) {
+      if (namesEffect(row["record"], operation, target)) {
+        found += 1;
+      }
+    }
+  });
+  return found;
 }
 
 /**
@@ -931,6 +1025,324 @@ describe("WF workflow document filesystem", () => {
         );
       });
       expect((yield* database.journal.readAll()).length).toEqual(before);
+    });
+  });
+
+  // WF15: the delete half of WF1 and WF9 together. One authored element is one
+  // effect, and the removal, the resulting root and the filtered result are one
+  // commit — which a second connection is what proves.
+  it("deletes a file and publishes the removal, root and result together", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/notes.md", "stale");
+        yield* workspace.filesystem.writeFile("/kept.md", "kept");
+      });
+
+      const run = yield* runDocument(database, '<File.Delete path="notes.md" />');
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.name.split(":")[0]).toEqual("delete");
+      expect(recorded[0]?.result).toEqual({ status: "ok", value: { kind: "deleted" } });
+
+      const gone = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.stat("/notes.md");
+      });
+      expect(gone.ok).toEqual(false);
+      expect(yield* workspaceText(database, "/kept.md")).toEqual("kept");
+      expect(committedRoot(path)).toEqual(rootOfLastEvent(path));
+      expect(committedEffects(path, "delete", "/notes.md")).toEqual(1);
+    });
+  });
+
+  // WF16: absence is the answer, not a condition. Both deletions publish the
+  // same successful outcome, and neither moves the run's root — a Workspace
+  // that did not change captures the root it already had.
+  it("records a deletion of a path that names nothing as the same success", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const path = runPath(root, database.record.runId);
+      const before = committedRoot(path);
+
+      const run = yield* runDocument(
+        database,
+        ['<File.Delete path="absent.md" />', "", '<File.Delete path="absent.md" />'].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded.map((effect) => effect.result)).toEqual([
+        { status: "ok", value: { kind: "deleted" } },
+        { status: "ok", value: { kind: "deleted" } },
+      ]);
+      expect(committedRoot(path)).toEqual(before);
+    });
+  });
+
+  // WF17: a link is the entry the document named. Removing it leaves what it
+  // pointed at, whether that is a file or a whole directory — the same claim
+  // HF19 makes about the host, on a filesystem with no host in it.
+  it("removes a logical symbolic link as the link, leaving what it names", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* mutateWorkspace(database, function* (workspace) {
+        yield* workspace.filesystem.writeFile("/real.txt", "kept");
+        yield* workspace.filesystem.mkdir("/tree", { recursive: true });
+        yield* workspace.filesystem.writeFile("/tree/inner.txt", "also kept");
+        yield* workspace.filesystem.symlink("/real.txt", "/link.txt");
+        yield* workspace.filesystem.symlink("/tree", "/mirror");
+      });
+
+      const run = yield* runDocument(
+        database,
+        ['<File.Delete path="link.txt" />', "", '<File.Delete path="mirror" />'].join("\n"),
+      );
+
+      expect(run.host.seen).toEqual([]);
+      expect((yield* recordedFileEffects(database)).map((effect) => effect.result)).toEqual([
+        { status: "ok", value: { kind: "deleted" } },
+        { status: "ok", value: { kind: "deleted" } },
+      ]);
+      expect(yield* workspaceText(database, "/real.txt")).toEqual("kept");
+      expect(yield* workspaceText(database, "/tree/inner.txt")).toEqual("also kept");
+    });
+  });
+
+  // WF18: the case that says the classification is the provider's rather than
+  // the filesystem's. The pinned DOFS `rm` removes an empty directory even when
+  // `recursive` is false, so a provider that delegated the decision would
+  // silently mean something different here than `<File.Delete>` means on a host.
+  it("refuses every directory, including the empty one DOFS would remove", function* () {
+    const root = yield* useStorageRoot();
+    const removed: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.mkdir("/empty", { recursive: true });
+          yield* workspace.filesystem.mkdir("/full", { recursive: true });
+          yield* workspace.filesystem.writeFile("/full/inner.txt", "kept");
+        });
+        const before = committedRoot(path);
+
+        const run = yield* runDocument(
+          database,
+          ['<File.Delete path="empty" />', "", '<File.Delete path="full" />'].join("\n"),
+        );
+
+        expect(run.host.seen).toEqual([]);
+        expect((yield* recordedFileEffects(database)).map((effect) => effect.result)).toEqual([
+          { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
+          { status: "ok", value: { kind: "refused", phase: "target", reason: "directory" } },
+        ]);
+        expect(String(run.output)).toContain('cannot delete "empty": it is a directory');
+
+        const empty = yield* transactWorkspaceRoots(database, function* (workspace) {
+          return yield* workspace.filesystem.stat("/empty");
+        });
+        expect(empty.ok).toEqual(true);
+        expect(yield* workspaceText(database, "/full/inner.txt")).toEqual("kept");
+        // A refusal publishes the failed effect against the root it started
+        // from: nothing was removed, so the Workspace the effect captured is
+        // the one it found.
+        expect(removed).toEqual([]);
+        expect(committedRoot(path)).toEqual(before);
+      },
+      { decorateFilesystem: countingRemoves(removed) },
+    );
+  });
+
+  // WF19: the delete half of WF6, and the one row where the two providers
+  // legitimately differ.
+  //
+  // An empty path never reaches the component: the schema declares a non-empty
+  // string, so prop validation refuses it and the document execution fails
+  // rather than printing. An absolute path and a `..` escape are decided from
+  // the path alone, so there is no effect to record.
+  //
+  // A parent link whose target leaves the Workspace root is the logical
+  // analogue of the host's escaping parent symlink, and it is not a lexical
+  // question here: the path is admissible, and what refuses it is DOFS
+  // declining to resolve a link target outside the root. So that one *does*
+  // publish an effect — a refusal, at resolution, against the unchanged root.
+  //
+  // None of the four removes anything, which the counter is what proves.
+  it("refuses an empty, absolute, escaping or unresolvable delete path", function* () {
+    const cases: Array<{ path: string; says: string; effects: number; link?: boolean }> = [
+      { path: "", says: "must NOT have fewer than 1 characters", effects: 0 },
+      { path: "/etc/passwd", says: "an absolute path is not accepted", effects: 0 },
+      { path: "../escape.txt", says: "resolves outside the working directory", effects: 0 },
+      {
+        path: "escape/secret.txt",
+        says: 'cannot resolve "escape/secret.txt": the filesystem operation failed.',
+        effects: 1,
+        link: true,
+      },
+    ];
+
+    for (const refused of cases) {
+      const root = yield* useStorageRoot();
+      const removed: string[] = [];
+      yield* withStorage(
+        root,
+        function* () {
+          const database = yield* createRun();
+          const path = runPath(root, database.record.runId);
+          if (refused.link === true) {
+            yield* mutateWorkspace(database, function* (workspace) {
+              yield* workspace.filesystem.symlink("../outside", "/escape");
+            });
+          }
+          const before = committedRoot(path);
+
+          expect(yield* reportedBy(database, `<File.Delete path="${refused.path}" />`)).toContain(
+            refused.says,
+          );
+
+          expect((yield* workspaceEvents(database)).length).toEqual(refused.effects);
+          expect(removed).toEqual([]);
+          expect(committedRoot(path)).toEqual(before);
+
+          if (refused.link === true) {
+            const link = yield* transactWorkspaceRoots(database, function* (workspace) {
+              return yield* workspace.filesystem.lstat("/escape");
+            });
+            expect(link.ok && link.value.kind).toEqual("symlink");
+            expect((yield* recordedFileEffects(database))[0]?.result).toEqual({
+              status: "ok",
+              value: { kind: "refused", phase: "resolution", reason: "operation-failed" },
+            });
+          }
+        },
+        { decorateFilesystem: countingRemoves(removed) },
+      );
+    }
+  });
+
+  // WF20: a failure after the removal and before publication. Nothing is
+  // journaled for it — it is not a documented condition — so the outer
+  // transaction rolls back and the run's file, root and history are the ones it
+  // started with.
+  it("rolls the removal back when publication fails after it", function* () {
+    const root = yield* useStorageRoot();
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const path = runPath(root, database.record.runId);
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/x.txt", "here");
+        });
+        const before = committedRoot(path);
+
+        const failure = yield* raised(runDocument(database, '<File.Delete path="x.txt" />'));
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(yield* workspaceText(database, "/x.txt")).toEqual("here");
+        expect(committedRoot(path)).toEqual(before);
+        // Nothing about the deletion was published, as a second connection sees
+        // it: the effect row and the root move in the same transaction, and
+        // this one rolled back.
+        expect(committedEffects(path, "delete", "/x.txt")).toEqual(0);
+        expect(yield* workspaceEvents(database)).toEqual([]);
+      },
+      { decorateFilesystem: faultAfterRemove("/x.txt") },
+    );
+  });
+
+  // WF21: a completed replay restores the outcome rather than performing it
+  // again. The target is privately recreated first, so a second removal would
+  // be visible as the file disappearing — and the removal counter says which of
+  // the two happened rather than leaving it to be inferred.
+  it("does not remove again when a completed replay restores its outcome", function* () {
+    const root = yield* useStorageRoot();
+    const removed: string[] = [];
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        const source = '<File.Delete path="x.txt" />';
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/x.txt", "first");
+        });
+
+        yield* runDocument(database, source);
+        expect(removed).toEqual(["/x.txt"]);
+        const recorded = yield* recordedFileEffects(database);
+        const before = yield* database.journal.readAll();
+
+        // Recreated through the private seam, without touching the retained
+        // delete record.
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/x.txt", "recreated");
+        });
+
+        const replayed = yield* replayDocument(database, source);
+
+        expect(replayed.host.seen).toEqual([]);
+        expect(removed).toEqual(["/x.txt"]);
+        expect(yield* workspaceText(database, "/x.txt")).toEqual("recreated");
+        expect((yield* database.journal.readAll()).length).toEqual(before.length);
+        expect(yield* recordedFileEffects(database)).toEqual(recorded);
+      },
+      { decorateFilesystem: countingRemoves(removed) },
+    );
+  });
+
+  // WF22: cancellation between the removal and the commit. Nothing is
+  // published, so the run's frontier is still the one it had — and the
+  // continuation, which has no record of a deletion, performs it once.
+  it("publishes no outcome for a cancelled delete, and the continuation performs it once", function* () {
+    const root = yield* useStorageRoot();
+    const source = '<File.Delete path="x.txt" />';
+    let path = "";
+    let before: unknown;
+
+    yield* withStorage(
+      root,
+      function* () {
+        const database = yield* createRun();
+        path = runPath(root, database.record.runId);
+        yield* mutateWorkspace(database, function* (workspace) {
+          yield* workspace.filesystem.writeFile("/x.txt", "here");
+        });
+        before = committedRoot(path);
+
+        yield* race([raised(runDocument(database, source)), sleep(500)]);
+
+        // The mutation the halt interrupted was never published: the file, the
+        // root and the file-effect history are all the ones it started with.
+        expect(yield* workspaceText(database, "/x.txt")).toEqual("here");
+        expect(committedRoot(path)).toEqual(before);
+        expect(committedEffects(path, "delete", "/x.txt")).toEqual(0);
+        expect(yield* workspaceEvents(database)).toEqual([]);
+      },
+      { decorateFilesystem: suspendingRemove("/x.txt") },
+    );
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = yield* runDocument(database, source);
+
+      expect(run.host.seen).toEqual([]);
+      const recorded = yield* recordedFileEffects(database);
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]?.result).toEqual({ status: "ok", value: { kind: "deleted" } });
+      const gone = yield* transactWorkspaceRoots(database, function* (workspace) {
+        return yield* workspace.filesystem.stat("/x.txt");
+      });
+      expect(gone.ok).toEqual(false);
+      expect(committedRoot(path)).not.toEqual(before);
+      // Performed once, by the continuation, and recorded once.
+      expect(committedEffects(path, "delete", "/x.txt")).toEqual(1);
     });
   });
 });

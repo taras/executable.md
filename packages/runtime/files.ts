@@ -13,8 +13,10 @@
  * replacement — admission, resolution, target classification, parent creation,
  * and commit — rather than a sequence a caller assembles, because assembling it
  * from outside is what would let a path admitted by one provider be used by
- * another. `API.Fs` remains the low-level host surface a host adapter is built
- * on; it is not this boundary.
+ * another. `deleteFile` is the same kind of whole act, and every operation here
+ * is mandatory: a provider with nothing to offer for one does not omit it and
+ * leave a document reaching the host instead. `API.Fs` remains the low-level
+ * host surface a host adapter is built on; it is not this boundary.
  *
  * `checkFilePath` is the one exception, and it is deliberately weak: pure path
  * arithmetic, no filesystem access, and nothing usable comes back — no path, no
@@ -114,11 +116,12 @@ const REASONS: readonly FilesReason[] = [
 ];
 
 /** The operations whose failure carries no commit outcome. */
-export type FilesOperation = "check-file-path" | "read" | "glob" | "temporary-directory";
+export type FilesOperation = "check-file-path" | "read" | "delete" | "glob" | "temporary-directory";
 
 const OPERATIONS: readonly FilesOperation[] = [
   "check-file-path",
   "read",
+  "delete",
   "glob",
   "temporary-directory",
 ];
@@ -230,6 +233,17 @@ export interface FilesHandler {
   checkFilePath(input: FilePathInput): Operation<Result<void>>;
   readTextFile(input: FilePathInput): Operation<Result<string>>;
   writeTextFile(input: FileWriteInput): Operation<Result<FileWriteSuccess>>;
+  /**
+   * Remove one entry this path names, and answer with nothing.
+   *
+   * Mandatory, like every other operation here: a provider that has no
+   * deletion to offer does not omit it and fall through to a host. Success
+   * carries no value at all — there is no receipt, no path, and no record of
+   * whether anything was there — because a document that asked for a file to be
+   * gone has been answered by its absence. A path that already names nothing is
+   * that same success.
+   */
+  deleteFile(input: FilePathInput): Operation<Result<void>>;
   /** Sorted, deduplicated, POSIX-separated paths of the regular files that match. */
   globFiles(input: GlobInput): Operation<Result<string[]>>;
   /**
@@ -806,6 +820,10 @@ export const Files: Api<FilesHandler> = createApi<FilesHandler>("executablemd.ru
   },
   // deno-lint-ignore require-yield
   *writeTextFile(_input: FileWriteInput): Operation<Result<FileWriteSuccess>> {
+    throw new FilesProviderUnavailableError();
+  },
+  // deno-lint-ignore require-yield
+  *deleteFile(_input: FilePathInput): Operation<Result<void>> {
     throw new FilesProviderUnavailableError();
   },
   // deno-lint-ignore require-yield

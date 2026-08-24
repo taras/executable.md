@@ -123,8 +123,8 @@ what lets one document mean the same thing in two environments.
 
 **Document data** — the files a document names in its own text — goes through
 `API.Files`, a contextual Api of whole semantic operations. `<File>` (§6.13),
-`<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only that Api, hold no host
-path, and never learn which provider answered. `xmd run` installs a host
+`<File.Delete>` (§6.13.1), `<Glob>` (§6.14), and `<TempDir>` (§6.11) speak only
+that Api, hold no host path, and never learn which provider answered. `xmd run` installs a host
 provider that resolves those paths in the caller's filesystem; a workflow run
 installs one whose paths name entries in a logical filesystem the run owns.
 The Api has **no host default**: with no provider installed, every operation
@@ -2675,8 +2675,8 @@ nothing. A non-string is not an error — it is a value with no destination.
 #### The components core supplies
 
 Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
-`<SafeParse>` (§6.12), `<File>` (§6.13), `<Glob>` (§6.14), and `<Fetch>`
-(§6.18). Each is already
+`<SafeParse>` (§6.12), `<File>` (§6.13), `<File.Delete>` (§6.13.1), `<Glob>`
+(§6.14), and `<Fetch>` (§6.18). Each is already
 in the module graph, so it ships in the compiled binary and every published
 package without a search path or a bundling step, and a document invokes it with
 no `--component-dir`.
@@ -3744,10 +3744,13 @@ own account, and may answer differently on each call. A caller that reads it and
 then invokes something which reads it again has therefore verified nothing —
 the two are separate dispatches.
 
-Only the invocation's own `hasContent()` (§5.6) is authoritative about the
-authored form. `<File>` (§6.13) and the workflow package's `<Dir>` read it. A
-component that reads this contextual operation has no authored-form guarantee:
-what it receives is whatever the chain answered for that call.
+Neither this operation nor the method on the invocation selects an effect. A
+component whose forms do different things declares them, and canonical
+invocation-form dispatch (§5.6) enters the one the scan recorded — `<File>`
+(§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and the
+workflow package's `<Dir>` is paired only. A component that reads this
+contextual operation has no authored-form guarantee at all: what it receives is
+whatever the chain answered for that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
@@ -3875,8 +3878,8 @@ rebind, and a contextual Api answer is composed by whoever installed a handler
 (Tier CIV). A component that needs nothing from it declares one parameter and
 never sees it.
 
-It carries one readable fact: `hasContent(): boolean`, the authored form of the
-element this invocation is of. `<C />` reports `false`; `<C>…</C>` and `<C></C>`
+It carries one readable fact, for observation: `hasContent(): boolean`, the
+authored form of the element this invocation is of. `<C />` reports `false`; `<C>…</C>` and `<C></C>`
 report `true`. It is synchronous and immutable, it projects no content and
 suspends on nothing, and reading it neither spends the invocation's durable
 identity nor changes its lifetime, frame, projection or domain.
@@ -3887,13 +3890,77 @@ state inside canonical core, reachable only through the object the engine minted
 and handed over — which is what makes it usable where the contextual
 `hasContent()` of §5.5 is not. Because the method travels on the genuine
 invocation, a component evaluated through a separately loaded copy calls what it
-received rather than a helper of its own copy, and a component compiled against
-a core that predates the method gets no fallback to the contextual answer: it
-refuses instead, before reaching a provider.
+received rather than a helper of its own copy.
+
+**Calling the method is not authenticating the object.** A component is handed
+whatever its caller passes it, so a wrapper can pass an object literal carrying
+a method of that name; the property is there, it is a function, and it returns a
+boolean. Every check expressible against the shape is one a forger satisfies by
+construction, because the shape is what a forger copies.
+
+Nor can a component authenticate it. A reader that recognized an invocation by
+private state would recognize only the copy of core it was imported with, and a
+component can be loaded from disk beside its own copy while the engine that
+minted the invocation is another — the compiled CLI resolving `--component-dir`
+is exactly that. So the method stays observation, and **no component reads the
+form to select an effect at all**.
+
+What decides instead is **invocation-form dispatch** (§5.6): a form-sensitive
+component declares which bodies it has and which form each answers, canonical
+core turns that declaration into an engine-owned dispatcher, and the dispatcher
+enters a body only for the form the scan recorded. The declaration is input to
+canonical definition construction; the dispatcher is the authority.
+
+So `invocation.hasContent()` remains what a component reading it may rely on —
+the canonical fact on a genuine invocation, and the only thing a component that
+imports nothing at all has — and it is not effect authority. A component that
+branches on it decides how to *render*.
 
 Implementing the method does not make an object an invocation. Durable identity
 is still the private field a claimant recognizes, so a structural look-alike
-answering `hasContent()` claims nothing.
+answering `hasContent()` claims nothing, and reaches no form-specific body.
+
+#### Invocation-form dispatch
+
+A **form-sensitive** function component declares, through canonical definition
+construction, which bodies it has and which authored form each answers. There
+are four behaviors: form-insensitive, self-closing only, paired only, and two
+distinct bodies selected by form. A declaration is input; it is not authority.
+
+Canonical core turns it into an engine-owned **dispatcher**, and the definition
+exposes that. The form-specific bodies stay behind it and never travel on a
+`Component.importComponent` answer, so the only route into one is a call the
+dispatcher admits. It admits a call when every one of these holds:
+
+- the invocation is an object **this** copy of core minted, recognized by the
+  private field a claimant is recognized by;
+- the issuance is live and its frame is the one running now, so an invocation
+  kept from a sibling, from a finished element, or from a concurrent invocation
+  of the same component answers nothing;
+- canonical resolution selected **this** dispatcher for the import that led
+  here, so a dispatcher a handler retained and answered with reaches no body.
+
+Otherwise it raises the refusal the component declared — the component's own
+error, so moving the decision ahead of the body does not change whose failure it
+is or how it is reported.
+
+Construction happens in the copy performing the execution, never in the
+component module. A repository `.ts` component may export a declaration and is
+wrapped by the executing copy; one that exports none is form-insensitive and
+reaches expansion exactly as before. That is what makes a component loaded from
+disk behave the same as the embedded default, which private-state authentication
+inside the component cannot do.
+
+Middleware may still observe an import, delegate it, refuse it by throwing, and
+forward the genuine invocation, and it may still answer with an implementation
+of its own under the open-import contract. What it cannot do is put a fabricated
+invocation, another element's issuance, or a dispatcher nothing selected here
+into a canonical form-specific body.
+
+Component search precedence is unchanged: a repository component still shadows a
+registered default and a registered default still shadows core's own. The form
+contract attaches to the definition canonical resolution selected, never to the
+authored name.
 
 The identity behind it is answered by a
 **claimant**, and a claimant reaches only one place: the factory a trusted host
@@ -6545,6 +6612,166 @@ directory's replay refusal depends on (§6.11).
 
 ---
 
+### 6.13.1 Removing a file: `<File.Delete>`
+
+A document that wrote a file can also stop it existing. `<File.Delete>` is
+core's own component (§5.3), takes one required non-empty `path` resolved
+against the contextual `Env.cwd`, and is written self-closing:
+
+```md
+<File.Delete path="obsolete.md" />
+```
+
+It composes with `<TempDir>` (§6.11) and with any component that rebinds
+`Env.cwd` on exactly the terms `<File>` does, and it makes no filesystem call of
+its own: it reads `Env.cwd` and makes one `API.Files` call, `deleteFile`.
+
+#### One form, decided by shape
+
+There is only the self-closing form. Any paired spelling is refused —
+`<File.Delete path="x">…</File.Delete>` and `<File.Delete path="x"></File.Delete>`
+alike, because what decides it is the **shape** the author wrote rather than
+what the content would render. Content that renders nothing is still content
+somebody wrote meaning something, and this component does not do it.
+
+That shape is not this component's to read. It declares itself self-closing only
+and canonical dispatch enters its body only for that form (§5.6). `Component.hasContent()` (§5.5) answers the same question through the
+composable chain, where a handler installed anywhere outside the invocation
+answers ahead of the engine and may answer differently on each call. This
+component selects an *effect* rather than a rendering, and the effect is
+irreversible in one direction: an answer of "self-closing" for a paired element
+would turn a document that wrote children into one that removed the path they
+were written beside. Neither weaker answer takes part — not the contextual
+chain, and not `invocation.hasContent()`, which reports whatever object a caller
+handed over. A call arriving without an invocation this engine issued and
+selected this dispatcher for is refused rather than resolved to either form,
+because guessing self-closing there would be guessing deletion.
+
+That refusal happens before `Env.cwd` is read and before the provider is
+reached, so a mistaken paired spelling costs the document nothing.
+
+#### What it renders, and what `as` captures
+
+Nothing, and the empty string. There is no output, no path, no receipt, and no
+`returns` declaration. The ordinary language rule for `as` stays in force: it
+captures the empty string this component returns and renders nothing, exactly
+as it does for any component that returns text.
+
+That is a contract rather than an omission. A document that also learned
+*whether something had been there* could branch on it, and that is a different
+question about the filesystem — one `<File>` and `<Glob>` already answer.
+
+#### What is removed
+
+One entry, and only these:
+
+- A **regular file** is removed.
+- A **final symbolic link** is removed as the link. Its target is neither
+  followed nor changed, whether that target is inside the working directory or
+  outside it, and whether or not it exists at all.
+- A path that **names nothing** is a successful no-op. Deleting the same path
+  twice succeeds twice: absence is what the document asked for, so arriving
+  there is not a condition to report.
+- Every **directory** is refused, including an empty one, and refused before
+  anything is attempted.
+- Anything else — a socket, a device, a named pipe — is refused as not a
+  regular file.
+
+There is no recursion, no glob, no multiple paths, no force, no trash, and no
+restore handle. Removing a directory tree is not a spelling of this component.
+
+#### Containment
+
+Everything `<File.Delete>` touches stays inside `Env.cwd`, on the same terms
+§6.13 states. An empty path, an absolute path, and a `..` escape are refused
+lexically, before any filesystem call; a path leading through a symlink out of
+the working directory is refused once resolution can see it.
+
+Resolution differs from a read's or a write's in exactly one way, and the
+difference is the whole reason a deletion is contained at all: only the
+**parent** prefix is resolved, and the authored final segment is put back onto
+it unresolved. Resolving the final segment would follow a link and remove
+whatever it named; not resolving the parent would miss a directory link leading
+out. A working directory that names itself — `.`, or a path normalizing onto it
+— is classified directly rather than through its parent, and fails as the
+directory it is.
+
+Under a **workflow run** the same rules hold against the run's logical
+Workspace, where there is no outside to reach: the path arithmetic is the
+provider's, the link is a logical one, and the entry removed is an entry in the
+run's own filesystem.
+
+#### The provider operation
+
+`deleteFile` is one semantic call, like `readTextFile` and `writeTextFile`. It
+owns admission, resolution, target classification, and the removal together,
+and it is **mandatory**: a provider does not omit it and let a document reach
+the host instead. Its success is Effection's `Unit` — `{ ok: true }`, carrying
+no value at all — which is what makes "there is no receipt" a property of the
+Api rather than a convention of the component.
+
+A success container that carries a value it should not, and a failure container
+that will not say what failed, are both provider-contract failures (§6.13's
+rules apply unchanged). A readable failure whose reason the vocabulary does not
+recognize is the generic printed sentence, as for every other non-write
+operation.
+
+The removal is the operation's **single commit point**. A failure or a
+cancellation before it changes nothing; once the platform call has begun it is
+not retrospectively undone, and cancellation produces no Result and no printed
+error. Under a workflow run the removal, the resulting Workspace root, and the
+filtered journal result publish in one transaction — a documented refusal rolls
+its mutation back and publishes the failed effect on the unchanged root, and an
+infrastructure failure or a cancellation rolls the whole transaction back and
+publishes nothing.
+
+Nothing is acquired, so there is nothing to clean up: deletion creates no
+temporary and registers no destructor.
+
+#### Printed errors
+
+A printed error names the path the document wrote and nothing else, selecting
+its phrase from the fixed vocabulary of §6.13. A rejected absolute path is not
+echoed — the reason it was rejected is that it named somewhere else — and the
+destination a link pointed at never crosses the provider boundary.
+
+```text
+cannot delete "reports": it is a directory, not a file.
+"escape/notes.md" leads through a symlink outside the working directory.
+```
+
+The component carries `<File>`'s failure declaration: an ordinary filesystem
+condition is a printed error owned by the component, and a provider that is
+absent, refuses an operation, or breaks its contract stays fatal (§6.13, *When
+the provider is the problem*).
+
+#### Replay
+
+Under `xmd run` nothing is journaled, so §6.13's replay rules apply unchanged:
+a completed journal restores the result without expanding the component, and a
+partial one reaches it and deletes again — which, absence being success, is the
+same answer.
+
+Under a workflow run the deletion is one durable effect. A completed replay
+restores its recorded outcome and removes nothing a second time, even where the
+path exists again; a partial replay continues live from the retained Workspace
+frontier and performs the first unrecorded deletion once.
+
+#### Runtime portability
+
+The component behaves identically under Deno, Node, Bun, and the compiled
+binary, and on every release target. Raw platform behavior is not the contract:
+a nonrecursive removal of an empty directory reports `ERR_FS_EISDIR` under Node
+and Deno and `EFAULT` under Bun, and the pinned Workspace filesystem removes one
+outright. Classifying the target before removing it is what makes those
+differences invisible.
+
+Generated XMD does not receive `<File.Delete>`: an Agent-generated fragment
+cannot invoke it, and no pinned identity names it (workflow-workspace-spec
+§8.4).
+
+---
+
 ### 6.14 Finding files: `<Glob>`
 
 A document decides what to work on by looking at what is there. `<Glob>` is
@@ -8774,7 +9001,26 @@ visible warning blocks, gather into a separate error report).
 | FL27 | Colocated document | `xmd test packages/core/src/components/File.test.md` covers both forms, `as` capture, nested parents, replacement, exact content for both authoring shapes, a leading-dots name, and isolation between temporary directories — with no search path and no JavaScript |
 | FL34–FL35 | The authored form decides the effect | A self-closing `<File />` reads and never writes, and a paired `<File>` writes and never reads, under a contextual `hasContent` handler installed outside the invocation that lies consistently *and* under one that answers `[false, true]` / `[true, false]`. A sibling reporting the contextual answer proves the handler live; the provider calls and the file bytes prove the element followed how it was written (§5.6) |
 | FL36 | An honest chain | With no handler interfering, both forms reach the same providers and produce the same bytes |
-| FL37 | No contextual fallback | The definition called without the invocation the engine issued refuses before reaching a provider, leaving the file unchanged |
+| FL37 | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select the write branch — refuses before reaching a provider, leaving the file unchanged; there is no contextual fallback either |
+
+### Tier FD — `<File.Delete>`
+
+Driven through `execute()` against the real host provider, so what each row
+measures is the whole path from an authored string to a printed sentence. The
+structural failure data behind those sentences is Tier HF's, and provider
+absence is Tier FF's.
+
+| # | Test | Verify |
+|---|------|--------|
+| FD1 | The ordinary deletion | One regular file is removed, nothing is rendered in its place, and `as` captures the empty string |
+| FD2 | Absence is success | Deleting a path that names nothing succeeds, twice, with no printed error |
+| FD3 | Paired content | Paired-*empty* content is refused on shape, before `Env.cwd` is read and before the provider is reached; the same watchers on the self-closing form record both calls, so the empty list is a refusal rather than an unwired spy |
+| FD3b | The form is the invocation's | Under a contextual `hasContent` handler that always denies content, and under one that answers true then false, both paired spellings still refuse and both targets keep their bytes; a `<Says />` beside them renders the chain's answer, so the handler is demonstrably live and lying, and the self-closing control in the same document still deletes |
+| FD3c | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select deletion — refuses before `Env.cwd` and before the provider, and the target keeps its bytes |
+| FD3d | The compiled two-copy path | The compiled binary reads, writes and deletes the same way with its embedded defaults and with core's own component sources on the search path, where the implementation is a second loaded copy; the paired refusal still holds there |
+| FD4 | The contextual directory | A nested `Env.cwd` selects the inner file of a shared name, the outer one is untouched, and the element after the region resolves against the restored directory |
+| FD5 | Every refusal sentence | An absolute path, a lexical escape, an escaping parent link, and a directory each produce their own sentence, name no absolute path, and reach no low-level removal — proven against an admitted deletion that does |
+| FD6 | A provider refusal | A structural `Err` is this component's own printed error, the sibling after it runs, and the target is unchanged |
 
 ### Tier FA — Fatal error discovery
 
@@ -8805,6 +9051,8 @@ visible warning blocks, gather into a separate error report).
 | FA26 | Cycles carrying a Files failure | A cyclic teardown graph and a self-caused content failure both terminate and still find it |
 | FA27 | A separately loaded runtime copy | A failure with no shared class identity is recognized by its structural tag; an object carrying a different tag is not |
 | FA28 | Decided by output | Only an output-mode `DocumentationError` is; a `throw` decision, every durability kind, and every Files kind are not |
+| LC1–LC2 | A bundled second copy | A failure built by a separately bundled `files.ts` is recognized and rethrown by identity, and recognition crosses in both directions |
+| LC3 | A payload-free outcome across copies | A delete failure built by the other copy is rebuilt from validated parts; its `Unit` success is accepted; a success carrying a value and a failure carrying none are each the fixed `protocol` invariant, with nothing planted escaping |
 
 ### Tier HF — The host Files provider
 
@@ -8823,7 +9071,7 @@ platform's.
 | HF6 | Escapes | A link out is refused at resolution for both forms, the destination is not named, and the outside file is unchanged |
 | HF7 | Internal links | Followed to the file they name; the link stays a link |
 | HF8 | Dangling links | Replaced rather than followed, and nothing is created where the link pointed |
-| HF9 | The observer contract | The private phases are announced in order, once each, for write, read, and search |
+| HF9 | The observer contract | The private phases are announced in order, once each, for write, read, search, and deletion |
 | HF10, HF10b | Where the guarantee stops | A parent replaced synchronously between resolution and use is written through, and a target replaced between resolution and access is read through — the documented weakness, with atomicity still holding |
 | HF11 | The commit is one event | A fault before and after `next()` report the same unknown outcome, and one of the two runs really did commit |
 | HF12 | Cancellation | No Result is produced and no temporary is left |
@@ -8832,14 +9080,20 @@ platform's.
 | HF14 | Absence | Every operation throws provider-unavailable with the fixed diagnostic and no cause, and no low-level call is made |
 | HF15 | Installation | `useHostFiles()` installs beneath ordinary middleware, which can still wrap it |
 | HF16 | Directory links on every platform | A junction on Windows and a directory symlink elsewhere are refused on the same terms |
-| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims and prints every one it checked |
+| HF17 | The compiled artifact | `scripts/files-contract-probe.ts`, compiled and run on each of the five targets, asserts the contract's observable claims — admission, the write round trip, containment, the search, temporary directories, and deletion's regular file, absent path, final link, directory and containment behavior — and prints every one it checked |
+| HF18 | Deletion's shape | A regular file is removed, the success carries no value at all, and a second deletion of the same path is the same success |
+| HF19 | Final links | An inward link, an outward file link, a dangling link, and an outward directory link are each removed as the link, and nothing on the far side of any of them moves |
+| HF20 | Directories | An empty directory, a full one, `.`, and a path normalizing onto the working directory are each refused at the target phase; so is `.` under a working directory reached through a link, which is what separates classifying the directory from resolving its parent |
+| HF21 | Containment before removal | Empty, absolute, lexically escaping, and parent-link-escaping paths are each refused with their own phase and reason and reach no low-level removal — proven against an admitted deletion that does |
+| HF22 | Platform failures | A refused removal is a structured `Err` carrying a reason and nothing else; one that reports the path already gone is the same success absence is |
+| HF23 | Cancellation | A halt before the removal produces no Result, leaves the entry as it was, and leaves nothing behind — deletion acquires nothing |
 
 ### Tier FF — Files infrastructure failure
 
 | # | Test | Verify |
 |---|------|--------|
 | FF1 | Absence before children | A write with no provider fails the execution, expands no children, renders nothing, reaches no `API.Fs` call, and stops the following sibling |
-| FF2 | Every other form | Read, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
+| FF2 | Every other form | Read, `<File.Delete>`, `<Glob>`, and `<TempDir>` each stop at their first provider call, and nothing after them expands |
 | FF3 | A refused operation | Denial is fatal, carries its own fixed diagnostic, and renders no content |
 | FF4 | The check authorizes nothing | A refused check makes exactly one provider call; the children never run and the document carries on |
 | FF5 | Malformed write data | A phase and target that contradict each other, a reason outside the vocabulary, and an undescribable success are all fatal `protocol` invariants, and the category is not interpolated |
@@ -9365,6 +9619,14 @@ Defined in [Workflow runs](./workflow-spec.md) §10.
 | WF12 | Discarded partial mutation | A write that refuses after creating two parent directories leaves neither behind, leaves what the Workspace already held untouched, records the sanitized refusal, and does not stop the next effect from committing |
 | WF13 | Unreadable history | A recorded outcome carrying a member its variant does not have, a member of the wrong type, or a phase or reason the operation's vocabulary does not hold, is refused as exactly the cause-free `protocol` provider invariant — nothing the record held is repeated back, and no later file effect is performed |
 | WF14 | The transaction filesystem is the provider's | Contextual middleware installed from inside the document — including descriptors rebuilt for every name a filesystem seam has used — neither observes nor replaces the filesystem a Workspace transaction hands its body |
+| WF15 | Atomic deletion | `<File.Delete>` removes one file and records one `delete` effect whose outcome is `{ kind: "deleted" }`; the current root, the newest journal row's root and the published effect agree, and a neighbouring file is untouched |
+| WF16 | Deleting nothing | Two deletions of a path that names nothing both record the same successful outcome, and the run's committed root is the one it started with |
+| WF17 | Logical links | A link to a file and a link to a directory are each removed as the link, and what either named is still there |
+| WF18 | Every directory | An empty directory and a full one are both refused at the target phase, with no removal performed and the committed root unchanged — the row that discriminates the pinned filesystem, whose nonrecursive `rm` removes an empty directory |
+| WF19 | Paths that name nothing removable | An empty path is refused by prop validation before the component runs; an absolute path and a `..` escape are refused lexically with no effect recorded; a parent link whose target leaves the Workspace root is refused at resolution and publishes that refusal against the unchanged root. None performs a removal |
+| WF20 | Rollback after the removal | An infrastructure failure between the removal and publication rolls the outer transaction back: the file, the committed root and the committed effect history are all the ones the run started with |
+| WF21 | Completed replay | A completed deletion restores its outcome without a second low-level removal, even where the path was privately recreated afterwards, and appends nothing |
+| WF22 | Cancelled deletion | A halt between the removal and the commit publishes no outcome and moves no root; the continuation, which has no record of it, performs and records the deletion exactly once |
 
 ### Tier EP — The execution protocol
 
@@ -9636,7 +9898,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.
 | IS3 | Self-closing has none | `<C />` reports none |
 | IS4 | Asking does not project | A component that only calls `hasContent()` never expands the invocation content it reports on |
 | IS5 | Compiled binary, end to end | The guide's lifetime narrative, run by `xmd test` with no JavaScript in the document |
-| IS6 | Contextual, and composable | The operation stays exported, delegable and overridable; what it may not decide is an effect-selecting branch, which reads `invocation.hasContent()` instead (§5.6) |
+| IS6 | Contextual, and composable | The operation stays exported, delegable and overridable, and both it and `invocation.hasContent()` stay observation — cross-copy readable, and neither one effect authority. What decides an effect-selecting branch is engine-owned invocation-form dispatch (§5.6), which no handler and no object a caller passes takes part in |
 
 ### Tier RT — Retained resources
 
@@ -10110,6 +10372,7 @@ Defined in §5.6, with the selection rule in §5.3.
 | CIV19 | The authored form | The invocation reports `false` for `<C />` and `true` for `<C>…</C>` and `<C></C>`, agreeing with the contextual answer while nothing interferes; asking it twice expands no content and runs no child |
 | CIV20 | Reading costs nothing | Reading the form, twice, leaves the durable identity unspent — the claim after it still succeeds |
 | CIV21 | Owner-kept | A repository component that imports nothing reads the canonical form from the object it received, for both authored forms; the fact appears on no definition a handler holding one can read |
+| CIV22 | Only the engine's own invocation enters a body | The dispatcher enters a form-specific body for a genuine, live, selected invocation of the form it answers, and refuses every other call before the body: a structural look-alike implementing `hasContent()`, a descriptor-for-descriptor clone, an object built on the prototype, an issuance canonical resolution selected nothing for, one selected for another dispatcher, and a closed one. Each look-alike's own `hasContent()` answers plausibly, which is why none of them is asked |
 
 ### Tier NEX — Nested document executions (`specs/testing-spec.md`)
 

@@ -17,10 +17,10 @@
  *   deno compile --allow-all --output <path> scripts/files-contract-probe.ts
  */
 
-import { ensureDir, exists } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile, writeTextFile } from "@effectionx/fs";
 import { exit, main, scoped, until } from "effection";
 import type { Result } from "effection";
-import { realpath, symlink } from "node:fs/promises";
+import { lstat, realpath, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { useTempDirectory } from "./lib/temp-directory.ts";
 import process from "node:process";
@@ -149,6 +149,54 @@ await main(function* () {
     "the search returns POSIX-relative files",
     JSON.stringify(valueOf(found)) === '["nested/notes.md"]',
   );
+
+  // Deletion. Every claim below is per-platform: what `lstat` reports for a
+  // link, what a nonrecursive removal of a directory does, and how a path
+  // arrives at the removal at all are the host's, and they differ between the
+  // runtimes and operating systems this binary ships to.
+  yield* writeTextFile(join(workspace, "doomed.md"), "obsolete");
+  check(
+    "a regular file is deleted",
+    (yield* Files.operations.deleteFile({ cwd: workspace, path: "doomed.md" })).ok &&
+      !(yield* exists(join(workspace, "doomed.md"))),
+  );
+  check(
+    "deleting a path that names nothing succeeds",
+    (yield* Files.operations.deleteFile({ cwd: workspace, path: "doomed.md" })).ok,
+  );
+
+  yield* writeTextFile(join(outside, "secret.txt"), "SECRET");
+  yield* until(symlink(join(outside, "secret.txt"), join(workspace, "outward")));
+  check(
+    "a final symbolic link is deleted",
+    (yield* Files.operations.deleteFile({ cwd: workspace, path: "outward" })).ok &&
+      !(yield* exists(join(workspace, "outward"))),
+  );
+  check(
+    "the link's target is neither followed nor changed",
+    (yield* readTextFile(join(outside, "secret.txt"))) === "SECRET",
+  );
+
+  yield* ensureDir(join(workspace, "held"));
+  check(
+    "an empty directory is refused",
+    reasonOf(yield* Files.operations.deleteFile({ cwd: workspace, path: "held" })) === "directory",
+  );
+  check(
+    "the working directory itself is refused as a directory",
+    reasonOf(yield* Files.operations.deleteFile({ cwd: workspace, path: "." })) === "directory",
+  );
+  check(
+    "the refused directory remains",
+    (yield* until(lstat(join(workspace, "held")))).isDirectory(),
+  );
+
+  check(
+    "a deletion through a directory link out of the working directory is refused",
+    reasonOf(yield* Files.operations.deleteFile({ cwd: workspace, path: "escape/secret.txt" })) ===
+      "resolved-escape",
+  );
+  check("nothing beyond that link was removed", yield* exists(join(outside, "secret.txt")));
 
   let temporary = "";
   yield* scoped(function* () {

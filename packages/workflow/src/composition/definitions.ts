@@ -11,11 +11,23 @@
  * read this, and the generated evaluator never consults the registration.
  */
 
+import { formDispatcher } from "@executablemd/core";
 import type { FunctionComponentDefinition } from "@executablemd/core";
-import Dir, { props as dirProps } from "./components/Dir.ts";
+import { form as dirForm, props as dirProps } from "./components/Dir.ts";
 
 export const COMPOSITION_ORIGIN = "@executablemd/workflow/composition";
 
+/**
+ * The dispatcher both consumers share, built once.
+ *
+ * `<Dir>` is paired-only, so its definition is an engine-owned dispatcher
+ * rather than the body itself, and canonical core builds it from the
+ * declaration the component exports. Built once here for the same reason the
+ * schema is read once: the registration and the pinned identity must be the
+ * same definition, and two dispatchers would be two components.
+ */
+const fn = formDispatcher(dirForm);
+
 export function dirDefinition(): FunctionComponentDefinition {
-  return { kind: "function", name: "Dir", props: dirProps, fn: Dir };
+  return { kind: "function", name: "Dir", props: dirProps, fn };
 }

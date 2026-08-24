@@ -76,7 +76,7 @@ import {
 import type { DocumentOutline, DocumentTargetFailure } from "./document-targets.ts";
 import { parseReturnsDeclaration } from "./frontmatter.ts";
 import {
-  expandSegments,
+  expandSegmentsWithin,
   expandBody,
   bodyHasOutput,
   isTopLevelReturn,
@@ -120,7 +120,12 @@ import {
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
 import { registerComponents } from "./components/registration.ts";
-import { installIdentities } from "./invocation-identity.ts";
+import {
+  formDispatcher,
+  installFormSelections,
+  installIdentities,
+  parseFormDeclaration,
+} from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import type { ExpansionAuthority } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
@@ -448,8 +453,14 @@ function* durableImportComponent(
       throw new Error(`Function component "${name}" at ${path} did not load a module`);
     }
 
+    // Read before the default export, because a declaration carries the bodies
+    // for a component that has more than one. What it produces is a dispatcher
+    // this copy of core built — the copy performing the execution — so a
+    // component loaded from disk beside its own copy of core is still
+    // authenticated against the invocation this engine minted.
+    const declared = parseFormDeclaration("form" in mod ? mod.form : undefined);
     const defaultExport = "default" in mod ? mod.default : undefined;
-    if (!isFunctionComponent(defaultExport)) {
+    if (declared === undefined && !isFunctionComponent(defaultExport)) {
       throw new Error(
         `Function component "${name}" at ${path} must have a default export that is a generator function`,
       );
@@ -466,7 +477,7 @@ function* durableImportComponent(
       kind: "function",
       name,
       props,
-      fn: defaultExport,
+      fn: declared === undefined ? defaultExport : formDispatcher(declared),
     };
 
     if ("returns" in mod && mod.returns !== undefined) {
@@ -1596,7 +1607,7 @@ function* runValueRoot(
         produced = { value: yield* resolveReturnValue("__root__", returns, segment) };
         continue;
       }
-      const expanded = yield* expandSegments(
+      const expanded = yield* expandSegmentsWithin(
         [segment],
         root.meta,
         validatedProps,
@@ -1774,7 +1785,7 @@ function* documentWorkflow(
     // has still handed over what it rendered — the root emits that before the
     // failure is reported, exactly as a buffered root does.
     for (const segment of root.bodySegments) {
-      yield* expandSegments(
+      yield* expandSegmentsWithin(
         [segment],
         root.meta,
         validatedProps,
@@ -1999,9 +2010,14 @@ function* executeDocument(
       // The domains stop answering with the execution that minted them, so an
       // implementation kept past teardown names nothing.
       yield* ensure(() => identity.identities.revoke());
+      // This execution's own selection frames, held here and handed to core's
+      // expansion by value. Nothing a document, a component or middleware can
+      // name reaches them.
+      const forms = installFormSelections();
       const authority: ExpansionAuthority = {
         ...(bundle === undefined ? {} : { imports: bundle }),
         identities: identity.identities,
+        forms,
       };
 
       // Install the document's runtime Component providers before durableRun
@@ -2027,6 +2043,11 @@ function* executeDocument(
             // nothing a handler above this can hold (`invocation-identity.ts`).
             if (definition.kind === "function") {
               identity.identities.select(name, definition);
+              // The same record, for the other thing canonical resolution
+              // decides here: which dispatcher — if any — this import selected.
+              // A dispatcher a handler kept from another import reaches no body
+              // without it.
+              forms.select(name, definition);
             }
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does

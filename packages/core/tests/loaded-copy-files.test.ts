@@ -22,16 +22,21 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { ensure, resource, until } from "effection";
-import type { Operation } from "effection";
+import { ensure, Err, resource, scoped, until } from "effection";
+import type { Operation, Result } from "effection";
 import { exec } from "@effectionx/process";
 import { rm } from "@effectionx/fs";
 import {
+  FILES_ERROR,
+  Files,
+  FilesError,
   FilesInvariantError,
   FilesProviderUnavailableError,
+  parseFilesFailure,
   parseFilesFatal,
 } from "@executablemd/runtime";
 import { InvocationTeardownError } from "../src/invocation.ts";
+import { deleteFile } from "../src/files.ts";
 import { DocumentationError, fatalCause, filesFatalFailure } from "../src/errors.ts";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -47,6 +52,7 @@ interface LoadedCopy {
   FilesProviderUnavailableError: new () => Error;
   FilesInvariantError: new (category: string) => Error;
   parseFilesFatal: (error: unknown) => unknown;
+  filesFailure: (input: { operation: string; phase: string; reason: string }) => Error;
 }
 
 function isLoadedCopy(value: unknown): value is LoadedCopy {
@@ -57,7 +63,8 @@ function isLoadedCopy(value: unknown): value is LoadedCopy {
   return (
     typeof module.FilesProviderUnavailableError === "function" &&
     typeof module.FilesInvariantError === "function" &&
-    typeof module.parseFilesFatal === "function"
+    typeof module.parseFilesFatal === "function" &&
+    typeof module.filesFailure === "function"
   );
 }
 
@@ -143,4 +150,82 @@ describe("Tier LC — a separately loaded runtime copy", () => {
       category: "authority",
     });
   });
+
+  // LC3: a deletion's whole outcome vocabulary, across the boundary. The
+  // success carries nothing, so what has to compose is the *container* — and
+  // the one shape a hostile or broken provider could use to smuggle a value
+  // through a payload-free operation is a success that carries one.
+  it("LC3: a delete outcome from another copy composes, and a malformed one is fatal", function* () {
+    const copy = yield* useSeparateCopy();
+
+    const foreign = copy.filesFailure({
+      operation: "delete",
+      phase: "target",
+      reason: "directory",
+    });
+    // The premise: nothing about it shares a class with the copy core imported.
+    expect(foreign instanceof FilesError).toBe(false);
+
+    const refused = yield* answered(() => Err(foreign));
+    expect(refused.ok).toBe(false);
+    expect(parseFilesFailure(refused.ok ? undefined : refused.error)).toEqual({
+      type: FILES_ERROR,
+      operation: "delete",
+      phase: "target",
+      reason: "directory",
+    });
+
+    // The other copy's payload-free success, which is `{ ok: true }` with no
+    // `value` member at all.
+    const unit = yield* answered(() => fromOutside({ ok: true }));
+    expect(unit).toEqual({ ok: true, value: undefined });
+
+    // And the two containers that describe nothing a caller may act on. The
+    // annotation is what lets each one be built from plain data: the contract
+    // under test is precisely the one the signature cannot enforce.
+    const malformed: Array<() => Result<void>> = [
+      () => fromOutside({ ok: true, value: "receipt-PLANTED" }),
+      () => fromOutside({ ok: false }),
+    ];
+    for (const outcome of malformed) {
+      let thrown: unknown;
+      try {
+        yield* answered(outcome);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(parseFilesFatal(thrown)).toEqual({
+        type: "executablemd.runtime.files-fatal/v1",
+        kind: "invariant",
+        category: "protocol",
+      });
+      expect(String(thrown)).not.toContain("PLANTED");
+      expect(thrown instanceof Error ? thrown.cause : "unset").toBeUndefined();
+    }
+  });
 });
+
+/**
+ * Data as it arrives from outside the type system.
+ *
+ * A provider is a contextual handler: at run time it returns whatever it likes,
+ * and the contract these cases exercise is the one the types cannot enforce.
+ * Round-tripping through JSON is how a container the signature forbids is built
+ * without asserting a type it does not have.
+ */
+function fromOutside<T>(value: unknown): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+/** One deletion, answered by a provider that returns exactly `outcome`. */
+function answered(outcome: () => Result<void>): Operation<Result<void>> {
+  return scoped(function* () {
+    yield* Files.around({
+      // deno-lint-ignore require-yield
+      *deleteFile(): Operation<Result<void>> {
+        return outcome();
+      },
+    });
+    return yield* deleteFile({ cwd: "/workspace", path: "obsolete.md" });
+  });
+}
