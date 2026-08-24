@@ -89,6 +89,49 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 ```
 </Let>
 
+<Let as="turnSchema" select="code[lang=json]">
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "observation" },
+        "source": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "source"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "proposal" },
+        "source": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "source"],
+      "additionalProperties": false
+    }
+  ]
+}
+```
+</Let>
+
+<Let as="proposalEnvelopeSchema" select="code[lang=json]">
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "kind": { "const": "proposal" },
+    "source": { "type": "string", "minLength": 1 }
+  },
+  "required": ["kind", "source"],
+  "additionalProperties": false
+}
+```
+</Let>
+
 <Let as="pullRequestVerdictSchema" select="code[lang=json]">
 ```json
 {
@@ -135,35 +178,93 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 <Agent name={props.implementor}>
   <Session name="implementor">
     <Loop name="implementation" max={5}>
-      <Prompt as="proposalCandidate" throwOnError>
-        Repository instructions:
+      <Let as="observation" value={null} />
 
-        {props.instructions}
+      <Loop name="observations" max={4}>
+        <Prompt as="turnCandidate" throwOnError>
+          Repository instructions:
 
-        Authorized plan:
+          {props.instructions}
 
-        {props.plan}
+          Authorized plan:
 
-        Authorization record:
+          {props.plan}
 
-        {props.authorization.assessment}
-        User response: {props.authorization.response}
-        Rationale: {props.authorization.rationale}
+          Authorization record:
 
-        Result contract:
+          {props.authorization.assessment}
+          User response: {props.authorization.response}
+          Rationale: {props.authorization.rationale}
 
-        {proposalSchema}
+          Result of your previous request, if any:
 
-        Implement the authorized plan by returning Executable.md source that
-        performs it. You have no repository access and cannot modify anything
-        directly; the material above is what you may reason from, and the
-        `changes` field is the only way your work takes effect.
+          <Json value={observation} />
 
-        `changes` may use only `<Dir>`, `<File>`, and `<DeleteFile>`. It may not
-        contain eval or exec blocks, imports, or any other component. Report
-        validation and newly discovered scope in `report`. Return only JSON
-        matching the supplied result contract.
-      </Prompt>
+          You cannot open this repository. You may ask to see part of it, one
+          request at a time, by returning an observation; what comes back is
+          the result above on your next turn.
+
+          Reply with one JSON object and nothing else, in one of two shapes.
+
+          To read something, return an observation whose `source` is
+          Executable.md that reads exactly what you want to see:
+
+          ```json
+          {"kind": "observation", "source": "<File path=\"README.md\" as=\"readme\" />"}
+          ```
+
+          An observation may use only self-closing `<File path=... as=... />`
+          reads. It may not write, delete, run a command, reach the network, or
+          name any other component; a request containing one is refused whole
+          and the exchange stops.
+
+          When you have seen enough, return the proposal instead. Its `source`
+          is the JSON of your implementation, matching this contract:
+
+          {proposalSchema}
+
+          ```json
+          {"kind": "proposal", "source": "<the implementation JSON>"}
+          ```
+
+          Inside that JSON, `changes` is Executable.md that performs the work,
+          and it is the only way your work takes effect. It may use exactly
+          these three forms and nothing else:
+
+          ```md
+          <File path="path/to/file.md">the replacement contents</File>
+
+          <Dir path="path/to/directory">
+            <File path="inside.md">contents</File>
+          </Dir>
+
+          <File.Delete path="obsolete.md" />
+          ```
+
+          It may not contain eval or exec blocks, imports, a Git or pull-request
+          or issue effect, a command, a network read, or any other component.
+          One unadmitted element refuses the whole fragment, and none of its
+          writes happen. Report validation and newly discovered scope in
+          `report`.
+        </Prompt>
+
+        <Parse schema={turnSchema} as="turn">
+          {turnCandidate}
+        </Parse>
+
+        <If condition={turn.kind === "proposal"}>
+          <Break />
+          <Else>
+            <Evaluate source={turn.source} as="observation" />
+          </Else>
+        </If>
+      </Loop>
+
+      <Parse schema={proposalEnvelopeSchema} as="proposalTurn">
+        {turnCandidate}
+      </Parse>
+
+      <Let as="proposalCandidate" value={proposalTurn.source} />
 
       <Loop max={2}>
         <SafeParse schema={proposalSchema} as="parsedProposal">
@@ -201,10 +302,7 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         {proposalCandidate}
       </Parse>
 
-      <Expand
-        source={proposal.changes}
-        allow={["Dir", "File", "DeleteFile"]}
-      />
+      <Evaluate source={proposal.changes} allow={["write"]} />
       <Git.Add paths="." />
       <Git.Commit message={proposal.commitMessage} as="commit" />
       <Git.Push />
@@ -421,13 +519,22 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
 ## Agents inspect; XMD mutates
 
-The implementor's proposal is XMD source, and `<Expand>` is what runs it — a
-documented placeholder, not a component. #369 still owes the public name and the
-component itself, and the workflow Workspace specification uses this spelling to
-say where one would go.
+The implementor's proposal is XMD source, and `<Evaluate>` is what runs it. It
+is a workflow component the run's host **declares to the execution** rather than
+registering with the rest of the composition: canonical execution calls the
+host's factory with the claimant it minted and registers what comes back, so a
+run whose host declares none has no `<Evaluate>` at all. Being available is not
+being authorized — every ceiling comes from values the host captured before any
+document existed.
 
-The evaluator underneath it is built (#497), as trusted-host APIs no document
-calls. `evaluateGeneratedXmd()` parses the complete fragment and walks all of it
+Its schema is closed: a required `source` string, an optional non-empty
+duplicate-free `allow` naming the classes `read`, `write`, or both, an ordinary
+`as`, and nothing else. It is self-closing and takes no content. **Omitting
+`allow` means exactly read-only**, which is the observation form above;
+`allow={["write"]}` is written once, on the approved proposal, and selects from
+the host's own write table rather than granting anything.
+
+The evaluator underneath it parses the complete fragment and walks all of it
 inside the durable admission before the first effect, resolves an allowlist to
 pinned component identities the trusted host supplies, and refuses everything
 outside that set — eval and exec blocks, expression props, interpolation that
@@ -447,38 +554,59 @@ expands the same fragment without asking the implementor again, and the source
 is available to the reviewer and to the user as the literal description of what
 happened.
 
-**What is admitted today is observation, not mutation.** #497 shipped pinned
-observation identities and exact request ceilings — `<Fetch>` is on the
-allowlist only when the run states the requests it may perform, and each
-observation is retained by its own ordinary durable effect. The allowlist this
-stage writes above asks for `<Dir>`, `<File>` and `<DeleteFile>`, and admission
-for a fragment that mutates files is not built. So `<Git.Add>` staying out of it
-is this document's decision to keep — what gets staged and committed is this
-document's word, not the proposal's — but it is not yet a decision any evaluator
-enforces here.
+**Both classes are admitted, from tables this document cannot reach.** The
+standard Deno workflow profile installs a read table of core's self-closing
+`<File>` read, and a write table of exactly, in that retained order: core's
+paired `<File>` write, this package's lexical `<Dir>`, and core's self-closing
+`<File.Delete>`. `allow` selects a class from what the host already installed
+and can add nothing to it, and it grants no identity, root, destination,
+credential, provider or request. `<Fetch>` is on the read table only when a
+trusted host captured a non-empty exact request ceiling; this root's ordinary
+attachment supplies none, so a generated fragment here cannot reach the network
+at all.
+
+`<Git.Add>` staying outside that table is no longer only this document's
+preference — generated local Git, Git-host, issue, process, execution,
+credential and external-write effects are outside the admitted class entirely. A
+proposal naming one refuses whole, and none of its writes happen. What gets
+staged, committed, pushed and opened as a pull request stays this document's
+word, written as authored effects after `<Evaluate>`.
+
+A write-only fragment produces no observation entry, receipt or changed-path
+list — the evaluator adds none, and its ordinary Workspace effect records are
+what is authoritative. That is why the mutation invocation above binds nothing:
+its unchanged `{ observations: [], output: "" }` result would say nothing this
+run does not already retain.
 
 Being lexically inside `<Agent>` selects an agent for nested prompts and grants
-that agent nothing. `<Expand>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, and
+that agent nothing. `<Evaluate>`, `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, and
 `<PullRequest>` are XMD's own effects against the authoritative Workspace; the
-agent process never sees them and could not perform them.
+agent process never sees them and could not perform them. What the implementor
+returns is source, and source is data — it performs nothing until this document
+reaches the element that admits it.
 
 Neither session is given a directory. A workflow Agent gets no checkout, no
 materialization of one, no Workspace or host path as cwd, and nothing registered
 with its session (#302), so both agents here reason over what their prompts
 render: the instruction text, the authorized plan, the recorded authorization,
-the proposal source, and the pull request's identity. Evidence not rendered is
-evidence the stage does not have, and the bounded request/result loop that would
-let an agent ask for more belongs to #302 and #369.
+the proposal source, the pull request's identity — and now the results of the
+reads it asked for. That last one is the bounded request/result loop #302 and
+#369 owed, and it is shipped (#549, #550): the implementor asks in the source it
+returns, XMD performs the read, and the detached value comes back into the next
+prompt. It still receives no checkout, no materialization, no Workspace or host
+path as cwd, no `additionalDirectories`, no MCP server and no native tool. What
+it sees is what a read it named returned.
 
 ## Every mutation is one effect, and pushing is separate
 
 Each step is one expansion, one effect, and one transaction:
 
 ```text
-<Expand>       → the target shape: each admitted <File> would publish its
-                 mutation, the resulting logical Workspace root, and its journal
-                 result together. #497 admits observation, not mutation, and
-                 #369 still owes the component
+<Evaluate>     → each admitted <File>, <Dir> or <File.Delete> runs as the
+                 ordinary component it is, through the run's own effect
+                 transactions: a generated deletion publishes the same
+                 workspace_file effect an authored one does. The evaluator adds
+                 no receipt of its own
 <Git.Add>      → stages explicit paths; "." is written explicitly because
                  omission never means all paths
 <Git.Commit>   → commits only the staged index, fails when nothing is staged,
@@ -652,35 +780,33 @@ was implementing the plan — which is what those effects carry out. The review
 checkpoint then authorizes what comes after the review: the deferred issues, the
 revision turn, or acceptance.
 
-## What does not exist yet
+## Every name here is built
 
 | Written above | Supplied by | Status |
 | --- | --- | --- |
-| `<Expand>` | #369 | unbuilt; public name open. The evaluator under it is shipped (#497), for observation only |
+| `<Evaluate source allow>` and the authored observation loop | #302 and #369, delivered by #549, #550 and #572 | shipped — declared to the execution by the workflow host |
+| generated Workspace mutation admission, by class and authored form | #369, delivered by #572 | shipped — paired `<File>`, lexical `<Dir>` |
+| generated `<File.Delete>` admission | delivered by #574 | shipped — under the `write` class |
+| ordinary `<File.Delete>` | delivered by #570 | shipped — core registered component |
+| omitting an expression prop that evaluates to `undefined` | #537, delivered by #541 | shipped |
 | `<IssueTracker>`, `<Issue>` | #296, delivered by #516 | shipped — registered by the workflow host |
 | `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
 | `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
-| omitting an expression prop that evaluates to `undefined` | #301 | unbuilt — the loop's `number={pullRequest.number}` depends on it |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
-| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and now the push and pull-request components over it |
+| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and the components over it |
 | the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
 
-The agent, parsing, binding, and control-flow syntax runs today, and so do the
-forge effects: `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, `<PullRequest>`,
-`<IssueTracker>` and `<Issue>` are all built and registered by the workflow
-host.
+There is no longer an unbuilt name in this stage. The agent, parsing, binding
+and control-flow syntax runs; the observation loop runs; the admitted mutation
+runs; and the Git, pull-request and issue effects after it are all registered by
+the workflow host.
 
-The loop body above still does not expand, and it is worth separating the two
-reasons. **One name resolves to nothing** — `<Expand>` (#369) — and one **engine
-capability is unbuilt**: omitting an expression prop that evaluates to
-`undefined` (#301), which the seeded `number={pullRequest.number}` needs on its
-first pass. Neither is a statement about the forge components. Those are
-shipped, and this stage still cannot reach them, because the `<Expand>` that
-would produce the change to stage and commit comes first. A shipped component
-behind an unbuilt prerequisite is unreachable here, not unbuilt — and the
-deferred-issue path is the furthest one back, since it also waits on the review
-that only a real change produces. Until the prerequisites land, the effects this
-stage stands for remain explicit user-run steps between manual stages.
+What remains bounded is the **class** a generated fragment may name, which is
+not the same thing as something being missing. Its writes are Workspace file
+writes, directory composition and single-file deletion. Generated local Git,
+Git-host, issue, process, execution, credential and external-write effects are
+outside that class and refuse the fragment whole, which is why this document
+performs them itself, as authored effects after `<Evaluate>`.
 
 Props are namespaced throughout (#305). `proposal`, `commit`, `pullRequest`,
 `verdict`, `checkpointMaterial`, and `reviewCheckpoint` are authored bindings and

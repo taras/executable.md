@@ -238,10 +238,13 @@ handoff, the plan, the recorded user decision — rendered into their prompts.
 
 `instructions` shows what that costs and what it buys: host-authored XMD file
 effects produced the exact repository-relative paths and contents, and the
-captured result travels as a prop into both prompts below. Evidence the stage
-does not receive as a value is evidence it does not have, and the bounded
-request/result loop that would let an agent ask for more is #302 and #369's,
-unbuilt. Everything else in this body runs today.
+captured result travels as a prop into both prompts below. Evidence the stage does not receive as a value is
+evidence it does not have. The bounded request/result loop that lets an agent ask
+for more is shipped (#302, #549, #550), and **this stage deliberately does not
+invoke it**: planning reasons over the handoff, the recorded decisions and the
+instructions its caller passed, and an agent that could read the repository here
+would be reviewing something other than what was handed to it. Everything in this
+body runs today.
 
 ## The stage returns its control state
 

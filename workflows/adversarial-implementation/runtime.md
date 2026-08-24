@@ -86,15 +86,22 @@ its working directory, no `additionalDirectories` over ACP, and no component
 that registers a directory with its session. Lexical `<Dir>` establishes cwd for
 XMD's own file effects and tells an Agent nothing.
 
-What an Agent reasons over is what a prompt renders into it. Repository
-observation, when it exists, is the bounded request/result loop #302 and #369
-still owe: an Agent asks in the source it returns, XMD performs the read as its
-own effect, and the result comes back as data. Until then a stage that needs
-evidence is handed it as a value — `InstructionFiles` is the shipped example,
-carrying exact repository-relative paths and contents that host-authored file
-effects produced. An Agent still proposes changes by returning XMD, which a
-constrained evaluator preflights and expands as ordinary durable effects against
-the authoritative Workspace (#369).
+What an Agent reasons over is what a prompt renders into it, and what a read it
+asked for returned. Repository observation is the bounded request/result loop
+#302 and #369 owed, and it is shipped (#549, #550): an Agent asks in the source
+it returns, `<Evaluate>` performs the read as XMD's own effect, and the detached
+value comes back as data on the next turn. A stage may still be handed evidence
+as a value instead — `InstructionFiles` carries exact repository-relative paths
+and contents that host-authored file effects produced — and `Discovery` and
+`Planning` deliberately do only that.
+
+An Agent proposes changes the same way, by returning XMD. The evaluator
+preflights the whole fragment and expands it as ordinary durable effects against
+the authoritative Workspace, and what it admits is decided by effect class and
+authored form (#369, #572, #574): a read table of core's self-closing `<File>`
+read, and a write table of core's paired `<File>`, workflow's lexical `<Dir>` and
+core's self-closing `<File.Delete>`. Omitting `allow` means read-only. Effects
+that reach past the Workspace are outside the class entirely.
 
 The engine keeps the same shape underneath. A workflow run reaches core as a
 trusted host installation: an admission core applies inside its own journal

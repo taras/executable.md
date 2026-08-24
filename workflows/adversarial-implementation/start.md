@@ -462,11 +462,17 @@ workflow run. Registration is scope-local and the workflow host is what installs
 it, so plain `xmd run` — which composes no workflow — reports all ten
 unresolved. That is where a document ran, not whether a component exists.
 
-**Not expressible.** One name resolves to nothing under either host:
+**Declared by the run's host, not registered with it.** `<Evaluate>` is the
+generated-XMD boundary, and the workflow host declares its factory to the
+execution through `ExecutionInstallation.components`; canonical execution mints
+the claimant, calls the factory, and registers what comes back for that one
+attachment. A run whose host declares none has no `<Evaluate>` at all, and being
+available carries none of the authority it exercises.
 
-| Written above | Supplied by | Status |
-| --- | --- | --- |
-| `<Expand>` for Agent-generated XMD | #369 | unbuilt; public name open |
+**Nothing here resolves to nothing.** The unresolved inventory is empty: every
+component this workflow writes is either an ordinary resolved name, one of the
+five bundled stages, a workflow-host registration, or the execution-declared
+`<Evaluate>`.
 
 `<IssueTracker>` and `<Issue>` have left that list (#296, delivered by #516):
 a tracker names the container new issues belong in, and a paired
@@ -484,17 +490,17 @@ the shared Git-host reconciliation the remote effects use (#297).
 `<Agent.AddDir>` is not on it either, and never will be — #302 settles that a
 workflow Agent receives no checkout, no materialization, no Workspace or host
 path as cwd, and no registered directory, so there is no component here to
-build. What is still missing is the public component that expands generated
-XMD.
+build. What replaced it is the bounded request/result loop: the implementor asks
+to read something by returning source, `<Evaluate>` performs exactly that read,
+and the value comes back into the next prompt (#549, #550).
 
-So what remains non-executable is the implementation stage — but not because its
-Git and forge effects are missing. The named checkouts the Workspace is composed
-from are here, and so are the local Git effects, the push and the pull request.
-What the stage waits on is what comes *before* them: `<Expand>` (#369) to
-produce the change at all, and #301's omission of an expression prop that
-evaluates to `undefined`, which the pull-request loop's seeded `number` depends
-on. The push, the pull request and the deferred-issue path are all shipped and
-simply out of reach behind those, which is a different thing from unbuilt.
+So the implementation stage is executable end to end. The change itself is an
+admitted generated fragment — Workspace file writes, directory composition and
+single-file deletion (#572, #574) — and the staging, commit, push, pull request
+and deferred issues after it are authored effects this document performs. What
+stays outside the generated class is every effect that reaches past the
+Workspace: local Git, the Git host, issues, processes, execution, credentials
+and external writes. A fragment naming one refuses whole.
 
 What can be exercised today is discovery through plan convergence and the user
 gates around them, running in one document execution and one existing working

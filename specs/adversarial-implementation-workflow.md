@@ -568,9 +568,19 @@ database instead, which is why a run survives independently of any repository it
 touched and why deleting a run never claims to undo a push.
 
 Co-location does not make arbitrary filesystem content journal or training data.
-Journal events reach storage already filtered by the pre-persistence secret gate,
-and storage adds no second policy: a rejected gate leaves nothing behind. Making
-that gate default-on for execution, with its CLI opt-out and warning, is #199.
+Journal events reach storage already filtered by the pre-persistence secret
+gate, and storage adds no second policy: a rejected gate leaves nothing behind.
+That gate is and that gate is **default-on** (#199, delivered by #573 and #575).
+Offline detection is installed before the first live event. An offending durable
+event is refused before persistence; a rendered chunk the scanner cannot clear is
+withheld whole, while an earlier cleared prefix stays observable. Withholding
+carries no settlement authority of its own — the journal gate owns rejection, and
+the execution settles failed with the filtered `SecretDetectedError` after
+teardown, so the journal retains only the safe preceding events and the safe root
+`Close(err)`. Diagnostics name the rule and never the matched value, and replay
+restores already-filtered output without rescanning it. `--no-secret-detection`
+is a host-only, invocation-wide diagnostic escape hatch that warns before
+execution; it is not a document prop and not a middleware permission.
 
 `JournalProvenance` is what makes retained history evidence rather than merely
 storage. It is a non-operational, equality-only witness that a live publication
@@ -711,8 +721,11 @@ document cannot widen it. The ceiling goes further than write access. A workflow
 Agent receives no Workspace checkout and no read-only materialization of one, no
 Workspace or host path as its working directory, no `additionalDirectories` over
 ACP, and no component that registers a directory with its session (#302). What
-it may reason over is what a prompt renders into it, and repository observation
-is the bounded XMD request/result loop #302 and #369 still owe.
+it may reason over is what a prompt renders into it — and what a read it asked
+for returned. That bounded XMD request/result loop is shipped (#549, #550): the
+Agent names a read in the source it returns, `<Evaluate>` performs exactly that
+read under the host's own table, and the detached value comes back into the next
+prompt. The Agent still touches no path itself.
 
 An Agent that cannot write proposes changes instead. It returns an XMD fragment,
 and a constrained evaluator parses the complete fragment before its first effect,
@@ -1014,14 +1027,18 @@ shipped behavior. They are recorded because the answers constrain what remains.
 
 The exercise must resolve enough of these to implement one vertical slice:
 
-1. What bounded request/result loop lets an Agent observe the repository at all,
-   given that it receives no checkout, no materialization, no working directory
-   and no registered directory (#302, #369)?
-2. What is the public spelling of the component a document writes to expand
-   constrained generated XMD, and what does a *mutating* fragment's admission
-   require (#369)? The evaluator itself is settled and built for observation
-   (#497): complete preflight inside the admission, pinned identities, exact
-   request ceilings, one retained decision, and replay held to it.
+1. *Settled and built.* The bounded request/result loop is authored Markdown
+   around `<Evaluate source>` (#302, #369, delivered by #549 and #550): one
+   `<Prompt>` per Agent turn, a closed observation/proposal envelope, and the
+   detached read value rendered into the next prompt. The Agent still receives no
+   checkout, materialization, working directory or registered directory.
+2. *Settled and built.* The component a document writes is `<Evaluate>`, with a
+   closed schema of required `source` and optional `allow`. A mutating fragment's
+   admission is by effect class and authored form (#369, delivered by #572 and
+   #574): the standard profile's write table is core's paired `<File>`, this
+   package's lexical `<Dir>` and core's self-closing `<File.Delete>`. What
+   remains open is not admission but its class — generated Git, Git-host, issue,
+   process, execution, credential and external-write effects stay outside it.
 3. What state makes external effects safe to repeat or resume after
    interruption (#297)? A revision iteration reaching the *same* pull request is
    settled: the effect is an upsert over one explicit identity (#295, #500,
@@ -1029,11 +1046,12 @@ The exercise must resolve enough of these to implement one vertical slice:
    expression prop evaluating to `undefined` is omitted before validation and
    before the durable JSON boundary, so a loop seeded with an empty object
    creates on its first iteration and updates on every later one through a
-   single invocation. Omission is not built yet.
+   single invocation. Omission is shipped (#537, delivered by #541).
 4. Which fetches does a review actually write? `<PullRequest>`'s result is
    deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer is
-   handed the rest — but no stage composes those reads yet, and the public
-   component that expands a fragment carrying one stays #369's.
+   handed the rest — but no stage composes those reads yet, and a generated
+   fragment reaches `<Fetch>` only when a trusted host captured a non-empty exact
+   request ceiling, which this root's ordinary attachment does not.
 5. Which host mechanism closes the validate-then-use race for each supported
    runtime, now that a run-owned Workspace resolves a document path without
    producing a host path at all (#227)?

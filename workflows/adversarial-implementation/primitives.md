@@ -259,18 +259,14 @@ prose into a component.
 The document-level logic in `InstructionFiles`, `Discovery`, `Planning`, and
 `UserCheckpoint` therefore uses shipped syntax throughout. None of them asks for
 a directory: a workflow Agent is given none, so each stage reasons over what its
-prompt renders. `Implementation` is the exception, and not for that reason: its loop body
-invokes `<Expand>`, which resolves to nothing. The `<Git.Add>`, `<Git.Commit>`,
-`<Git.Push>`, `<PullRequest>`, `<IssueTracker>` and `<Issue>` beside it do
-resolve — under a workflow run, where the host registers them.
+prompt renders. `Implementation` is the exception, and not for that reason: it invokes
+`<Evaluate>`, which the run's host declares to the execution rather than
+registering, and `<Git.Add>`, `<Git.Commit>`, `<Git.Push>`, `<PullRequest>`,
+`<IssueTracker>` and `<Issue>`, which resolve under a workflow run where the
+host registers them.
 
-One name in this workflow resolves to nothing today, and one issue owes it:
-
-| Name | Owed by |
-| --- | --- |
-| `<Expand>` | #369 |
-
-`<IssueTracker>` and `<Issue>` left that list when #516 shipped them for #296;
+**No name in this workflow resolves to nothing.** The unresolved inventory is
+empty. `<IssueTracker>` and `<Issue>` left it when #516 shipped them for #296;
 `<Git.Push>` and `<PullRequest>` left it when #495, #500 and #504 shipped them;
 `<Git.Switch>`, `<Git.Add>` and staged-only `<Git.Commit>` left it when #294
 shipped them as Workspace-local durable effects. The Git effects sit over the
@@ -278,8 +274,8 @@ shared Git-host reconciliation #297 shipped, and the issue effects sit over
 `IssueApi`, which is its own boundary rather than a Git one. `<Agent.AddDir>` is
 absent for a different reason: #302 settles that a workflow Agent gets no
 checkout, no materialization, no cwd of its own and no registered directory, so
-it is not an implementation target this workflow is waiting on. What still
-resolves to nothing is the public component that expands generated XMD.
+it is not an implementation target this workflow is waiting on. What replaced it
+is the bounded request/result loop `<Evaluate>` performs (#549, #550).
 
 `<Repository>`, `<Worktree>` and `<Dir>` have left that list:
 `@executablemd/workflow/composition` registers all three (#293, shipped), which
@@ -426,14 +422,16 @@ alike.
 | Capability | Issue | Status |
 | --- | --- | --- |
 | provider-correct filesystem containment | #227 | open — `API.Files`, the host provider and the run's transaction-bound provider are built; the host validate-then-use race is what remains |
-| the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory | #302 | architecture settled; the bounded request/result loop is open |
-| `evaluateGeneratedXmd()` and the pinned observation policy a run admits a fragment under | #497 | shipped — trusted-host APIs, observation only |
-| `<Expand>`: the public component that expands constrained Agent-generated XMD | #369 | open; public component name undecided |
+| the workflow Agent ceiling: no checkout, no materialization, no cwd, no registered directory, no `additionalDirectories`, no MCP server, no native tool | #302, delivered by #549 | shipped — with a retained session the run comes back to |
+| the authored bounded observation loop, and `<Evaluate source>` | #302 and #369, delivered by #550 | shipped — declared to the execution by the workflow host |
+| generated Workspace mutation admission, by effect class and authored form | #369, delivered by #572 | shipped — paired `<File>`, lexical `<Dir>` |
+| generated single-file deletion | delivered by #574 | shipped — core's self-closing `<File.Delete>`, under the `write` class |
+| engine-owned authored-form dispatch on the invocation it issued | #569 | shipped |
 | transactional Worker Shell | #363 | open; containment and transaction POCs complete |
 
-The read-only ceiling is the host's, not the document's, which is why no
-`<Sandbox>` appears anywhere in this workflow. An implementor that cannot write
-returns XMD instead, and the evaluator that admits it is built (#497). It parses
+The ceiling is the host's, not the document's, which is why no `<Sandbox>`
+appears anywhere in this workflow. An implementor that cannot write returns XMD
+instead, and the evaluator that admits it is built. It parses
 the complete fragment and walks all of it before the first effect, resolves an
 allowlist to pinned component identities the trusted host supplies, and refuses
 everything outside that set — eval and exec blocks, expression props,
@@ -449,15 +447,28 @@ normalized policy are retained in it, and a continuation is held to the exact
 ceilings it was admitted under — so replay expands the same fragment without
 asking the Agent again.
 
-What that evaluator admits today is **observation**: pinned identities and exact
-request ceilings, with `<Fetch>` on the allowlist only when the run states the
-requests it may perform, and each observation retained by its own ordinary
-durable effect. It admits no file mutation. Three things this workflow's
-implementation stage needs are still open: the bounded request/result loop that
-lets an Agent ask the repository anything at all (#302, #369), admission for the
-mutating fragment this stage writes, and the public `<Expand>` component that a
-document would write to reach any of it (#369). `evaluateGeneratedXmd()` is a
-trusted-host API, and no document calls it.
+What that evaluator admits is decided by **class and authored form**. The
+standard Deno workflow profile installs a read table — core's self-closing
+`<File>` read — and a write table of exactly, in retained order: core's paired
+`<File>` write, this package's lexical `<Dir>`, and core's self-closing
+`<File.Delete>`. A document selects a class with `allow`, which chooses from
+what the host already installed and can add nothing to it; omitting `allow`
+means read-only. `<Fetch>` joins the read table only when a trusted host
+captured a non-empty exact request ceiling, and an ordinary attachment supplies
+none.
+
+Preflight decides on the admitted name, the pinned definition **and the authored
+form**, and canonical engine dispatch reports that form from the invocation it
+issued (#569) — so contextual `Component.hasContent()` middleware cannot choose
+read versus write for `<File>` or `<Dir>`, and a same-named repository component
+or middleware answer supplies no admitted identity. File read, File write, Dir
+and File.Delete each keep their own exact form contract.
+
+What stays outside the class is every effect that reaches past the Workspace:
+generated local Git, Git-host, issue, process, execution, credential and
+external-write effects are not admitted, and a fragment naming one refuses
+whole. This workflow performs those itself, as authored effects after
+`<Evaluate>`.
 
 **4. Compose and certify.**
 
