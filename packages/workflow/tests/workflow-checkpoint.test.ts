@@ -10,19 +10,22 @@
  *
  * The attachment is the production `withWorkflowWorkspace`, not a hand-built
  * install, so what these cases prove is that the host wires it rather than that
- * the test does.
+ * the test does. What a suspended run then costs the executor — settlement,
+ * released lock, delivery, resume — is Tier CKX's, against the real command.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { call, race, scoped } from "effection";
 import type { Operation } from "effection";
-import { collect, execute, inlineSource } from "@executablemd/core";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import { DatabaseSync } from "node:sqlite";
+import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
+import type { Json } from "@executablemd/core";
+import type { DurableEvent, Yield } from "@executablemd/durable-streams";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { runWorkflowDocument } from "./support/composition.ts";
-import { useStorageRoot, withBegunRun } from "./support/storage.ts";
+import { runPath, useStorageRoot, withBegunRun } from "./support/storage.ts";
 import { createSuspensionController } from "../src/deno/suspension.ts";
 import type { SuspensionNotice } from "../src/deno/suspension.ts";
 import { SUSPENSION_REQUEST } from "../src/suspension/suspend.ts";
@@ -30,13 +33,22 @@ import { SUSPENSION_REQUEST } from "../src/suspension/suspend.ts";
 /** The durable record core's `<Elicit>` writes and the workflow's must not. */
 const ELICIT = "elicit";
 
-const SCHEMA = `{"type":"object","properties":{"proceed":{"type":"boolean"}},"required":["proceed"]}`;
+const RUN_ID = "checkpoint";
+
+const DECISION_SCHEMA =
+  `{"type":"object","properties":{"proceed":{"type":"boolean"},"response":{"type":"string"},` +
+  `"rationale":{"type":"string"}},"required":["proceed","response","rationale"],` +
+  `"additionalProperties":false}`;
+
+const ASSESSMENT_SCHEMA =
+  `{"type":"object","properties":{"requiresUser":{"type":"boolean"},"question":{"type":"string"}},` +
+  `"required":["requiresUser","question"],"additionalProperties":false}`;
 
 /** One `<Elicit>`, answered in the document so nobody is asked. */
 const ANSWERED = `<Answers>
-<Answer value={{proceed: true}} />
+<Answer value={{proceed: true, response: "go", rationale: "because"}} />
 
-<Elicit schema={${SCHEMA}} as="decision">
+<Elicit schema={${DECISION_SCHEMA}} as="decision">
 Proceed with the change?
 </Elicit>
 </Answers>
@@ -45,48 +57,84 @@ decision: {decision.proceed}
 `;
 
 /** The same question with nothing to answer it. */
-const UNANSWERED = `<Elicit schema={${SCHEMA}} as="decision">
+const UNANSWERED = `<Elicit schema={${DECISION_SCHEMA}} as="decision">
 Proceed with the change?
 </Elicit>
 
 decision: {decision.proceed}
 `;
 
-/** A question the document never reaches. */
-const UNREACHED = `<If condition={false}>
-<Elicit schema={${SCHEMA}} as="decision">
-Proceed with the change?
-</Elicit>
+/**
+ * A checkpoint whose assessment found no material choice.
+ *
+ * The shape a checkpoint component uses, written here rather than imported: the
+ * `<Else>` branch parses an explicit decision, so `proceed` is a validated
+ * boolean some path produced on purpose. Nothing reads a missing elicitation as
+ * consent, and the branch that would have asked is never expanded.
+ */
+const NO_MATERIAL_CHOICE = `<Parse schema={${ASSESSMENT_SCHEMA}} as="assessment">
+{"requiresUser": false, "question": ""}
+</Parse>
+
+<If condition={assessment.requiresUser}>
+  <Elicit schema={${DECISION_SCHEMA}} as="decision">
+  {assessment.question}
+  </Elicit>
+  <Else>
+    <Parse schema={${DECISION_SCHEMA}} as="decision">
+    {"proceed": true, "response": "continue", "rationale": "The assessing agent found no material choice, so this transition needs no user decision."}
+    </Parse>
+  </Else>
 </If>
 
-nothing was asked
+proceed: {decision.proceed}
+rationale: {decision.rationale}
 `;
 
-function withRun<T>(body: (database: WorkflowRunDatabase) => Operation<T>): Operation<T> {
+/** Narrowing rather than a cast: `filter` alone does not refine the element. */
+function isYield(event: DurableEvent): event is Yield {
+  return event.type === "yield";
+}
+
+function withRun<T>(
+  body: (database: WorkflowRunDatabase, root: string) => Operation<T>,
+): Operation<T> {
   return scoped(function* () {
     const root = yield* useStorageRoot();
-    return yield* withBegunRun(root, (run) => body(run.database), "checkpoint");
+    return yield* withBegunRun(root, (run) => body(run.database, root), RUN_ID);
   });
 }
 
 /** Every durable yield this run retained, as `type` alone. */
 function* yields(database: WorkflowRunDatabase): Operation<string[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
-  return events
-    .filter((event) => event.type === "yield")
-    .map((event) => (event as unknown as Described).description.type as string);
+  return events.filter(isYield).map((event) => event.description.type);
 }
 
-/** One retained yield's description, as the journal holds it. */
-type Described = { description: Record<string, unknown> };
-
 /** The retained suspension requests, in order. */
-function* requests(database: WorkflowRunDatabase): Operation<Described[]> {
+function* requests(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events: DurableEvent[] = yield* database.journal.readAll();
-  return events
-    .filter((event) => event.type === "yield")
-    .map((event) => event as unknown as Described)
-    .filter((event) => event.description.type === SUSPENSION_REQUEST);
+  return events.filter(isYield).filter((event) => event.description.type === SUSPENSION_REQUEST);
+}
+
+/** The run's retained status, read the way something outside XMD would. */
+function status(root: string, runId: string): string {
+  const database = new DatabaseSync(runPath(root, runId), { readOnly: true });
+  try {
+    return String(
+      database.prepare("SELECT status FROM workflow_run WHERE id = 1").get()?.["status"],
+    );
+  } finally {
+    database.close();
+  }
+}
+
+/** One retained JSON object field, parsed rather than asserted. */
+function object(value: Json | undefined, what: string): Record<string, Json> {
+  if (!isJsonObject(value)) {
+    throw new Error(`${what} is not a JSON object`);
+  }
+  return value;
 }
 
 /**
@@ -141,34 +189,40 @@ describe("Tier CK — the durable checkpoint", () => {
       // What the person was asked, and what an answer must satisfy, are the
       // request — not something a later execution reconstructs.
       const description = published[0].description;
-      const request = description.request as Record<string, unknown>;
+      const request = object(description.request, "the retained request");
       expect(request.kind).toBe("elicitation");
       expect(String(request.message)).toContain("Proceed with the change?");
-      expect(description.responseSchema).toMatchObject({ type: "object" });
+      expect(object(description.responseSchema, "the retained response schema").type).toBe(
+        "object",
+      );
 
       expect(yield* yields(database)).not.toContain(ELICIT);
     });
   });
 
-  it("CK6: an <Answers> region answers first, so nothing suspends", function* () {
-    yield* withRun(function* (database) {
+  it("CK6: an <Answers> region answers first, so nothing suspends and the run stays running", function* () {
+    yield* withRun(function* (database, root) {
       yield* runWorkflowDocument(database, ANSWERED);
 
       expect(yield* requests(database)).toHaveLength(0);
+      // Not merely "no request": the lifecycle never left `running`, so nothing
+      // settled a suspension the executor would have had to release a lock for.
+      expect(status(root, RUN_ID)).toBe("running");
     });
   });
 
-  // A guard rather than a discriminator: it passes with either registration,
-  // because both publish nothing for an element that never expands. What it
-  // catches is a future install that published a request eagerly — at
-  // attachment or at expansion — instead of when the question is asked.
-  it("CK8: a question the document never reaches publishes nothing", function* () {
-    yield* withRun(function* (database) {
-      const output = yield* runWorkflowDocument(database, UNREACHED);
+  it("CK8: a checkpoint with no material choice proceeds on its own reason, and suspends nothing", function* () {
+    yield* withRun(function* (database, root) {
+      const output = yield* runWorkflowDocument(database, NO_MATERIAL_CHOICE);
 
-      expect(String(output)).toContain("nothing was asked");
+      // The decision is produced by the branch that ran, with the reason it
+      // gave — an advance because a decision said so, not because none existed.
+      expect(String(output)).toContain("proceed: true");
+      expect(String(output)).toContain("The assessing agent found no material choice");
+
       expect(yield* requests(database)).toHaveLength(0);
       expect(yield* yields(database)).not.toContain(ELICIT);
+      expect(status(root, RUN_ID)).toBe("running");
     });
   });
 
@@ -179,10 +233,7 @@ describe("Tier CK — the durable checkpoint", () => {
     expect(String(output)).toContain("decision: true");
 
     const events: DurableEvent[] = yield* stream.readAll();
-    const recorded = events
-      .filter((event) => event.type === "yield")
-      .map((event) => event as unknown as Described)
-      .filter((event) => event.description.type === ELICIT);
+    const recorded = events.filter(isYield).filter((event) => event.description.type === ELICIT);
     expect(recorded).toHaveLength(1);
   });
 });
