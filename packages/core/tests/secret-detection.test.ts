@@ -23,7 +23,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { all, createContext, Err, Ok, scoped, sleep, spawn, withResolvers } from "effection";
+import {
+  all,
+  createContext,
+  ensure,
+  Err,
+  Ok,
+  race,
+  scoped,
+  sleep,
+  spawn,
+  withResolvers,
+} from "effection";
 import type { Operation, Result } from "effection";
 import type { Json } from "../src/types.ts";
 import { forEach } from "@effectionx/stream-helpers";
@@ -49,6 +60,7 @@ import { inlineSource } from "../src/root-source.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { createScannerWith, createSecretScanner } from "../src/secrets/scanner.ts";
 import type { SecretScanner } from "../src/secrets/scanner.ts";
+import { SecretDetectedError } from "../src/secrets/findings.ts";
 import type { SecretFinding } from "../src/secrets/findings.ts";
 import {
   scanSecrets,
@@ -870,7 +882,157 @@ describe("default-on secret detection", () => {
       expect(replay.appendCount).toBe(0);
     });
   });
+
+  describe("output and settlement when a rendering is detected", () => {
+    it("settles the clean control with its complete output", function* () {
+      const run = yield* settledRendering("Token loopback-credential");
+
+      expect(run.result.ok).toBe(true);
+      expect(run.chunks).toEqual([
+        "# Probe\n\n",
+        "\n\nThe header was Token loopback-credential.\n",
+      ]);
+      expect(run.close).toBe("# Probe\n\n\n\nThe header was Token loopback-credential.\n");
+      expect(run.events.map(label)).toEqual([
+        "yield(import_component)",
+        "yield(import_component)",
+        "close(root)",
+      ]);
+      const close = run.events.at(-1);
+      expect(close?.type === "close" && close.result.status).toBe("ok");
+    });
+
+    it("settles a detected rendering with Err and only safe partial output", function* () {
+      const run = yield* settledRendering(CANARY);
+
+      expect(run.result.ok).toBe(false);
+      const error = run.result.ok ? new Error("unreachable") : run.result.error;
+      expect(error instanceof SecretDetectedError).toBe(true);
+
+      // The unsafe chunk is withheld in full; what closed is exactly the
+      // cleared prefix the consumer already received.
+      expect(run.chunks).toEqual(["# Probe\n\n"]);
+      expect(run.close).toBe(run.chunks.join(""));
+
+      // The document's own source template legitimately persists with the root
+      // import, so the sweep hunts the rendered sentence — the one carrying
+      // the canary — rather than the template text.
+      const tainted = `The header was ${CANARY}.`;
+
+      const journal = run.events.map(serializeDurableEvent).join("");
+      const readable = [
+        ...run.chunks,
+        run.close,
+        String(error),
+        error.name,
+        error.message,
+        error.stack ?? "",
+        String(error.cause ?? ""),
+        JSON.stringify(findingsOf(error)),
+        journal,
+      ];
+      for (const channel of readable) {
+        expect(channel).not.toContain(CANARY);
+        expect(channel).not.toContain(tainted);
+      }
+
+      expect(run.events.map(label)).toEqual([
+        "yield(import_component)",
+        "yield(import_component)",
+        "close(root)",
+      ]);
+      const close = run.events.at(-1);
+      expect(close?.type === "close" && close.result.status).toBe("err");
+      expect(journal).toContain("SecretDetectedError");
+
+      expect(run.order).toEqual(["output-closed", "teardown", "completion-observed"]);
+    });
+  });
 });
+
+/** A clean root that renders a registered component's value into its body. */
+const RENDERING = `# Probe
+
+<Header as="header" />
+
+The header was {header}.
+`;
+
+/** What one drain-then-await run of the rendering probe left behind. */
+interface SettledRendering {
+  chunks: string[];
+  close: string;
+  result: Result<Json>;
+  events: DurableEvent[];
+  order: string[];
+}
+
+/**
+ * Run the rendering probe end to end — output drained first, completion
+ * awaited second — bounded by a failing five-second timer.
+ *
+ * The registered return value is the only variable, so what differs between
+ * the clean control and the detected case is what detection did. A real
+ * interval holds the event loop open for the whole sequence: an abandoned
+ * completion under an idle loop is a test-runner diagnostic, while a held-open
+ * loop turns it into an indefinite hang, and the losing timer turns either
+ * into a plain failure.
+ */
+function* settledRendering(value: string): Operation<SettledRendering> {
+  const backend = new InMemoryStream();
+  const chunks: string[] = [];
+  const order: string[] = [];
+
+  return yield* scoped(function* () {
+    yield* registerComponents([
+      {
+        name: "Header",
+        origin: "test:settlement",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        returns: { type: "string" },
+        // deno-lint-ignore require-yield
+        *fn(): Operation<Json> {
+          return value;
+        },
+      },
+    ]);
+    yield* Execution.around({
+      *document([props], next) {
+        yield* ensure(() => {
+          order.push("teardown");
+        });
+        return yield* next(props);
+      },
+    });
+
+    const interval = setInterval(() => {}, 50);
+    yield* ensure(() => {
+      clearInterval(interval);
+    });
+
+    return yield* race([drainThenAwait(), timedOut()]);
+  });
+
+  function* drainThenAwait(): Operation<SettledRendering> {
+    const execution = yield* execute({ ...inlineSource(RENDERING), stream: backend });
+    const subscription = yield* execution.output;
+    let next = yield* subscription.next();
+    while (!next.done) {
+      chunks.push(next.value);
+      next = yield* subscription.next();
+    }
+    order.push("output-closed");
+    const close = next.value;
+    const result = yield* execution;
+    order.push("completion-observed");
+    return { chunks, close, result, events: backend.snapshot(), order };
+  }
+
+  function* timedOut(): Operation<never> {
+    yield* sleep(5000);
+    throw new Error("the drain-then-await sequence did not settle within five seconds");
+  }
+}
 
 /**
  * Run a document and return what `observe` saw from inside the execution.

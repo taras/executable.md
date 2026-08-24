@@ -139,7 +139,7 @@ import { checkedFailureLedger } from "./component-failures.ts";
 import { provideTestHarnessInstallers } from "./test-harness.ts";
 import type { TestHarnessInstaller } from "./test-harness.ts";
 import type { CheckedFailures } from "./component-failures.ts";
-import { useSecretDetection } from "./secrets/policy.ts";
+import { clearsLiveOutput, useSecretDetection } from "./secrets/policy.ts";
 import { propsEnvironment } from "./eval-env.ts";
 import { liveEnvironment } from "./live-env.ts";
 
@@ -1953,6 +1953,7 @@ function* executeDocument(
   yield* spawn(function* () {
     let emitted = false;
     let emittedText = "";
+    let restoring = false;
 
     // The ENTIRE setup and workflow sit inside one error boundary: once the
     // handle exists, any failure closes output (with whatever rendered so
@@ -1965,8 +1966,15 @@ function* executeDocument(
 
       // DocumentOutput → channel bridge (innermost middleware — output flows
       // through caller-installed normalize/terminal middleware first, then here).
+      // A live chunk the execution's scanner cannot clear is withheld in full —
+      // not sent, accumulated, or described — while the durable journal gate
+      // stays the authority that fails the run. Restored output crossed that
+      // gate when it was journaled, so restoration is not screened again.
       yield* DocumentOutput.around({
         *output([text]) {
+          if (!restoring && !(yield* clearsLiveOutput(text))) {
+            return;
+          }
           emitted = true;
           emittedText += text;
           yield* channel.send(text);
@@ -2186,7 +2194,9 @@ function* executeDocument(
       // never the close value. A failed document takes the same path, so what
       // it rendered first reaches consumers before its failure does.
       if (!emitted && result.output) {
+        restoring = true;
         yield* DocumentOutput.operations.output(result.output);
+        restoring = false;
       }
 
       yield* channel.close(result.output);

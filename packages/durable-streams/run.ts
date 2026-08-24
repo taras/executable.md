@@ -13,7 +13,7 @@
  * See integration doc §10, protocol spec §4.
  */
 
-import { useScope } from "effection";
+import { scoped, useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { DurableContext } from "./context.ts";
 import { activeDurabilityFailure, appendDurableEvent } from "./durability.ts";
@@ -178,7 +178,12 @@ export function* durableRun<T extends WorkflowValue>(
       result: { status: "ok", value: result as Json },
     };
 
-    yield* appendDurableEvent(ctx, closeEvent);
+    // The append's ordered turn is a resource of the scope it runs in, and
+    // this frame survives a rejected close: the catch below appends the
+    // compensating Close(err) from the same scope, so a turn still held here
+    // would make that append wait forever. A boundary around the attempt
+    // returns the turn as part of the outcome.
+    yield* scoped(() => appendDurableEvent(ctx, closeEvent));
 
     return result;
   } catch (error) {
@@ -207,7 +212,7 @@ export function* durableRun<T extends WorkflowValue>(
     };
 
     try {
-      yield* appendDurableEvent(ctx, closeEvent);
+      yield* scoped(() => appendDurableEvent(ctx, closeEvent));
     } catch (closeError) {
       const closeDurabilityFailure = activeDurabilityFailure(ctx, closeError);
       if (closeDurabilityFailure) {
