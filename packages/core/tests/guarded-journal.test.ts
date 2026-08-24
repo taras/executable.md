@@ -26,6 +26,23 @@ import type { DurableEvent, DurableStream } from "@executablemd/durable-streams"
 import { API } from "@executablemd/runtime";
 import { useStubFs } from "@executablemd/runtime/test";
 import { execute } from "../src/execute.ts";
+import { inlineSource } from "../src/root-source.ts";
+
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+/**
+ * A synthetic GitHub token, format-realistic and assembled here at run time so
+ * no usable-looking literal enters the repository and scanning this file finds
+ * nothing. Nothing here reads an environment variable, a Git credential, or
+ * user configuration.
+ */
+const CANARY = ["ghp", "_", ALPHABET.slice(0, 36)].join("");
+
+/** A root whose own source carries the canary, so its import event does. */
+const TAINTED = `# Tainted
+
+The token is ${CANARY} and must never reach a backend.
+`;
 
 const DOCUMENT = `# Guarded
 
@@ -268,5 +285,80 @@ describe("a guarded journal", () => {
     const persisted = yield* backend.readAll();
     expect(persisted.some(isFirstExec)).toBe(false);
     expect(persisted.map(label)).toEqual(["yield(import_component)", "yield(exec)", "close(root)"]);
+  });
+});
+
+/**
+ * The default scanner over each persistence backend (#199).
+ *
+ * These runs install no gate of their own. `execute()` selects its own
+ * credential policy before the first live event, so what they exercise is the
+ * real default scanner reaching a file and an HTTP backend — the memory case
+ * is covered in `secret-detection.test.ts` and is not repeated here.
+ */
+describe("the default scanner over a persistence backend", () => {
+  it("keeps a credential out of a file backend", function* () {
+    const dir = yield* useTempDirectory("xmd-default-scanner-");
+    const journalPath = path.join(dir, "journal.jsonl");
+    const backend = fileStream(journalPath);
+
+    const result = yield* yield* execute({ ...inlineSource(TAINTED), stream: backend });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.name).toBe("SecretDetectedError");
+
+    // The diagnostic names the rule that fired and never the matched value.
+    const error = result.ok === false ? result.error : new Error("unreachable");
+    expect(error.message).not.toContain(CANARY);
+    expect(error.stack ?? "").not.toContain(CANARY);
+
+    // The offending import never reached the backend, and the close the
+    // failure produced crossed the policy on its own.
+    const persisted = yield* backend.readAll();
+    expect(persisted.some((event) => event.type === "yield")).toBe(false);
+    expect(persisted.map(label)).toEqual(["close(root)"]);
+    const close = persisted[0]!;
+    expect(close.type === "close" && close.result.status).toBe("err");
+    expect(persisted.map(serializeDurableEvent).join("")).not.toContain(CANARY);
+
+    // What is on disk is exactly those events, canary-free byte for byte.
+    const bytes = yield* readTextFile(journalPath);
+    expect(bytes).toBe(persisted.map(serializeDurableEvent).join(""));
+    expect(bytes).not.toContain(CANARY);
+  });
+
+  it("keeps a credential out of an HTTP backend", function* () {
+    // port 0: the corpus runs under three runtimes concurrently, and a fixed
+    // port lets those servers collide — macOS shares the listen port between
+    // processes instead of refusing the second bind.
+    const server = new DurableStreamTestServer({ port: 0 });
+    const baseUrl = yield* until(server.start());
+    yield* ensure(() => until(server.stop()));
+
+    const backend = yield* useHttpDurableStream({
+      baseUrl,
+      streamId: "default-scanner",
+      producerId: "default-scanner-test",
+      epoch: 1,
+      fetch: closingFetch,
+    });
+
+    const result = yield* yield* execute({ ...inlineSource(TAINTED), stream: backend });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error.name).toBe("SecretDetectedError");
+
+    // The diagnostic names the rule that fired and never the matched value.
+    const error = result.ok === false ? result.error : new Error("unreachable");
+    expect(error.message).not.toContain(CANARY);
+    expect(error.stack ?? "").not.toContain(CANARY);
+
+    // Read back through the stream rather than from anything the run retained.
+    const persisted = yield* backend.readAll();
+    expect(persisted.some((event) => event.type === "yield")).toBe(false);
+    expect(persisted.map(label)).toEqual(["close(root)"]);
+    const close = persisted[0]!;
+    expect(close.type === "close" && close.result.status).toBe("err");
+    expect(persisted.map(serializeDurableEvent).join("")).not.toContain(CANARY);
   });
 });

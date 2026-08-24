@@ -28,6 +28,15 @@ export default define.page(function Reference() {
           must not exist and is never replayed.
         </li>
         <li>
+          <code>--no-secret-detection</code>{" "}
+          — turn off credential detection for the whole invocation. Detection is
+          on by default, and refuses to persist a durable event carrying a
+          credential. This is the only spelling that disables it, and a disabled
+          run warns once on standard error that credentials may be persisted. A
+          dangerous diagnostic escape hatch: the normal response to a finding is
+          to fix the code or data flow that produced it.
+        </li>
+        <li>
           <code>--verbose</code>, <code>-V</code>{" "}
           — print journal entries to stderr.
         </li>
