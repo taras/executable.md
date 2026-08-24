@@ -35,7 +35,15 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as url from "node:url";
-import { execute, installAgentComponents, isJsonObject, Agent } from "@executablemd/core";
+import {
+  agentIdentityComponents,
+  Agent,
+  installAgentComponents,
+  isJsonObject,
+} from "@executablemd/core";
+// `executeInstalled` is the host boundary: declaring `<Session>` to an
+// execution is a host's job, which is exactly the seam this test stands in for.
+import { executeInstalled } from "@executablemd/core/host";
 import type {
   AgentPromptEvent,
   AgentProviderFactory,
@@ -169,7 +177,11 @@ function stubProvider(trace: Trace): AgentProviderFactory {
           return name ?? options.defaultAgent;
         },
         // deno-lint-ignore require-yield
-        *session([name]) {
+        *session([request]) {
+          // #549 widened this to a request whose `name` is descriptive; a
+          // string is still what a document authored, so both shapes are read
+          // for the one thing this trace asserts about.
+          const name = typeof request === "string" ? request : request?.name;
           trace.sessionSelections.push(name);
           return { sessionKey: `${name ?? "default"}`, cwd: "/" };
         },
@@ -266,11 +278,11 @@ function* runPlanning(): Operation<{ value: JsonObject; calls: Call[]; trace: Tr
 
     const root = path.join(dir, "exhaustion-root.md");
     yield* writeTextFile(root, ROOT);
-    const execution = yield* execute({
+    const execution = yield* executeInstalled({
       path: root,
       stream: new InMemoryStream(),
       componentDirs: COMPONENT_DIRS,
-    });
+    }, [{ components: agentIdentityComponents() }]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -397,11 +409,11 @@ function* runBoundary(
 
     const root = path.join(dir, "boundary-root.md");
     yield* writeTextFile(root, BOUNDARY_ROOT);
-    const execution = yield* execute({
+    const execution = yield* executeInstalled({
       path: root,
       stream: new InMemoryStream(),
       componentDirs: COMPONENT_DIRS,
-    });
+    }, [{ components: agentIdentityComponents() }]);
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
