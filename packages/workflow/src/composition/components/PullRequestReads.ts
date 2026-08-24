@@ -35,6 +35,12 @@
  * these components closed over a terminal, and the terminal is the only thing
  * that can author a result.
  *
+ * What the terminal authenticates is the object this activation is holding, not
+ * a name for it. An expansion identifier is stable across continuations, so a
+ * handler could keep a genuine request from one execution and present it in the
+ * next execution of the same element; a fresh object per activation has no such
+ * afterlife.
+ *
  * An operation on a public Api would undo that. Anything installed on it could
  * answer with a fabricated collection without delegating, and what a document
  * bound and the journal retained would be that answer rather than a host's.
@@ -79,9 +85,7 @@ import type {
   PullRequestReadRequest,
   PullRequestReadResult,
 } from "../pull-request-read-records.ts";
-import { PullRequestEvidence } from "../pull-request-evidence-api.ts";
-import { mintReadRequest } from "../pull-request-read-terminal.ts";
-import { getExpansion } from "@executablemd/core";
+import { PullRequestAPI } from "../pull-request-api.ts";
 
 /** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
@@ -219,9 +223,16 @@ export const checksReturns: ReturnsSchema = array({
  * and reachable only through the closure these components capture.
  */
 export interface PullRequestReadTerminal {
+  /**
+   * Read on behalf of one live activation.
+   *
+   * `issued` is the object the component created for the activation now
+   * running and is still holding; `asked` is what came back from the public
+   * route. The terminal performs the read only when they are the same object.
+   */
   read(
-    invocation: string,
-    request: PullRequestReadRequest,
+    issued: PullRequestReadRequest,
+    asked: PullRequestReadRequest,
     attachment: PullRequestReadAttachment,
   ): Operation<PullRequestReadResult>;
 }
@@ -253,17 +264,17 @@ function read(kind: PullRequestReadKind, element: string, terminal: PullRequestR
 
     // Minted here, so the object the provider admits is the one this
     // invocation issued and nothing a handler can reconstruct.
-    const expansion = yield* getExpansion();
-    const issued = mintReadRequest(expansion.id, readRequest(repository, number, kind));
+    // One object for this activation, created here and held here. Nothing
+    // names it and nothing else can produce it.
+    const issued = readRequest(repository, number, kind);
 
     // Request-only, and structural. Middleware sees what is about to be read
     // and may refuse it by raising, or delegate; what it answers with is a
     // request, so there is nothing here it could answer with instead of the
-    // evidence. A request it did not receive from this invocation is not one
-    // the terminal acts on.
-    const asked = yield* PullRequestEvidence.operations.read(issued);
+    // evidence.
+    const asked = yield* PullRequestAPI.operations.read(issued);
 
-    const result = yield* terminal.read(expansion.id, asked, {
+    const result = yield* terminal.read(issued, asked, {
       repository,
       workingDirectory: yield* cwd(),
     });

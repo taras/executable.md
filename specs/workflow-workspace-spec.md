@@ -1392,7 +1392,7 @@ answer indistinguishable from a complete one.
 **The request crosses a public route; the evidence crosses none.** The
 structural request — the retained Repository identity, the number and the
 collection — passes through a contextual Api named
-`executablemd.workflow.pull-request-evidence`, which answers with a request.
+`executablemd.workflow.pull-request`, which answers with a request.
 Middleware in scope may inspect what is about to be read, refuse it by raising,
 narrow which reads a run may perform, or delegate. Refusal is the whole of
 narrowing: a handler may reject a subset of reads and may not reshape a request.
@@ -1404,12 +1404,20 @@ host itself. An operation on a public Api would be one anything in scope could
 answer without delegating, and the collection it fabricated would be what a
 document binds and the journal retains.
 
-Behind the route sits an exact-invocation terminal. The request object is minted
-for one invocation and branded so no other can present it: a request rebuilt
-from the same members, one another invocation issued, and one a handler kept
-from an earlier read are each refused before anything is sent. Structural
-equality is not identity — two elements reading the same number produce equal
-requests, and one must not stand in for the other.
+Behind the route sits a terminal that authenticates the **exact object the live
+activation is holding**. The component creates one request for the activation it
+is running, keeps it, and the terminal performs the read only when what came
+back from the route is that same object. A request rebuilt from the same
+members, one a sibling element issued, and one a handler kept from an earlier
+execution of this same element are each refused before a credential is read,
+before anything is sent, and before any durable work begins.
+
+Identity rather than a name, and that distinction is load-bearing. An expansion
+identifier is stable across continuations, so a handler could keep a genuine
+request from one execution and present it in the next execution of the same
+element, and a name-based check would call it current. A fresh object per
+activation has no such afterlife. The expansion identifier still names the
+durable position; it is not what authenticates issuance.
 
 The **attachment** — the whole Repository record and the working directory —
 never appears in a request. It goes from the component to the terminal directly:

@@ -52,7 +52,6 @@ import type {
   PullRequestReadRequest,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
-import { isReadRequestFor } from "../../composition/pull-request-read-terminal.ts";
 import { parseGitHubRepository } from "./github.ts";
 import type { GitHubSource } from "./github.ts";
 import { denoGitHubSource } from "./github.ts";
@@ -122,10 +121,11 @@ function* describeRead(request: PullRequestReadRequest): Operation<EffectDescrip
 function readEvidenceFor(
   database: WorkflowRunDatabase,
   source: GitHubSource,
-  invocation: string,
-  request: PullRequestReadRequest,
+  issued: PullRequestReadRequest,
+  asked: PullRequestReadRequest,
   attachment: PullRequestReadAttachment,
 ): Operation<PullRequestReadResult> {
+  const request = issued;
   const element = ELEMENT[request.kind];
 
   return scoped(function* () {
@@ -134,12 +134,17 @@ function readEvidenceFor(
     // rebuilt from the same members, one another invocation issued, or one a
     // handler kept from an earlier read is not it, and performing under one
     // would be letting a caller choose whose evidence a document binds.
-    if (!isReadRequestFor(invocation, request)) {
+    // The exact live object, by identity. A copy, a sibling's request, one
+    // rebuilt from the retained journal, and one kept from an earlier execution
+    // of this same element are each a different object than the one this
+    // activation is holding — refused here, before a credential is read, before
+    // anything is sent, and before any durable work begins.
+    if (asked !== issued) {
       throw new PullRequestReadError(
         "protocol",
         element,
-        "the request that reached the provider is not the one the engine issued for this " +
-          "invocation, so there is no invocation to read on behalf of.",
+        "the request that came back from the public route is not the one this activation " +
+          "issued, so there is no live read to perform on its behalf.",
       );
     }
     const admitted = request;
@@ -239,8 +244,8 @@ export function pullRequestReadComponents(
   readonly fn: FunctionComponent;
 }[] {
   const terminal: PullRequestReadTerminal = {
-    read(invocation, request, attachment) {
-      return readEvidenceFor(database, source, invocation, request, attachment);
+    read(issued, asked, attachment) {
+      return readEvidenceFor(database, source, issued, asked, attachment);
     },
   };
   const forms = pullRequestReadForms(terminal);

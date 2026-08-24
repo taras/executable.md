@@ -12,18 +12,18 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, race, resource, scoped, suspend, withResolvers } from "effection";
+import { call, race, resource, scoped, suspend, until, withResolvers } from "effection";
+import { exists } from "@effectionx/fs";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type { Operation } from "effection";
 import { createApi } from "@effectionx/context-api";
-import {
-  PULL_REQUEST_EVIDENCE_API,
-  PullRequestEvidence,
-} from "../src/composition/pull-request-evidence-api.ts";
-import type { PullRequestEvidenceApi } from "../src/composition/pull-request-evidence-api.ts";
+import { PULL_REQUEST_API, PullRequestAPI } from "../src/composition/pull-request-api.ts";
+import type { PullRequestApi } from "../src/composition/pull-request-api.ts";
 import type { PullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
 import { PullRequestReadError } from "../src/composition/errors.ts";
 import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { dropRootClose } from "./support/replay.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
@@ -153,6 +153,26 @@ function pullRequestPayload(overrides: Record<string, unknown> = {}): unknown {
 
 function read(server: Server, kind: "reviews" | "comments" | "checks"): Operation<EvidenceReading> {
   return readPullRequestEvidence(server.access, NAME, 7, kind);
+}
+
+/**
+ * Every byte of this run's storage, main database and sidecars alike.
+ *
+ * A refusal must leave the run untouched, so this compares bytes rather than
+ * the rows a query would select — a write a query does not look at is exactly
+ * what a refusal must not make.
+ */
+function* storageDigest(path: string): Operation<Record<string, string>> {
+  const digests: Record<string, string> = {};
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    const file = `${path}${suffix}`;
+    digests[suffix === "" ? "db" : suffix] = (yield* exists(file))
+      ? createHash("sha256")
+          .update(yield* until(readFile(file)))
+          .digest("hex")
+      : "absent";
+  }
+  return digests;
 }
 
 /** Every retained evidence read this run holds. */
@@ -802,7 +822,7 @@ describe("Tier PRR — pull-request evidence", () => {
       const refused = yield* raised(
         runWorkflowDocument(database, document, base, function* (run) {
           return yield* scoped(function* () {
-            yield* PullRequestEvidence.around({
+            yield* PullRequestAPI.around({
               // deno-lint-ignore require-yield
               *read(): Operation<PullRequestReadRequest> {
                 throw new PullRequestReadError(
@@ -840,7 +860,7 @@ describe("Tier PRR — pull-request evidence", () => {
       const database = yield* createRun();
       const output = yield* runWorkflowDocument(database, document, base, function* (run) {
         return yield* scoped(function* () {
-          yield* PullRequestEvidence.around({
+          yield* PullRequestAPI.around({
             *read([request], next): Operation<PullRequestReadRequest> {
               seen.push(`${request.kind}:${request.number}`);
               return yield* next(request);
@@ -892,7 +912,7 @@ describe("Tier PRR — pull-request evidence", () => {
         const failure = yield* raised(
           runWorkflowDocument(database, document, base, function* (run) {
             return yield* scoped(function* () {
-              yield* PullRequestEvidence.around({
+              yield* PullRequestAPI.around({
                 // deno-lint-ignore require-yield
                 *read([request]): Operation<PullRequestReadRequest> {
                   return forge(request);
@@ -906,7 +926,7 @@ describe("Tier PRR — pull-request evidence", () => {
         expect(`${name}: ${failure === undefined ? "performed" : "refused"}`).toBe(
           `${name}: refused`,
         );
-        expect(String(failure)).toContain("not the one the engine issued");
+        expect(String(failure)).toContain("not the one this activation issued");
         expect(`${name}: ${host.requests.length}`).toBe(`${name}: 0`);
       }
     });
@@ -934,7 +954,7 @@ describe("Tier PRR — pull-request evidence", () => {
       const failure = yield* raised(
         runWorkflowDocument(database, document, base, function* (run) {
           return yield* scoped(function* () {
-            yield* PullRequestEvidence.around({
+            yield* PullRequestAPI.around({
               // deno-lint-ignore require-yield
               *read([request]): Operation<PullRequestReadRequest> {
                 held ??= request;
@@ -948,7 +968,7 @@ describe("Tier PRR — pull-request evidence", () => {
 
       // The first invocation is answered with its own request and reads. The
       // second is handed the first's, which is not the object minted for it.
-      expect(String(failure)).toContain("not the one the engine issued");
+      expect(String(failure)).toContain("not the one this activation issued");
       expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([REVIEWS]);
     });
   });
@@ -968,7 +988,7 @@ describe("Tier PRR — pull-request evidence", () => {
     // A second copy of the Api, built from the published name rather than
     // imported — what a separately loaded copy of this package reaches, and
     // what anything that read the name off the wire could build.
-    const reconstructed = createApi<PullRequestEvidenceApi>(PULL_REQUEST_EVIDENCE_API, {
+    const reconstructed = createApi<PullRequestApi>(PULL_REQUEST_API, {
       // deno-lint-ignore require-yield
       *read(request: PullRequestReadRequest): Operation<PullRequestReadRequest> {
         return request;
@@ -1237,6 +1257,96 @@ describe("Tier PRR — pull-request evidence", () => {
       const output = yield* runWorkflowDocument(database, document, composed(remote, working));
       expect(String(output)).toContain("1 reviews");
       expect(working.requests).toHaveLength(1);
+    });
+  });
+
+  it("PRR28: a genuine request from an earlier execution of the same element is stale", function* () {
+    const entered = withResolvers<void>();
+    const remote = yield* useBareRemote(REMOTE);
+
+    // The first execution reaches the wire and is halted there, so the root
+    // stays open and the next execution re-enters the same element.
+    const hanging: GitHubSource = {
+      endpoint: ENDPOINT,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          yield* provide({
+            endpoint: ENDPOINT,
+            // deno-lint-ignore require-yield
+            *token(): Operation<string | undefined> {
+              return "t";
+            },
+            *send(): Operation<GitHubHttpResponse> {
+              entered.resolve();
+              yield* suspend();
+              throw new Error("unreachable");
+            },
+          });
+        });
+      },
+    };
+
+    const working = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const base = composed(remote, working);
+    const document = published(
+      `<PullRequest.Reviews number={7} as="reviews" />`,
+      "",
+      "{reviews.length} reviews",
+    );
+
+    // One handler across both executions, keeping the first genuine request.
+    let held: PullRequestReadRequest | undefined;
+    const holding = function* (run: () => Operation<Json>): Operation<Json> {
+      return yield* scoped(function* () {
+        yield* PullRequestAPI.around({
+          // deno-lint-ignore require-yield
+          *read([request]): Operation<PullRequestReadRequest> {
+            held ??= request;
+            return held;
+          },
+        });
+        return yield* run();
+      });
+    };
+
+    const root = yield* useStorageRoot();
+    const path = runPath(root, "release-1.4");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+
+      yield* race([
+        call(function* () {
+          yield* raised(
+            runWorkflowDocument(
+              database,
+              document,
+              { ...base, composition: { ...base.composition, gitHub: hanging } },
+              holding,
+            ),
+          );
+        }),
+        call(function* () {
+          yield* entered.operation;
+        }),
+      ]);
+
+      // The handler is holding a request this host really did issue — for the
+      // execution that is now over.
+      expect(held).toBeDefined();
+      const before = yield* storageDigest(path);
+
+      // The same element, the next execution. Its activation issued a new
+      // object; the handler returns the old one.
+      const stale = yield* raised(runWorkflowDocument(database, document, base, holding));
+      expect(String(stale)).toContain("not the one this activation issued");
+
+      // Refused before anything: no credential read, no request, no binding.
+      expect(working.requests).toEqual([]);
+      expect(String(stale)).not.toContain("reviews");
+      // And nothing moved in storage while it was refused.
+      expect(yield* storageDigest(path)).toEqual(before);
     });
   });
 });

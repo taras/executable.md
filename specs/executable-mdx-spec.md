@@ -7068,10 +7068,13 @@ workflow host's `Elicit` is one shape of that: an ordinary registration whose
 body reaches something only the host has. `<PullRequest.Reviews>`,
 `<PullRequest.Comments>` and `<PullRequest.Checks>` are another, and they show
 the boundary it draws. Their structural request crosses a public contextual Api,
-where middleware may observe it, refuse it, or narrow which reads a run
-performs; the evidence they bind crosses no public Api at all, because a public
-operation returning it would be one anything in scope could answer without
-delegating. What such a registration closes over is reachable from its own body
+`executablemd.workflow.pull-request`, where middleware may observe it, refuse
+it, or narrow which reads a run performs; the evidence they bind crosses no
+public Api at all, because a public operation returning it would be one anything
+in scope could answer without delegating. What the host authenticates behind
+that route is the exact request object the live activation is holding, rather
+than a name for it — an identifier that outlives one activation would let a
+handler present an earlier execution's genuine request as this one's. What such a registration closes over is reachable from its own body
 and from nowhere else — not by name, not through a context, and not from a
 second loaded copy of the package that registered it. See §7.7 of the workflow
 Workspace specification for the surface itself.

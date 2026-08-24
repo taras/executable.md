@@ -1287,12 +1287,15 @@ only one of them is `[]`; a truncated list would report the first while meaning
 the second, so an incomplete walk fails the read and retains no array at all.
 The structural request crosses a public request-only route, so middleware may
 see it, refuse it, or narrow what a run may read — refusal being the whole of
-narrowing. The evidence crosses no public route at all: there is no operation on
-any public Api that returns it, because one would be an operation anything in
-scope could answer without delegating. The components are built by the trusted
-host over a terminal they capture in their closure, the terminal admits only the
-exact request object minted for the invocation now running, and the attachment a
-provider needs — the Repository record and the working directory — never appears
+narrowing, since reshaping a request is not something the terminal will accept.
+The evidence crosses no public route at all: there is no operation on any public
+Api that returns it, because one would be an operation anything in scope could
+answer without delegating. The components are built by the trusted host over a
+terminal they capture in their closure, and the terminal admits only the exact
+request object the live activation is holding — not one named by an expansion
+identifier, which is stable across continuations and would let a handler present
+a genuine request from an earlier execution as a current one. The attachment a
+provider needs, the Repository record and the working directory, never appears
 in a request at all.
 
 An external effect is judged by its retained record rather than by its type. A
