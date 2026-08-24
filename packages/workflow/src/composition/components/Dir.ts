@@ -21,8 +21,8 @@
  */
 
 import { API, cwd } from "@executablemd/runtime";
-import { authoredForm, content } from "@executablemd/core";
-import type { ComponentInvocation } from "@executablemd/core";
+import { content } from "@executablemd/core";
+import type { FormDeclaration, InvocationForm } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 
@@ -39,35 +39,10 @@ export class DirInvocationError extends Error {
   override name = "DirInvocationError";
 }
 
-export default function* Dir(
-  props: Record<string, Json>,
-  invocation: ComponentInvocation,
-): Operation<string> {
+function* Dir(props: Record<string, Json>): Operation<string> {
   const path = props.path;
   if (typeof path !== "string" || path === "") {
     throw new DirInvocationError("<Dir> needs a non-empty path.");
-  }
-
-  // From the invocation the engine issued, not from the composable chain and not
-  // from a method the caller supplied: which form this was written as decides
-  // whether a working directory is installed at all, and both a handler
-  // answering that question and a wrapper minting an object that answers it
-  // could validate a self-closing `<Dir />` the document never wrote children
-  // for. `authoredForm()` authenticates before answering.
-  const form = authoredForm(invocation);
-  if (form === undefined) {
-    throw new DirInvocationError(
-      `<Dir path=${JSON.stringify(path)}> was called without the invocation the engine issued, ` +
-        "so which form it was written as cannot be established.",
-    );
-  }
-
-  if (!form.content) {
-    throw new DirInvocationError(
-      `<Dir path=${JSON.stringify(path)} /> is invalid: Dir installs a working directory for ` +
-        `its content, and a self-closing invocation has none. Write it as <Dir path=` +
-        `${JSON.stringify(path)}>…</Dir>.`,
-    );
   }
 
   // A bound Workspace path is absolute and is used as written; anything else is
@@ -91,3 +66,32 @@ export default function* Dir(
   );
   return yield* content();
 }
+
+/**
+ * The one form this component runs.
+ *
+ * `<Dir>` installs a working directory for its content, and a self-closing
+ * invocation has none — so which form it was written as decides whether it does
+ * anything at all. That is canonical dispatch's decision, taken from the scan
+ * before this body is entered, so neither a contextual handler answering ahead
+ * of the engine nor a wrapper minting an object that answers can validate a
+ * `<Dir />` the document wrote no children for (executable-mdx-spec §5.6).
+ *
+ * The sentences stay this component's, so the refusal is the same
+ * `DirInvocationError` it always was.
+ */
+export const form: FormDeclaration = {
+  forms: "paired",
+  fn: Dir,
+  refuse: (props: Record<string, Json>, written: InvocationForm | undefined) =>
+    new DirInvocationError(
+      written === "self-closing"
+        ? `<Dir path=${JSON.stringify(String(props.path))} /> is invalid: Dir installs a working ` +
+            `directory for its content, and a self-closing invocation has none. Write it as <Dir ` +
+            `path=${JSON.stringify(String(props.path))}>…</Dir>.`
+        : `<Dir path=${JSON.stringify(String(props.path))}> was called without the invocation the ` +
+            "engine issued, so which form it was written as cannot be established.",
+    ),
+};
+
+export default form;

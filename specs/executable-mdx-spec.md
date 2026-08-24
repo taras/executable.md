@@ -3744,12 +3744,13 @@ own account, and may answer differently on each call. A caller that reads it and
 then invokes something which reads it again has therefore verified nothing —
 the two are separate dispatches.
 
-Only the invocation the engine issued is authoritative about the authored form,
-and a component that selects an effect from it reads `authoredForm()` (§5.6),
-which authenticates the invocation before answering. `<File>` (§6.13),
-`<File.Delete>` (§6.13.1) and the workflow package's `<Dir>` do. A component that
-reads this contextual operation has no authored-form guarantee: what it receives
-is whatever the chain answered for that call.
+Neither this operation nor the method on the invocation selects an effect. A
+component whose forms do different things declares them, and canonical
+invocation-form dispatch (§5.6) enters the one the scan recorded — `<File>`
+(§6.13) is dual-form, `<File.Delete>` (§6.13.1) is self-closing only, and the
+workflow package's `<Dir>` is paired only. A component that reads this
+contextual operation has no authored-form guarantee at all: what it receives is
+whatever the chain answered for that call.
 
 `hasBinding()` reports the other half of the invocation's shape, and reports a
 boolean only. `as` stays engine-owned: it is validated and stripped before the
@@ -3877,8 +3878,8 @@ rebind, and a contextual Api answer is composed by whoever installed a handler
 (Tier CIV). A component that needs nothing from it declares one parameter and
 never sees it.
 
-It carries one readable fact: `hasContent(): boolean`, the authored form of the
-element this invocation is of. `<C />` reports `false`; `<C>…</C>` and `<C></C>`
+It carries one readable fact, for observation: `hasContent(): boolean`, the
+authored form of the element this invocation is of. `<C />` reports `false`; `<C>…</C>` and `<C></C>`
 report `true`. It is synchronous and immutable, it projects no content and
 suspends on nothing, and reading it neither spends the invocation's durable
 identity nor changes its lifetime, frame, projection or domain.
@@ -3897,29 +3898,69 @@ a method of that name; the property is there, it is a function, and it returns a
 boolean. Every check expressible against the shape is one a forger satisfies by
 construction, because the shape is what a forger copies.
 
-So the form has two reads, and which one a component uses follows from what its
-branch decides:
+Nor can a component authenticate it. A reader that recognized an invocation by
+private state would recognize only the copy of core it was imported with, and a
+component can be loaded from disk beside its own copy while the engine that
+minted the invocation is another — the compiled CLI resolving `--component-dir`
+is exactly that. So the method stays observation, and **no component reads the
+form to select an effect at all**.
 
-- A branch that decides **how to render** may call `invocation.hasContent()`.
-  A component that imports nothing at all has only that, and on a genuine
-  invocation it is the canonical fact.
-- A branch that selects an **irreversible effect** calls `authoredForm(invocation)`
-  instead. It answers `{ content }` for an invocation this engine issued and
-  `undefined` for anything else, recognizing the same private field a claimant
-  recognizes — so a structural look-alike, a descriptor-for-descriptor clone and
-  an object built on the prototype are each refused. `<File>` (§6.13),
-  `<File.Delete>` (§6.13.1) and the workflow package's `<Dir>` read it, and each
-  refuses rather than selecting a branch when it answers `undefined`, before
-  reaching a provider.
+What decides instead is **invocation-form dispatch** (§5.6): a form-sensitive
+component declares which bodies it has and which form each answers, canonical
+core turns that declaration into an engine-owned dispatcher, and the dispatcher
+enters a body only for the form the scan recorded. The declaration is input to
+canonical definition construction; the dispatcher is the authority.
 
-`undefined` rather than `false`, and a record rather than a boolean, because a
-caller writing `if (form)` on a bare boolean would read "not an invocation" as
-"self-closing" — which for `<File.Delete>` is *delete* and for `<File>` is
-*write over it*. There is no boolean there to make that mistake with.
+So `invocation.hasContent()` remains what a component reading it may rely on —
+the canonical fact on a genuine invocation, and the only thing a component that
+imports nothing at all has — and it is not effect authority. A component that
+branches on it decides how to *render*.
 
 Implementing the method does not make an object an invocation. Durable identity
 is still the private field a claimant recognizes, so a structural look-alike
-answering `hasContent()` claims nothing and reports no form.
+answering `hasContent()` claims nothing, and reaches no form-specific body.
+
+#### Invocation-form dispatch
+
+A **form-sensitive** function component declares, through canonical definition
+construction, which bodies it has and which authored form each answers. There
+are four behaviors: form-insensitive, self-closing only, paired only, and two
+distinct bodies selected by form. A declaration is input; it is not authority.
+
+Canonical core turns it into an engine-owned **dispatcher**, and the definition
+exposes that. The form-specific bodies stay behind it and never travel on a
+`Component.importComponent` answer, so the only route into one is a call the
+dispatcher admits. It admits a call when every one of these holds:
+
+- the invocation is an object **this** copy of core minted, recognized by the
+  private field a claimant is recognized by;
+- the issuance is live and its frame is the one running now, so an invocation
+  kept from a sibling, from a finished element, or from a concurrent invocation
+  of the same component answers nothing;
+- canonical resolution selected **this** dispatcher for the import that led
+  here, so a dispatcher a handler retained and answered with reaches no body.
+
+Otherwise it raises the refusal the component declared — the component's own
+error, so moving the decision ahead of the body does not change whose failure it
+is or how it is reported.
+
+Construction happens in the copy performing the execution, never in the
+component module. A repository `.ts` component may export a declaration and is
+wrapped by the executing copy; one that exports none is form-insensitive and
+reaches expansion exactly as before. That is what makes a component loaded from
+disk behave the same as the embedded default, which private-state authentication
+inside the component cannot do.
+
+Middleware may still observe an import, delegate it, refuse it by throwing, and
+forward the genuine invocation, and it may still answer with an implementation
+of its own under the open-import contract. What it cannot do is put a fabricated
+invocation, another element's issuance, or a dispatcher nothing selected here
+into a canonical form-specific body.
+
+Component search precedence is unchanged: a repository component still shadows a
+registered default and a registered default still shadows core's own. The form
+contract attaches to the definition canonical resolution selected, never to the
+authored name.
 
 The identity behind it is answered by a
 **claimant**, and a claimant reaches only one place: the factory a trusted host
@@ -6593,18 +6634,18 @@ alike, because what decides it is the **shape** the author wrote rather than
 what the content would render. Content that renders nothing is still content
 somebody wrote meaning something, and this component does not do it.
 
-That shape is read from the invocation the engine issued (§5.6), authenticated
-through `authoredForm()` before it is read, and from nowhere else. `Component.hasContent()` (§5.5) answers the same question through the
+That shape is not this component's to read. It declares itself self-closing only
+and canonical dispatch enters its body only for that form (§5.6). `Component.hasContent()` (§5.5) answers the same question through the
 composable chain, where a handler installed anywhere outside the invocation
 answers ahead of the engine and may answer differently on each call. This
 component selects an *effect* rather than a rendering, and the effect is
 irreversible in one direction: an answer of "self-closing" for a paired element
 would turn a document that wrote children into one that removed the path they
-were written beside. Neither weaker answer is used — not the contextual chain,
-and not `invocation.hasContent()`, which reports whatever object the caller
-handed over. There is no fallback either: a call arriving without a genuine
-invocation is refused rather than resolved to either form, because guessing
-self-closing there would be guessing deletion.
+were written beside. Neither weaker answer takes part — not the contextual
+chain, and not `invocation.hasContent()`, which reports whatever object a caller
+handed over. A call arriving without an invocation this engine issued and
+selected this dispatcher for is refused rather than resolved to either form,
+because guessing self-closing there would be guessing deletion.
 
 That refusal happens before `Env.cwd` is read and before the provider is
 reached, so a mistaken paired spelling costs the document nothing.
@@ -8976,6 +9017,7 @@ absence is Tier FF's.
 | FD3 | Paired content | Paired-*empty* content is refused on shape, before `Env.cwd` is read and before the provider is reached; the same watchers on the self-closing form record both calls, so the empty list is a refusal rather than an unwired spy |
 | FD3b | The form is the invocation's | Under a contextual `hasContent` handler that always denies content, and under one that answers true then false, both paired spellings still refuse and both targets keep their bytes; a `<Says />` beside them renders the chain's answer, so the handler is demonstrably live and lying, and the self-closing control in the same document still deletes |
 | FD3c | A look-alike is not an invocation | The definition called with an object implementing `hasContent()` — the whole public shape, reporting the answer that would select deletion — refuses before `Env.cwd` and before the provider, and the target keeps its bytes |
+| FD3d | The compiled two-copy path | The compiled binary reads, writes and deletes the same way with its embedded defaults and with core's own component sources on the search path, where the implementation is a second loaded copy; the paired refusal still holds there |
 | FD4 | The contextual directory | A nested `Env.cwd` selects the inner file of a shared name, the outer one is untouched, and the element after the region resolves against the restored directory |
 | FD5 | Every refusal sentence | An absolute path, a lexical escape, an escaping parent link, and a directory each produce their own sentence, name no absolute path, and reach no low-level removal — proven against an admitted deletion that does |
 | FD6 | A provider refusal | A structural `Err` is this component's own printed error, the sibling after it runs, and the target is unchanged |

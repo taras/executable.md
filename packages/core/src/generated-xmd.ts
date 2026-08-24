@@ -114,6 +114,7 @@ import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
+import { invocationForm, selectForm } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
 import type { FunctionComponentDefinition, Json, JsonObject, Segment } from "./types.ts";
 
@@ -525,23 +526,25 @@ type RetainedAdmission =
 /**
  * Refuse this invocation unless it is the form its identity was admitted for.
  *
- * Read from the invocation the engine issued, which is the same place the
- * admitted component reads it (executable-mdx-spec §5.6). Preflight decided the
- * identity from the scan and this reads the engine's own account of the same
- * element, so the two agree unless something built the invocation rather than
- * receiving it — which is what this refuses.
+ * Preflight decided the identity from the scan; this reads the engine's own
+ * account of the same element, so the two agree unless something built the
+ * invocation rather than receiving it — which is what this refuses.
  *
- * Not `Component.hasContent()`. That chain is answered by whoever installed a
- * handler outside this expansion, and a check there would bind nothing: it and
- * the component's own read are two dispatches, so a handler answering per call
- * satisfies the check and still decides the branch.
+ * Neither `Component.hasContent()` nor the method on the invocation takes part.
+ * The chain is answered by whoever installed a handler outside this expansion,
+ * and the method belongs to whatever object a caller passed; both are answers
+ * about something other than the element (executable-mdx-spec §5.6).
  */
 function holdForm(form: AuthoredForm, invocation: ComponentInvocation): void {
-  if (typeof invocation?.hasContent !== "function") {
-    throw new GeneratedXmdError(SHAPE);
-  }
-  const written: AuthoredForm = invocation.hasContent() ? "paired" : "self-closing";
-  if (written !== form) {
+  // The engine's own account of the element, not the method on the object this
+  // was handed. A wrapper can mint an object carrying that method; it cannot
+  // mint an issuance, and this reads the issuance
+  // (`invocation-identity.ts`). A component whose form the engine-owned
+  // dispatcher already enforces is held to the same fact twice, which is
+  // harmless; one whose definition carries no dispatcher — a form-insensitive
+  // pinned identity — is held to it here and nowhere else.
+  const written = invocationForm(invocation);
+  if (written === undefined || written !== form) {
     throw new GeneratedXmdError(SHAPE);
   }
 }
@@ -586,7 +589,7 @@ class GeneratedImportAuthority implements ImportAuthority {
   }
 
   /** The answer canonical execution produces for this name. */
-  issue(name: string): ImportedDefinition {
+  *issue(name: string): Operation<ImportedDefinition> {
     // Imports happen once per element and in the order the walk read them, so
     // the head of this name's queue is the entry preflight selected for the
     // element being expanded. An import the plan does not account for is an
@@ -601,6 +604,11 @@ class GeneratedImportAuthority implements ImportAuthority {
       throw new GeneratedXmdError(CONSTRUCT.component);
     }
     const implementation = copy.fn;
+    // The wrapper below is the answer to the import; the dispatcher underneath
+    // it is the form authority. Recording the dispatcher is what binds the
+    // invocation to it — a wrapper that collected results is trusted host code
+    // and takes no part in deciding which form-specific body runs.
+    yield* selectForm(implementation);
     // The value is taken where the component produced it. Reading it back from
     // the rendered fragment would lose every observation that renders nothing,
     // which is most of them. A mutation collects nothing: its own durable
@@ -1250,9 +1258,8 @@ function expand(
     const authority = new GeneratedImportAuthority(named);
     yield* Component.around(
       {
-        // deno-lint-ignore require-yield
         *importComponent([name], _next) {
-          return authority.issue(name);
+          return yield* authority.issue(name);
         },
       },
       { at: "min" },

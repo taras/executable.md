@@ -96,8 +96,23 @@ export { walkSchema } from "./src/schema-walk.ts";
 export type { NameKind, SchemaVisitor } from "./src/schema-walk.ts";
 
 export { hasContent, useContent } from "./src/content-context.ts";
-export type { AuthoredForm, ComponentInvocation } from "./src/types.ts";
-export { authoredForm } from "./src/invocation-identity.ts";
+export type {
+  ComponentInvocation,
+  FormDeclaration,
+  FormRefusal,
+  InvocationForm,
+} from "./src/types.ts";
+/**
+ * Canonical definition construction for a package that registers a form-
+ * sensitive component of its own.
+ *
+ * Not authority: what it returns runs only for an invocation this copy of core
+ * minted, in the frame the engine is running, selected by canonical resolution
+ * for that import. Building one proves nothing and grants nothing — it is the
+ * normalization step, exposed so a package registering `<Dir>` normalizes at
+ * the same boundary core's own defaults do.
+ */
+export { formDispatcher } from "./src/invocation-identity.ts";
 /**
  * The opaque session placement a `<Session>` element routes. A handler reads its
  * descriptive name; only provider authority reads the engine identity.

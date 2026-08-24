@@ -25,6 +25,7 @@ import { collect } from "../src/collect.ts";
 import { useTempFileCompiler } from "../src/temp-file-compiler.ts";
 import { FileAccessError } from "../src/components/File.ts";
 import { CORE_REGISTRY } from "../src/components/registry.ts";
+import { selectForm, useFormSelections } from "../src/invocation-identity.ts";
 import { registerComponents } from "../src/components/registration.ts";
 import { hasContent } from "../src/content-context.ts";
 import type { ComponentInvocation } from "../src/invocation-identity.ts";
@@ -178,6 +179,13 @@ const BROKE = "Function component Broken error: broken";
  * failure is reported, and the shape of the failure that leaves the component —
  * which error object, carrying which others — are not things rendered output can
  * show.
+ *
+ * Going a level down means being the resolver, not wrapping one. `<File>` is
+ * form-sensitive, so its definition is an engine-owned dispatcher that runs only
+ * for an invocation canonical resolution selected it for (§5.6) — a middleware
+ * answer holding a dispatcher nothing selected is refused, which is the whole
+ * point of that rule. So this installs the execution's selection stack and
+ * records what it resolved, exactly as `execute()`'s own terminal does.
  */
 function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<Observation> {
   return scoped(function* () {
@@ -189,6 +197,7 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     const failures: DocumentationError[] = [];
 
     yield* useWorkspaceCwd(fixture);
+    yield* useFormSelections();
     yield* Component.around({
       *raise([error], next) {
         raised.push(error);
@@ -207,9 +216,12 @@ function observe(fixture: Fixture, source: string, mode: ErrorMode): Operation<O
     });
     yield* Component.around(
       {
-        // deno-lint-ignore require-yield
         *importComponent([name], _next) {
           if (name === definition.name) {
+            // Recorded where it is resolved, which is what makes this canonical
+            // resolution rather than a handler answering with a definition it
+            // was holding.
+            yield* selectForm(definition.fn);
             return definition;
           }
           if (name === "Broken") {

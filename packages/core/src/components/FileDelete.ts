@@ -38,16 +38,18 @@
  * `Env.cwd` is read and before the provider is reached, so a mistaken paired
  * spelling costs the document nothing.
  *
- * The shape comes from the invocation the engine issued (§5.6), authenticated
- * before it is read, and from nowhere else. Two weaker answers exist and
- * neither is used here. `Component.hasContent()` answers through the composable
- * chain, where a handler installed anywhere outside this invocation answers
- * ahead of the engine and may answer differently on each call; and
- * `invocation.hasContent()` answers from an object this component was handed,
- * which a caller can mint. This component is not choosing how to render — it is
- * choosing whether to remove a file — so either answer, reporting "no content"
- * for a paired element, would turn a document that wrote children into one that
- * deleted the path they were written beside.
+ * The shape is not this component's to read. It declares itself self-closing
+ * only, and canonical core turns that declaration into the dispatcher every
+ * invocation arrives through: the form comes from the scan, the dispatcher
+ * authenticates the invocation in the copy of core that minted it, and the body
+ * below is entered only for the form it answers (§5.6).
+ *
+ * That is why neither weaker answer appears here. `Component.hasContent()`
+ * answers through the composable chain, where a handler installed outside this
+ * invocation answers ahead of the engine; `invocation.hasContent()` answers
+ * from an object this component was handed, which a caller can mint. Either
+ * one, reporting "no content" for a paired element, would turn a document that
+ * wrote children into one that deleted the path they were written beside.
  *
  * ## Failure
  *
@@ -64,8 +66,7 @@ import { printErrors } from "../component-failures.ts";
 import { cwd } from "@executablemd/runtime";
 import { parseFilesFailure } from "@executablemd/runtime";
 import type { FilesFailureData } from "@executablemd/runtime";
-import { authoredForm } from "../invocation-identity.ts";
-import type { ComponentInvocation } from "../invocation-identity.ts";
+import type { FormDeclaration, InvocationForm } from "../invocation-identity.ts";
 import { deleteFile } from "../files.ts";
 import type { Json } from "../types.ts";
 import { reason } from "./fs-error-phrases.ts";
@@ -90,17 +91,8 @@ export class FileDeleteError extends Error {
 const PAIRED =
   '<File.Delete> is self-closing and has no content: write <File.Delete path="…" /> instead.';
 
-export default printErrors(function* (
-  props: Record<string, Json>,
-  invocation: ComponentInvocation,
-): Operation<string> {
+const remove = printErrors(function* (props: Record<string, Json>): Operation<string> {
   const requested = String(props.path);
-  // Before the working directory and before the provider: the shape decides
-  // this, and neither of them has anything to contribute to that decision.
-  if (authoredContent(invocation, requested)) {
-    throw new FileDeleteError(PAIRED);
-  }
-
   const directory = yield* cwd();
   const removed = yield* deleteFile({ cwd: directory, path: requested });
   if (!removed.ok) {
@@ -110,31 +102,24 @@ export default printErrors(function* (
 });
 
 /**
- * How this element was written, from the invocation the engine issued.
+ * The one form this component runs, and what it says about the other.
  *
- * Authenticated rather than asked. Calling `invocation.hasContent()` would take
- * the caller's word for it: a component is handed whatever its caller passes,
- * and an object literal carrying a method of that name satisfies the property
- * check, the type check and the return check alike — a shape is what a forger
- * copies. `authoredForm()` reads the private field durable identity is
- * recognized by, so a look-alike answers nothing here.
- *
- * There is no fallback to the contextual answer either, and none to a default. A call
- * arriving without a genuine invocation is not one the engine made — a handler
- * holding this implementation and calling it somewhere else is the case that
- * matters — and guessing "self-closing" there would be guessing *delete*. So it
- * refuses instead, before `cwd()` and therefore before any provider is reached.
+ * `refuse` is the component's own, so moving the decision ahead of the body
+ * does not move which failure it is: both sentences below are `FileDeleteError`
+ * raised inside this component's printing declaration, exactly as the paired
+ * refusal was when the body decided it.
  */
-function authoredContent(invocation: ComponentInvocation, requested: string): boolean {
-  const form = authoredForm(invocation);
-  if (form === undefined) {
-    throw new FileDeleteError(
-      `<File.Delete path=${JSON.stringify(requested)} /> was called without the invocation the ` +
-        "engine issued, so which form it was written as cannot be established.",
-    );
-  }
-  return form.content;
-}
+export const form: FormDeclaration = {
+  forms: "self-closing",
+  fn: remove,
+  refuse: (props: Record<string, Json>, written: InvocationForm | undefined) =>
+    new FileDeleteError(
+      written === "paired"
+        ? PAIRED
+        : `<File.Delete path=${JSON.stringify(String(props.path))} /> was called without the ` +
+            "invocation the engine issued, so which form it was written as cannot be established.",
+    ),
+};
 
 const EMPTY = "path is empty; give a path relative to the working directory.";
 const ABSOLUTE = "an absolute path is not accepted; give a path relative to the working directory.";

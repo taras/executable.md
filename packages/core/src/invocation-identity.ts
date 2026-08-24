@@ -47,11 +47,13 @@
  * nothing.
  */
 
-import { useScope } from "effection";
+import { createContext, useScope } from "effection";
 import type { Operation, Scope } from "effection";
+import { printErrors, printsErrors } from "./component-failures.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
+  Json,
   PropsSchema,
   ReturnsSchema,
 } from "./types.ts";
@@ -196,6 +198,15 @@ interface Issuance {
   readonly component: string;
   /** How the element was written, as the engine scanned it. */
   readonly content: boolean;
+  /**
+   * The dispatcher canonical resolution selected for this import, when it
+   * selected one.
+   *
+   * Recorded by the engine rather than read off the answer, so a dispatcher a
+   * handler kept from another import — or produced for another name — is not
+   * the one this invocation admits.
+   */
+  readonly selection: FunctionComponent | undefined;
   /** The domain this execution gave that component, when it gave one. */
   readonly domain: IdentityDomain | undefined;
   /** The frame the engine invoked the implementation in. */
@@ -245,38 +256,264 @@ class EngineInvocation implements ComponentInvocation {
   }
 }
 
-/** The authored shape of an element, as the engine scanned it. */
-export interface AuthoredForm {
-  /** `<C>…</C>` and `<C></C>` yes, `<C />` no. */
-  readonly content: boolean;
+/**
+ * How an element was written, as the scanner read it.
+ *
+ * The vocabulary generated-XMD admission already speaks (`generated-xmd.ts`),
+ * used here for the same fact so one element is described one way wherever it
+ * is decided.
+ */
+export type InvocationForm = "self-closing" | "paired";
+
+/** The error a component reports for a form, or an invocation, it will not run. */
+export type FormRefusal = (props: Record<string, Json>, form: InvocationForm | undefined) => Error;
+
+/**
+ * What a form-sensitive component declares to canonical definition
+ * construction.
+ *
+ * A declaration is **input**, not authority: it says which bodies exist and
+ * which forms they answer, and canonical core turns it into the dispatcher that
+ * decides. A component that declares nothing is form-insensitive and reaches
+ * expansion exactly as it always has.
+ *
+ * `refuse` belongs to the component rather than to the engine because the
+ * sentence and the failure mode are the component's settled contract: a
+ * `<File.Delete>` refusal is a printed component error and a `<Dir />` refusal
+ * ends the run, and moving the decision earlier must not change which.
+ */
+export type FormDeclaration =
+  | { readonly forms: "either"; readonly fn: FunctionComponent }
+  | {
+      readonly forms: "self-closing";
+      readonly fn: FunctionComponent;
+      readonly refuse: FormRefusal;
+    }
+  | { readonly forms: "paired"; readonly fn: FunctionComponent; readonly refuse: FormRefusal }
+  | {
+      readonly forms: "both";
+      readonly "self-closing": FunctionComponent;
+      readonly paired: FunctionComponent;
+    };
+
+/**
+ * The declaration this value is, or `undefined` when it is not one.
+ *
+ * Parsed rather than asserted: a repository module exports whatever it likes,
+ * and this reads a value from outside the type system. An unreadable
+ * declaration is not a declaration, which leaves the component form-insensitive
+ * rather than half-dispatched.
+ */
+export function parseFormDeclaration(value: unknown): FormDeclaration | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const forms = Reflect.get(value, "forms");
+  const refuse = Reflect.get(value, "refuse");
+  const fn = Reflect.get(value, "fn");
+  if (forms === "either" && typeof fn === "function") {
+    return { forms, fn: fn as FunctionComponent };
+  }
+  if ((forms === "self-closing" || forms === "paired") && typeof fn === "function") {
+    if (typeof refuse !== "function") {
+      return undefined;
+    }
+    return { forms, fn: fn as FunctionComponent, refuse: refuse as FormRefusal };
+  }
+  if (forms === "both") {
+    const selfClosing = Reflect.get(value, "self-closing");
+    const paired = Reflect.get(value, "paired");
+    if (typeof selfClosing === "function" && typeof paired === "function") {
+      return {
+        forms,
+        "self-closing": selfClosing as FunctionComponent,
+        paired: paired as FunctionComponent,
+      };
+    }
+  }
+  return undefined;
 }
 
 /**
- * How this element was written, or `undefined` when this is not an invocation
- * this engine issued.
+ * The mark a dispatcher this copy of core built wears.
  *
- * The authenticated read. `ComponentInvocation.hasContent()` is a method on an
- * object a component was handed, and a component is handed whatever its caller
- * passes: a wrapper that mints `{ hasContent: () => false }` satisfies the type,
- * the name and the return type, and no check written against the shape can tell
- * it apart from the real thing. This reads the same private field durable
- * identity is recognized by, so a structural look-alike, a descriptor-for-
- * descriptor clone and an object built on the prototype are each refused here
- * exactly as they are refused a claim.
- *
- * `undefined` rather than `false`, and a record rather than a boolean, because
- * this answer selects an effect. A caller that wrote `if (form)` on a bare
- * boolean would read "not an invocation" as "self-closing" — which for
- * `<File.Delete>` is *delete*, and for `<File>` is *write over it*. There is no
- * boolean here to make that mistake with.
- *
- * Reading spends nothing: no projection, no suspension, no durable identity,
- * and no liveness requirement. A finished invocation still reports the form of
- * the element it was.
+ * A module-private `Symbol` rather than a registry: it is not on the global
+ * symbol table, so nothing outside this module can name it, and a dispatcher
+ * another copy of core built wears that copy's symbol rather than this one.
+ * `Symbol.for` would be forgeable by anyone who can spell the key.
  */
-export function authoredForm(invocation: ComponentInvocation): AuthoredForm | undefined {
+const DISPATCHER: unique symbol = Symbol("executablemd.core.form-dispatcher");
+
+/** Whether this implementation is a dispatcher this copy of core built. */
+export function isFormDispatcher(fn: unknown): boolean {
+  return typeof fn === "function" && DISPATCHER in fn;
+}
+
+/**
+ * The engine-owned body a form-sensitive component is invoked through.
+ *
+ * This is the authority. The raw handlers stay closed over here and never
+ * travel on an import answer, so the only route into one is a call that
+ * satisfies all of:
+ *
+ * - the invocation is an object **this** copy of core minted, recognized by the
+ *   same private field a claimant recognizes — a structural look-alike carrying
+ *   `hasContent()` is not one;
+ * - the issuance is still live, and its frame is the one running now, so an
+ *   invocation kept from a sibling or a finished element answers nothing here;
+ * - canonical resolution selected *this* dispatcher for the import that led
+ *   here, so a dispatcher a handler retained and answered with reaches no body.
+ *
+ * Built by whichever copy of core is performing the execution — canonical
+ * definition construction calls this, never the component module — so a
+ * component loaded from disk through `--component-dir` is wrapped by the copy
+ * that minted the invocation. That is what makes the compiled binary's embedded
+ * defaults and a repository-loaded copy behave the same.
+ *
+ * The form itself comes from the scan, carried on the issuance. No contextual
+ * answer, no method on the object handed in, and nothing a handler composed
+ * takes part in choosing it.
+ */
+export function formDispatcher(declaration: FormDeclaration): FunctionComponent {
+  const handlers: Partial<Record<InvocationForm, FunctionComponent>> =
+    declaration.forms === "both"
+      ? { "self-closing": declaration["self-closing"], paired: declaration.paired }
+      : declaration.forms === "either"
+        ? { "self-closing": declaration.fn, paired: declaration.fn }
+        : { [declaration.forms]: declaration.fn };
+  const refuse: FormRefusal =
+    declaration.forms === "self-closing" || declaration.forms === "paired"
+      ? declaration.refuse
+      : unusable;
+
+  function* dispatch(
+    props: Record<string, Json>,
+    invocation: ComponentInvocation,
+  ): Operation<unknown> {
+    const issuance = stateOf(invocation);
+    if (
+      issuance === undefined ||
+      !issuance.live ||
+      issuance.selection !== dispatch ||
+      issuance.frame !== (yield* useScope())
+    ) {
+      throw refuse(props, undefined);
+    }
+    const form: InvocationForm = issuance.content ? "paired" : "self-closing";
+    const handler = handlers[form];
+    if (handler === undefined) {
+      throw refuse(props, form);
+    }
+    return yield* handler(props, invocation);
+  }
+
+  // The declaration a component wears travels to the dispatcher, because the
+  // dispatcher is what expansion asks. A component that prints its own failures
+  // must go on printing the one this raises for a form it will not run.
+  if (Object.values(handlers).some((handler) => printsErrors(handler))) {
+    printErrors(dispatch);
+  }
+  Object.defineProperty(dispatch, DISPATCHER, { value: true, enumerable: false });
+  return dispatch;
+}
+
+/** The fallback refusal, for a declaration that names no sentence of its own. */
+function unusable(_props: Record<string, Json>, form: InvocationForm | undefined): Error {
+  return new ComponentInvocationError(
+    form === undefined
+      ? "this component was called without the invocation the engine issued, so which form it " +
+          "was written as cannot be established."
+      : `this component has no ${form} form.`,
+  );
+}
+
+/**
+ * The dispatcher canonical resolution selected for one import.
+ *
+ * The same shape the identity frame above uses, and open for the same reason:
+ * what the engine records is what canonical resolution produced *inside* this
+ * import, not what came back from the chain. A frame holding two selections —
+ * a handler that delegated twice, or two expansions interleaving — settles to
+ * nothing, which refuses rather than guesses.
+ *
+ * Held in a context an execution installs, not in this module. A module-scoped
+ * stack would be one stack for every run in the process, so two executions
+ * importing at once would push and pop each other's frames — the identity
+ * frames beside this live in `installIdentities()`'s closure for the same
+ * reason.
+ */
+interface SelectionFrame {
+  selected: FunctionComponent | undefined;
+  count: number;
+}
+
+const FormSelections = createContext<SelectionFrame[]>("executablemd.core.form-selection");
+
+/**
+ * Give this execution its own selection stack.
+ *
+ * Installed once per execution, before anything imports. An expansion running
+ * without one records no selection, so a form-sensitive component refuses
+ * rather than running unselected — the safe direction, and the reason this is
+ * not defaulted to a shared array.
+ */
+export function* useFormSelections(): Operation<void> {
+  yield* FormSelections.set([]);
+}
+
+export interface FormSelection {
+  settle(): FunctionComponent | undefined;
+}
+
+/** Open the frame for one import the engine is about to ask for. */
+export function* beginFormSelection(): Operation<FormSelection> {
+  const stack = yield* FormSelections.get();
+  const frame: SelectionFrame = { selected: undefined, count: 0 };
+  stack?.push(frame);
+  return {
+    settle(): FunctionComponent | undefined {
+      const index = stack?.lastIndexOf(frame) ?? -1;
+      if (index >= 0) {
+        stack?.splice(index, 1);
+      }
+      return frame.count === 1 ? frame.selected : undefined;
+    },
+  };
+}
+
+/**
+ * Record what canonical resolution selected. Only core's own resolvers call
+ * this, from inside the import the frame above was opened for.
+ *
+ * What it records is the **dispatcher**, wherever it sits. A trusted wrapper
+ * that collects what a component returned is still the answer to the import,
+ * but it is not the form authority: what the invocation is bound to is the
+ * canonical dispatcher underneath it.
+ */
+export function* selectForm(fn: unknown): Operation<void> {
+  const stack = yield* FormSelections.get();
+  const frame = stack?.at(-1);
+  if (frame === undefined) {
+    return;
+  }
+  frame.count += 1;
+  frame.selected = isFormDispatcher(fn) ? (fn as FunctionComponent) : undefined;
+}
+
+/**
+ * The form of an invocation this engine issued, for core's own use.
+ *
+ * Not exported from the package. A caller-visible method on the object handed
+ * in is what a wrapper can mint; this reads the issuance the engine holds, so a
+ * check written against it is a check about the element rather than about what
+ * somebody passed.
+ */
+export function invocationForm(invocation: ComponentInvocation): InvocationForm | undefined {
   const issuance = stateOf(invocation);
-  return issuance === undefined ? undefined : Object.freeze({ content: issuance.content });
+  if (issuance === undefined) {
+    return undefined;
+  }
+  return issuance.content ? "paired" : "self-closing";
 }
 
 /** Mint one invocation identity. Only the engine calls this. */
@@ -286,11 +523,13 @@ export function issueInvocation(
   domain: IdentityDomain | undefined,
   frame: Scope,
   content: boolean,
+  selection?: FunctionComponent,
 ): IssuedInvocation {
   const issuance: Issuance = {
     id,
     component,
     content,
+    selection,
     domain,
     frame,
     live: true,

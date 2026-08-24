@@ -16,6 +16,7 @@
 import { ensure, Err, Ok, scoped, useScope, withResolvers } from "effection";
 import type { Operation, Result } from "effection";
 import type {
+  FunctionComponent,
   Segment,
   TextSegment,
   ErrorSegment,
@@ -64,7 +65,7 @@ import { carriesTestActivationDecision } from "./test-activation.ts";
 import { declaredRouting, withRouting } from "./foreground.ts";
 import { issueBoundExec } from "./bound-exec.ts";
 import { elementFrame, elementSite, extendPath, publishExpansion, snapshot } from "./expansion.ts";
-import { issueInvocation } from "./invocation-identity.ts";
+import { beginFormSelection, issueInvocation } from "./invocation-identity.ts";
 import type { IdentityDomain } from "./invocation-identity.ts";
 import { withInvocation } from "./invocation.ts";
 import type { Invocation } from "./invocation.ts";
@@ -2224,7 +2225,12 @@ function* expandComponent(
   // this invocation is in one of this execution's identity domains, and nothing
   // on the answer or in the chain carries it (`invocation-identity.ts`).
   const selection = authority?.identities?.beginImport(name);
+  // Always open, unlike the identity frame beside it: every execution has
+  // components whose authored form selects an effect, whether or not a trusted
+  // host declared an identity for anything.
+  const form = yield* beginFormSelection();
   let selected: IdentityDomain | undefined;
+  let dispatcher: FunctionComponent | undefined;
   try {
     // The public chain answers, and canonical execution decides whether the
     // answer is one it produced. In a closed execution — a workflow holding a
@@ -2234,10 +2240,12 @@ function* expandComponent(
     // chain produced, exactly as it always was.
     const answered = yield* importComponent(name, position);
     selected = selection?.settle();
+    dispatcher = form.settle();
     const imports = authority?.imports;
     imported = imports === undefined ? answered : imports.authorize(name, answered);
   } catch (error) {
     selection?.settle();
+    form.settle();
     // Import is a durable effect, so it is the other place a stale journal
     // entry can surface.
     const fatal = fatalCause(error);
@@ -2277,6 +2285,7 @@ function* expandComponent(
       checkedFailures,
       authority,
       selected,
+      dispatcher,
     );
   }
 
@@ -2699,6 +2708,14 @@ function* expandFunctionComponent(
    * (`invocation-identity.ts`).
    */
   selected?: IdentityDomain,
+  /**
+   * The dispatcher canonical resolution selected for this invocation.
+   *
+   * Absent unless resolution answered with a form dispatcher this copy of core
+   * built, which is what a dispatcher requires before it will enter one of its
+   * form-specific bodies (`invocation-identity.ts`).
+   */
+  dispatcher?: FunctionComponent,
 ): Operation<Segment[]> {
   // An invocation of core's own `<Test>` keeps its checked failures to itself:
   // they become that invocation's failure, which is how a failing test is the
@@ -2875,6 +2892,7 @@ function* expandFunctionComponent(
           selected,
           yield* useScope(),
           !selfClosing,
+          dispatcher,
         );
         const handle = createProjectionHandle({
           invocation,

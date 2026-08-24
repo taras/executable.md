@@ -120,7 +120,13 @@ import {
 } from "./components/select.ts";
 import { installedBundle } from "./components/bundle.ts";
 import { registerComponents } from "./components/registration.ts";
-import { installIdentities } from "./invocation-identity.ts";
+import {
+  formDispatcher,
+  installIdentities,
+  parseFormDeclaration,
+  selectForm,
+  useFormSelections,
+} from "./invocation-identity.ts";
 import type { IdentityComponent } from "./invocation-identity.ts";
 import type { ExpansionAuthority } from "./components/import-authority.ts";
 import type { WorkflowComponentBundle, WorkflowImportAuthority } from "./components/bundle.ts";
@@ -448,8 +454,14 @@ function* durableImportComponent(
       throw new Error(`Function component "${name}" at ${path} did not load a module`);
     }
 
+    // Read before the default export, because a declaration carries the bodies
+    // for a component that has more than one. What it produces is a dispatcher
+    // this copy of core built — the copy performing the execution — so a
+    // component loaded from disk beside its own copy of core is still
+    // authenticated against the invocation this engine minted.
+    const declared = parseFormDeclaration("form" in mod ? mod.form : undefined);
     const defaultExport = "default" in mod ? mod.default : undefined;
-    if (!isFunctionComponent(defaultExport)) {
+    if (declared === undefined && !isFunctionComponent(defaultExport)) {
       throw new Error(
         `Function component "${name}" at ${path} must have a default export that is a generator function`,
       );
@@ -466,7 +478,7 @@ function* durableImportComponent(
       kind: "function",
       name,
       props,
-      fn: defaultExport,
+      fn: declared === undefined ? defaultExport : formDispatcher(declared),
     };
 
     if ("returns" in mod && mod.returns !== undefined) {
@@ -2007,6 +2019,8 @@ function* executeDocument(
       // Install the document's runtime Component providers before durableRun
       // so the workflow inherits them: component import, modifier execution,
       // and the root eval scope.
+      // This execution's own selection stack, before anything imports.
+      yield* useFormSelections();
       yield* Component.around(
         {
           *importComponent([name, position], _next) {
@@ -2027,6 +2041,11 @@ function* executeDocument(
             // nothing a handler above this can hold (`invocation-identity.ts`).
             if (definition.kind === "function") {
               identity.identities.select(name, definition);
+              // The same record, for the other thing canonical resolution
+              // decides here: which dispatcher — if any — this import selected.
+              // A dispatcher a handler kept from another import reaches no body
+              // without it.
+              yield* selectForm(definition.fn);
             }
             // The witness for this answer. It is issued where the answer is
             // produced and verified where it is invoked, so what a handler does

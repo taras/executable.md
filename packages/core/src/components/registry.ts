@@ -19,15 +19,16 @@ import type { ComponentRegistry, RegistryEntry } from "../types.ts";
 import Elicit, { props as elicitProps, returns as elicitReturns } from "./Elicit.ts";
 import TempDir, { props as tempDirProps } from "./TempDir.ts";
 import Fetch, { props as fetchProps } from "./Fetch.ts";
-import File, { props as fileProps } from "./File.ts";
-import FileDelete, { props as fileDeleteProps } from "./FileDelete.ts";
+import { form as fileForm, props as fileProps } from "./File.ts";
+import { form as fileDeleteForm, props as fileDeleteProps } from "./FileDelete.ts";
 import Glob, { props as globProps, returns as globReturns } from "./Glob.ts";
 import Json, { props as jsonProps } from "./Json.ts";
 import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts";
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
-import type { FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
+import { formDispatcher } from "../invocation-identity.ts";
+import type { FormDeclaration, FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
 
 /** The origin every core component reports to inspection. */
 export const CORE_ORIGIN = "@executablemd/core";
@@ -44,12 +45,21 @@ interface CoreOptions {
   captures?: readonly string[];
 }
 
+/**
+ * One core default, with its implementation normalized here.
+ *
+ * A component that declares an authored form hands over a declaration and this
+ * builds the dispatcher — in the copy of core that will perform the execution,
+ * which is the whole point (`invocation-identity.ts`). A component that
+ * declares nothing is form-insensitive and its function is used as it is.
+ */
 function core(
   name: string,
-  fn: FunctionComponent,
+  implementation: FunctionComponent | FormDeclaration,
   props: PropsSchema,
   options: CoreOptions = {},
 ): [string, RegistryEntry] {
+  const fn = typeof implementation === "function" ? implementation : formDispatcher(implementation);
   const { returns, captures } = options;
   return [
     name,
@@ -75,8 +85,8 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   }),
   core("TempDir", TempDir, parseJsonObject(tempDirProps)),
   core("Fetch", Fetch, parseJsonObject(fetchProps)),
-  core("File", File, parseJsonObject(fileProps)),
-  core("File.Delete", FileDelete, parseJsonObject(fileDeleteProps)),
+  core("File", fileForm, parseJsonObject(fileProps)),
+  core("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps)),
   core("Glob", Glob, parseJsonObject(globProps), { returns: parseJsonObject(globReturns) }),
   core("Json", Json, parseJsonObject(jsonProps), { captures: ["value"] }),
   core("Parse", Parse, parseJsonObject(parseProps), { returns: parseJsonObject(parseReturns) }),
