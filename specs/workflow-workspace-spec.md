@@ -1363,6 +1363,70 @@ Each Commit, Push and PullRequest owns its effect identity and durability.
 Document structure expresses ordering, retry and failure policy. It never makes
 two Git repositories one atomic domain.
 
+### 7.7 Pull-request evidence
+
+A workflow Agent has no network, so an objection its prompt does not render is
+an objection its review never saw. Three self-closing components read what a
+pull request already holds:
+
+```md
+<PullRequest.Reviews  number={pullRequest.number} as="reviews"  />
+<PullRequest.Comments number={pullRequest.number} as="comments" />
+<PullRequest.Checks   number={pullRequest.number} as="checks"   />
+```
+
+Each takes one required positive-integer `number`, requires `as`, renders
+nothing and binds one JSON array. The enclosing `<Repository>` and the
+contextual working directory decide which repository it names, as §7.1 decides
+every Git operation's place, so there is no repository, URL, host, provider,
+endpoint, token, credential, page, cursor or limit prop. Each is self-closing
+only, declared to the engine rather than asked about, so a paired invocation is
+refused before the component's body runs.
+
+Three components rather than one, for the reason Push and PullRequest are two:
+three separate remote collections, three durable effects, three independent
+replays and failures. One component returning three lists would make a partial
+answer indistinguishable from a complete one.
+
+**A read is not a reconciled effect.** §7.5's upsert reconciles because it
+mutates a remote and must adopt an interrupted attempt rather than repeat it.
+These change nothing, have no natural key and no pre-state, and are ordinary
+non-mutating durable reads. An interruption before the result commits may repeat
+the requests, which is safe for a read in the way it is not for a write; no
+incomplete list is ever retained. A completed replay restores the retained array
+without opening an authentication session or sending anything.
+
+**Complete, or unavailable.** The host follows the provider's pagination until
+the collection is complete. A transport failure, a rate limit, an authentication
+failure, an ambiguous 404, malformed content, an item the adapter cannot read, a
+next relation off the authorized origin, and a walk still going at the page
+limit are all *unavailable*: the read fails and binds nothing. None becomes a
+short list. An empty array means the authenticated provider completed the
+collection and found none — which is why the two are distinguishable at all.
+
+**The answer is held to the request.** A payload naming another repository,
+another pull request or another head is a protocol failure rather than data.
+Checks observe the pull request's head first and read every result at that exact
+SHA, and each record carries it, so evidence always says which revision it
+describes.
+
+**Authentication is the host's.** The credential is the host's own, acquired for
+the retained locator and disposed with the invocation, and the destination stays
+inside the adapter's ceiling. A document names a number; it names no host and
+supplies no credential. Nothing of the credential, the endpoint, the raw
+response or the pagination state is retained: what the journal holds is the
+normalized request and the normalized evidence, across the ordinary secret gate.
+
+The records are closed and provider-neutral. Bodies and provider messages are
+retained byte-for-byte, because a reviewer reading a summary of an objection has
+not read the objection; identifiers are decimal strings, because a provider
+identifier already exceeds what a JSON number holds exactly; and timestamps are
+the provider's own strings, unreformatted. Check runs and commit statuses keep
+their separate vocabularies under a `kind` discriminator — a commit status's
+`error` is not a check run's `failure`, and collapsing them would report that a
+check ran and failed when the provider said it never ran.
+
+
 ## 8. Agents inspect; XMD mutates
 
 ### 8.1 No directory registration

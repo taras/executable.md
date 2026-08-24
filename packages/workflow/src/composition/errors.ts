@@ -273,6 +273,42 @@ export class GitCompositionProviderError extends WorkflowStorageError {
 }
 
 /** The provider answered with something that is not a Git operation result. */
+/**
+ * A word from the fixed vocabulary a pull-request evidence read refuses with.
+ *
+ * `unavailable` is the one that matters, and it is deliberately not "empty".
+ * A transport failure, a rate limit, a rejected credential, a 404 that is really
+ * a permission check, a page that could not be followed and a body that could
+ * not be read all prove nothing about what the pull request holds. Binding `[]`
+ * for any of them would tell a reviewer there are no objections, which is the
+ * one wrong answer this surface must never give.
+ */
+export type PullRequestReadReason =
+  | "no-repository-context"
+  | "invalid-number"
+  | "unexpected-content"
+  | "unavailable"
+  | "protocol";
+
+/**
+ * A read that cannot answer with the evidence it promised.
+ *
+ * A `StaleInputError`, like the pull-request authority refusals, so expansion
+ * propagates it rather than rendering it: an ambient error mode must not be able
+ * to downgrade "nobody could read the objections" to a comment and let the
+ * review continue as though there were none.
+ */
+export class PullRequestReadError extends StaleInputError {
+  override name = "PullRequestReadError";
+
+  readonly reason: PullRequestReadReason;
+
+  constructor(reason: PullRequestReadReason, element: string, sentence: string) {
+    super(`${element} could not read the evidence it names: ${sentence}`);
+    this.reason = reason;
+  }
+}
+
 export class GitOperationProtocolError extends WorkflowStorageError {
   override name = "GitOperationProtocolError";
 
