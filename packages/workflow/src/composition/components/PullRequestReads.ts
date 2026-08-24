@@ -44,7 +44,13 @@
  */
 
 import { cwd } from "@executablemd/runtime";
-import type { FormDeclaration, InvocationForm, PropsSchema } from "@executablemd/core";
+import type {
+  FormDeclaration,
+  InvocationForm,
+  JsonObject,
+  PropsSchema,
+  ReturnsSchema,
+} from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
 import { GitComposition } from "../git-api.ts";
@@ -52,6 +58,9 @@ import { currentRepository } from "../context.ts";
 import { PullRequestReadError } from "../errors.ts";
 import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
 import type { PullRequestReadKind } from "../pull-request-read-records.ts";
+import { PullRequestEvidence } from "../pull-request-evidence-api.ts";
+import { mintReadRequest } from "../pull-request-read-terminal.ts";
+import { getExpansion } from "@executablemd/core";
 
 /** The component names, as a document writes them and a refusal names them. */
 export const REVIEWS_ELEMENT = "<PullRequest.Reviews>";
@@ -67,14 +76,121 @@ export const props: PropsSchema = {
   additionalProperties: false,
 };
 
+const AUTHOR: JsonObject = { type: ["string", "null"] };
+const NULLABLE_TEXT: JsonObject = { type: ["string", "null"] };
+const NULLABLE_COUNT: JsonObject = { type: ["integer", "null"] };
+const SIDE: JsonObject = { enum: ["left", "right", null] };
+
+function array(items: JsonObject): ReturnsSchema {
+  return { type: "array", items };
+}
+
+function closed(properties: JsonObject): JsonObject {
+  return {
+    type: "object",
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
+}
+
 /**
- * No `returns`.
+ * The evidence each component binds, exactly.
  *
- * Declaring one would compile a schema for an array whose item shapes are the
- * provider records, and a second description of those is a second contract to
- * keep in agreement. The provider parses what it retained; what reaches a
- * binding is that parsed value.
+ * Declared rather than left open, and for two reasons. It is the boundary a
+ * document reads these records through, so a member arriving that the contract
+ * does not name would be a provider detail reaching a binding. And declaring
+ * `returns` is what makes `as` mandatory — which is checked before the body
+ * runs, so an invocation that forgot it is refused before a credential is read
+ * or a request is sent.
  */
+export const reviewsReturns: ReturnsSchema = array(
+  closed({
+    id: { type: "string" },
+    author: AUTHOR,
+    state: { enum: ["approved", "changes-requested", "commented", "dismissed", "pending"] },
+    body: { type: "string" },
+    submittedAt: NULLABLE_TEXT,
+    commitSha: NULLABLE_TEXT,
+    url: { type: "string" },
+  }),
+);
+
+export const commentsReturns: ReturnsSchema = array({
+  oneOf: [
+    closed({
+      kind: { const: "conversation" },
+      id: { type: "string" },
+      author: AUTHOR,
+      body: { type: "string" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+      url: { type: "string" },
+    }),
+    closed({
+      kind: { const: "review" },
+      id: { type: "string" },
+      reviewId: NULLABLE_TEXT,
+      author: AUTHOR,
+      body: { type: "string" },
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+      url: { type: "string" },
+      path: { type: "string" },
+      diffHunk: { type: "string" },
+      commitSha: { type: "string" },
+      originalCommitSha: { type: "string" },
+      line: NULLABLE_COUNT,
+      side: SIDE,
+      startLine: NULLABLE_COUNT,
+      startSide: SIDE,
+      inReplyToId: NULLABLE_TEXT,
+    }),
+  ],
+});
+
+export const checksReturns: ReturnsSchema = array({
+  oneOf: [
+    closed({
+      kind: { const: "check-run" },
+      id: { type: "string" },
+      headSha: { type: "string" },
+      name: { type: "string" },
+      status: {
+        enum: ["queued", "in_progress", "completed", "waiting", "requested", "pending"],
+      },
+      conclusion: {
+        enum: [
+          "success",
+          "failure",
+          "neutral",
+          "cancelled",
+          "skipped",
+          "timed_out",
+          "action_required",
+          null,
+        ],
+      },
+      url: NULLABLE_TEXT,
+      startedAt: NULLABLE_TEXT,
+      completedAt: NULLABLE_TEXT,
+      title: NULLABLE_TEXT,
+      summary: NULLABLE_TEXT,
+      text: NULLABLE_TEXT,
+    }),
+    closed({
+      kind: { const: "commit-status" },
+      id: { type: "string" },
+      headSha: { type: "string" },
+      name: { type: "string" },
+      state: { enum: ["error", "failure", "pending", "success"] },
+      description: NULLABLE_TEXT,
+      url: NULLABLE_TEXT,
+      createdAt: { type: "string" },
+      updatedAt: { type: "string" },
+    }),
+  ],
+});
 function read(kind: PullRequestReadKind, element: string) {
   return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
     // The props schema is what refuses a missing, fractional or non-positive
@@ -100,12 +216,24 @@ function read(kind: PullRequestReadKind, element: string) {
       );
     }
 
-    const result = yield* GitComposition.operations.readPullRequestEvidence({
+    // Minted here, so the object the provider admits is the one this
+    // invocation issued and nothing a handler can reconstruct.
+    const expansion = yield* getExpansion();
+    const issued = mintReadRequest(expansion.id, {
       repository,
       workingDirectory: yield* cwd(),
       number,
       kind,
     });
+
+    // Request-only. Middleware installed in scope sees exactly what is about to
+    // be read and may refuse it by throwing, or delegate; what it answers with
+    // is a request, so there is nothing here it could answer with instead of
+    // the evidence. A request it did not receive from this invocation is not
+    // one the terminal will act on.
+    const asked = yield* PullRequestEvidence.operations.read(issued);
+
+    const result = yield* GitComposition.operations.readPullRequestEvidence(asked);
     return pullRequestReadResultJson(result);
   };
 }

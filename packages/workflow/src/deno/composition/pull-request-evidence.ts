@@ -28,7 +28,8 @@
  * identity is what the answer is held to.
  */
 
-import type { Operation } from "effection";
+import { Err, Ok } from "effection";
+import type { Operation, Result } from "effection";
 import {
   authorizedHeaders,
   member,
@@ -60,16 +61,55 @@ export type EvidenceReading =
       readonly headSha: string | null;
       readonly evidence: PullRequestEvidence[];
     }
-  | { readonly state: "unavailable" };
+  | { readonly state: "unavailable" }
+  | { readonly state: "protocol-invalid" };
 
-const UNAVAILABLE: EvidenceReading = Object.freeze({ state: "unavailable" });
+/**
+ * Something was read, and it was not what it claimed to be.
+ *
+ * Told apart from unavailable because they mean opposite things about the host:
+ * unavailable is a host that did not answer, and this is a host that answered
+ * about the wrong subject or with an item outside the contract. One is worth
+ * asking again; the other is a provider a run should stop believing.
+ */
+/**
+ * Why a collection could not be answered, carried as the failure itself.
+ *
+ * The two states are the whole payload: this never reaches a document, and the
+ * component turns it into the refusal a reader sees.
+ */
+export class EvidenceUnreadable extends Error {
+  override name = "EvidenceUnreadable";
+
+  readonly state: "unavailable" | "protocol-invalid";
+
+  constructor(state: "unavailable" | "protocol-invalid") {
+    super(state);
+    this.state = state;
+  }
+}
+
+function unavailable<T>(): Result<T> {
+  return Err(new EvidenceUnreadable("unavailable"));
+}
+
+function invalid<T>(): Result<T> {
+  return Err(new EvidenceUnreadable("protocol-invalid"));
+}
+
+/** The refusal a failed collection carries, read back rather than asserted. */
+function refusal(error: Error): EvidenceReading {
+  return { state: error instanceof EvidenceUnreadable ? error.state : "unavailable" };
+}
+
+type Collected = Result<PullRequestEvidence[]>;
 
 /** The identifier a provider returned, as the decimal string a record holds. */
 function identifier(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isInteger(value)) {
-    return String(value);
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) ? String(value) : undefined;
   }
-  return typeof value === "string" && value !== "" ? value : undefined;
+  return typeof value === "string" && /^[0-9]+$/.test(value) ? value : undefined;
 }
 
 function login(value: unknown): string | null {
@@ -113,10 +153,10 @@ function* collect(
    * where the items are is not.
    */
   envelope?: string,
-): Operation<PullRequestEvidence[] | undefined> {
+): Operation<Collected> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return undefined;
+    return unavailable();
   }
   const gathered: PullRequestEvidence[] = [];
   let url = first;
@@ -125,33 +165,33 @@ function* collect(
     try {
       response = yield* access.send({ method: "GET", url, headers: sent });
     } catch {
-      return undefined;
+      return unavailable();
     }
     if (response.status !== 200) {
-      return undefined;
+      return unavailable();
     }
     const payload = readJson(response.body);
     const listed = envelope === undefined ? payload : member(payload, envelope);
     if (!Array.isArray(listed)) {
-      return undefined;
+      return invalid();
     }
     for (const candidate of listed) {
       const item = read(candidate);
       if (item === undefined) {
-        return undefined;
+        return invalid();
       }
       gathered.push(item);
     }
     const walk = nextPage(response.link, access.endpoint);
     if (walk.kind === "complete") {
-      return gathered;
+      return Ok(gathered);
     }
     if (walk.kind === "unfollowable") {
-      return undefined;
+      return unavailable();
     }
     url = walk.url;
   }
-  return undefined;
+  return unavailable();
 }
 
 function collectionUrl(
@@ -164,7 +204,12 @@ function collectionUrl(
   return `${prefix}${path}?per_page=${PAGE_SIZE}${query}`;
 }
 
-function readReview(payload: unknown): ReviewEvidence | undefined {
+function readReview(number: number, payload: unknown): ReviewEvidence | undefined {
+  // The review says which pull request it belongs to; one that does not, or
+  // that names another, is not this read's evidence.
+  if (!belongsToPullRequest(member(payload, "pull_request_url"), number)) {
+    return undefined;
+  }
   const id = identifier(member(payload, "id"));
   const url = nonEmpty(member(payload, "html_url"));
   const body = member(payload, "body");
@@ -188,7 +233,10 @@ function readReview(payload: unknown): ReviewEvidence | undefined {
   };
 }
 
-function readConversationComment(payload: unknown): CommentEvidence | undefined {
+function readConversationComment(number: number, payload: unknown): CommentEvidence | undefined {
+  if (!belongsToIssue(member(payload, "issue_url"), number)) {
+    return undefined;
+  }
   const id = identifier(member(payload, "id"));
   const url = nonEmpty(member(payload, "html_url"));
   const body = member(payload, "body");
@@ -211,7 +259,10 @@ function readConversationComment(payload: unknown): CommentEvidence | undefined 
   };
 }
 
-function readReviewComment(payload: unknown): CommentEvidence | undefined {
+function readReviewComment(number: number, payload: unknown): CommentEvidence | undefined {
+  if (!belongsToPullRequest(member(payload, "pull_request_url"), number)) {
+    return undefined;
+  }
   const id = identifier(member(payload, "id"));
   const url = nonEmpty(member(payload, "html_url"));
   const body = member(payload, "body");
@@ -220,7 +271,9 @@ function readReviewComment(payload: unknown): CommentEvidence | undefined {
   const path = nonEmpty(member(payload, "path"));
   const commitSha = nonEmpty(member(payload, "commit_id"));
   const originalCommitSha = nonEmpty(member(payload, "original_commit_id"));
-  const reviewId = identifier(member(payload, "pull_request_review_id"));
+  const declaredReview = member(payload, "pull_request_review_id");
+  const reviewId =
+    declaredReview === null || declaredReview === undefined ? null : identifier(declaredReview);
   const diffHunk = member(payload, "diff_hunk");
   if (id === undefined || url === undefined || typeof body !== "string") {
     return undefined;
@@ -259,21 +312,23 @@ function readReviewComment(payload: unknown): CommentEvidence | undefined {
 function readCheckRun(headSha: string, payload: unknown): CheckEvidence | undefined {
   const id = identifier(member(payload, "id"));
   const name = nonEmpty(member(payload, "name"));
-  const status = lowered(member(payload, "status"));
+  const declaredStatus = lowered(member(payload, "status"));
+  const status = CHECK_RUN_STATUSES.find((known) => known === declaredStatus);
   if (id === undefined || name === undefined || status === undefined) {
     return undefined;
   }
-  if (!CHECK_RUN_STATUSES.includes(status)) {
+  const declaredConclusion = lowered(member(payload, "conclusion"));
+  const conclusion =
+    declaredConclusion === undefined
+      ? null
+      : CHECK_RUN_CONCLUSIONS.find((known) => known === declaredConclusion);
+  if (conclusion === undefined) {
     return undefined;
   }
-  const conclusion = lowered(member(payload, "conclusion"));
-  if (conclusion !== undefined && !CHECK_RUN_CONCLUSIONS.includes(conclusion)) {
-    return undefined;
-  }
-  // The run's own head, checked against the one this read is about: a check
-  // describing another commit is not evidence about this revision.
-  const declared = nonEmpty(member(payload, "head_sha"));
-  if (declared !== undefined && declared !== headSha) {
+  // The run's own head, required and checked: a check that does not say which
+  // commit it describes cannot be evidence about this one, and one that names
+  // another commit is evidence about something else.
+  if (nonEmpty(member(payload, "head_sha")) !== headSha) {
     return undefined;
   }
   const output = member(payload, "output");
@@ -283,8 +338,8 @@ function readCheckRun(headSha: string, payload: unknown): CheckEvidence | undefi
     headSha,
     name,
     status,
-    conclusion: conclusion ?? null,
-    url: optionalText(member(payload, "details_url")),
+    conclusion,
+    url: optionalText(member(payload, "html_url")),
     startedAt: optionalText(member(payload, "started_at")),
     completedAt: optionalText(member(payload, "completed_at")),
     title: optionalText(member(output, "title")),
@@ -296,13 +351,10 @@ function readCheckRun(headSha: string, payload: unknown): CheckEvidence | undefi
 function readCommitStatus(headSha: string, payload: unknown): CheckEvidence | undefined {
   const id = identifier(member(payload, "id"));
   const name = nonEmpty(member(payload, "context"));
-  const state = lowered(member(payload, "state"));
+  const state = COMMIT_STATUS_STATES.find((known) => known === lowered(member(payload, "state")));
   const createdAt = nonEmpty(member(payload, "created_at"));
   const updatedAt = nonEmpty(member(payload, "updated_at"));
   if (id === undefined || name === undefined || state === undefined) {
-    return undefined;
-  }
-  if (!COMMIT_STATUS_STATES.includes(state)) {
     return undefined;
   }
   if (createdAt === undefined || updatedAt === undefined) {
@@ -321,37 +373,65 @@ function readCommitStatus(headSha: string, payload: unknown): CheckEvidence | un
   };
 }
 
+/**
+ * Whether a subject URL names the pull request this read is about.
+ *
+ * The last path segment is the number, so a review carried over from another
+ * pull request — or one this adapter cannot place at all — is refused rather
+ * than rendered as an objection to this change.
+ */
+function belongsTo(value: unknown, number: number, collection: string): boolean {
+  const url = nonEmpty(value);
+  if (url === undefined) {
+    return false;
+  }
+  return new RegExp(`/${collection}/([0-9]+)$`).exec(url)?.[1] === String(number);
+}
+
+function belongsToPullRequest(value: unknown, number: number): boolean {
+  return belongsTo(value, number, "pulls");
+}
+
+function belongsToIssue(value: unknown, number: number): boolean {
+  return belongsTo(value, number, "issues");
+}
+
 /** The head this numbered pull request is at, checked against the request. */
+type Observed = Result<string>;
+
 function* observeHead(
   access: GitHubAccess,
   name: GitHubRepositoryName,
   number: number,
-): Operation<string | undefined> {
+): Operation<Observed> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return undefined;
+    return unavailable();
   }
   const url = `${access.endpoint}/repos/${name.owner}/${name.repository}/pulls/${number}`;
   let response;
   try {
     response = yield* access.send({ method: "GET", url, headers: sent });
   } catch {
-    return undefined;
+    return unavailable();
   }
   if (response.status !== 200) {
-    return undefined;
+    return unavailable();
   }
   const payload = readJson(response.body);
-  const answered = member(payload, "number");
-  if (answered !== number) {
-    return undefined;
+  // Every field this answer is authenticated by is required. An answer that
+  // omits the number, the repository or the head is not one this read can hold
+  // to its request, and accepting it would be trusting the URL alone.
+  if (member(payload, "number") !== number) {
+    return invalid();
   }
   const full = nonEmpty(member(member(member(payload, "base"), "repo"), "full_name"));
   const asked = `${name.owner}/${name.repository}`.toLowerCase();
-  if (full !== undefined && full.toLowerCase() !== asked) {
-    return undefined;
+  if (full === undefined || full.toLowerCase() !== asked) {
+    return invalid();
   }
-  return nonEmpty(member(member(payload, "head"), "sha"));
+  const headSha = nonEmpty(member(member(payload, "head"), "sha"));
+  return headSha === undefined ? invalid() : Ok(headSha);
 }
 
 /** The combined status for one ref, which is a single object rather than a page. */
@@ -359,10 +439,10 @@ function* readCombinedStatus(
   access: GitHubAccess,
   name: GitHubRepositoryName,
   headSha: string,
-): Operation<PullRequestEvidence[] | undefined> {
+): Operation<Collected> {
   const sent = yield* authorizedHeaders(access, false);
   if (sent === undefined) {
-    return undefined;
+    return unavailable();
   }
   const url =
     `${access.endpoint}/repos/${name.owner}/${name.repository}/commits/${headSha}/status` +
@@ -371,29 +451,29 @@ function* readCombinedStatus(
   try {
     response = yield* access.send({ method: "GET", url, headers: sent });
   } catch {
-    return undefined;
+    return unavailable();
   }
   if (response.status !== 200) {
-    return undefined;
+    return unavailable();
   }
   const payload = readJson(response.body);
-  const declared = nonEmpty(member(payload, "sha"));
-  if (declared !== undefined && declared !== headSha) {
-    return undefined;
+  // The combined status has to say which commit it is about, and say this one.
+  if (nonEmpty(member(payload, "sha")) !== headSha) {
+    return invalid();
   }
   const listed = member(payload, "statuses");
   if (!Array.isArray(listed)) {
-    return undefined;
+    return invalid();
   }
   const gathered: PullRequestEvidence[] = [];
   for (const candidate of listed) {
     const item = readCommitStatus(headSha, candidate);
     if (item === undefined) {
-      return undefined;
+      return invalid();
     }
     gathered.push(item);
   }
-  return gathered;
+  return Ok(gathered);
 }
 
 /** Read one collection, completely, or say it could not be read. */
@@ -407,11 +487,11 @@ export function* readPullRequestEvidence(
     const reviews = yield* collect(
       access,
       collectionUrl(access, name, `/pulls/${number}/reviews`),
-      readReview,
+      (payload) => readReview(number, payload),
     );
-    return reviews === undefined
-      ? UNAVAILABLE
-      : { state: "read", headSha: null, evidence: reviews };
+    return reviews.ok
+      ? { state: "read", headSha: null, evidence: reviews.value }
+      : refusal(reviews.error);
   }
 
   if (kind === "comments") {
@@ -420,26 +500,31 @@ export function* readPullRequestEvidence(
     const conversation = yield* collect(
       access,
       collectionUrl(access, name, `/issues/${number}/comments`),
-      readConversationComment,
+      (payload) => readConversationComment(number, payload),
     );
-    if (conversation === undefined) {
-      return UNAVAILABLE;
+    if (!conversation.ok) {
+      return refusal(conversation.error);
     }
     const inline = yield* collect(
       access,
       collectionUrl(access, name, `/pulls/${number}/comments`),
-      readReviewComment,
+      (payload) => readReviewComment(number, payload),
     );
-    if (inline === undefined) {
-      return UNAVAILABLE;
+    if (!inline.ok) {
+      return refusal(inline.error);
     }
-    return { state: "read", headSha: null, evidence: [...conversation, ...inline] };
+    return {
+      state: "read",
+      headSha: null,
+      evidence: [...conversation.value, ...inline.value],
+    };
   }
 
-  const headSha = yield* observeHead(access, name, number);
-  if (headSha === undefined) {
-    return UNAVAILABLE;
+  const observed = yield* observeHead(access, name, number);
+  if (!observed.ok) {
+    return refusal(observed.error);
   }
+  const headSha = observed.value;
   // `filter=latest` is the default and is written anyway: what a reviewer wants
   // is what the pull request's own page associates with this head — the latest
   // run per name — rather than every historical attempt at it.
@@ -449,12 +534,12 @@ export function* readPullRequestEvidence(
     (payload) => readCheckRun(headSha, payload),
     "check_runs",
   );
-  if (runs === undefined) {
-    return UNAVAILABLE;
+  if (!runs.ok) {
+    return refusal(runs.error);
   }
   const statuses = yield* readCombinedStatus(access, name, headSha);
-  if (statuses === undefined) {
-    return UNAVAILABLE;
+  if (!statuses.ok) {
+    return refusal(statuses.error);
   }
-  return { state: "read", headSha, evidence: [...runs, ...statuses] };
+  return { state: "read", headSha, evidence: [...runs.value, ...statuses.value] };
 }

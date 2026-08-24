@@ -282,7 +282,7 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/295",
   },
   {
-    path: "packages/workflow/tests/pull-request-reads.test.ts",
+    path: "packages/workflow/tests/pull-request-read.test.ts",
     reason:
       "drives the three evidence reads against a real node:sqlite WorkflowRun database, the Deno DOFS Workspace adapter and a real `git` subprocess, and replays one from the retained journal; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/576",

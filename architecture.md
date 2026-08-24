@@ -68,6 +68,7 @@ Existing documents and code get aligned to this section retroactively.
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation |
 | XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is retained as an ordinary durable observation. It is distinct from an Agent's own network authority, which it does not grant, and from a reconciled mutating external effect, which it does not claim: an interruption before its record commits may repeat the read |
+| Git-host evidence read | one bounded, non-mutating read of a collection a Git host already holds about a named pull request — its reviews, its comments, or the checks on its head. It is authenticated with the host's own credential and paginated by the adapter, and it is *not* a reconciled external effect: it has no natural key, no pre-state and nothing to adopt, so it is an ordinary durable read whose interrupted attempt may repeat and whose completed record replays without contacting a provider. It answers completely or not at all — an empty collection and a collection nobody could finish reading are different answers |
 | object-source attachment | adapter-private composition data the trusted host builds for exactly one external-effect reconciliation, giving the selected provider authorized live access to local state the frozen request cannot describe — the Git objects a push publishes, and the retained locator it is authorized to reach. It is authenticated against the durable identity it belongs to and proven contained before its first use — the local state behind one can name further state, so the graph a provider could traverse through it is validated rather than assumed — held in that provider's own closure, disposed with the invocation, and is never durable, never part of a natural key and never visible to routing middleware |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
@@ -906,8 +907,9 @@ transaction commits restores the recorded answer event without reaching the live
 controller and without consuming or publishing again.
 
 Scheduling — automatic resume, watchers, unattended iteration and remote host
-selection — remains blocked on #301's supervised-workflow contract and is not
-part of this behavior.
+selection — is #300's and is not part of this behavior. Nothing here waits on
+it: a suspended run continues through `xmd workflow answer` followed by an
+explicit `xmd workflow resume`.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -1269,6 +1271,25 @@ selected root and the roots the inherited prefix names into the new run, replays
 the inherited prefix under a compatible modified definition and appends new
 history under a new run ID. It never rewinds external branches, pushes, pull
 requests or provider state.
+
+Reading what a Git host holds is not reconciling what it owns. A reconciliation
+exists to mutate a remote at most once across interruption, and everything it
+carries — the natural key, the pre-state, the observe-then-perform pair — is
+there to decide whether an attempt already landed. A read decides nothing of the
+kind: repeating it is safe, and a completed one restores from the journal. So a
+Git-host evidence read is an ordinary durable effect, and the machinery that
+makes a mutation exactly-once is deliberately absent rather than reused where it
+would only add a second identity to keep in agreement.
+
+What such a read must not do is answer partially. A collection the host
+completed and a collection nobody could finish reading are opposite facts, and
+only one of them is `[]`; a truncated list would report the first while meaning
+the second, so an incomplete walk fails the read and retains no array at all.
+The request crosses a public request-only route, so middleware may see it,
+refuse it, or narrow what a run may read; the evidence crosses no public route
+at all. What that route answers with is a request, and the terminal behind it
+admits only the exact request object the host minted for the invocation now
+running.
 
 An external effect is judged by its retained record rather than by its type. A
 completed Git-host reconciliation record replays without contacting a provider,
@@ -3092,7 +3113,8 @@ Status is measured against main.
 | `suspendFor()` | publishes one filtered suspension request, settles `suspended`, releases the executor lock, and re-enters the same wait without duplicating it | built on the #367 stack |
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
 | `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
-| workflow scheduling (watchers, unattended iteration, remote host selection) | — | blocked on #301 |
+| `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all | built by #576 |
+| workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 

@@ -21,6 +21,12 @@
 import { isJsonObject } from "@executablemd/core";
 import type { Json, JsonObject } from "@executablemd/core";
 import type { RepositoryRecord } from "./records.ts";
+import {
+  filteredRepositoryIdentity,
+  gitPushRepositoryIdentityJson,
+  parseGitPushRepositoryIdentity,
+} from "./git-push-records.ts";
+import type { GitPushRepositoryIdentity } from "./git-push-records.ts";
 
 /** Which collection one read covers. */
 export type PullRequestReadKind = "reviews" | "comments" | "checks";
@@ -63,7 +69,8 @@ export interface ConversationCommentEvidence {
 export interface ReviewCommentEvidence {
   readonly kind: "review";
   readonly id: string;
-  readonly reviewId: string;
+  /** Null for a comment that belongs to no review. */
+  readonly reviewId: string | null;
   readonly author: string | null;
   readonly body: string;
   readonly createdAt: string;
@@ -83,13 +90,32 @@ export interface ReviewCommentEvidence {
 export type CommentEvidence = ConversationCommentEvidence | ReviewCommentEvidence;
 
 /** One check run associated with the observed head. */
+export type CheckRunStatus =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "waiting"
+  | "requested"
+  | "pending";
+
+export type CheckRunConclusion =
+  | "success"
+  | "failure"
+  | "neutral"
+  | "cancelled"
+  | "skipped"
+  | "timed_out"
+  | "action_required";
+
+export type CommitStatusState = "error" | "failure" | "pending" | "success";
+
 export interface CheckRunEvidence {
   readonly kind: "check-run";
   readonly id: string;
   readonly headSha: string;
   readonly name: string;
-  readonly status: string;
-  readonly conclusion: string | null;
+  readonly status: CheckRunStatus;
+  readonly conclusion: CheckRunConclusion | null;
   readonly url: string | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
@@ -104,7 +130,7 @@ export interface CommitStatusEvidence {
   readonly id: string;
   readonly headSha: string;
   readonly name: string;
-  readonly state: string;
+  readonly state: CommitStatusState;
   readonly description: string | null;
   readonly url: string | null;
   readonly createdAt: string;
@@ -123,7 +149,7 @@ export type PullRequestEvidence = ReviewEvidence | CommentEvidence | CheckEviden
  * would tell a reviewer a check failed when the provider said it never ran, so
  * `kind` says which vocabulary an item came from and both sets stay whole.
  */
-export const CHECK_RUN_STATUSES: readonly string[] = [
+export const CHECK_RUN_STATUSES: readonly CheckRunStatus[] = [
   "queued",
   "in_progress",
   "completed",
@@ -132,7 +158,7 @@ export const CHECK_RUN_STATUSES: readonly string[] = [
   "pending",
 ];
 
-export const CHECK_RUN_CONCLUSIONS: readonly string[] = [
+export const CHECK_RUN_CONCLUSIONS: readonly CheckRunConclusion[] = [
   "success",
   "failure",
   "neutral",
@@ -142,7 +168,12 @@ export const CHECK_RUN_CONCLUSIONS: readonly string[] = [
   "action_required",
 ];
 
-export const COMMIT_STATUS_STATES: readonly string[] = ["error", "failure", "pending", "success"];
+export const COMMIT_STATUS_STATES: readonly CommitStatusState[] = [
+  "error",
+  "failure",
+  "pending",
+  "success",
+];
 
 export const REVIEW_STATES: readonly ReviewEvidence["state"][] = [
   "approved",
@@ -152,7 +183,15 @@ export const REVIEW_STATES: readonly ReviewEvidence["state"][] = [
   "pending",
 ];
 
-/** One read, as the component asks for it. */
+/**
+ * One read, as the component asks for it.
+ *
+ * Live provider-private attachment data. The whole Repository record and the
+ * working directory are here because the provider needs them to select a
+ * checkout and resolve a locator, and neither belongs in the journal: a
+ * checkout path is this machine's, and the locator the fingerprint already
+ * names is the one thing a retained record must not repeat.
+ */
 export interface PullRequestReadRequest {
   /** The whole Repository record the component observed, to be compared. */
   readonly repository: RepositoryRecord;
@@ -160,6 +199,68 @@ export interface PullRequestReadRequest {
   readonly workingDirectory: string;
   readonly number: number;
   readonly kind: PullRequestReadKind;
+}
+
+/**
+ * The same read, filtered to what durable JSON may carry.
+ *
+ * The Repository identity Push retains, without its Workspace checkout path,
+ * plus the two things that say which collection of which pull request this is.
+ * This is what the effect's input holds and what its fingerprint is taken over,
+ * so a document edited to read another number in the same place is a different
+ * effect rather than one replaying the first's answer.
+ */
+export interface PullRequestReadInputs {
+  readonly repository: GitPushRepositoryIdentity;
+  readonly number: number;
+  readonly kind: PullRequestReadKind;
+}
+
+/** The durable inputs one live request reduces to. */
+export function readInputs(request: PullRequestReadRequest): PullRequestReadInputs {
+  return Object.freeze({
+    repository: filteredRepositoryIdentity(request.repository),
+    number: request.number,
+    kind: request.kind,
+  });
+}
+
+export function pullRequestReadInputsJson(inputs: PullRequestReadInputs): JsonObject {
+  return {
+    repository: gitPushRepositoryIdentityJson(inputs.repository),
+    number: inputs.number,
+    kind: inputs.kind,
+  };
+}
+
+/** The retained inputs, read back rather than asserted. */
+export function parsePullRequestReadInputs(value: Json): PullRequestReadInputs | undefined {
+  if (!isJsonObject(value) || !exactMembers(value, ["repository", "number", "kind"])) {
+    return undefined;
+  }
+  const repository = parseGitPushRepositoryIdentity(value.repository);
+  const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
+  const number = value.number;
+  if (repository === undefined || kind === undefined) {
+    return undefined;
+  }
+  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
+    return undefined;
+  }
+  return { repository, number, kind };
+}
+
+/**
+ * Exactly these members, and no others.
+ *
+ * A record that carries one more member than its contract declares is a
+ * provider detail that reached a binding, so the check is equality rather than
+ * presence — a closed record that only refused what was *missing* would let
+ * anything extra through.
+ */
+function exactMembers(value: JsonObject, names: readonly string[]): boolean {
+  const present = Object.keys(value);
+  return present.length === names.length && names.every((name) => present.includes(name));
 }
 
 /** What one completed read holds. */
@@ -204,6 +305,9 @@ export function parsePullRequestReadResult(value: Json): PullRequestReadResult |
   }
   const evidence = value.evidence;
   if (!Array.isArray(evidence)) {
+    return undefined;
+  }
+  if (!exactMembers(value, ["kind", "headSha", "evidence"])) {
     return undefined;
   }
   const items: PullRequestEvidence[] = [];
@@ -255,7 +359,61 @@ function side(value: Json | undefined): "left" | "right" | null | undefined {
   return value === "left" || value === "right" ? value : undefined;
 }
 
+const REVIEW_MEMBERS = ["id", "author", "state", "body", "submittedAt", "commitSha", "url"];
+
+const CONVERSATION_MEMBERS = ["kind", "id", "author", "body", "createdAt", "updatedAt", "url"];
+
+const REVIEW_COMMENT_MEMBERS = [
+  "kind",
+  "id",
+  "reviewId",
+  "author",
+  "body",
+  "createdAt",
+  "updatedAt",
+  "url",
+  "path",
+  "diffHunk",
+  "commitSha",
+  "originalCommitSha",
+  "line",
+  "side",
+  "startLine",
+  "startSide",
+  "inReplyToId",
+];
+
+const CHECK_RUN_MEMBERS = [
+  "kind",
+  "id",
+  "headSha",
+  "name",
+  "status",
+  "conclusion",
+  "url",
+  "startedAt",
+  "completedAt",
+  "title",
+  "summary",
+  "text",
+];
+
+const COMMIT_STATUS_MEMBERS = [
+  "kind",
+  "id",
+  "headSha",
+  "name",
+  "state",
+  "description",
+  "url",
+  "createdAt",
+  "updatedAt",
+];
+
 function parseReview(value: JsonObject): ReviewEvidence | undefined {
+  if (!exactMembers(value, REVIEW_MEMBERS)) {
+    return undefined;
+  }
   const id = text(value.id);
   const state = value.state;
   const body = text(value.body);
@@ -290,12 +448,15 @@ function parseComment(value: JsonObject): CommentEvidence | undefined {
     return undefined;
   }
   if (value.kind === "conversation") {
+    if (!exactMembers(value, CONVERSATION_MEMBERS)) {
+      return undefined;
+    }
     return { kind: "conversation", id, author, body, createdAt, updatedAt, url };
   }
-  if (value.kind !== "review") {
+  if (value.kind !== "review" || !exactMembers(value, REVIEW_COMMENT_MEMBERS)) {
     return undefined;
   }
-  const reviewId = text(value.reviewId);
+  const reviewId = nullableText(value.reviewId);
   const path = text(value.path);
   const diffHunk = text(value.diffHunk);
   const commitSha = text(value.commitSha);
@@ -347,20 +508,19 @@ function parseCheck(value: JsonObject): CheckEvidence | undefined {
     return undefined;
   }
   if (value.kind === "check-run") {
-    const status = text(value.status);
-    const conclusion = nullableText(value.conclusion);
+    if (!exactMembers(value, CHECK_RUN_MEMBERS)) {
+      return undefined;
+    }
+    const status = CHECK_RUN_STATUSES.find((known) => known === value.status);
+    const declared = nullableText(value.conclusion);
+    const conclusion =
+      declared === null ? null : CHECK_RUN_CONCLUSIONS.find((known) => known === declared);
     const startedAt = nullableText(value.startedAt);
     const completedAt = nullableText(value.completedAt);
     const title = nullableText(value.title);
     const summary = nullableText(value.summary);
     const body = nullableText(value.text);
-    if (status === undefined || !CHECK_RUN_STATUSES.includes(status)) {
-      return undefined;
-    }
-    if (conclusion === undefined) {
-      return undefined;
-    }
-    if (conclusion !== null && !CHECK_RUN_CONCLUSIONS.includes(conclusion)) {
+    if (status === undefined || declared === undefined || conclusion === undefined) {
       return undefined;
     }
     if (startedAt === undefined || completedAt === undefined) {
@@ -384,14 +544,14 @@ function parseCheck(value: JsonObject): CheckEvidence | undefined {
       text: body,
     };
   }
-  if (value.kind !== "commit-status") {
+  if (value.kind !== "commit-status" || !exactMembers(value, COMMIT_STATUS_MEMBERS)) {
     return undefined;
   }
-  const state = text(value.state);
+  const state = COMMIT_STATUS_STATES.find((known) => known === value.state);
   const description = nullableText(value.description);
   const createdAt = text(value.createdAt);
   const updatedAt = text(value.updatedAt);
-  if (state === undefined || !COMMIT_STATUS_STATES.includes(state)) {
+  if (state === undefined) {
     return undefined;
   }
   if (description === undefined || createdAt === undefined || updatedAt === undefined) {

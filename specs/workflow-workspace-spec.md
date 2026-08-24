@@ -355,8 +355,9 @@ restores the retained answer event without consuming or publishing again.
 
 This suspension and executor-lock-release contract folds issue #322 into #367;
 #322 is not a separate implementation prerequisite. Scheduling — automatic
-resume, watchers, unattended iteration and remote host selection — remains
-blocked on #301.
+resume, watchers, unattended iteration and remote host selection — is #300's.
+Nothing above waits on it: a suspended run continues through `xmd workflow
+answer` followed by an explicit `xmd workflow resume`.
 
 ### 3.6 Interruption and cancellation differ
 
@@ -1388,6 +1389,18 @@ three separate remote collections, three durable effects, three independent
 replays and failures. One component returning three lists would make a partial
 answer indistinguishable from a complete one.
 
+**The request crosses a public route; the evidence does not.** The read passes
+through a contextual Api named `executablemd.workflow.pull-request-evidence`,
+which carries the request outward and answers with a request. Middleware in
+scope may inspect what is about to be read, refuse it by raising, narrow which
+reads a run may perform, or delegate — and has nothing it could answer with in
+place of the evidence, because no evidence crosses that route. Behind it sits an
+exact-invocation terminal: the request object is minted by the host for one
+invocation, and a request rebuilt from the same members, one another invocation
+issued, or one a handler kept from an earlier read is refused before anything is
+sent. Structural equality is not identity — two elements reading the same number
+produce equal requests, and one must not be able to stand in for the other.
+
 **A read is not a reconciled effect.** §7.5's upsert reconciles because it
 mutates a remote and must adopt an interrupted attempt rather than repeat it.
 These change nothing, have no natural key and no pre-state, and are ordinary
@@ -1415,7 +1428,18 @@ the retained locator and disposed with the invocation, and the destination stays
 inside the adapter's ceiling. A document names a number; it names no host and
 supplies no credential. Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
-normalized request and the normalized evidence, across the ordinary secret gate.
+complete normalized request and the normalized evidence, across the ordinary
+secret gate. The retained request is the Repository identity Push retains —
+without its Workspace checkout path — plus the number and the collection, and
+the effect's fingerprint is taken over those same members, so a document edited
+to read a different number or collection in the same place is a different effect
+rather than one replaying the first answer. The full Repository record and the
+working directory stay live provider-private attachment data: the provider needs
+them to select a checkout and resolve a locator, and neither belongs in a
+journal.
+
+A read that could not be completed retains its refusal and no array. There is
+never a partial collection in the journal for a continuation to restore.
 
 The records are closed and provider-neutral. Bodies and provider messages are
 retained byte-for-byte, because a reviewer reading a summary of an objection has
@@ -1425,6 +1449,22 @@ the provider's own strings, unreformatted. Check runs and commit statuses keep
 their separate vocabularies under a `kind` discriminator — a commit status's
 `error` is not a check run's `failure`, and collapsing them would report that a
 check ran and failed when the provider said it never ran.
+
+Each component declares the exact array it binds, which is what makes `as`
+mandatory: an invocation that forgot it is refused before a credential is read
+or a request is sent. The records are closed on exact membership rather than on
+presence, so a payload carrying one member more than the contract names is
+refused rather than passed through to a binding. An identifier that cannot be
+held exactly is refused too: a rounded one names a different object.
+
+Two failures are told apart. *Unavailable* is a host that did not answer —
+transport, rate limit, credential, an unfinished page walk. *Protocol-invalid*
+is a host that answered about the wrong subject, or with an item outside the
+contract. Every field an answer is authenticated by is required, not optional: a
+review or comment that does not say which pull request it belongs to, a check or
+status that does not say which commit it describes, and a pull request that does
+not name its own number and repository are all refused. A well-formed answer to
+another question is still the wrong answer.
 
 
 ## 8. Agents inspect; XMD mutates
@@ -2892,11 +2932,12 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
+| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub adapter, Deno host. Ordinary durable reads rather than reconciled effects; the request crosses a public request-only route and the evidence crosses none; complete or unavailable, never truncated |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
-| workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
+| workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
 | history fork | built (§11); Deno provider only |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |

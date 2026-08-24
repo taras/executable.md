@@ -29,9 +29,12 @@ import PullRequest, {
 import Issue, { props as issueProps, returns as issueReturns } from "./components/Issue.ts";
 import {
   checksForm,
+  checksReturns,
   commentsForm,
+  commentsReturns,
   props as pullRequestReadProps,
   reviewsForm,
+  reviewsReturns,
 } from "./components/PullRequestReads.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 
@@ -94,18 +97,21 @@ export function useCompositionComponents(): Operation<void> {
       name: "PullRequest.Reviews",
       origin: COMPOSITION_ORIGIN,
       props: pullRequestReadProps,
+      returns: reviewsReturns,
       fn: formDispatcher(reviewsForm),
     },
     {
       name: "PullRequest.Comments",
       origin: COMPOSITION_ORIGIN,
       props: pullRequestReadProps,
+      returns: commentsReturns,
       fn: formDispatcher(commentsForm),
     },
     {
       name: "PullRequest.Checks",
       origin: COMPOSITION_ORIGIN,
       props: pullRequestReadProps,
+      returns: checksReturns,
       fn: formDispatcher(checksForm),
     },
     {

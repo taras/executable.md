@@ -28,11 +28,16 @@ import { transactWorkspaceRoots } from "../workspace/private.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { parseJsonValue } from "../../storage/members.ts";
 import { PullRequestReadError } from "../../composition/errors.ts";
-import { parsePullRequestReadResult } from "../../composition/pull-request-read-records.ts";
+import {
+  parsePullRequestReadResult,
+  pullRequestReadInputsJson,
+  readInputs,
+} from "../../composition/pull-request-read-records.ts";
 import type {
   PullRequestReadRequest,
   PullRequestReadResult,
 } from "../../composition/pull-request-read-records.ts";
+import { isReadRequestFor } from "../../composition/pull-request-read-terminal.ts";
 import { parseGitHubRepository } from "./github.ts";
 import type { GitHubSource } from "./github.ts";
 import { denoGitHubSource } from "./github.ts";
@@ -48,17 +53,34 @@ const ELEMENT: Readonly<Record<PullRequestReadRequest["kind"], string>> = Object
   checks: "<PullRequest.Checks>",
 });
 
+/**
+ * What this read is, in the journal.
+ *
+ * The complete normalized request is the effect's `input` rather than a digest
+ * of it, because a reader of the history needs to know what was asked; the
+ * fingerprint beside it is taken over the same members, so a document edited to
+ * read another number or another collection in the same place is a different
+ * effect and diverges rather than replaying the first one's answer. Neither
+ * carries the locator or the checkout path: the fingerprint already names the
+ * one, and the other is this machine's.
+ */
 function* describeRead(request: PullRequestReadRequest): Operation<EffectDescription> {
   const expansion = yield* getExpansion();
+  const inputs = readInputs(request);
   const configuration = gitOperationFingerprint([
-    request.repository.name,
-    request.repository.locatorFingerprint,
-    request.kind,
-    String(request.number),
+    inputs.repository.name,
+    inputs.repository.locatorFingerprint,
+    inputs.repository.requestedBase,
+    inputs.repository.creationCommit,
+    inputs.repository.primaryBranch,
+    inputs.repository.objectFormat,
+    inputs.kind,
+    String(inputs.number),
   ]);
   return {
     type: PULL_REQUEST_READ,
-    name: `${expansion.id}:${request.repository.name}:${configuration}`,
+    name: `${expansion.id}:${inputs.repository.name}:${configuration}`,
+    input: pullRequestReadInputsJson(inputs),
     configuration,
     ...sourceDescription(expansion.position),
   };
@@ -77,14 +99,22 @@ export function readPullRequestReads(
   source: GitHubSource = denoGitHubSource(),
 ): Operation<PullRequestReadResult> {
   const element = ELEMENT[request.kind];
-  const admitted: PullRequestReadRequest = Object.freeze({
-    repository: Object.freeze({ ...request.repository }),
-    workingDirectory: request.workingDirectory,
-    number: request.number,
-    kind: request.kind,
-  });
 
   return scoped(function* () {
+    // The exact-invocation terminal. Whatever reached this provider has to be
+    // the object this host minted for the invocation now running: a request
+    // rebuilt from the same members, one another invocation issued, or one a
+    // handler kept from an earlier read is not it, and performing under one
+    // would be letting a caller choose whose evidence a document binds.
+    if (!isReadRequestFor((yield* getExpansion()).id, request)) {
+      throw new PullRequestReadError(
+        "protocol",
+        element,
+        "the request that reached the provider is not the one the engine issued for this " +
+          "invocation, so there is no invocation to read on behalf of.",
+      );
+    }
+    const admitted = request;
     const description = yield* describeRead(admitted);
 
     // The locator is retained state, not something the component carried: a
@@ -122,6 +152,15 @@ export function readPullRequestReads(
             element,
             "the Git host did not answer with the complete collection. None of what it did " +
               "answer is evidence that there is nothing there.",
+          );
+        }
+        if (reading.state === "protocol-invalid") {
+          throw new PullRequestReadError(
+            "protocol",
+            element,
+            "the Git host answered about a different subject, or with an item outside the " +
+              "evidence contract. A well-formed answer to another question is still the wrong " +
+              "answer.",
           );
         }
         return {
