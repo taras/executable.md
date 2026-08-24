@@ -68,7 +68,7 @@ import type { Operation, Result } from "effection";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+import { realpath, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { FsApi, rm } from "@effectionx/fs";
 import { API } from "./apis.ts";
@@ -503,6 +503,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
     }
 
     notify(observe, { operation: "delete", phase: "target" });
+    let wasSymbolicLink = false;
     try {
       const info = yield* API.Fs.operations.lstat(target.path);
       if (!info.exists) {
@@ -514,6 +515,7 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       if (!info.isFile && !info.isSymbolicLink) {
         return nonWriteFailure("delete", "target", "special-file");
       }
+      wasSymbolicLink = info.isSymbolicLink;
     } catch (error) {
       return nonWriteFailure("delete", "target", reasonOf(error));
     }
@@ -525,6 +527,18 @@ export function hostFilesHandler(options: HostFilesOptions = {}): FilesHandler {
       const reason = reasonOf(error);
       if (reason === "missing") {
         return Ok(undefined);
+      }
+      // Windows removes a symbolic link to a directory with RemoveDirectory,
+      // and not every runtime's `rm` falls back to it. The entry was classified
+      // a link above, so removing it as a directory still removes only the
+      // link. A fallback that fails leaves the original refusal in force.
+      if (wasSymbolicLink) {
+        try {
+          yield* until(rmdir(target.path));
+          return Ok(undefined);
+        } catch {
+          return nonWriteFailure("delete", "access", reason);
+        }
       }
       return nonWriteFailure("delete", "access", reason);
     }
