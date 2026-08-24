@@ -10,10 +10,10 @@
 ## Purpose
 
 An executable document can prepare a coding-agent session and then place the
-user in that agent's native interactive UI. The document decides which context
-the session receives and which filesystem roots it can use. The provider owns
-the mapping from the logical XMD session to the durable native session and the
-command that resumes it.
+user in that agent's native interactive UI. The document decides which rendered
+context the session receives; the host's Agent context determines its filesystem
+authority. The provider owns the mapping from the logical XMD session to the
+durable native session and the command that resumes it.
 
 The common repository entry point is an ordinary document target:
 
@@ -81,9 +81,10 @@ output. Only the rendered body of `Session.Launch` becomes prepared agent
 instructions. A file that exists in the repository is not selected merely
 because the provider can read it.
 
-`Agent` keeps provider and model binding separate from role identity. With no
-authored agent name, the host's `--default-agent` selects Claude Code, Codex, or
-another compatible agent without changing what `Implementor` means.
+`Agent` keeps provider selection separate from role identity. With no authored
+agent name, the current/default-agent rule in the ACP Client specification
+selects Claude Code, Codex, or another compatible agent without changing what
+`Implementor` means.
 
 ## Existing semantics
 
@@ -96,7 +97,8 @@ The feature reuses these contracts unchanged:
 - `Agent` selects the coding agent lexically, and is the availability boundary
   for what it wraps;
 - `Session` identifies stateful continuity lexically;
-- the contextual cwd participates in logical session identity;
+- under ordinary `xmd run` ACPX placement, the contextual cwd participates in
+  the resolved logical session key;
 - the Agent provider belongs to `DocumentExecution` and finishes teardown before
   the document completes;
 - completed durable effects restore without contacting their external provider;
@@ -107,27 +109,14 @@ The feature reuses these contracts unchanged:
 No behavior depends on the filename `AGENTS.md`. Any executable document target
 can launch a prepared native session.
 
-## The added operation
+## The launch operation
 
-The Agent API gains one operation:
+The ACP Client specification owns the complete five-operation `AgentApi`, the
+caller-facing `launchAgentSession(instructions, options)` operation, and the
+shared `LaunchOptions` and `SessionLaunchResult` types. Native launch adds no
+second Agent or Session hierarchy. Its launch-specific routed request is:
 
 ```ts
-interface AgentApi {
-  agent(name?: string): Operation<Agent>;
-  session(name?: string): Operation<Session>;
-  prompt(
-    content: string,
-    options?: PromptOptions,
-  ): Operation<Stream<AgentPromptEvent, string>>;
-  launch(request: AgentLaunchRequest): Operation<void>;
-  requestPermission(request: PermissionRequest): Operation<PermissionOutcome>;
-}
-
-interface LaunchOptions {
-  agent?: Agent;
-  session?: string | Session;
-}
-
 interface AgentLaunchRequest {
   readonly instructions: string;
   readonly agent: Agent;
@@ -135,25 +124,17 @@ interface AgentLaunchRequest {
   readonly cwd: string;
   readonly additionalDirectories: readonly string[];
   readonly permissionMode: PermissionMode;
-  readonly model?: string;
   with(changes: {
     instructions?: string;
     agent?: Agent;
     session?: string | Session;
   }): AgentLaunchRequest;
 }
-
-interface SessionLaunchResult {
-  agent: Agent;
-  session: Session;
-  nativeSessionId: string;
-  launcher: string;
-}
 ```
 
-`Agent.launch(instructions, options)` is the canonical operation and the only
-owner of what a launch settles on: it reserves the terminal, normalizes the
-request, mints its durable identity, retains every phase, and derives the
+`launchAgentSession(instructions, options)` is the canonical operation and the
+only owner of what a launch settles on: it reserves the terminal, normalizes
+the request, mints its durable identity, retains every phase, and derives the
 `SessionLaunchResult`. It is available anywhere inside a live document
 expansion, including a repository function component, and refuses outside one.
 
@@ -180,20 +161,22 @@ nonzero exit, signal, and cancellation do not produce it. It contains only
 filtered stable evidence and exposes no process handle, ACP client, credential,
 raw environment, or executable argument vector.
 
-`launch()` is distinct from `prompt()`:
+`launchAgentSession()` is distinct from `prompt()`:
 
 - `prompt()` performs one model turn through ACP and returns the agent response;
-- `launch()` performs no model turn, transfers the session to a native UI, and
-  returns only after that UI exits.
+- `launchAgentSession()` performs no model turn, transfers the session to a
+  native UI, and returns only after that UI exits.
 
-The base `launch()` handler fails. A provider must install the operation
-explicitly; availability of `agent()`, `session()`, and `prompt()` does not imply
-native-launch support.
+The base `Agent.launch(request)` routing handler fails. A provider must install
+the route explicitly; availability of `agent()`, `session()`, and `prompt()`
+does not imply native-launch support.
 
-`Session.Launch` renders its body before invoking `Agent.launch()`. An empty body
-is valid and prepares no additional instructions. Its optional `agent` and
-`session` props mirror `Prompt`; omitted props use lexical `Agent` and `Session`
-configuration.
+`Session.Launch` renders its body before invoking `launchAgentSession()`. An
+empty body is valid and prepares no additional instructions. Its optional
+`agent` and `session` props mirror `Prompt`; omitted props use lexical `Agent`
+and `Session` configuration. Omitting the `name` prop from an enclosing
+`<Agent>` uses the current/default-agent rule from the ACP Client specification;
+launch defines no default of its own.
 
 ## Prepared session request
 
@@ -204,8 +187,7 @@ agent
 logical session
 prepared instructions
 primary cwd
-ordered additional directories
-effective model request, when present
+ordered additional directories (the empty list in V1)
 effective permission configuration
 source position and expansion identity
 ```
@@ -244,17 +226,25 @@ mirrored into ACPX or XMD state. Relaunch therefore never silently keeps a stale
 layer, discards unobserved native history, substitutes a new provider session
 for retained continuity, or performs a bootstrap turn.
 
-The prepared text and the filesystem roots are different capabilities:
+The prepared text and filesystem authority are different capabilities:
 
-- cwd and additional directories determine what the native agent can access;
+- the contextual cwd determines what the V1 native agent can access;
 - prepared instructions determine text supplied to the model as instructions;
 - neither one implies the other; and
 - unreferenced repository files are not injected as text.
 
-The native launcher preserves the admitted access mode of every root. It cannot
-map a read-only additional directory to a native CLI option that makes the
-directory writable. An adapter without an authority-preserving mapping refuses
-that request before handoff.
+`Agent.AddDir` is not an existing semantic this launch consumes. The ACP Client
+specification defines the current contract: no directory-registration component
+exists, and every V1 launch carries the explicit empty ordered
+`additionalDirectories` list. A later directory feature is a prerequisite to
+launching with another root and must define ordering and access modes before an
+adapter can map one. Until then the launcher neither receives nor grants one.
+
+The stateful Agent/Session surface likewise defines no V1 model-selection prop
+or launch option. Native launch uses the provider session's model configuration
+and does not create a launch-only model selector. A provider-reported current
+model may be retained as observational evidence; it is not a request and does
+not participate in launch identity or authority.
 
 Raw prepared instructions never appear in process arguments or environment
 variables. A provider uses its session API or an invocation-private file with
@@ -305,7 +295,7 @@ A **provider-returned** adapter proves all seven of the following:
 2. its returned native ID names that exact state;
 3. prepared instructions are effective on the first native user turn without a
    bootstrap model turn;
-4. cwd, additional directories, model, and permissions survive the handoff;
+4. cwd and permissions survive the handoff without being widened;
 5. the ACP owner can release the session before native attachment;
 6. the native process can exit without deleting the resumable session; and
 7. ACP can later reattach to the same session if document execution uses it
@@ -463,7 +453,7 @@ session one of them constructs through ACP and the other does not.
 **Provider-returned.** ACP owns the session first and has to hand it over:
 
 9. The provider creates or resumes the durable provider session and applies the
-   prepared instruction layer and directory configuration.
+   prepared instruction layer and contextual cwd configuration.
 10. The provider verifies a native-resume capability and obtains the exact
     native session ID.
 11. XMD commits the prepared launch record before releasing ownership.
@@ -525,11 +515,11 @@ From there both rejoin:
     terminal lease. The route and the retained phases stay: they are what the
     next invocation resumes from.
 17. Later Agent work depends on the route again. On an `acp-first` session it
-    lazily reattaches through ACP to the same provider session; on a
-    `client-native` one a `<Session>` or `<Prompt>` raises the provider's typed
-    route error instead, because this release does not attach ACP to a session a
-    native process created. Continuing such a conversation is
-    `<Session.Launch>`'s to do, and #561 is where attaching becomes possible.
+    lazily reattaches through ACP to the same provider session. On a bound
+    `client-native` route advertised for attachment, `<Session>` and `<Prompt>`
+    follow *ACP attachment on a bound route* below and join the same provider
+    conversation. A legacy unbound route or an unavailable attachment
+    capability refuses before a turn and creates no substitute conversation.
 18. Document execution continues after `Session.Launch`.
 
 An enclosing `<Agent>` or `<Session>` resolves by its own contract, before
@@ -918,9 +908,9 @@ It offers each phase as live work to the authority core delivered it; the
 authority runs a phase only when the journal has none, retains what comes back
 before the next live effect, and cross-checks the preparation against the exact
 request that was routed — instructions and digest, agent, requested session,
-cwd, directories, permission mode, and requested model. A record that changed
-what was asked would make the journal describe a launch nobody authored, so it
-is refused rather than retained.
+cwd, the V1 empty additional-directory list, and permission mode. A record that
+changed what was asked would make the journal describe a launch nobody
+authored, so it is refused rather than retained.
 
 That is the authority boundary. Middleware composed around the Agent Api may
 observe a launch or refuse one; it cannot author a phase, and a completion it
@@ -938,8 +928,8 @@ created or resumed
 instruction reconciliation outcome
 prepared instructions and digest
 instruction channel selected by the provider
-primary cwd and ordered additional directories
-requested and effective model, when reported
+primary cwd and the empty V1 additional-directory list
+provider-reported current model, when observed, as non-configuring evidence
 permission configuration
 launch phase
 native launcher identity
@@ -957,6 +947,14 @@ reuses the recorded native session, and continues at the first incomplete phase.
 was interrupted reattaches the native UI to that same session; it never creates
 a replacement or reconstructs state from a transcript.
 
+Those are operation/runtime replay semantics: they define how an execution
+behaves when an embedder, a test, or a future retained execution host supplies
+the launch's durable history again. They do not create a public continuation
+command. Diagnostic persistence remains `xmd run --journal`, and the ordinary
+run command exposes no resume UX; only `xmd workflow resume` is a current public
+CLI continuation mechanism, under the separate constrained workflow profile
+that does not provide native launch.
+
 XMD does not journal turns performed inside the native UI. The provider-native
 session is authoritative for those turns, tool state, summaries, and transcript
 history. The XMD journal remains authoritative for deterministic preparation,
@@ -968,9 +966,9 @@ Preparation failure creates or launches nothing on behalf of
 `Session.Launch`. Provider availability already resolved by an enclosing
 `Agent` remains an ordinary earlier effect.
 
-Failure to configure instructions or directories leaves ownership with ACP and
-does not spawn the native UI. Missing native-launch capability fails before
-detach. Detach failure also prevents spawn.
+Failure to configure instructions or the contextual cwd leaves ownership with
+ACP and does not spawn the native UI. Missing native-launch capability fails
+before detach. Detach failure also prevents spawn.
 
 Changing instructions on a retained session fails with `instructions-refused`
 whenever the provider cannot replace the layer in place while preserving
@@ -1047,12 +1045,14 @@ native UI may be in the conversation — as *Ownership and concurrency* describe
 Only ordinary `xmd run` receives that assembly. Every other command receives
 none, and a host profile whose session authority differs from ordinary `xmd run`
 states its capability sets explicitly rather than inheriting the provider
-package's. The workflow Agent profile selects both sets empty.
+package's. The workflow Agent profile selects both sets empty and installs no
+native foreground launcher, so `Session.Launch` is unsupported there without
+weakening the workflow sandbox.
 
-Provider, agent, and model remain runtime bindings. The target and logical
-session name remain role and continuity identities. A document can explicitly
-name an Agent where required, but no provider-specific executable or resume
-syntax appears in `AGENTS.md`.
+Provider and agent remain runtime bindings. The target and logical session name
+remain role and continuity identities. V1 defines no stateful-Agent model
+selection. A document can explicitly name an Agent where required, but no
+provider-specific executable or resume syntax appears in `AGENTS.md`.
 
 ## Testing
 
@@ -1067,7 +1067,8 @@ Focused tests prove:
 2. selecting one role excludes sibling preparation;
 3. rendered instructions exactly match the selected files and computations;
 4. no Agent prompt occurs during preparation or launch;
-5. directory, model, and permission configuration reaches the provider exactly;
+5. cwd, the explicit empty additional-directory list, and permission
+   configuration reach the provider exactly;
 6. a provider without native-launch capability fails before detach;
 7. ACP release completes before the native child starts;
 8. the native child receives only the provider-asserted native session ID;
@@ -1176,12 +1177,12 @@ what the provider does, and would then be reporting on itself.
 
 ## What this contract covers
 
-The feature is `Agent.launch()` and the `Session.Launch` component; the opaque
-launch request its public route carries and the invocation-owned authority its
-installed provider receives; the `agent_session_launch` durable records with
-their replay and secret scanning; the host-owned session coordinator and its
-crash-conservative ownership record; an invocation-owned native-launch
-capability in the ACPX provider;
+The feature is `launchAgentSession()` and the `Session.Launch` component; the
+opaque launch request its public Agent route carries and the invocation-owned
+authority its installed provider receives; the `agent_session_launch` durable
+records with their replay and secret scanning; the host-owned session
+coordinator and its crash-conservative ownership record; an invocation-owned
+native-launch capability in the ACPX provider;
 provider-native identity that is either asserted by the provider or allocated by
 the adapter before the provider exists, retained explicitly and never inferred;
 a strict create-once construction route beside the coordinator's own records,
@@ -1193,7 +1194,8 @@ an inherited-terminal foreground child with cancellation and bounded reaping;
 and the controlled TestAgent fixture that proves all of it without starting a
 model.
 
-Two things it does not yet have, and both fail closed rather than degrading:
+The following capabilities remain outside V1 and fail closed rather than
+degrading:
 
 - **Only `claude` is advertised**, and separately for each capability. It is
   client-allocated, and its proofs ran the applicable claims under
@@ -1205,7 +1207,13 @@ Two things it does not yet have, and both fail closed rather than degrading:
   advertised only for native launch.
 - **`Agent.AddDir` is unbuilt**, so a launch declares no additional roots. The
   retained request says so explicitly — an empty ordered list — rather than
-  omitting the fact, and no adapter maps a root it was never given.
+  omitting the fact, and no adapter maps a root it was never given. The ACP
+  Client specification is the prerequisite owner for a future ordering and
+  access-mode contract.
+- **Stateful-Agent model selection is unbuilt.** `Agent`, `Session`, `Prompt`
+  and `Session.Launch` expose no model prop or launch option. A provider may
+  report the current model as observational evidence, but native launch neither
+  selects nor changes it.
 - **Executable upgrade migration is unbuilt.** A V2 route freezes one build for
   that logical session, and a later build refuses with
   `executable-binding-refused` rather than modifying the route or the provider's

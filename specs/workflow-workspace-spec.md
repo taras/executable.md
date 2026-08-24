@@ -533,11 +533,13 @@ retained failure, and that does not make the run eligible for `resume`.
   the definition it continues with, and every one of the three is required. Its
   generated `--props-*` arguments are the candidate definition's and merge over
   the props the source retained, and `--at` belongs to it alone (§11).
-- The document filesystem (§10.1) and Repository/Worktree/Dir composition (§6)
-  are the capabilities a run has. Git operations, Agent, Worker Shell and native
-  services are not: an inherited `API.Service` provider is refused rather than
-  delegated to, and `temporaryDirectory` is refused rather than answered with a
-  host directory.
+- The document filesystem (§10.1), Repository/Worktree/Dir composition (§6),
+  and the constrained ACP-only Agent profile (§8) are capabilities a run has.
+  Git operations, native Agent session launch, Worker Shell and native services
+  are not: the workflow profile advertises no native launch or client-native
+  attachment, installs no native foreground launcher, refuses an inherited
+  `API.Service` provider rather than delegating to it, and refuses
+  `temporaryDirectory` rather than answering with a host directory.
 - A function-component root is not supported in this subset and fails before the
   run executes. A bundled component is Markdown for the same reason: a `.ts`
   module, an extensionless path, a directory, a glob, a URL, a package
@@ -1413,6 +1415,15 @@ document cannot reach.
 This is what the host asks for and what it refuses. It is not a claim that every
 ACP adapter exposes no tool when asked for none; that portable proof is tracked
 by #496 and does not widen this ceiling.
+
+`Session.Launch` is unsupported by this profile. The trusted workflow host states
+both ordinary-run native capability sets empty and installs no native
+foreground launcher, so a launch is refused before provider preparation,
+session ownership transfer, or process creation. The host does not expose the
+machine-wide coordinator, construction-route store or executable observer to
+repair that refusal. Supporting an interactive workflow-native handoff would
+require a separate retained-host and authority contract; it does not weaken the
+current sandbox.
 
 ### 8.4 Generated XMD
 

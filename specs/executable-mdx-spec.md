@@ -1001,6 +1001,13 @@ no shared runner infers it from whether a journal pathname was named.
 | `xmd workflow start`, `xmd workflow resume` | unchanged | exit status, stdout, and stderr |
 | programmatic `execute()` | unchanged | exit status, stdout, and stderr |
 
+`xmd run --journal` writes diagnostic history; `xmd run` has no command or
+option that reopens that file as continuation input. Runtime replay semantics
+still govern a retained stream supplied programmatically — by an embedder, a
+test, or a future retained execution host — but they do not imply a public CLI
+resume UX. `xmd workflow resume` is the current public continuation command and
+belongs to its separate retained workflow host.
+
 A workflow names no journal — it owns one — and retains durably within the
 environment it authorized, because its process results are part of the run's
 retained history: a resumed procedure reads back
@@ -9250,7 +9257,7 @@ Each row names the derivation it kills.
 | AF9-AF12 | Fatality survives nesting | A `throwOnError` prompt ends the document inside `<Agent>`, inside `<Agent><Session>`, and inside a repository component projecting it as content; the error stays the original `AgentPromptError` |
 | AF13-AF15 | Registered defaults | Each name resolves to core's registration, a repository component overrides it, and a repository `Prompt` contacts no provider |
 | AF16-AF20 | Prompt-failure policy | Absent by default; forces `throwOnError` when it says yes; an explicit `throwOnError` wins without consulting it; a repository `Prompt` never consults it |
-| AF21 | `<Session.Launch>` is a caller, not a second implementation | It renders its body and calls `Agent.launch()` with what it rendered; the phase sequencing, retention and result belong to that one canonical operation, and the component holds none of them |
+| AF21 | `<Session.Launch>` is a caller, not a second implementation | It renders its body and calls `launchAgentSession()` with what it rendered; the phase sequencing, retention and result belong to that one canonical operation, and the component holds none of them |
 | AF22 | A refused launch is an observation | The failure is raised as an error segment whose cause carries `phase` and `failureClass`, so `<AssertThrows as="…">` binds a value an author can assert which refusal it was on, rather than the wording of a message |
 | AF23 | A `<Session>` joins what a launch constructed | The same named `<Session>` after a client-native `<Session.Launch>` attaches to the conversation the native process made, and a `<Prompt>` in it answers from that conversation's history rather than from a new one. The route is unchanged: not republished, not converted, and no second identity allocated. Authored whole in `packages/test-agent/src/NativeSessionLaunch.test.md`; a provider that reported another conversation fails it |
 

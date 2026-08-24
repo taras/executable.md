@@ -89,6 +89,12 @@ Observability describes the real execution rather than an agent's self-report.
 The following examples express the intended experience. They are not a frozen
 syntax contract.
 
+The current stateful Agent contract is narrower than some examples below:
+`<Agent>` has only an optional `name` prop, omission resolves the enclosing or
+provider-default agent, and provider or model selection is not declared on that
+element. The ACP Client specification owns that implemented surface; the extra
+provider and model props below remain product-direction sketches.
+
 ### Deterministic repository instructions
 
 ```text

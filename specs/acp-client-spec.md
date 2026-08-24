@@ -9,7 +9,7 @@ the `rootProvider` factory seam described below.
 
 `Agent` is an Effection Api (`@executablemd/core`) for stateful coding-agent
 sessions, distinct from the stateless Sample Api. It has exactly five
-operations:
+contextual operations:
 
 ```ts
 interface AgentApi {
@@ -21,20 +21,47 @@ interface AgentApi {
 }
 ```
 
+The caller-facing native-launch operation is separate from that request-only
+route:
+
+```ts
+function launchAgentSession(
+  instructions: string,
+  options?: LaunchOptions,
+): Operation<SessionLaunchResult>;
+
+interface LaunchOptions {
+  agent?: Agent;
+  session?: string | Session;
+}
+
+interface SessionLaunchResult {
+  agent: Agent;
+  session: Session;
+  nativeSessionId: string;
+  launcher: string;
+}
+```
+
+`launchAgentSession()` and `prompt()` resolve through the same `Agent` and
+`Session` operations. The extra shape exists only at the authority boundary:
+callers supply instructions and receive a result, while public Agent middleware
+routes an opaque request and cannot manufacture that result.
+
 - `Agent` is a resolvable agent name (a string). `Session` is
   `{ sessionKey; cwd; agentSessionId? }`. `PromptOptions` is
   `{ agent?; session?: string | Session; timeout? }`.
 - `AgentPromptEvent` is `started` → zero or more `text_delta` → one `terminal`
   (`{ status: "completed" | "failed" | "cancelled"; stopReason?; error? }`).
 - `launch()` routes one frozen, one-use `AgentLaunchRequest` and answers
-  nothing. `Agent.launch(instructions, options)` is the canonical operation that
-  issues that request, retains the launch's phases, and derives its
-  `SessionLaunchResult`; the route is where public middleware sees the ask, and
-  authority to perform it reaches the installed provider directly rather than
-  travelling on this chain (specs/native-agent-session-launch-spec.md). A launch
-  performs no model turn, and a provider that answers `prompt()` does not
-  thereby answer it: native session launch is its own capability, installed on
-  its own.
+  nothing. `launchAgentSession(instructions, options)` is the canonical
+  operation that issues that request, retains the launch's phases, and derives
+  its `SessionLaunchResult`; the route is where public middleware sees the ask,
+  and authority to perform it reaches the installed provider directly rather
+  than travelling on this chain
+  (specs/native-agent-session-launch-spec.md). A launch performs no model turn,
+  and a provider that answers `prompt()` does not thereby answer it: native
+  session launch is its own capability, installed on its own.
 - Built-in **`claude` is advertised**, for two separate capabilities: native
   launch, and attaching ACP to a session a native process constructed. Its
   sessions are named by XMD and created by the native process
@@ -83,13 +110,6 @@ interface AgentApi {
   not advertised for attachment, build drift, a disagreeing arrangement and a
   differing returned identity each refuse before a turn and create no substitute
   conversation.
-- A `session()` or subscribed `prompt()` that meets a `client-native` route
-  raises `AgentSessionRouteError` before runtime creation, ensure, turn, close
-  or accepted history. It manufactures no launch failure, because no launch was
-  asked for, and this release does not attach ACP to a session a native process
-  created. Advertising `claude` does not change that: `<Session>` and
-  `<Prompt>` still fail closed on a route it constructed, and continuing such a
-  conversation is `<Session.Launch>`'s to do.
 - `withSessionRoute` remains routing only: it selects which partition serves a
   call and carries no authority to construct, own or answer.
 - **Base behavior:** with no provider installed, `agent()`, `session()`,
@@ -151,6 +171,31 @@ until one is installed as a root provider or by `<AgentProvider>`.
 components below; the contextual state holding them is private to the
 components.
 
+### Agent selection, directories, and models
+
+`<Agent>`'s `name` prop is optional. Omitting it asks `Agent.agent(undefined)`
+to resolve the current agent: an enclosing `<Agent>` when one is active,
+otherwise the installed provider's `defaultAgent`. An explicit name overrides
+that selection for the element's body. A self-closing `<Agent />` performs the
+same resolution and availability validation, then renders nothing; it does not
+create a session or run a turn.
+
+`defaultAgent` names an ACP agent command, not a model. The stateful Agent and
+Session surface has no `model` prop or launch option in V1. Model routing on the
+stateless Sample Api is a different contract and does not create an implicit
+model-selection mechanism for `prompt()` or native launch. A provider may
+report the model already active in its session as observational evidence, but
+that observation neither selects nor changes it.
+
+The current ordinary-run Agent surface grants the resolved contextual cwd and
+defines no directory-registration component. In particular, `Agent.AddDir` is
+not registered or specified as an available component, and native launch's
+`additionalDirectories` value is the explicit empty ordered list. A future
+directory-registration feature must first define path resolution, ordering and
+access modes here; until then native launch cannot claim or widen any additional
+root. Filesystem accessibility and rendered agent instructions remain separate:
+the cwd is not injected as text, and rendered instructions grant no directory.
+
 ## Components
 
 `installAgentComponents()` registers six components for the installing scope
@@ -194,8 +239,10 @@ boundary runs after the component has returned.
   An unknown provider name, or no default agent configured, **fails the
   execution before the body expands**: neither the body nor any later content
   renders.
-- **`<Agent name>`** resolves an agent and, for its body, pins it onto nested
-  prompts. Self-closing validates only (no output).
+- **`<Agent name?>`** resolves its explicit name, or the current/default agent
+  when `name` is omitted, and for its body pins that resolved agent onto nested
+  prompts and launches. Self-closing performs the same resolution and
+  availability validation, then renders nothing.
 - **`<Session name>`** resolves a session and pins it onto nested prompts and
   launches. Self-closing validates only. It is the one agent word a host does
   not register with the others: its implementation names durable work after its
@@ -352,8 +399,8 @@ ACP adapter exposes no tool when asked for none; that portable proof is tracked
 separately and does not widen this ceiling.
 
 Nothing else changes. `<Prompt>` is still exactly one turn, the Agent Api gains
-no operation, and `xmd run` keeps its caller-selected cwd, its omitted MCP and
-session options, and its public permission routing.
+no workflow-only operation, and `xmd run` keeps its caller-selected cwd, its
+omitted MCP and session options, and its public permission routing.
 
 #### Retained sessions
 
@@ -459,7 +506,7 @@ The default agent resolves in order, each entry overriding the ones above it:
 2. the `DEFAULT_AGENT_NAME` environment variable,
 3. `--default-agent`,
 4. an enclosing `<AgentProvider defaultAgent>`,
-5. an explicit `<Agent name>` or `<Prompt agent>`.
+5. an explicit `<Agent name>`, `<Prompt agent>`, or `<Session.Launch agent>`.
 
 The installed provider belongs to the run's `DocumentExecution` scope and closes
 during its teardown.
@@ -467,10 +514,10 @@ during its teardown.
 ### Availability
 
 Installing a provider starts nothing. The **first** Agent API use validates the
-selected agent, and both `<Agent>` and `<Prompt>` resolve the agent through the
-Agent API before any turn begins or is journaled. A document that never uses an
-agent therefore never probes one, and a confirmed full replay restores its
-prompts without re-checking availability.
+selected agent, and `<Agent>`, `<Prompt>` and `<Session.Launch>` resolve the agent
+through the Agent API before a turn or launch begins. A document that never uses
+an agent therefore never probes one, and a confirmed full replay restores its
+completed work without re-checking availability.
 
 A failed availability check aborts expansion where it occurs: the content after
 the failed operation does not render, no prompt failure is aggregated, and the
