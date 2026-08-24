@@ -13,15 +13,24 @@
  * `xmd workflow answer` runs through the same module the CLI dispatches to, so
  * what is observed of a delivery is what a caller sees: one stdout line, no
  * status line, and a run whose lifecycle the delivery did not touch.
+ *
+ * Tier CKX below drives the same executor with the wait a *document* reaches:
+ * an ordinary `<Elicit>`, resolved to the workflow host's registration and
+ * answered by the suspending provider. It runs a real `start` — the definition
+ * is established through the command's own module and the attachment is
+ * `withWorkflowWorkspace` itself — so nothing it depends on is installed by
+ * this suite. Only the agent is a stand-in, in the slot the real agent profile
+ * fills, because what is under test is that a turn is retained once rather than
+ * what an agent says.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { call, ensure, Err, Ok, resource, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { rm, writeTextFile } from "@effectionx/fs";
+import { exists, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -38,12 +47,24 @@ import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import { Git, SUSPENSION_REQUEST, suspendFor, WorkflowLifecycle } from "@executablemd/workflow";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import { workflowRunPath } from "@executablemd/workflow/deno";
+import { withWorkflowWorkspace, WORKSPACE_FILE } from "@executablemd/workflow/deno";
+import { Agent, installAgentComponents } from "@executablemd/core";
+import type {
+  AgentPromptEvent,
+  Json as CoreJson,
+  PromptOptions,
+  Session,
+} from "@executablemd/core";
+import type { Stream } from "effection";
+import { createHash } from "node:crypto";
+import { establishDefinition } from "../src/workflow-definition.ts";
 import { runWorkflow } from "../src/workflow.ts";
 import type {
   WorkflowExecution,
   WorkflowHost,
   WorkflowManagementRequest,
   WorkflowRequest,
+  WorkflowStart,
 } from "../src/workflow.ts";
 import { runWorkflowManagement } from "../src/workflow-management.ts";
 
@@ -709,5 +730,481 @@ describe("Tier WFS — a suspended run and its no-input resumes", () => {
         (event) => event.type === "yield" && event.description.type === SUSPENSION_REQUEST,
       ),
     ).toHaveLength(0);
+  });
+});
+
+/**
+ * The checkpoint document, and the three effects that must survive a resume.
+ *
+ * One real `<Prompt>` turn, one real generated-XMD observation and one real
+ * file mutation, all before the question. Each is an ordinary durable effect
+ * with its own journal entry, which is what makes "the resume repeated none of
+ * them" a claim about the journal rather than about a counter this suite kept.
+ */
+const CHECKPOINT_SCHEMA = `{"type":"object","properties":{"proceed":{"type":"boolean"}},"required":["proceed"]}`;
+
+const CHECKPOINT = `<File path="notes.md">
+the change is ready
+</File>
+
+<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />
+
+<Agent name="codex">
+  <Prompt as="verdict" throwOnError>
+    Is it ready?
+  </Prompt>
+</Agent>
+
+<Elicit schema={${CHECKPOINT_SCHEMA}} as="decision">
+Proceed with the change?
+</Elicit>
+
+decision: {decision.proceed}
+`;
+
+/**
+ * What each of the three effects is called in the journal.
+ *
+ * Two of the names are module-private to the package that writes them, so they
+ * are stated here with their source. They are not taken on trust: CK3/CK4
+ * asserts all three appear among the effect types the run actually journaled,
+ * so a renamed effect fails the case rather than silently counting zero.
+ */
+const PROMPT_EFFECT = "agent_prompt"; // packages/core/src/agent/journal.ts
+const EVALUATION_EFFECT = "generated_xmd"; // packages/core/src/generated-xmd.ts
+const FILE_EFFECT = WORKSPACE_FILE;
+
+/** Every prompt this run's agent was actually asked. */
+interface AgentCalls {
+  readonly prompts: string[];
+}
+
+/**
+ * A root Agent provider that answers without a process.
+ *
+ * Test-only, and the smallest thing that makes `<Prompt>` a real durable turn:
+ * what is under test is that the turn is retained once, not what an agent says.
+ */
+function* useStubAgent(calls: AgentCalls): Operation<void> {
+  // Installed on the caller's scope, not a nested one: a `scoped()` here would
+  // close before the document runs and take the registration with it.
+  yield* installAgentComponents();
+  yield* Agent.around(
+    {
+      // deno-lint-ignore require-yield
+      *agent([name]) {
+        return name ?? "codex";
+      },
+      // deno-lint-ignore require-yield
+      *session([name]) {
+        return { sessionKey: `s:${name ?? "default"}`, cwd: "/" };
+      },
+      // deno-lint-ignore require-yield
+      *prompt([content, options]): Operation<Stream<AgentPromptEvent, string>> {
+        calls.prompts.push(content);
+        const session: Session =
+          typeof options?.session === "object" ? options.session : { sessionKey: "s", cwd: "/" };
+        const events: AgentPromptEvent[] = [
+          { type: "started", agent: options?.agent ?? "codex", session },
+          { type: "text_delta", text: "ready" },
+          { type: "terminal", status: "completed" },
+        ];
+        return {
+          *[Symbol.iterator]() {
+            let index = 0;
+            return {
+              // deno-lint-ignore require-yield
+              *next() {
+                if (index < events.length) {
+                  return { done: false, value: events[index++]! };
+                }
+                return { done: true, value: "ready" };
+              },
+            };
+          },
+        };
+      },
+    },
+    { at: "min" },
+  );
+}
+
+/**
+ * The production host, with a stub agent in the slot the real profile fills.
+ *
+ * `attach` is `withWorkflowWorkspace` itself, so the elicitation pair these
+ * cases depend on is installed by the code that installs it in production
+ * rather than by this suite.
+ */
+function productionHost(root: string, calls: AgentCalls, events: string[] = []): WorkflowHost {
+  return {
+    useRunHost(): Operation<WorkflowExecutionTransitions> {
+      return useWorkflowRunHost({ root });
+    },
+    useLifecycle(): Operation<void> {
+      return useWorkflowLifecycle({ root });
+    },
+    useDelivery(): Operation<void> {
+      return useWorkflowInputDelivery({ root });
+    },
+    attach<T>(database: WorkflowRunDatabase, operation: Operation<T>): Operation<T> {
+      return scoped(function* () {
+        events.push("attached");
+        yield* ensure(function* () {
+          events.push("released");
+        });
+        return yield* withWorkflowWorkspace(database, operation, {
+          agent: () => useStubAgent(calls),
+        });
+      });
+    },
+  };
+}
+
+/** A committed definition whose root document is `source`. */
+function useCheckpointFixture(source: string): Operation<Fixture> {
+  return resource<Fixture>(function* (provide) {
+    const repository = yield* until(mkdtemp(join(tmpdir(), "xmd-ckx-repo-")));
+    yield* ensure(function* () {
+      yield* rm(repository, { recursive: true, force: true });
+    });
+    yield* git(repository, ["init", "--quiet"]);
+    yield* git(repository, ["config", "user.email", "ckx@example.test"]);
+    yield* git(repository, ["config", "user.name", "CKX"]);
+    yield* writeTextFile(join(repository, "workflow.md"), source);
+    yield* git(repository, ["add", "workflow.md"]);
+    yield* git(repository, ["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "definition"]);
+    const objectId = (yield* git(repository, ["rev-parse", "HEAD:workflow.md"])).trim();
+    yield* provide({ repository, objectId, contents: source });
+  });
+}
+
+/** What `xmd workflow start` establishes, through the command's own module. */
+function* startFor(fixture: Fixture): Operation<WorkflowStart> {
+  const established = yield* establishDefinition(join(fixture.repository, "workflow.md"));
+  if (!established.ok) {
+    throw established.error;
+  }
+  return { established: established.value, props: {}, propsSchema: {} };
+}
+
+/** The document this run pinned, executed as its root. */
+function pinnedBody(rendered: string[]): (execution: WorkflowExecution) => Operation<Result<void>> {
+  return function* (execution): Operation<Result<void>> {
+    return yield* execution.around(
+      call(function* (): Operation<Result<void>> {
+        try {
+          rendered.push(
+            String(
+              yield* collect(
+                yield* executeInstalled(
+                  { ...execution.root, stream: execution.stream, props: execution.props },
+                  execution.installations,
+                ),
+              ),
+            ),
+          );
+          return Ok(undefined);
+        } catch (error) {
+          return Err(error instanceof Error ? error : new Error(String(error)));
+        }
+      }),
+    );
+  };
+}
+
+/** One `runWorkflow` invocation, with what it reported on each stream. */
+function invoke(
+  request: WorkflowRequest,
+  start: WorkflowStart | undefined,
+  workflowHost: WorkflowHost,
+  execute: (execution: WorkflowExecution) => Operation<Result<void>>,
+): Operation<{ exitCode: number; written: Written }> {
+  return scoped(function* () {
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    yield* ensure(() => {
+      console.log = log;
+      console.error = error;
+    });
+    console.log = (...parts: unknown[]) => out.push(parts.map((part) => String(part)).join(" "));
+    console.error = (...parts: unknown[]) => err.push(parts.map((part) => String(part)).join(" "));
+    const outcome = yield* runWorkflow(request, start, workflowHost, execute);
+    return { exitCode: outcome.exitCode, written: { out, err } };
+  });
+}
+
+/**
+ * Every byte of this run's storage, main database and sidecars alike.
+ *
+ * A refusal is specified to leave the database byte-identical, so this compares
+ * bytes rather than the rows a query would select — a write a query does not
+ * look at is exactly what a refusal must not make.
+ */
+function* storageDigest(path: string): Operation<Record<string, string>> {
+  const digests: Record<string, string> = {};
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    const file = `${path}${suffix}`;
+    digests[suffix === "" ? "db" : suffix] = (yield* exists(file))
+      ? createHash("sha256")
+          .update(yield* until(readFile(file)))
+          .digest("hex")
+      : "absent";
+  }
+  return digests;
+}
+
+/**
+ * The three effects, counted.
+ *
+ * `workspace_file` is two, and deliberately: the mutation writes one file and
+ * the admitted observation reads one, and both are ordinary Workspace file
+ * effects. Pinning the shape rather than asserting "one each" is what makes a
+ * repeat visible — a resume that re-ran the read would make it three.
+ */
+function counts(path: string): Record<string, number> {
+  return {
+    [PROMPT_EFFECT]: journalled(path, PROMPT_EFFECT),
+    [EVALUATION_EFFECT]: journalled(path, EVALUATION_EFFECT),
+    [FILE_EFFECT]: journalled(path, FILE_EFFECT),
+  };
+}
+
+/** Every durable yield of one description type this run retained. */
+function journalled(path: string, type: string): number {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    let count = 0;
+    for (const row of database
+      .prepare("SELECT record FROM journal_events ORDER BY sequence")
+      .all()) {
+      const parsed = JSON.parse(String(row["record"]));
+      if (parsed?.type === "yield" && parsed.description?.type === type) {
+        count += 1;
+      }
+    }
+    return count;
+  } finally {
+    database.close();
+  }
+}
+
+/** Every distinct effect type this run journaled, for naming what it performed. */
+function effectTypes(path: string): string[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const seen = new Set<string>();
+    for (const row of database
+      .prepare("SELECT record FROM journal_events ORDER BY sequence")
+      .all()) {
+      const parsed = JSON.parse(String(row["record"]));
+      if (parsed?.type === "yield") {
+        seen.add(String(parsed.description?.type));
+      }
+    }
+    return [...seen].sort();
+  } finally {
+    database.close();
+  }
+}
+
+describe("Tier CKX — a checkpoint a document asked for", () => {
+  it("CK1: a real start suspends, reports its identifiers, and releases the lock", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useCheckpointFixture(CHECKPOINT);
+    yield* useGit(fixture);
+
+    const calls: AgentCalls = { prompts: [] };
+    const attachments: string[] = [];
+    const started = yield* invoke(
+      { ...REQUEST, action: "start" },
+      yield* startFor(fixture),
+      productionHost(root, calls, attachments),
+      pinnedBody([]),
+    );
+
+    // The process return a caller reads: suspension is its own outcome.
+    expect(started.exitCode).toBe(2);
+
+    // Every identifier reaches standard error, in the order the contract gives
+    // them: the run, the wait, then the status as the closing word.
+    const runLine = started.written.err.find((line) => line.startsWith("workflow run: "));
+    expect(runLine).toBeDefined();
+    const runId = String(runLine).slice("workflow run: ".length).trim();
+
+    const suspensionLine = started.written.err.find((line) =>
+      line.startsWith("workflow suspension: "),
+    );
+    expect(suspensionLine).toBeDefined();
+    const reported = String(suspensionLine).slice("workflow suspension: ".length).trim();
+
+    // Exactly these three, and nothing else: a caller reads the pair it needs
+    // for `xmd workflow answer` without parsing past anything.
+    expect(started.written.err).toEqual([
+      `workflow run: ${runId}`,
+      `workflow suspension: ${reported}`,
+      "workflow status: suspended",
+    ]);
+
+    const path = workflowRunPath(root, runId);
+    const suspended = retained(path);
+    expect(suspended.status).toBe("suspended");
+    expect(suspended.requests).toHaveLength(1);
+    expect(suspended.rootCloses).toBe(0);
+
+    // The wait the caller was told to answer is the wait the run retained —
+    // read back from the journal rather than from the line that announced it.
+    expect(reported).toBe(suspended.requests[0]);
+
+    // The stop reason names the retained request rather than repeating it.
+    const settled = suspended.executions.filter((execution) => execution.status === "suspended");
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.reasonEventId).toBe(suspended.requestEventId);
+
+    // The lock is free: acquisition refuses outright while an executor holds
+    // it, so acquiring at all is the proof it was released.
+    yield* scoped(function* () {
+      yield* useWorkflowLifecycle({ root });
+      const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
+      expect(acquired.ok).toBe(true);
+      expect(acquired.ok && acquired.value.kind).toBe("acquired");
+    });
+
+    // The attachment opened and closed: nothing is left holding the execution.
+    expect(attachments).toEqual(["attached", "released"]);
+  });
+
+  it("CK3/CK4: a delivery executes nothing, and a resume repeats no committed effect", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useCheckpointFixture(CHECKPOINT);
+    yield* useGit(fixture);
+
+    const calls: AgentCalls = { prompts: [] };
+    const rendered: string[] = [];
+    const started = yield* invoke(
+      { ...REQUEST, action: "start" },
+      yield* startFor(fixture),
+      productionHost(root, calls),
+      pinnedBody(rendered),
+    );
+    expect(started.exitCode).toBe(2);
+
+    const runId = String(started.written.err.find((line) => line.startsWith("workflow run: ")))
+      .slice("workflow run: ".length)
+      .trim();
+    const path = workflowRunPath(root, runId);
+
+    // The three effects ahead of the question ran, once each, and the document
+    // stopped at the wait rather than rendering its end.
+    // Named rather than assumed: a renamed effect fails here instead of
+    // silently counting zero for the rest of the case.
+    const performed = effectTypes(path);
+    expect(performed).toContain(PROMPT_EFFECT);
+    expect(performed).toContain(EVALUATION_EFFECT);
+    expect(performed).toContain(FILE_EFFECT);
+
+    const atSuspension = counts(path);
+    expect(atSuspension).toEqual({
+      [PROMPT_EFFECT]: 1,
+      [EVALUATION_EFFECT]: 1,
+      [FILE_EFFECT]: 2,
+    });
+    expect(calls.prompts).toHaveLength(1);
+    expect(rendered).toEqual([]);
+
+    // CK3 — the delivery retains a value and moves nothing.
+    const suspended = retained(path);
+    const suspensionId = suspended.requests[0] ?? "";
+    const delivered = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      productionHost(root, calls),
+    );
+    expect(delivered.exitCode).toBe(0);
+    expect(delivered.written.out).toEqual([`workflow answer: ${runId} (${suspensionId})`]);
+    expect(delivered.written.err).toEqual([]);
+    expect(retained(path)).toEqual(suspended);
+    expect(calls.prompts).toHaveLength(1);
+
+    // CK4 — the resume spends the answer, and repeats none of the three.
+    const resumed = yield* invoke(
+      { ...REQUEST, action: "resume", target: runId },
+      undefined,
+      productionHost(root, calls),
+      pinnedBody(rendered),
+    );
+    expect(resumed.exitCode).toBe(0);
+
+    const completed = retained(path);
+    expect(completed.status).toBe("completed");
+    expect(completed.requests).toHaveLength(1);
+    expect(completed.requests[0]).toBe(suspended.requests[0]);
+
+    // Not one more of anything: the resume restored every committed effect.
+    expect(counts(path)).toEqual(atSuspension);
+
+    // The agent was asked once across both executions: the resume restored the
+    // turn rather than taking it again.
+    expect(calls.prompts).toHaveLength(1);
+
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]).toContain("decision: true");
+    expect(answers(path)[0]?.state).toBe("consumed");
+  });
+
+  it("CK5: an invalid and a duplicate delivery are refused, byte for byte", function* () {
+    const root = yield* useRunStore();
+    const fixture = yield* useCheckpointFixture(CHECKPOINT);
+    yield* useGit(fixture);
+
+    const calls: AgentCalls = { prompts: [] };
+    const started = yield* invoke(
+      { ...REQUEST, action: "start" },
+      yield* startFor(fixture),
+      productionHost(root, calls),
+      pinnedBody([]),
+    );
+    const runId = String(started.written.err.find((line) => line.startsWith("workflow run: ")))
+      .slice("workflow run: ".length)
+      .trim();
+    const path = workflowRunPath(root, runId);
+    const suspensionId = retained(path).requests[0] ?? "";
+    expect(suspensionId).not.toBe("");
+
+    // An answer the retained response schema rejects. `proceed` is the field
+    // `<Elicit>` declared, and this is the shape its schema gives it — so the
+    // refusal is by the schema the document compiled, not one delivery guessed.
+    const before = yield* storageDigest(path);
+    const invalid = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: "yes" }, secretDetection: true },
+      productionHost(root, calls),
+    );
+    expect(invalid.exitCode).not.toBe(0);
+    expect(invalid.written.err.join(" ")).toContain("does not satisfy the response schema");
+    expect(invalid.written.err.join(" ")).toContain("/proceed must be boolean");
+    expect(yield* storageDigest(path)).toEqual(before);
+
+    const accepted = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+      productionHost(root, calls),
+    );
+    expect(accepted.exitCode).toBe(0);
+
+    // The digest is sensitive to what a delivery writes: a delivery that was
+    // accepted moved bytes, so the two comparisons above and below are not
+    // comparing something that could never change.
+    const afterAccepted = yield* storageDigest(path);
+    expect(afterAccepted).not.toEqual(before);
+
+    // The wait is no longer pending, so a second delivery has nothing to
+    // answer — and leaves every byte the first one wrote exactly as it was.
+    const duplicate = yield* manage(
+      { action: "answer", runId, suspensionId, value: { proceed: false }, secretDetection: true },
+      productionHost(root, calls),
+    );
+    expect(duplicate.exitCode).not.toBe(0);
+    expect(duplicate.written.err.join(" ")).toContain("already has an answer waiting");
+    expect(yield* storageDigest(path)).toEqual(afterAccepted);
   });
 });

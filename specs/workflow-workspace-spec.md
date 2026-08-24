@@ -299,9 +299,17 @@ report the run ID and reason on standard error and return control to the caller.
 No Agent,
 process or Workspace attachment remains alive.
 
-Pending input belongs to the suspending operation. For example, an Elicitation
-provider records a schema-validated response. `resume` accepts neither
-replacement root props nor an untyped generic answer. The host may schedule
+Pending input belongs to the suspending operation, and the shipped one is the
+Elicitation provider. A workflow run resolves `Elicit` to a registration the
+host installs beside the composition components, for a live or partial
+attachment only; it asks the same question core's does and writes no durable
+record of its own, because a durable wait cannot sit inside another durable
+operation. The host's provider calls `suspendFor()` with the rendered message as
+the request and the compiled schema as the response schema, so what is retained
+is what the person was asked, and a delivered value is judged against the schema
+the document itself compiled. An `<Answers>` region installs nearer and answers
+first, so a document that already knows the answer never suspends. `resume`
+accepts neither replacement root props nor an untyped generic answer. The host may schedule
 resumption when input arrives, or a caller may invoke `resume`. If input remains
 absent, replay restores the same request event, performs no earlier effect,
 publishes no duplicate request, and returns incomplete again after teardown.
@@ -405,6 +413,32 @@ A request the command refuses rather than runs — bad grammar, a missing run, a
 incompatible reuse, damaged storage, an unsupported host — exits 1 and publishes
 no status line.
 
+**What an execution reports.** `start`, `resume` and `fork` each publish two
+lines on standard error: the run identity once the run exists, and the status
+once it is retained.
+
+```text
+workflow run: <run-id>
+workflow status: <status>
+```
+
+A **suspended** outcome reports a third line between them, because it is the one
+outcome whose continuation needs a second identifier — `xmd workflow answer`
+names the run and the wait:
+
+```text
+workflow run: <run-id>
+workflow suspension: <suspension-id>
+workflow status: suspended
+```
+
+The suspension line is published on the same terms as the status line: after the
+settlement transition commits, never before. A wait nothing retained is not one
+a caller can answer, and a refused settlement publishes neither line. The
+identifier is the one the retained `suspension_request` event carries, so what
+the caller is told to answer and what the run is waiting on are the same
+suspension. The status line stays the closing word on every outcome.
+
 **A status line says what was retained**, so a lifecycle transition storage
 refused publishes none. Finishing the document-execution record and publishing
 the run state are one transaction; no command observes one without the other.
@@ -460,9 +494,11 @@ reports one line on standard output — `workflow cancel: <run-id> (<status>)` a
 `workflow delete: <run-id> (<removed>)`.
 
 `start`, `resume` and `fork` stream the document's own output to standard output
-and report two stable lines on standard error — `workflow run: <run-id>` once the run
+and report stable lines on standard error — `workflow run: <run-id>` once the run
 has been created or found, and `workflow status: <status>` once the execution
-settles.
+settles. A **suspended** outcome reports `workflow suspension: <suspension-id>`
+between them, because continuing it takes both identifiers (§3.7). The status
+line is the closing word either way.
 
 A status line is published only after the transaction that finishes the
 document-execution record and publishes the run state has committed. What a

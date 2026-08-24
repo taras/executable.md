@@ -7043,6 +7043,26 @@ for. What replay never repeats is the provider call and the interaction it
 stands for. A recorded answer whose question does not match the one this run
 computed is refused rather than bound.
 
+**Under a workflow run the durability is different, and the Markdown is not.**
+`xmd workflow` resolves `Elicit` to a registration of its own, installed by the
+workflow host with the composition components and reached only for a live or
+partial attachment. It is an ordinary registration rather than a reserved one, so
+a repository component of the same name still shadows it in its own scope. It
+asks the same question in the same three steps and reaches the same Elicitation
+Api; what it does not do is write an `elicit` record. The host's provider
+suspends the run (§6.17), and a durable wait cannot sit inside another durable
+operation: the request would be published in the same coroutine ahead of the
+`elicit` entry that never settles, and the resumed execution would replay that
+coroutine and find the wrong entry waiting. So the answer is retained by the
+suspension protocol instead, once rather than twice, and it is claimed at the
+durable position that published the request. Two questions in one procedure sit
+at two positions, which is the identity the question fingerprint provides
+elsewhere.
+
+An `<Answers>` region still answers first — it installs at `{ at: "min" }` in a
+nested scope — so a document that says what the answer is never suspends, under
+either host.
+
 `Elicit.test.md` is the authoring contract in Markdown.
 
 #### 6.16.1 The Elicitation Api
@@ -7258,13 +7278,24 @@ reaching the live route again.
 A host retains one such answer with `xmd workflow answer <run-id>
 <suspension-id> <json>`, which is delivery and not execution: it takes no
 executor lock and leaves the run `suspended` until somebody resumes it. Resume
-scheduling belongs to #301.
+scheduling belongs to #300.
 
-Suspension is distinct from `<Elicit>`. Elicitation's current provider remains
-a live interaction whose validated answer is the one durable effect. A workflow
-component may use suspension to ask the host to retain and release an
-unavailable input instead. The host chooses no answer and the document chooses
-no transport.
+Suspension is distinct from `<Elicit>` under `xmd run`, where the provider is a
+live interaction and its validated answer is the one durable effect. Under
+`xmd workflow` it is the same mechanism reached from the same element: the host
+installs an Elicitation provider that calls `suspendFor()` with the rendered
+message as the request and the compiled schema as the response schema, so the
+retained request is what the person was asked and the delivered answer is judged
+against the schema the document compiled. `xmd workflow answer` recompiles that
+schema through the same preparation `<Elicit>` used, so one compiler decides
+both ends. The host chooses no answer and the document chooses no transport.
+
+Any other public Elicitation middleware sits where `<Answers>` sits: it may
+answer the question or refuse it, and in both cases the run it affects is a run
+that never suspended. None of them continues a suspended one — that takes a run
+whose status is `suspended`, whose stop reason names the retained request, a
+value that satisfies the retained response schema and the secret gate, and a
+resume claiming it at the exact position that published it.
 
 ### 6.18 Reading over HTTP: `<Fetch>`
 
