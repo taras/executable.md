@@ -494,9 +494,11 @@ reports one line on standard output — `workflow cancel: <run-id> (<status>)` a
 `workflow delete: <run-id> (<removed>)`.
 
 `start`, `resume` and `fork` stream the document's own output to standard output
-and report two stable lines on standard error — `workflow run: <run-id>` once the run
+and report stable lines on standard error — `workflow run: <run-id>` once the run
 has been created or found, and `workflow status: <status>` once the execution
-settles.
+settles. A **suspended** outcome reports `workflow suspension: <suspension-id>`
+between them, because continuing it takes both identifiers (§3.7). The status
+line is the closing word either way.
 
 A status line is published only after the transaction that finishes the
 document-execution record and publishes the run state has committed. What a
