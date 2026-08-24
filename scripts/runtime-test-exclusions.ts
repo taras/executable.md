@@ -54,6 +54,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/365",
   },
   {
+    path: "scripts/tests/component-form-dispatch.test.ts",
+    reason:
+      "drives the compiled `dist/xmd` executable, which only `deno compile` produces — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "scripts/tests/build-web-client.test.ts",
     reason:
       "subject is scripts/build-web-client.ts, which runs `deno bundle` and calls Deno.execPath()/makeTempFile — Deno-only",
