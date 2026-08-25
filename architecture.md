@@ -68,7 +68,7 @@ Existing documents and code get aligned to this section retroactively.
 | effect transaction | the single atomic SQLite transaction that publishes one Workspace-local mutation together with that effect's journal result |
 | external effect | an effect whose provider-owned outcome cannot participate in the Workspace SQLite transaction and therefore requires a stable identity and provider reconciliation |
 | XMD-mediated HTTP read | one bounded, non-mutating HTTP request an authored document performs through the contextual Fetch capability, whose detached response is retained as an ordinary durable observation. It is distinct from an Agent's own network authority, which it does not grant, and from a reconciled mutating external effect, which it does not claim: an interruption before its record commits may repeat the read |
-| Git-host evidence read | one bounded, non-mutating read of a collection a Git host already holds about a named pull request — its reviews, its comments, or the checks on its head. It is authenticated with the host's own credential and paginated by the adapter, and it is *not* a reconciled external effect: it has no natural key, no pre-state and nothing to adopt, so it is an ordinary durable read whose interrupted attempt may repeat and whose completed record replays without contacting a provider. It answers completely or not at all — an empty collection and a collection nobody could finish reading are different answers |
+| Git-host evidence read | one bounded, non-mutating read of a collection a Git host already holds about the pull request a canonical URL names — its reviews, its comments, or the checks on its head. It needs no Repository in scope: the URL is the identity, and the selected provider parses the repository and number out of it. It is authenticated with the host's own credential, bounded by the operator's `allowed` list, and paginated by the adapter, and it is *not* a reconciled external effect: it has no natural key, no pre-state and nothing to adopt, so it is an ordinary durable read whose interrupted attempt may repeat, whose completed record replays without contacting a provider, and which a fork inherits. It answers completely or not at all — an empty collection and a collection nobody could finish reading are different answers |
 | object-source attachment | adapter-private composition data the trusted host builds for exactly one external-effect reconciliation, giving the selected provider authorized live access to local state the frozen request cannot describe — the Git objects a push publishes, and the retained locator it is authorized to reach. It is authenticated against the durable identity it belongs to and proven contained before its first use — the local state behind one can name further state, so the graph a provider could traverse through it is validated rather than assumed — held in that provider's own closure, disposed with the invocation, and is never durable, never part of a natural key and never visible to routing middleware |
 | checkpoint | a completed journal boundary associated with the logical Workspace root visible after that effect |
 | history fork | a new workflow run that replays a compatible journal prefix and continues from its checkpoint and Workspace root under a new immutable document definition |
@@ -1285,18 +1285,20 @@ What such a read must not do is answer partially. A collection the host
 completed and a collection nobody could finish reading are opposite facts, and
 only one of them is `[]`; a truncated list would report the first while meaning
 the second, so an incomplete walk fails the read and retains no array at all.
-The structural request crosses a public request-only route, so middleware may
-see it, refuse it, or narrow what a run may read — refusal being the whole of
-narrowing, since reshaping a request is not something the terminal will accept.
-The evidence crosses no public route at all: there is no operation on any public
-Api that returns it, because one would be an operation anything in scope could
-answer without delegating. The components are built by the trusted host over a
-terminal they capture in their closure, and the terminal admits only the exact
-request object the live activation is holding — not one named by an expansion
-identifier, which is stable across continuations and would let a handler present
-a genuine request from an earlier execution as a current one. The attachment a
-provider needs, the Repository record and the working directory, never appears
-in a request at all.
+Both questions about a pull request — what it holds, and what it should say —
+are asked of one surface, and a provider is ordinary middleware around it. That
+is the Issue surface's topology, adopted deliberately: an adapter recognizes the
+URLs it can act on and delegates the rest, and once it matches, its validation
+and its refusal are final. A refusal ends the request rather than starting a
+search for another provider, because a search is how a document that named one
+service quietly reaches a different one.
+
+Authority here is the operator's `allowed` list, checked before a session is
+opened, a credential is read or anything is sent. It bounds reads alone: an
+upsert names a branch this run published rather than a URL a document wrote, and
+its authority is this run's own matching Push evidence, which no configuration
+grants or withdraws. "Authority ceiling" remains the word for the bound; what an
+operator writes is the list of places this host is allowed to reach.
 
 An external effect is judged by its retained record rather than by its type. A
 completed Git-host reconciliation record replays without contacting a provider,

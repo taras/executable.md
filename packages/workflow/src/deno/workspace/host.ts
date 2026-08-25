@@ -43,8 +43,9 @@ import { scoped, type Operation } from "effection";
 import { API } from "@executablemd/runtime";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { useCompositionComponents } from "../../composition/installation.ts";
-import { pullRequestReadComponents } from "../composition/pull-request-reads.ts";
-import { registerComponents } from "@executablemd/core";
+import { useGitHubPullRequests } from "../composition/pull-request-reads.ts";
+import { denoRepositoryHost } from "../composition/host.ts";
+import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
 import { useWorkflowElicitation } from "../../suspension/elicitation.ts";
 import {
   useGitComposition,
@@ -97,6 +98,15 @@ export interface WorkflowWorkspaceOptions {
    * reaches `IssueApi`'s own base error.
    */
   readonly gitHubIssues?: GitHubIssuesOptions;
+  /**
+   * The pull-request destinations this host allows a document to read.
+   *
+   * Absent authorizes no URL read, so a document naming one reaches
+   * `PullRequestAPI`'s own base error rather than a host that quietly read
+   * somewhere nobody allowed. It does not disable `<PullRequest>`, whose
+   * authority is this run's own Push evidence rather than a configured URL.
+   */
+  readonly gitHubPullRequests?: GitHubPullRequestsOptions;
   /**
    * How this host writes and starts its own credential helper.
    *
@@ -154,10 +164,16 @@ export function withWorkflowWorkspace<T>(
         yield* useGitHubIssues(options.gitHubIssues);
       }
       yield* useCompositionComponents();
-      // Built here rather than by the provider-neutral installer: their
-      // terminal needs this run's storage and Git-host source, and a closure is
-      // the only route to it.
-      yield* registerComponents([...pullRequestReadComponents(database, composition.gitHub)]);
+      // Ordinary middleware, installed the way the Issue adapter is: it owns
+      // the URLs it recognizes and delegates the rest.
+      // Installed on every live or partial attachment, configured or not: the
+      // configuration governs URL reads, and `<PullRequest>` must keep working
+      // on a host that authorizes none.
+      yield* useGitHubPullRequests(
+        database,
+        composition.host ?? denoRepositoryHost(),
+        options.gitHubPullRequests ?? {},
+      );
       // After the composition components and inside this attachment: a
       // completed replay never reaches here, so it registers no second `Elicit`
       // and installs no provider for work that is not going to happen.

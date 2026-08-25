@@ -20,13 +20,6 @@
 
 import { isJsonObject } from "@executablemd/core";
 import type { Json, JsonObject } from "@executablemd/core";
-import type { RepositoryRecord } from "./records.ts";
-import {
-  filteredRepositoryIdentity,
-  gitPushRepositoryIdentityJson,
-  parseGitPushRepositoryIdentity,
-} from "./git-push-records.ts";
-import type { GitPushRepositoryIdentity } from "./git-push-records.ts";
 
 /** Which collection one read covers. */
 export type PullRequestReadKind = "reviews" | "comments" | "checks";
@@ -184,75 +177,80 @@ export const REVIEW_STATES: readonly ReviewEvidence["state"][] = [
 ];
 
 /**
- * One read, structurally: which collection of which pull request, in which
- * retained Repository.
+ * One read, as the journal holds it.
  *
- * This is the whole of what a request is. It is what crosses the public
- * request-only route, what the effect retains as its input, and what its
- * fingerprint is taken over — so a document edited to read another number in
- * the same place is a different effect rather than one replaying the first
- * answer.
+ * The URL is the identity: it names the pull request, and the selected provider
+ * parses the repository and the number out of it. Nothing here is a Repository
+ * record or a checkout path, because a read needs neither — a document that can
+ * name a pull request can ask what it holds, wherever it is written.
  *
- * The Repository identity is the one Push retains, without its Workspace
- * checkout path. What is deliberately absent is everything a provider needs and
- * nobody else may see: the whole Repository record and the working directory
- * are attachment data, held in the terminal's own closure and never offered to
- * middleware.
+ * `operation` and `kind` say which question was asked, `provider` records an
+ * explicit discriminator when the document wrote one, and the run and expansion
+ * place this read in one run's history at one position — so a document edited
+ * to read a different URL or collection there is a different effect rather than
+ * one replaying the first answer.
  */
 export interface PullRequestReadRequest {
-  readonly repository: GitPushRepositoryIdentity;
-  readonly number: number;
+  readonly operation: "read";
+  /** The canonical pull-request URL the document named. */
+  readonly url: string;
+  /** The explicit discriminator, or `null` when the URL alone selects. */
+  readonly provider: string | null;
   readonly kind: PullRequestReadKind;
+  readonly runId: string;
+  readonly expansionId: string;
 }
 
-/**
- * The live state a read needs and no public surface receives.
- *
- * Built by the component, handed straight to the terminal, and never part of a
- * request: a checkout path is this machine's, and the locator the fingerprint
- * already names is the one thing a retained record must not repeat.
- */
-export interface PullRequestReadAttachment {
-  readonly repository: RepositoryRecord;
-  readonly workingDirectory: string;
-}
-
-/** The structural request one Repository record and number reduce to. */
+/** The durable request one URL and collection reduce to. */
 export function readRequest(
-  repository: RepositoryRecord,
-  number: number,
+  url: string,
   kind: PullRequestReadKind,
+  provider: string | undefined,
+  runId: string,
+  expansionId: string,
 ): PullRequestReadRequest {
   return Object.freeze({
-    repository: filteredRepositoryIdentity(repository),
-    number,
+    operation: "read" as const,
+    url,
+    provider: provider ?? null,
     kind,
+    runId,
+    expansionId,
   });
 }
 
-export function pullRequestReadRequestJson(inputs: PullRequestReadRequest): JsonObject {
+export function pullRequestReadRequestJson(request: PullRequestReadRequest): JsonObject {
   return {
-    repository: gitPushRepositoryIdentityJson(inputs.repository),
-    number: inputs.number,
-    kind: inputs.kind,
+    operation: request.operation,
+    url: request.url,
+    provider: request.provider,
+    kind: request.kind,
+    runId: request.runId,
+    expansionId: request.expansionId,
   };
 }
 
-/** The retained inputs, read back rather than asserted. */
+/** The retained request, read back rather than asserted. */
 export function parsePullRequestReadRequest(value: Json): PullRequestReadRequest | undefined {
-  if (!isJsonObject(value) || !exactMembers(value, ["repository", "number", "kind"])) {
+  if (!isJsonObject(value)) {
     return undefined;
   }
-  const repository = parseGitPushRepositoryIdentity(value.repository);
+  const names = ["operation", "url", "provider", "kind", "runId", "expansionId"];
+  if (!exactMembers(value, names) || value.operation !== "read") {
+    return undefined;
+  }
   const kind = PULL_REQUEST_READ_KINDS.find((known) => known === value.kind);
-  const number = value.number;
-  if (repository === undefined || kind === undefined) {
+  const { url, provider, runId, expansionId } = value;
+  if (kind === undefined || typeof url !== "string" || url === "") {
     return undefined;
   }
-  if (typeof number !== "number" || !Number.isInteger(number) || number < 1) {
+  if (provider !== null && typeof provider !== "string") {
     return undefined;
   }
-  return { repository, number, kind };
+  if (typeof runId !== "string" || typeof expansionId !== "string") {
+    return undefined;
+  }
+  return { operation: "read", url, provider, kind, runId, expansionId };
 }
 
 /**

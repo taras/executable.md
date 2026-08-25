@@ -284,8 +284,8 @@ export class GitCompositionProviderError extends WorkflowStorageError {
  * one wrong answer this surface must never give.
  */
 export type PullRequestReadReason =
-  | "no-repository-context"
-  | "invalid-number"
+  | "invalid-url"
+  | "invalid-provider"
   | "unexpected-content"
   | "unavailable"
   | "protocol";

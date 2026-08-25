@@ -4,10 +4,10 @@
  * (specs/workflow-workspace-spec.md §7.7).
  *
  * ```md
- * <PullRequest number={pullRequest.number} title="Prepare 1.4" as="pullRequest">…</PullRequest>
- * <PullRequest.Reviews  number={pullRequest.number} as="reviews"  />
- * <PullRequest.Comments number={pullRequest.number} as="comments" />
- * <PullRequest.Checks   number={pullRequest.number} as="checks"   />
+ * <PullRequest title="Prepare 1.4" as="pullRequest">…</PullRequest>
+ * <PullRequest.Reviews  url={pullRequest.url} as="reviews"  />
+ * <PullRequest.Comments url={pullRequest.url} as="comments" />
+ * <PullRequest.Checks   url={pullRequest.url} as="checks"   />
  * ```
  *
  * A workflow Agent has no network, so an objection the prompt does not render
@@ -15,39 +15,31 @@
  * each binds one array, and a caller iterates it with `<Each>` into the prompt
  * and into whatever material a person is asked to approve.
  *
- * `number` is the only prop, and the enclosing `<Repository>` and the
- * contextual working directory decide which repository it names — the way §7.1
- * decides every Git operation's place. There is no repository, URL, host,
- * provider, endpoint, token, credential, page, cursor or limit prop, because
- * every one of those would be a way to say what the document already said by
- * writing the element where it wrote it, or a way to send a credential
- * somewhere the host never authorized.
+ * The URL is the identity. A pull request is a public object with a canonical
+ * address, so a document that can name one can ask what it holds — there is no
+ * `<Repository>` to be inside of, no working directory to be at, and no
+ * repository or number prop, because the URL already says both and the selected
+ * provider parses them out of it.
+ *
+ * `provider` names an adapter explicitly, for a self-hosted or non-standard
+ * URL. There is no endpoint, token, credential, page, cursor or limit prop: a
+ * document says which pull request, and the host says which places it may be
+ * reached at.
  *
  * `as` is required. These read to be rendered, and an uncaptured one would
  * perform requests nobody reads.
  *
  * ## Where the evidence comes from
  *
- * Not from any public Api. The structural request — the retained Repository
- * identity, the number and the collection — crosses the public request-only
- * route, where middleware may see it, refuse it, or narrow which reads a run
- * performs. The evidence crosses no public surface at all: the host builds
- * these components closed over a terminal, and the terminal is the only thing
- * that can author a result.
+ * From the selected provider, which owns its answer — the shape `<Issue>` has.
+ * A provider is ordinary middleware around `PullRequestAPI`: it recognizes the
+ * URLs it can act on, and once it matches, its validation and its refusal are
+ * final. What a document binds is what that provider normalized.
  *
- * What the terminal authenticates is the object this activation is holding, not
- * a name for it. An expansion identifier is stable across continuations, so a
- * handler could keep a genuine request from one execution and present it in the
- * next execution of the same element; a fresh object per activation has no such
- * afterlife.
- *
- * An operation on a public Api would undo that. Anything installed on it could
- * answer with a fabricated collection without delegating, and what a document
- * bound and the journal retained would be that answer rather than a host's.
- *
- * The attachment — the whole Repository record and the working directory — goes
- * straight from here to the terminal and is never part of a request. A provider
- * needs it; middleware has no business seeing a checkout path.
+ * This supersedes the request-only route and invocation-private terminal an
+ * earlier revision carried. Those kept evidence off a public surface at the
+ * cost of a second authority model beside the Issue surface's, and of a read
+ * that needed a Repository in scope to name a pull request by number.
  *
  * ## The form is declared, not asked about
  *
@@ -66,7 +58,6 @@
  * one.
  */
 
-import { cwd } from "@executablemd/runtime";
 import type {
   FormDeclaration,
   InvocationForm,
@@ -76,15 +67,10 @@ import type {
 } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { currentRepository } from "../context.ts";
 import { PullRequestReadError } from "../errors.ts";
-import { pullRequestReadResultJson, readRequest } from "../pull-request-read-records.ts";
-import type {
-  PullRequestReadAttachment,
-  PullRequestReadKind,
-  PullRequestReadRequest,
-  PullRequestReadResult,
-} from "../pull-request-read-records.ts";
+import { pullRequestReadResultJson } from "../pull-request-read-records.ts";
+import { canonicalPullRequestUrl, pullRequestProviderName } from "../pull-request-target.ts";
+import type { PullRequestReadKind } from "../pull-request-read-records.ts";
 import { PullRequestAPI } from "../pull-request-api.ts";
 
 /** The component names, as a document writes them and a refusal names them. */
@@ -95,9 +81,10 @@ export const CHECKS_ELEMENT = "<PullRequest.Checks>";
 export const props: PropsSchema = {
   type: "object",
   properties: {
-    number: { type: "integer", minimum: 1 },
+    url: { type: "string", minLength: 1 },
+    provider: { type: "string", minLength: 1 },
   },
-  required: ["number"],
+  required: ["url"],
   additionalProperties: false,
 };
 
@@ -216,80 +203,51 @@ export const checksReturns: ReturnsSchema = array({
     }),
   ],
 });
-/**
- * What authors evidence for one invocation.
- *
- * Implemented by the host that has the run's storage and its Git-host source,
- * and reachable only through the closure these components capture.
- */
-export interface PullRequestReadTerminal {
-  /**
-   * Read on behalf of one live activation.
-   *
-   * `issued` is the object the component created for the activation now
-   * running and is still holding; `asked` is what came back from the public
-   * route. The terminal performs the read only when they are the same object.
-   */
-  read(
-    issued: PullRequestReadRequest,
-    asked: PullRequestReadRequest,
-    attachment: PullRequestReadAttachment,
-  ): Operation<PullRequestReadResult>;
-}
-
-function read(kind: PullRequestReadKind, element: string, terminal: PullRequestReadTerminal) {
+function read(kind: PullRequestReadKind, element: string) {
   return function* PullRequestRead(props: Record<string, Json>): Operation<Json> {
-    // The props schema is what refuses a missing, fractional or non-positive
-    // number, before this function is entered and therefore before a credential
-    // is read. A second hand-written check here would be one no test could tell
-    // from the first.
-    const number = props.number;
-    if (typeof number !== "number") {
+    // The props schema refuses a missing or empty `url` before this function is
+    // entered, and therefore before any provider is asked anything.
+    // Canonicalized before any provider sees it, so the component, the durable
+    // request and every adapter read one answer.
+    const url = canonicalPullRequestUrl(props.url);
+    if (url === undefined) {
       throw new PullRequestReadError(
-        "invalid-number",
+        "invalid-url",
         element,
-        "it requires a positive integer `number` naming the pull request to read.",
+        "its `url` is not the plain canonical address of a pull request. A credential, a " +
+          "query or a fragment makes it something else, and none of them is stripped.",
+      );
+    }
+    const provider =
+      props.provider === undefined ? undefined : pullRequestProviderName(props.provider);
+    if (props.provider !== undefined && provider === undefined) {
+      throw new PullRequestReadError(
+        "invalid-provider",
+        element,
+        "its `provider` is not a provider name: lower case, starting with a letter.",
       );
     }
 
-    const repository = yield* currentRepository();
-    if (repository === undefined) {
-      throw new PullRequestReadError(
-        "no-repository-context",
-        element,
-        "it is written outside a lexical <Repository>, so there is no repository in scope " +
-          "holding the pull request it names.",
-      );
-    }
-
-    // Minted here, so the object the provider admits is the one this
-    // invocation issued and nothing a handler can reconstruct.
-    // One object for this activation, created here and held here. Nothing
-    // names it and nothing else can produce it.
-    const issued = readRequest(repository, number, kind);
-
-    // Request-only, and structural. Middleware sees what is about to be read
-    // and may refuse it by raising, or delegate; what it answers with is a
-    // request, so there is nothing here it could answer with instead of the
-    // evidence.
-    const asked = yield* PullRequestAPI.operations.read(issued);
-
-    const result = yield* terminal.read(issued, asked, {
-      repository,
-      workingDirectory: yield* cwd(),
+    const result = yield* PullRequestAPI.operations.read(url, {
+      kind,
+      ...(provider === undefined ? {} : { provider }),
     });
+    if (result.kind !== kind) {
+      throw new PullRequestReadError(
+        "protocol",
+        element,
+        "the selected provider answered with a different collection than the one this element " +
+          "asked for.",
+      );
+    }
     return pullRequestReadResultJson(result);
   };
 }
 
-function declare(
-  kind: PullRequestReadKind,
-  element: string,
-  terminal: PullRequestReadTerminal,
-): FormDeclaration {
+function declare(kind: PullRequestReadKind, element: string): FormDeclaration {
   return {
     forms: "self-closing",
-    fn: read(kind, element, terminal),
+    fn: read(kind, element),
     refuse: (_props: Record<string, Json>, written: InvocationForm | undefined) =>
       new PullRequestReadError(
         "unexpected-content",
@@ -303,15 +261,6 @@ function declare(
   };
 }
 
-/** The three declarations, built over one host terminal. */
-export function pullRequestReadForms(terminal: PullRequestReadTerminal): {
-  readonly reviews: FormDeclaration;
-  readonly comments: FormDeclaration;
-  readonly checks: FormDeclaration;
-} {
-  return {
-    reviews: declare("reviews", REVIEWS_ELEMENT, terminal),
-    comments: declare("comments", COMMENTS_ELEMENT, terminal),
-    checks: declare("checks", CHECKS_ELEMENT, terminal),
-  };
-}
+export const reviewsForm: FormDeclaration = declare("reviews", REVIEWS_ELEMENT);
+export const commentsForm: FormDeclaration = declare("comments", COMMENTS_ELEMENT);
+export const checksForm: FormDeclaration = declare("checks", CHECKS_ELEMENT);

@@ -27,7 +27,6 @@ import type {
   GitSwitchResult,
 } from "./git-records.ts";
 import type { GitPushOutcome, GitPushRequest } from "./git-push-records.ts";
-import type { PullRequestOutcome, PullRequestRequest } from "./pull-request-records.ts";
 import type { PullRequestReadRequest, PullRequestReadResult } from "./pull-request-read-records.ts";
 
 export interface GitCompositionApi {
@@ -74,25 +73,6 @@ export interface GitCompositionApi {
    * directory and the objects it publishes against what this run retained.
    */
   pushCurrentBranch(request: GitPushRequest): Operation<GitPushOutcome>;
-
-  /**
-   * Create or bring up to date one pull request for the selected checkout's
-   * current branch.
-   *
-   * Routed here with the other four because a document names a checkout the
-   * same way for all of them — by writing an element inside one — and because
-   * this one has to prove something about the run's own history before it may
-   * act: the branch it names has to be a branch this run published with
-   * `<Git.Push>`. The component observes props, a Repository and a working
-   * directory; the head branch, the head commit, that proof, the Git host and
-   * the credentials are all the provider's.
-   *
-   * It never pushes and never moves a head. Which resource it acts on is the
-   * request's own `number`: absent, it reconciles the branch pair and creates at
-   * most one pull request; present, it reconciles that exact pull request and
-   * moves only the four fields the request names.
-   */
-  upsertPullRequest(request: PullRequestRequest): Operation<PullRequestOutcome>;
 }
 
 export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionApi>(
@@ -113,10 +93,6 @@ export const GitComposition: Api<GitCompositionApi> = createApi<GitCompositionAp
     // deno-lint-ignore require-yield
     *pushCurrentBranch(_request: GitPushRequest): Operation<GitPushOutcome> {
       throw new GitCompositionProviderError("<Git.Push>");
-    },
-    // deno-lint-ignore require-yield
-    *upsertPullRequest(_request: PullRequestRequest): Operation<PullRequestOutcome> {
-      throw new GitCompositionProviderError("<PullRequest>");
     },
   },
 );

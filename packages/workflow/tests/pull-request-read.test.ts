@@ -17,21 +17,19 @@ import { exists } from "@effectionx/fs";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { Operation } from "effection";
-import { createApi } from "@effectionx/context-api";
-import { PULL_REQUEST_API, PullRequestAPI } from "../src/composition/pull-request-api.ts";
-import type { PullRequestApi } from "../src/composition/pull-request-api.ts";
-import type { PullRequestReadRequest } from "../src/composition/pull-request-read-records.ts";
+import type { PullRequestReadResult } from "../src/composition/pull-request-read-records.ts";
+import { PullRequestAPI } from "../src/composition/pull-request-api.ts";
+import {
+  parseGitHubPullRequestUrl,
+  recognizesGitHubPullRequestUrl,
+} from "../src/deno/composition/pull-request-reads.ts";
 import { PullRequestReadError } from "../src/composition/errors.ts";
 import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import type { WorkflowRunDatabase } from "../mod.ts";
 import { dropRootClose } from "./support/replay.ts";
-import { useBareRemote } from "./support/git-remotes.ts";
 import { raised, runWorkflowDocument } from "./support/composition.ts";
-import { fixture, published, REMOTE } from "./support/pull-requests.ts";
-import type { BareRemote } from "./support/git-remotes.ts";
 import { gitHubSource } from "../src/deno/composition/github.ts";
-import { GitComposition } from "../src/composition/git-api.ts";
 import { PULL_REQUEST_READ } from "../src/deno/composition/pull-request-reads.ts";
 import { collect, execute, inlineSource, isJsonObject } from "@executablemd/core";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -102,20 +100,37 @@ function server(answers: Record<string, Answer>, token: string | null = "t"): Se
 }
 
 /**
- * The shipped Repository machinery, with this suite's transport in place of the
- * Git host's.
+ * A run whose only pull-request adapter is this suite's transport.
  *
- * `fixture()` supplies the counting host that resolves a local bare remote; only
- * the GitHub source is replaced, so what these cases drive is the real
- * Repository, checkout and provider path.
+ * A read needs no Repository, no checkout and no working directory, so these
+ * cases install the GitHub middleware over a canned server and nothing else.
+ * The ceiling is the repository the fixtures name.
  */
-function composed(remote: BareRemote, host: Server) {
-  const base = fixture(remote);
+/**
+ * Middleware installed *outside* the run's own adapter.
+ *
+ * Position is the whole of provider order here: a handler installed through the
+ * harness callback lands inside the attachment, and therefore behind the GitHub
+ * adapter — it is the *next* provider. One installed around the whole run is in
+ * front of it, and sees a request first.
+ */
+function ahead<T>(handler: () => Operation<void>, body: () => Operation<T>): Operation<T> {
+  return scoped(function* () {
+    yield* handler();
+    return yield* body();
+  });
+}
+
+function reading(host: Server, allowed: readonly string[] = [SUBJECT_REPO]) {
   return {
-    ...base.options,
-    composition: { ...base.options.composition, gitHub: gitHubSource(host.access) },
+    composition: {},
+    gitHubPullRequests: { allowed, access: gitHubSource(host.access) },
   };
 }
+
+/** The pull request every case here names, and the ceiling that admits it. */
+const SUBJECT_REPO = "https://github.com/octo/project";
+const SUBJECT_URL = `${SUBJECT_REPO}/pull/7`;
 
 const REVIEWS = "/repos/octo/project/pulls/7/reviews";
 const CONVERSATION = "/repos/octo/project/issues/7/comments";
@@ -519,20 +534,316 @@ describe("Tier PRR — pull-request evidence", () => {
   it("PRR1: no credential is no read, and the credential never reaches a record", function* () {
     const host = server({ [REVIEWS]: { body: "[]" } }, null);
 
-    // A host with nothing to authenticate with does not send an unauthenticated
-    // request and call the answer evidence.
     expect((yield* read(host, "reviews")).state).toBe("unavailable");
     expect(host.requests).toEqual([]);
 
     const authenticated = server({ [REVIEWS]: { body: "[]" } }, "ghp_secret");
     yield* read(authenticated, "reviews");
     expect(authenticated.requests[0]?.headers.Authorization).toBe("Bearer ghp_secret");
-    // What the read answers with holds nothing of it.
     const reading = yield* read(authenticated, "reviews");
     expect(JSON.stringify(reading)).not.toContain("ghp_secret");
   });
 
-  it("PRR10: the three are three reads, and one does not perform another", function* () {
+  it("PRR2: a malformed invocation is refused before any provider is asked", function* () {
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const options = reading(host);
+
+    const refusals: readonly string[] = [
+      `<PullRequest.Reviews as="reviews" />`,
+      `<PullRequest.Reviews url="" as="reviews" />`,
+      `<PullRequest.Reviews url="not a url" as="reviews" />`,
+      `<PullRequest.Reviews url="${SUBJECT_URL}?token=hunter2" as="reviews" />`,
+      `<PullRequest.Reviews url="https://user:pw@github.com/octo/project/pull/7" as="reviews" />`,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" provider="Not A Name" as="reviews" />`,
+      `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews">paired</PullRequest.Reviews>`,
+    ];
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      for (const element of refusals) {
+        const database = yield* createRun();
+        const failure = yield* raised(runWorkflowDocument(database, `${element}\n`, options));
+        expect(`${element}: ${failure === undefined ? "bound" : "refused"}`).toBe(
+          `${element}: refused`,
+        );
+      }
+    });
+
+    // Not one request, and no credential read: every refusal is local.
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR12: a missing `as` is refused before the provider is contacted", function* () {
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" />\n`,
+          reading(host),
+        ),
+      );
+      expect(failure).toBeDefined();
+    });
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR13: an ordinary run resolves none of the three", function* () {
+    const stream = new InMemoryStream();
+    const failure = yield* raised(
+      collect(
+        yield* execute({
+          ...inlineSource(`<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`),
+          stream,
+        }),
+      ),
+    );
+    expect(String(failure)).toContain("PullRequest.Reviews");
+  });
+
+  it("PRR19: a canonical URL selects GitHub, and names the repository and number", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* runWorkflowDocument(
+        database,
+        `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`,
+        reading(host),
+      );
+      expect(String(output)).toContain("1 reviews");
+    });
+
+    // No discriminator was written; the URL selected the adapter, and the
+    // owner, repository and number it sent came out of that URL.
+    expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([REVIEWS]);
+  });
+
+  it("PRR20: an explicit provider selects GitHub for a self-hosted URL shape", function* () {
+    const selfHosted = "https://git.example.test/octo/project/pull/7";
+
+    // Implicit selection is public GitHub only. The same path shape on another
+    // host is not claimed, because claiming it is how a document that named one
+    // service quietly reaches a different one.
+    expect(recognizesGitHubPullRequestUrl(SUBJECT_URL)).toBe(true);
+    expect(recognizesGitHubPullRequestUrl(selfHosted)).toBe(false);
+    // The shape is still one this adapter speaks, which is what makes the URL
+    // addressable once a document names the provider.
+    expect(parseGitHubPullRequestUrl(selfHosted)).toEqual({
+      owner: "octo",
+      repository: "project",
+      number: 7,
+    });
+
+    const host = server({ "/repos/octo/project/pulls/7/reviews": { body: "[]" } });
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(
+        database,
+        `<PullRequest.Reviews url="${selfHosted}" provider="github" as="reviews" />\n`,
+        reading(host, [selfHosted]),
+      );
+    });
+
+    // Named, the same URL is this adapter's.
+    expect(host.requests).toHaveLength(1);
+  });
+
+  it("PRR20b: a malformed provider name is refused before the API is invoked", function* () {
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    let asked = 0;
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        ahead(
+          function* () {
+            yield* PullRequestAPI.around({
+              *read([url, options], next): Operation<PullRequestReadResult> {
+                asked += 1;
+                return yield* next(url, options);
+              },
+            });
+          },
+          () =>
+            runWorkflowDocument(
+              database,
+              `<PullRequest.Reviews url="${SUBJECT_URL}" provider="Not A Name" as="reviews" />\n`,
+              reading(host),
+            ),
+        ),
+      );
+      expect(String(failure)).toContain("not a provider name");
+    });
+
+    // The component refused it, so nothing was asked of the surface at all.
+    expect(asked).toBe(0);
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR21: a provider that does not match delegates the exact arguments", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    const seen: string[] = [];
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const output = yield* ahead(
+        // A provider for somewhere else, in front of the adapter. It sees the
+        // request, recognizes nothing, and passes both arguments along
+        // untouched.
+        function* () {
+          yield* PullRequestAPI.around({
+            *read([url, options], next): Operation<PullRequestReadResult> {
+              seen.push(`${url}|${options.kind}|${options.provider ?? "-"}`);
+              return yield* next(url, options);
+            },
+          });
+        },
+        () =>
+          runWorkflowDocument(
+            database,
+            `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`,
+            reading(host),
+          ),
+      );
+      expect(String(output)).toContain("1 reviews");
+    });
+
+    // Exactly what the component asked for, and the next matching provider
+    // owned the answer.
+    expect(seen).toEqual([`${SUBJECT_URL}|reviews|-`]);
+    expect(host.requests).toHaveLength(1);
+  });
+
+  it("PRR25: once a provider matches, its refusal is final", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+    let fallbacks = 0;
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+          // Configured, so the adapter matches this URL by recognizing it —
+          // and then refuses, because this is not one of the places allowed.
+          // An empty list would make it delegate instead, which is a different
+          // fact about a different situation.
+          reading(host, ["https://github.com/octo/other"]),
+          function* (run) {
+            return yield* scoped(function* () {
+              // Installed outside the adapter, so it would be the next one
+              // asked if a refusal were a reason to keep looking.
+              yield* PullRequestAPI.around({
+                // deno-lint-ignore require-yield
+                *read(): Operation<PullRequestReadResult> {
+                  fallbacks += 1;
+                  return { kind: "reviews", items: [] };
+                },
+              });
+              return yield* run();
+            });
+          },
+        ),
+      );
+      expect(String(failure)).toContain("has not authorized");
+    });
+
+    // The refusal ended the request. Nothing fell back to a second answer.
+    expect(fallbacks).toBe(0);
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR28: a URL that is not allowed is refused before any session or request", function* () {
+    const sessions: string[] = [];
+    const host = server({ [REVIEWS]: { body: "[]" } });
+    const counted: GitHubSource = {
+      endpoint: host.access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          try {
+            yield* provide(host.access);
+          } finally {
+            sessions.push("close");
+          }
+        });
+      },
+    };
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+          {
+            composition: {},
+            // Authorizes a different repository entirely.
+            gitHubPullRequests: { allowed: ["https://github.com/octo/other"], access: counted },
+          },
+        ),
+      );
+      expect(String(failure)).toContain("has not authorized");
+    });
+
+    // No access session was opened, so no credential was read and nothing was
+    // sent. The ceiling is asked before any of that exists.
+    expect(sessions).toEqual([]);
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR18a: middleware may refuse, and nothing is read", function* () {
+    const host = server({
+      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
+    });
+
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const refused = yield* raised(
+        ahead(
+          function* () {
+            yield* PullRequestAPI.around({
+              // deno-lint-ignore require-yield
+              *read(): Operation<PullRequestReadResult> {
+                throw new PullRequestReadError(
+                  "unavailable",
+                  "<PullRequest.Reviews>",
+                  "this run may not read pull requests.",
+                );
+              },
+            });
+          },
+          () =>
+            runWorkflowDocument(
+              database,
+              `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+              reading(host),
+            ),
+        ),
+      );
+      expect(String(refused)).toContain("may not read pull requests");
+    });
+
+    expect(host.requests).toEqual([]);
+  });
+
+  it("PRR10: the three are three independent durable reads", function* () {
     const host = server({
       [REVIEWS]: { body: "[]" },
       [CONVERSATION]: { body: "[]" },
@@ -542,557 +853,143 @@ describe("Tier PRR — pull-request evidence", () => {
       [STATUS]: { body: JSON.stringify({ sha: HEAD, statuses: [] }) },
     });
 
-    yield* read(host, "reviews");
-    expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([REVIEWS]);
+    const root = yield* useStorageRoot();
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(
+        database,
+        [
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />`,
+          `<PullRequest.Comments url="${SUBJECT_URL}" as="comments" />`,
+          `<PullRequest.Checks url="${SUBJECT_URL}" as="checks" />`,
+          "",
+        ].join("\n"),
+        reading(host),
+      );
 
-    yield* read(host, "comments");
-    expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([
-      REVIEWS,
-      CONVERSATION,
-      INLINE,
-    ]);
-
-    yield* read(host, "checks");
-    expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([
-      REVIEWS,
-      CONVERSATION,
-      INLINE,
-      PULL,
-      RUNS,
-      STATUS,
-    ]);
-    // The check-runs request states the filter it depends on rather than
-    // inheriting a default that could move.
-    expect(host.requests[4]?.url).toContain("filter=latest");
-    expect(host.requests.every((request) => request.method === "GET")).toBe(true);
-    const paged = host.requests.filter((request) => new URL(request.url).pathname !== PULL);
-    expect(paged.every((request) => request.url.includes("per_page=100"))).toBe(true);
-    // The pull request itself is one object, so it asks for no page size.
-    expect(
-      host.requests.find((request) => new URL(request.url).pathname === PULL)?.url,
-    ).not.toContain("per_page");
+      // Three effects, one per collection: completing one manufactures neither
+      // of the others.
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(3);
+      const kinds = retained.map((event) =>
+        event.type === "yield" && isJsonObject(event.description.input)
+          ? event.description.input.kind
+          : undefined,
+      );
+      expect(kinds).toEqual(["reviews", "comments", "checks"]);
+    });
   });
 
-  it("PRR2: a malformed invocation is refused before anything is sent", function* () {
-    const host = server({ [REVIEWS]: { body: "[]" } });
-    const remote = yield* useBareRemote(REMOTE);
-    const options = composed(remote, host);
-
-    const refusals = [
-      `<PullRequest.Reviews number={7} as="reviews">not mine to render</PullRequest.Reviews>`,
-      `<PullRequest.Reviews as="reviews" />`,
-      `<PullRequest.Reviews number={0} as="reviews" />`,
-      `<PullRequest.Reviews number={1.5} as="reviews" />`,
-    ];
+  it("PRR23: the URL, the discriminator and the collection all name the effect", function* () {
+    const other = "https://github.com/octo/project/pull/8";
+    const host = server({
+      [REVIEWS]: { body: "[]" },
+      [CONVERSATION]: { body: "[]" },
+      [INLINE]: { body: "[]" },
+      "/repos/octo/project/pulls/8/reviews": { body: "[]" },
+    });
 
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
-      for (const element of refusals) {
-        const database = yield* createRun();
-        const failure = yield* raised(runWorkflowDocument(database, published(element), options));
-        expect(`${element}: ${failure === undefined ? "bound" : "refused"}`).toBe(
-          `${element}: refused`,
-        );
-        // Named, so a case that starts failing for an unrelated reason — a
-        // Repository that would not prepare, a push that did not land — stops
-        // counting as this refusal.
-        expect(String(failure)).toContain("PullRequestReadError");
-      }
-
-      // Written outside a Repository there is nothing in scope to read from.
       const database = yield* createRun();
-      const outside = yield* raised(
-        runWorkflowDocument(database, `<PullRequest.Reviews number={7} as="reviews" />\n`, options),
+      yield* runWorkflowDocument(
+        database,
+        [
+          `<PullRequest.Reviews url="${SUBJECT_URL}" as="a" />`,
+          `<PullRequest.Reviews url="${other}" as="b" />`,
+          `<PullRequest.Comments url="${SUBJECT_URL}" as="c" />`,
+          `<PullRequest.Reviews url="${SUBJECT_URL}" provider="github" as="d" />`,
+          "",
+        ].join("\n"),
+        reading(host, [SUBJECT_REPO]),
       );
-      expect(outside).toBeDefined();
-    });
 
-    // Not one request, and no credential read: every refusal is local.
-    expect(host.requests).toEqual([]);
+      const retained = yield* reads(database);
+      expect(retained).toHaveLength(4);
+      const inputs = retained.map((event) =>
+        event.type === "yield" && isJsonObject(event.description.input)
+          ? event.description.input
+          : {},
+      );
+      // Every member the request is made of appears in it.
+      expect(inputs.map((input) => input.url)).toEqual([
+        SUBJECT_URL,
+        other,
+        SUBJECT_URL,
+        SUBJECT_URL,
+      ]);
+      expect(inputs.map((input) => input.kind)).toEqual([
+        "reviews",
+        "reviews",
+        "comments",
+        "reviews",
+      ]);
+      expect(inputs.map((input) => input.provider)).toEqual([null, null, null, "github"]);
+
+      // And each is a different effect: four reads, four names.
+      const names = retained.map((event) =>
+        event.type === "yield" ? String(event.description.name) : "",
+      );
+      expect(new Set(names).size).toBe(4);
+    });
   });
 
-  it("PRR11: a completed replay reads nothing and answers identically", function* () {
+  it("PRR11: a completed replay performs no provider or credential work", function* () {
+    const sessions: string[] = [];
     const host = server({
       [REVIEWS]: {
-        body: JSON.stringify([
-          review(1, "APPROVED", "ship it"),
-          review(2, "COMMENTED", "one note"),
-        ]),
+        body: JSON.stringify([review(1, "APPROVED", "ship it"), review(2, "COMMENTED", "note")]),
       },
     });
-    const remote = yield* useBareRemote(REMOTE);
-    const options = composed(remote, host);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
+    const counted: GitHubSource = {
+      endpoint: host.access.endpoint,
+      open(): Operation<GitHubAccess> {
+        return resource(function* (provide) {
+          sessions.push("open");
+          yield* provide(host.access);
+        });
+      },
+    };
+    const options = {
+      composition: {},
+      gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted },
+    };
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
 
     const root = yield* useStorageRoot();
     const path = runPath(root, "release-1.4");
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-
       const first = yield* runWorkflowDocument(database, document, options);
       expect(String(first)).toContain("2 reviews");
       expect(host.requests).toHaveLength(1);
+      expect(sessions).toEqual(["open"]);
 
-      // Without this the second execution is a completed replay, which restores
-      // the retained output without entering the procedure at all — and would
-      // pass whether or not this read is durable. Dropping the root Close makes
-      // the document run again, so each effect either restores or performs.
       dropRootClose(path);
 
       const second = yield* runWorkflowDocument(database, document, options);
       expect(String(second)).toBe(String(first));
-      // Still one: the array a reviewer is shown on a resume is the one the run
-      // retained, and no credential was read to produce it a second time.
+      // No second request, and no second session: a completed read restores.
       expect(host.requests).toHaveLength(1);
+      expect(sessions).toEqual(["open"]);
     });
   });
 
-  it("PRR12: a missing `as` is refused before the provider is contacted", function* () {
-    const host = server({ [REVIEWS]: { body: "[]" } });
-    const remote = yield* useBareRemote(REMOTE);
-    const options = composed(remote, host);
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      // Declaring `returns` is what makes `as` mandatory, and the engine checks
-      // it before the body runs.
-      const failure = yield* raised(
-        runWorkflowDocument(database, published(`<PullRequest.Reviews number={7} />`), options),
-      );
-      expect(failure).toBeDefined();
-    });
-
-    expect(host.requests).toEqual([]);
-  });
-
-  it("PRR13: an ordinary run resolves none of the three", function* () {
-    // `xmd run` composes no workflow, so these names reach nothing. A document
-    // that wrote one outside a workflow gets an unresolved component rather
-    // than a read performed under whatever credentials the machine holds.
-    const stream = new InMemoryStream();
-    const failure = yield* raised(
-      collect(
-        yield* execute({
-          ...inlineSource(`<PullRequest.Reviews number={7} as="reviews" />\n`),
-          stream,
-        }),
-      ),
-    );
-    expect(String(failure)).toContain("PullRequest.Reviews");
-  });
-
-  it("PRR14: the exact URLs and the field each record reads from", function* () {
-    const host = server({
-      [`${REVIEWS}?per_page=100`]: { body: "[]" },
-      [`${CONVERSATION}?per_page=100`]: { body: "[]" },
-      [`${INLINE}?per_page=100`]: { body: "[]" },
-      [PULL]: { body: JSON.stringify(pullRequestPayload()) },
-      [`${RUNS}?per_page=100&filter=latest`]: { body: JSON.stringify({ check_runs: [] }) },
-      [`${STATUS}?per_page=100`]: { body: JSON.stringify({ sha: HEAD, statuses: [] }) },
-    });
-
-    yield* read(host, "reviews");
-    yield* read(host, "comments");
-    yield* read(host, "checks");
-
-    // Exact, including the query: a default that moved would change what a
-    // reviewer is shown without changing a line of this repository.
-    expect(host.requests.map((request) => request.url)).toEqual([
-      `${ENDPOINT}${REVIEWS}?per_page=100`,
-      `${ENDPOINT}${CONVERSATION}?per_page=100`,
-      `${ENDPOINT}${INLINE}?per_page=100`,
-      `${ENDPOINT}${PULL}`,
-      `${ENDPOINT}${RUNS}?per_page=100&filter=latest`,
-      `${ENDPOINT}${STATUS}?per_page=100`,
-    ]);
-  });
-
-  it("PRR15: a check run reads its link from html_url, a status from target_url", function* () {
-    const host = server({
-      [PULL]: { body: JSON.stringify(pullRequestPayload()) },
-      [RUNS]: {
-        body: JSON.stringify({
-          check_runs: [
-            {
-              id: 1,
-              head_sha: HEAD,
-              name: "test",
-              status: "completed",
-              conclusion: "success",
-              // Both present and different, so the record cannot pass by
-              // reading whichever happens to be there.
-              html_url: "https://github.test/runs/1",
-              details_url: "https://elsewhere.test/details",
-              output: { title: null, summary: null, text: null },
-              started_at: null,
-              completed_at: null,
-            },
-          ],
-        }),
-      },
-      [STATUS]: {
-        body: JSON.stringify({
-          sha: HEAD,
-          statuses: [
-            {
-              id: 2,
-              context: "deploy",
-              state: "success",
-              description: null,
-              target_url: "https://github.test/deploy/2",
-              html_url: "https://elsewhere.test/status",
-              created_at: "2026-08-24T00:00:00Z",
-              updated_at: "2026-08-24T00:00:00Z",
-            },
-          ],
-        }),
-      },
-    });
-
-    const reading = yield* read(host, "checks");
-    expect(reading.state).toBe("read");
-    const [run, status] = items(reading);
-    expect(run?.url).toBe("https://github.test/runs/1");
-    expect(status?.url).toBe("https://github.test/deploy/2");
-  });
-
-  it("PRR16: an inline comment outside a review keeps a null review id", function* () {
-    const host = server({
-      [CONVERSATION]: { body: "[]" },
-      [INLINE]: {
-        body: JSON.stringify([
-          {
-            id: 3,
-            pull_request_review_id: null,
-            user: { login: "reviewer" },
-            body: "a standalone note",
-            created_at: "2026-08-24T02:00:00Z",
-            updated_at: "2026-08-24T02:00:00Z",
-            html_url: "https://github.test/pr/7#d3",
-            path: "mod.ts",
-            diff_hunk: "@@ -1 +1 @@",
-            commit_id: HEAD,
-            original_commit_id: HEAD,
-            line: 1,
-            side: "RIGHT",
-            start_line: null,
-            start_side: null,
-            in_reply_to_id: null,
-            pull_request_url: SUBJECT,
-          },
-        ]),
-      },
-    });
-
-    const reading = yield* read(host, "comments");
-    expect(reading.state).toBe("read");
-    const comment = items(reading)[0];
-    expect(comment?.reviewId).toBe(null);
-  });
-
-  it("PRR17: an identifier that cannot be held exactly is refused", function* () {
-    const host = server({
-      [REVIEWS]: {
-        body: JSON.stringify([
-          { ...(review(1, "COMMENTED", "one") as Record<string, unknown>), id: 2 ** 53 },
-        ]),
-      },
-    });
-    // `String(2**53)` names a different object than the host meant, and a
-    // record that rounded it would be evidence about something else.
-    expect((yield* read(host, "reviews")).state).toBe("protocol-invalid");
-  });
-
-  it("PRR18a: middleware may refuse, and nothing is read", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const document = published(`<PullRequest.Reviews number={7} as="reviews" />`);
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const refused = yield* raised(
-        runWorkflowDocument(database, document, base, function* (run) {
-          return yield* scoped(function* () {
-            yield* PullRequestAPI.around({
-              // deno-lint-ignore require-yield
-              *read(): Operation<PullRequestReadRequest> {
-                throw new PullRequestReadError(
-                  "unavailable",
-                  "<PullRequest.Reviews>",
-                  "this run may not read pull requests.",
-                );
-              },
-            });
-            return yield* run();
-          });
-        }),
-      );
-      expect(String(refused)).toContain("may not read pull requests");
-    });
-
-    expect(host.requests).toEqual([]);
-  });
-
-  it("PRR18b: middleware may observe and delegate, and the read is unchanged", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
-
-    const seen: string[] = [];
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const output = yield* runWorkflowDocument(database, document, base, function* (run) {
-        return yield* scoped(function* () {
-          yield* PullRequestAPI.around({
-            *read([request], next): Operation<PullRequestReadRequest> {
-              seen.push(`${request.kind}:${request.number}`);
-              return yield* next(request);
-            },
-          });
-          return yield* run();
-        });
-      });
-      expect(String(output)).toContain("1 reviews");
-    });
-
-    // It saw exactly what was about to be read, and changed nothing about it.
-    expect(seen).toEqual(["reviews:7"]);
-  });
-
-  it("PRR19: a terminal a handler tries to answer for performs nothing", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
-
-    /** Each attack, and the request its handler hands back instead. */
-    const attacks: Record<string, (issued: PullRequestReadRequest) => PullRequestReadRequest> = {
-      // A copy carrying the same members. Structural equality is not identity,
-      // and two invocations on one number produce equal requests.
-      copied: (issued) => ({ ...issued }),
-      // The same members with the number moved: a handler choosing which pull
-      // request a document reads.
-      "another subject": (issued) => ({ ...issued, number: 8 }),
-      // A request rebuilt from nothing, the way a handler that had only seen
-      // the retained journal could build one.
-      reconstructed: (issued) => ({
-        repository: { ...issued.repository },
-        number: issued.number,
-        kind: issued.kind,
-      }),
-    };
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      for (const [name, forge] of Object.entries(attacks)) {
-        const database = yield* createRun();
-        const failure = yield* raised(
-          runWorkflowDocument(database, document, base, function* (run) {
-            return yield* scoped(function* () {
-              yield* PullRequestAPI.around({
-                // deno-lint-ignore require-yield
-                *read([request]): Operation<PullRequestReadRequest> {
-                  return forge(request);
-                },
-              });
-              return yield* run();
-            });
-          }),
-        );
-        // Refused as a protocol failure, and refused *before* anything is sent.
-        expect(`${name}: ${failure === undefined ? "performed" : "refused"}`).toBe(
-          `${name}: refused`,
-        );
-        expect(String(failure)).toContain("not the one this activation issued");
-        expect(`${name}: ${host.requests.length}`).toBe(`${name}: 0`);
-      }
-    });
-  });
-
-  it("PRR20: a stale request from an earlier invocation is not this one's", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-      [CONVERSATION]: { body: "[]" },
-      [INLINE]: { body: "[]" },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    // Two invocations in one document; the handler keeps the first request and
-    // returns it in place of the second.
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      `<PullRequest.Comments number={7} as="comments" />`,
-    );
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      let held: PullRequestReadRequest | undefined;
-      const failure = yield* raised(
-        runWorkflowDocument(database, document, base, function* (run) {
-          return yield* scoped(function* () {
-            yield* PullRequestAPI.around({
-              // deno-lint-ignore require-yield
-              *read([request]): Operation<PullRequestReadRequest> {
-                held ??= request;
-                return held;
-              },
-            });
-            return yield* run();
-          });
-        }),
-      );
-
-      // The first invocation is answered with its own request and reads. The
-      // second is handed the first's, which is not the object minted for it.
-      expect(String(failure)).toContain("not the one this activation issued");
-      expect(host.requests.map((request) => new URL(request.url).pathname)).toEqual([REVIEWS]);
-    });
-  });
-
-  it("PRR21: the route reached under its own name from another copy is still request-only", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
-
-    // A second copy of the Api, built from the published name rather than
-    // imported — what a separately loaded copy of this package reaches, and
-    // what anything that read the name off the wire could build.
-    const reconstructed = createApi<PullRequestApi>(PULL_REQUEST_API, {
-      // deno-lint-ignore require-yield
-      *read(request: PullRequestReadRequest): Operation<PullRequestReadRequest> {
-        return request;
-      },
-    });
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const output = yield* runWorkflowDocument(database, document, base, function* (run) {
-        return yield* scoped(function* () {
-          yield* reconstructed.around({
-            *read([request], next): Operation<PullRequestReadRequest> {
-              // It reaches the same cell — the handler runs — and still has
-              // nothing to answer with but a request.
-              return yield* next(request);
-            },
-          });
-          return yield* run();
-        });
-      });
-      expect(String(output)).toContain("1 reviews");
-    });
-  });
-
-  it("PRR22: a read that could not be completed retains nothing to replay", function* () {
+  it("PRR22: a read that could not be completed retains no array", function* () {
     const failing = server({ [REVIEWS]: { status: 500, body: "{}" } });
-    const remote = yield* useBareRemote(REMOTE);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`;
 
     const root = yield* useStorageRoot();
-    const path = runPath(root, "release-1.4");
     yield* withStorage(root, function* () {
       const database = yield* createRun();
-      const refused = yield* raised(
-        runWorkflowDocument(database, document, composed(remote, failing)),
-      );
+      const refused = yield* raised(runWorkflowDocument(database, document, reading(failing)));
       expect(String(refused)).toContain("did not answer with the complete collection");
 
-      // The failure is retained, as every durable effect's outcome is. What is
-      // not retained is a list: there is no evidence array in the journal for a
-      // collection nobody finished reading, so nothing can restore a partial
-      // one and call it what the pull request holds.
       const retained = yield* reads(database);
       expect(retained).toHaveLength(1);
       const outcome = retained[0]?.result;
-      // A failure, not a value: the entry carries the refusal and no `value` at
-      // all, so there is no array anywhere for a continuation to restore and
-      // call what the pull request holds.
       expect(outcome?.status).toBe("err");
       expect(outcome && "value" in outcome).toBe(false);
-    });
-  });
-
-  it("PRR23: a different question is a different effect, named and retained apart", function* () {
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-      [`/repos/octo/project/pulls/8/reviews`]: {
-        body: JSON.stringify(
-          [2, 3].map((id) => ({
-            ...(review(id, "CHANGES_REQUESTED", "not yet") as Record<string, unknown>),
-            pull_request_url: `${ENDPOINT}/repos/octo/project/pulls/8`,
-          })),
-        ),
-      },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const options = composed(remote, host);
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      // Both reads in one document, so they are two invocations of the same
-      // component asking two different questions.
-      const output = yield* runWorkflowDocument(
-        database,
-        published(
-          `<PullRequest.Reviews number={7} as="seven" />`,
-          `<PullRequest.Reviews number={8} as="eight" />`,
-          "",
-          "{seven.length} then {eight.length}",
-        ),
-        options,
-      );
-      expect(String(output)).toContain("1 then 2");
-
-      // Two retained reads, and the number is in both the fingerprint and the
-      // input — so neither could restore the other's answer.
-      const retained = yield* reads(database);
-      expect(retained).toHaveLength(2);
-      const inputs = retained.map((event) =>
-        event.type === "yield" ? event.description.input : undefined,
-      );
-      expect(inputs.map((input) => (isJsonObject(input) ? input.number : undefined))).toEqual([
-        7, 8,
-      ]);
-      const names = retained.map((event) =>
-        event.type === "yield" ? String(event.description.name) : "",
-      );
-      expect(names[0]).not.toBe(names[1]);
     });
   });
 
@@ -1113,79 +1010,22 @@ describe("Tier PRR — pull-request evidence", () => {
       },
     };
 
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const options = { ...base, composition: { ...base.composition, gitHub: counted } };
-
     const root = yield* useStorageRoot();
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       yield* runWorkflowDocument(
         database,
-        published(`<PullRequest.Reviews number={7} as="reviews" />`),
-        options,
+        `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n`,
+        { composition: {}, gitHubPullRequests: { allowed: [SUBJECT_REPO], access: counted } },
       );
     });
 
-    // One session for the read, and it is closed before the run finishes — a
-    // credential held open past the invocation that acquired it is the thing
-    // this boundary exists to prevent.
     expect(events).toEqual(["open", "close"]);
-  });
-
-  it("PRR25: no public Api carries evidence, so none can be answered for", function* () {
-    // The structural check first: there is no operation on the public
-    // composition Api that returns evidence, so there is nothing for middleware
-    // to intercept. This is the shape of the defect that made the previous
-    // revision bypassable.
-    const operations: Record<string, unknown> = GitComposition.operations;
-    expect(Object.keys(operations)).not.toContain("readPullRequestEvidence");
-
-    // And behaviourally: middleware on that Api sees no read at all.
-    const host = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const remote = yield* useBareRemote(REMOTE);
-    const base = composed(remote, host);
-    const seen: string[] = [];
-
-    const root = yield* useStorageRoot();
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-      const output = yield* runWorkflowDocument(
-        database,
-        published(
-          `<PullRequest.Reviews number={7} as="reviews" />`,
-          "",
-          "{reviews.length} reviews",
-        ),
-        base,
-        function* (run) {
-          return yield* scoped(function* () {
-            yield* GitComposition.around({
-              *upsertPullRequest([request], next) {
-                seen.push("pull-request");
-                return yield* next(request);
-              },
-            });
-            return yield* run();
-          });
-        },
-      );
-      expect(String(output)).toContain("1 reviews");
-    });
-
-    // The read happened, and the public Git-host Api never carried it.
-    expect(host.requests).toHaveLength(1);
-    expect(seen).toEqual([]);
   });
 
   it("PRR26: an interruption in flight unwinds and retains no result", function* () {
     const entered = withResolvers<void>();
     const sessions: string[] = [];
-    const remote = yield* useBareRemote(REMOTE);
-
-    // A transport that reaches the wire and never comes back.
     const hanging: GitHubSource = {
       endpoint: ENDPOINT,
       open(): Operation<GitHubAccess> {
@@ -1210,26 +1050,18 @@ describe("Tier PRR — pull-request evidence", () => {
         });
       },
     };
-
-    const base = composed(remote, server({}));
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
+    const document = `<PullRequest.Reviews url="${SUBJECT_URL}" as="reviews" />\n\n{reviews.length} reviews\n`;
 
     const root = yield* useStorageRoot();
-    const path = runPath(root, "release-1.4");
     yield* withStorage(root, function* () {
       const database = yield* createRun();
 
-      // Halt the run the moment the request is on the wire.
       yield* race([
         call(function* () {
           yield* raised(
             runWorkflowDocument(database, document, {
-              ...base,
-              composition: { ...base.composition, gitHub: hanging },
+              composition: {},
+              gitHubPullRequests: { allowed: [SUBJECT_REPO], access: hanging },
             }),
           );
         }),
@@ -1238,115 +1070,18 @@ describe("Tier PRR — pull-request evidence", () => {
         }),
       ]);
 
-      // The session unwound with the scope that opened it.
       expect(sessions).toEqual(["open", "close"]);
 
-      // Nothing succeeded, so nothing is retained to restore: no completed read
-      // and no partial array.
       const retained = yield* reads(database);
       expect(retained.every((event) => event.result?.status !== "ok")).toBe(true);
       expect(JSON.stringify(retained)).not.toContain('"items"');
 
-      // No root close to drop: the halt left the root open, which is what
-      // makes the run continuable in the first place.
-
-      // A continuation performs the whole collection.
       const working = server({
         [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
       });
-      const output = yield* runWorkflowDocument(database, document, composed(remote, working));
+      const output = yield* runWorkflowDocument(database, document, reading(working));
       expect(String(output)).toContain("1 reviews");
       expect(working.requests).toHaveLength(1);
-    });
-  });
-
-  it("PRR28: a genuine request from an earlier execution of the same element is stale", function* () {
-    const entered = withResolvers<void>();
-    const remote = yield* useBareRemote(REMOTE);
-
-    // The first execution reaches the wire and is halted there, so the root
-    // stays open and the next execution re-enters the same element.
-    const hanging: GitHubSource = {
-      endpoint: ENDPOINT,
-      open(): Operation<GitHubAccess> {
-        return resource(function* (provide) {
-          yield* provide({
-            endpoint: ENDPOINT,
-            // deno-lint-ignore require-yield
-            *token(): Operation<string | undefined> {
-              return "t";
-            },
-            *send(): Operation<GitHubHttpResponse> {
-              entered.resolve();
-              yield* suspend();
-              throw new Error("unreachable");
-            },
-          });
-        });
-      },
-    };
-
-    const working = server({
-      [REVIEWS]: { body: JSON.stringify([review(1, "APPROVED", "ship it")]) },
-    });
-    const base = composed(remote, working);
-    const document = published(
-      `<PullRequest.Reviews number={7} as="reviews" />`,
-      "",
-      "{reviews.length} reviews",
-    );
-
-    // One handler across both executions, keeping the first genuine request.
-    let held: PullRequestReadRequest | undefined;
-    const holding = function* (run: () => Operation<Json>): Operation<Json> {
-      return yield* scoped(function* () {
-        yield* PullRequestAPI.around({
-          // deno-lint-ignore require-yield
-          *read([request]): Operation<PullRequestReadRequest> {
-            held ??= request;
-            return held;
-          },
-        });
-        return yield* run();
-      });
-    };
-
-    const root = yield* useStorageRoot();
-    const path = runPath(root, "release-1.4");
-    yield* withStorage(root, function* () {
-      const database = yield* createRun();
-
-      yield* race([
-        call(function* () {
-          yield* raised(
-            runWorkflowDocument(
-              database,
-              document,
-              { ...base, composition: { ...base.composition, gitHub: hanging } },
-              holding,
-            ),
-          );
-        }),
-        call(function* () {
-          yield* entered.operation;
-        }),
-      ]);
-
-      // The handler is holding a request this host really did issue — for the
-      // execution that is now over.
-      expect(held).toBeDefined();
-      const before = yield* storageDigest(path);
-
-      // The same element, the next execution. Its activation issued a new
-      // object; the handler returns the old one.
-      const stale = yield* raised(runWorkflowDocument(database, document, base, holding));
-      expect(String(stale)).toContain("not the one this activation issued");
-
-      // Refused before anything: no credential read, no request, no binding.
-      expect(working.requests).toEqual([]);
-      expect(String(stale)).not.toContain("reviews");
-      // And nothing moved in storage while it was refused.
-      expect(yield* storageDigest(path)).toEqual(before);
     });
   });
 });

@@ -1371,58 +1371,63 @@ an objection its review never saw. Three self-closing components read what a
 pull request already holds:
 
 ```md
-<PullRequest.Reviews  number={pullRequest.number} as="reviews"  />
-<PullRequest.Comments number={pullRequest.number} as="comments" />
-<PullRequest.Checks   number={pullRequest.number} as="checks"   />
+<PullRequest.Reviews  url={pullRequest.url} as="reviews"  />
+<PullRequest.Comments url={pullRequest.url} as="comments" />
+<PullRequest.Checks   url={pullRequest.url} as="checks"   />
 ```
 
-Each takes one required positive-integer `number`, requires `as`, renders
-nothing and binds one JSON array. The enclosing `<Repository>` and the
-contextual working directory decide which repository it names, as §7.1 decides
-every Git operation's place, so there is no repository, URL, host, provider,
-endpoint, token, credential, page, cursor or limit prop. Each is self-closing
-only, declared to the engine rather than asked about, so a paired invocation is
-refused before the component's body runs.
+Each takes one required `url`, an optional `provider`, requires `as`, renders
+nothing and binds one JSON array. The URL is the identity: a pull request is a
+public object with a canonical address, so a document that can name one can ask
+what it holds — there is no `<Repository>` to be inside of, no working directory
+to be at, and no repository or number prop, because the URL says both and the
+selected provider parses them out of it. Each is self-closing only, declared to
+the engine rather than asked about, so a paired invocation is refused before the
+component's body runs.
 
 Three components rather than one, for the reason Push and PullRequest are two:
 three separate remote collections, three durable effects, three independent
 replays and failures. One component returning three lists would make a partial
 answer indistinguishable from a complete one.
 
-**The request crosses a public route; the evidence crosses none.** The
-structural request — the retained Repository identity, the number and the
-collection — passes through a contextual Api named
-`executablemd.workflow.pull-request`, which answers with a request.
-Middleware in scope may inspect what is about to be read, refuse it by raising,
-narrow which reads a run may perform, or delegate. Refusal is the whole of
-narrowing: a handler may reject a subset of reads and may not reshape a request.
+**One surface, two operations.** Reads and upserts are both asked of
+`PullRequestApi`, reached under the contextual name
+`executablemd.workflow.pull-request` — the shape `<Issue>` already has:
 
-There is **no public operation that returns evidence**, on this Api or any
-other. The three components are built by the trusted host over a terminal and
-capture it in their closure, so the only thing that can author a result is the
-host itself. An operation on a public Api would be one anything in scope could
-answer without delegating, and the collection it fabricated would be what a
-document binds and the journal retains.
+```ts
+read(url: string, options: PullRequestReadOptions): Operation<PullRequestReadResult>
+upsert(pullRequest: PullRequestInput, options: PullRequestUpsertOptions): Operation<PullRequestResult>
+```
 
-Behind the route sits a terminal that authenticates the **exact object the live
-activation is holding**. The component creates one request for the activation it
-is running, keeps it, and the terminal performs the read only when what came
-back from the route is that same object. A request rebuilt from the same
-members, one a sibling element issued, and one a handler kept from an earlier
-execution of this same element are each refused before a credential is read,
-before anything is sent, and before any durable work begins.
+There is no registry, no resolver, no routing protocol and no private terminal.
+A provider is ordinary middleware around these operations: an adapter composes
+`PullRequestAPI.around(...)`, looks at what it was handed, and either handles the
+request or delegates it untouched. The rule applies to each method
+independently.
 
-Identity rather than a name, and that distinction is load-bearing. An expansion
-identifier is stable across continuations, so a handler could keep a genuine
-request from one execution and present it in the next execution of the same
-element, and a name-based check would call it current. A fresh object per
-activation has no such afterlife. The expansion identifier still names the
-durable position; it is not what authenticates issuance.
+**Selection.** Without an explicit discriminator a provider matches its own
+URLs; the shipped GitHub adapter recognizes public `github.com` pull requests
+and passes everything else along. With `provider` named, only the provider of
+that exact name may handle it, which is what makes a self-hosted deployment
+wearing the same `/{owner}/{repository}/pull/{number}` shape addressable.
 
-The **attachment** — the whole Repository record and the working directory —
-never appears in a request. It goes from the component to the terminal directly:
-a provider needs it to select a checkout and resolve a locator, and middleware
-has no business seeing a host path.
+**Once middleware matches, it owns the answer.** Its validation and its refusal
+are final: it does not delegate after matching, and no provider catches the
+surface's base error to implement a fallback. A refusal from the selected
+provider ends the request rather than starting a search for another one, because
+a search is how a document that named one service quietly reaches a different
+one.
+
+Canonicalization is provider-neutral and happens before any of this, so the
+component, the durable request and every adapter read one answer. A credential
+in the URL, a query and a fragment each make it something other than the plain
+name of a pull request, and none is stripped.
+
+`upsert` answers with the complete identity §7.5 settled — repository,
+providerId, number, url, state, headSha and baseSha. Issue's upsert answers with
+a URL alone because that is the whole of its portable contract; a pull request
+already has a stronger shipped one, and adopting Issue's topology does not erase
+it.
 
 **A read is not a reconciled effect.** §7.5's upsert reconciles because it
 mutates a remote and must adopt an interrupted attempt rather than repeat it.
@@ -1446,10 +1451,14 @@ Checks observe the pull request's head first and read every result at that exact
 SHA, and each record carries it, so evidence always says which revision it
 describes.
 
-**Authentication is the host's.** The credential is the host's own, acquired for
-the retained locator and disposed with the invocation, and the destination stays
-inside the adapter's ceiling. A document names a number; it names no host and
-supplies no credential. Nothing of the credential, the endpoint, the raw
+**Authentication and reach are the host's.** The credential is the host's own,
+acquired for the request and disposed with the invocation. Which pull requests
+may be read at all is operator configuration — the `allowed` list, checked
+before a session is opened, a credential is read or anything is sent — and a
+document names a URL, never a host or a credential. Absence of that
+configuration authorizes no URL read and disables nothing else: `<PullRequest>`
+upserts on this run's own matching Push evidence, which no configuration grants
+or withdraws. Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
 secret gate. The retained request is the Repository identity Push retains —
@@ -1466,6 +1475,14 @@ interrupted in flight retains no successful result at all — the access session
 unwinds with the scope that opened it and a continuation performs the whole
 collection. There is never a partial collection in the journal for a
 continuation to restore.
+
+The retained request is the whole normalized question: the operation, the
+canonical URL, the provider discriminator, the collection, the run and the
+expansion. The effect's name covers the question rather than the run — a fork is
+a different run reaching the same position with the same question, and a name
+carrying the run would make every inherited read a different effect. A retained
+read *is* inheritable: it changed nothing at the host, so a fork consumes the
+record and asks the provider nothing.
 
 The retained result is a discriminated envelope: `{ kind: "reviews", items }`,
 `{ kind: "comments", items }`, or `{ kind: "checks", headSha, items }`. Only a

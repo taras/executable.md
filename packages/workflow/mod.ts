@@ -100,6 +100,22 @@ export type {
   WorktreeCreationRequest,
   WorktreeRecord,
 } from "./src/composition/records.ts";
+export {
+  NoPullRequestProvider,
+  PULL_REQUEST_API,
+  PullRequestAPI,
+} from "./src/composition/pull-request-api.ts";
+export type {
+  PullRequestApi,
+  PullRequestInput,
+  PullRequestReadOptions,
+  PullRequestUpsertOptions,
+} from "./src/composition/pull-request-api.ts";
+export {
+  canonicalPullRequestUrl,
+  pullRequestProviderName,
+} from "./src/composition/pull-request-target.ts";
+export type { PullRequestTarget } from "./src/composition/pull-request-target.ts";
 export { GitComposition } from "./src/composition/git-api.ts";
 export type { GitCompositionApi } from "./src/composition/git-api.ts";
 export {

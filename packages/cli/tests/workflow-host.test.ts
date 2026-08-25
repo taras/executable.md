@@ -30,6 +30,11 @@ import {
   gitHubIssuesConfiguration,
 } from "../src/github-issues-config.ts";
 import {
+  GITHUB_PULL_REQUESTS_ENV,
+  GitHubPullRequestsConfigError,
+  gitHubPullRequestsConfiguration,
+} from "../src/github-pull-requests-config.ts";
+import {
   HELPER_MODE,
   helperCommand,
   isCredentialHelperMode,
@@ -224,6 +229,87 @@ describe("Tier WFH — GitHub issue handling is host configuration", () => {
       }
       expect(raised).toBeInstanceOf(GitHubIssuesConfigError);
       expect(String(raised)).toContain(GITHUB_ISSUES_ENV);
+    }
+  });
+});
+
+describe("Tier WFH — GitHub pull-request reading is host configuration", () => {
+  /**
+   * H2. Which pull requests a run may *read* is the operator's to state, and it
+   * is stated as `allowed` — the list of places this host permits — rather than
+   * as the architecture's word for the bound it imposes.
+   *
+   * Absence authorizes no URL read, and disables nothing else: `<PullRequest>`
+   * upserts on the authority of this run's own Push evidence, which no
+   * environment variable grants or withdraws.
+   */
+  function configured(value: string | undefined): Operation<unknown> {
+    return scoped(function* () {
+      yield* API.Env.around({
+        // deno-lint-ignore require-yield
+        *env([name]) {
+          return name === GITHUB_PULL_REQUESTS_ENV ? value : undefined;
+        },
+      });
+      return yield* gitHubPullRequestsConfiguration();
+    });
+  }
+
+  it("authorizes no read when nothing is configured", function* () {
+    expect(yield* configured(undefined)).toBeUndefined();
+    expect(yield* configured("")).toBeUndefined();
+  });
+
+  it("reads what is allowed, and canonicalizes every entry", function* () {
+    const options = yield* configured(
+      JSON.stringify({ allowed: ["https://github.com/octo/project/"] }),
+    );
+    expect(options).toEqual({ allowed: ["https://github.com/octo/project"] });
+
+    // A loopback endpoint with a port: how a deployment points this at
+    // something that is not GitHub's own API.
+    const withEndpoint = yield* configured(
+      JSON.stringify({
+        allowed: ["https://github.com/octo/project"],
+        endpoint: "http://127.0.0.1:8787/",
+      }),
+    );
+    expect(withEndpoint).toEqual({
+      allowed: ["https://github.com/octo/project"],
+      endpoint: "http://127.0.0.1:8787",
+    });
+  });
+
+  it("refuses configuration it cannot use rather than narrowing it", function* () {
+    const refused = [
+      "not json",
+      "[]",
+      '"a string"',
+      JSON.stringify({}),
+      JSON.stringify({ allowed: [] }),
+      JSON.stringify({ allowed: "https://github.com/octo/project" }),
+      JSON.stringify({ allowed: ["not a url"] }),
+      JSON.stringify({ allowed: ["https://github.com/octo/project?tab=pulls"] }),
+      JSON.stringify({ allowed: ["https://user:pw@github.com/octo/project"] }),
+      JSON.stringify({ allowed: ["https://github.com/octo/project"], endpoint: 7 }),
+      JSON.stringify({ allowed: ["https://github.com/octo/project"], endpoint: "not a url" }),
+      JSON.stringify({
+        allowed: ["https://github.com/octo/project"],
+        endpoint: "https://api.github.com?x=1",
+      }),
+      // The shipped issues contract's word is not this one's.
+      JSON.stringify({ ceiling: ["https://github.com/octo/project"] }),
+      JSON.stringify({ allowed: ["https://github.com/octo/project"], token: "…" }),
+    ];
+    for (const value of refused) {
+      let raised: unknown;
+      try {
+        yield* configured(value);
+      } catch (error) {
+        raised = error;
+      }
+      expect(raised).toBeInstanceOf(GitHubPullRequestsConfigError);
+      expect(String(raised)).toContain(GITHUB_PULL_REQUESTS_ENV);
     }
   });
 });
