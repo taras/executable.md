@@ -332,9 +332,7 @@ describe("durable terminal boundary", () => {
     if (!(failure instanceof EarlyReturnDivergenceError)) {
       throw new Error("expected early-return divergence");
     }
-    expect(failure.message).toContain(
-      "first unreached entry is the Close of coroutine root.0",
-    );
+    expect(failure.message).toContain("first unreached entry is the Close of coroutine root.0");
     // No fabricated effect or source: the Close is named as itself.
     expect(failure.message).not.toContain(" at ");
     expectUnchanged(stream, before);

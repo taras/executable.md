@@ -530,9 +530,7 @@ describe("divergence detection", () => {
       }
       expect(e.consumedCount).toBe(1);
       expect(e.totalCount).toBe(2);
-      expect(e.message).toContain(
-        'first unreached entry is call("stepB") at docs/Plan.md:7:5',
-      );
+      expect(e.message).toContain('first unreached entry is call("stepB") at docs/Plan.md:7:5');
     }
     expect(stream.snapshot()).toEqual(before);
   });

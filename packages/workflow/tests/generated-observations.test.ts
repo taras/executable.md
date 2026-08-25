@@ -104,7 +104,12 @@ function evaluate(
     const stream = new InMemoryStream(options.events ?? []);
     const captured: { result?: GeneratedObservationResult } = {};
     const installation = driven(function* () {
-      captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy, options.position);
+      captured.result = yield* evaluateGeneratedFragment(
+        "turn-1",
+        source,
+        policy,
+        options.position,
+      );
     });
     const execution = yield* executeInstalled(
       { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream, componentDirs: [] },
