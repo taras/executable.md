@@ -355,8 +355,9 @@ restores the retained answer event without consuming or publishing again.
 
 This suspension and executor-lock-release contract folds issue #322 into #367;
 #322 is not a separate implementation prerequisite. Scheduling — automatic
-resume, watchers, unattended iteration and remote host selection — remains
-blocked on #301.
+resume, watchers, unattended iteration and remote host selection — is #300's.
+Nothing above waits on it: a suspended run continues through `xmd workflow
+answer` followed by an explicit `xmd workflow resume`.
 
 ### 3.6 Interruption and cancellation differ
 
@@ -1364,6 +1365,142 @@ SDK Commit starts
 Each Commit, Push and PullRequest owns its effect identity and durability.
 Document structure expresses ordering, retry and failure policy. It never makes
 two Git repositories one atomic domain.
+
+### 7.7 Pull-request evidence
+
+A workflow Agent has no network, so an objection its prompt does not render is
+an objection its review never saw. Three self-closing components read what a
+pull request already holds:
+
+```md
+<PullRequest.Reviews  url={pullRequest.url} as="reviews"  />
+<PullRequest.Comments url={pullRequest.url} as="comments" />
+<PullRequest.Checks   url={pullRequest.url} as="checks"   />
+```
+
+Each takes one required `url`, an optional `provider`, requires `as`, renders
+nothing and binds one JSON array. The URL is the identity: a pull request is a
+public object with a canonical address, so a document that can name one can ask
+what it holds — there is no `<Repository>` to be inside of, no working directory
+to be at, and no repository or number prop, because the URL says both and the
+selected provider parses them out of it. Each is self-closing only, declared to
+the engine rather than asked about, so a paired invocation is refused before the
+component's body runs.
+
+Three components rather than one, for the reason Push and PullRequest are two:
+three separate remote collections, three durable effects, three independent
+replays and failures. One component returning three lists would make a partial
+answer indistinguishable from a complete one.
+
+**One surface, two operations.** Reads and upserts are both asked of
+`PullRequestApi`, reached under the contextual name
+`executablemd.workflow.pull-request` — the shape `<Issue>` already has:
+
+```ts
+read(url: string, options: PullRequestReadOptions): Operation<PullRequestReadResult>
+upsert(pullRequest: PullRequestInput, options: PullRequestUpsertOptions): Operation<PullRequestResult>
+```
+
+There is no registry, no resolver, no routing protocol and no private terminal.
+A provider is ordinary middleware around these operations: an adapter composes
+`PullRequestAPI.around(...)`, looks at what it was handed, and either handles the
+request or delegates it untouched. The rule applies to each method
+independently.
+
+**Selection.** Without an explicit discriminator a provider matches its own
+URLs; the shipped GitHub adapter recognizes public `github.com` pull requests
+and passes everything else along. With `provider` named, only the provider of
+that exact name may handle it, which is what makes a self-hosted deployment
+wearing the same `/{owner}/{repository}/pull/{number}` shape addressable.
+
+**Once middleware matches, it owns the answer.** Its validation and its refusal
+are final: it does not delegate after matching, and no provider catches the
+surface's base error to implement a fallback. A refusal from the selected
+provider ends the request rather than starting a search for another one, because
+a search is how a document that named one service quietly reaches a different
+one.
+
+Canonicalization is provider-neutral and happens before any of this, so the
+component, the durable request and every adapter read one answer. A credential
+in the URL, a query and a fragment each make it something other than the plain
+name of a pull request, and none is stripped.
+
+`upsert` answers with the complete identity §7.5 settled — repository,
+providerId, number, url, state, headSha and baseSha. Issue's upsert answers with
+a URL alone because that is the whole of its portable contract; a pull request
+already has a stronger shipped one, and adopting Issue's topology does not erase
+it.
+
+**A read is not a reconciled effect.** §7.5's upsert reconciles because it
+mutates a remote and must adopt an interrupted attempt rather than repeat it.
+These change nothing, have no natural key and no pre-state, and are ordinary
+non-mutating durable reads. An interruption before the result commits may repeat
+the requests, which is safe for a read in the way it is not for a write; no
+incomplete list is ever retained. A completed replay restores the retained array
+without opening an authentication session or sending anything.
+
+**Complete, or unavailable.** The host follows the provider's pagination until
+the collection is complete. A transport failure, a rate limit, an authentication
+failure, an ambiguous 404, malformed content, an item the adapter cannot read, a
+next relation off the authorized origin, and a walk still going at the page
+limit are all *unavailable*: the read fails and binds nothing. None becomes a
+short list. An empty array means the authenticated provider completed the
+collection and found none — which is why the two are distinguishable at all.
+
+**The answer is held to the request.** A payload naming another repository,
+another pull request or another head is a protocol failure rather than data.
+Checks observe the pull request's head first and read every result at that exact
+SHA, and each record carries it, so evidence always says which revision it
+describes.
+
+**Authentication and reach are the host's.** The credential is the host's own,
+acquired for the request and disposed with the invocation. Which pull requests
+may be read at all is operator configuration — the `allowed` list, checked
+before a session is opened, a credential is read or anything is sent — and a
+document names a URL, never a host or a credential. Absence of that
+configuration authorizes no URL read and disables nothing else: `<PullRequest>`
+upserts on this run's own matching Push evidence, which no configuration grants
+or withdraws. Nothing of the credential, the endpoint, the raw
+response or the pagination state is retained: what the journal holds is the
+complete normalized request and the normalized evidence, across the ordinary
+secret gate. The retained request is the whole normalized question: the operation, the
+canonical URL, the provider discriminator, the collection, the run and the
+expansion. The effect's name covers the question rather than the run — a fork is
+a different run reaching the same position with the same question, and a name
+carrying the run would make every inherited read a different effect. A retained
+read *is* inheritable: it changed nothing at the host, so a fork consumes the
+record and asks the provider nothing.
+
+The retained result is a discriminated envelope: `{ kind: "reviews", items }`,
+`{ kind: "comments", items }`, or `{ kind: "checks", headSha, items }`. Only a
+checks result has a head, so the other two carry no member a reader must know to
+ignore. Only `items` becomes the component's binding.
+
+The records are closed and provider-neutral. Bodies and provider messages are
+retained byte-for-byte, because a reviewer reading a summary of an objection has
+not read the objection; identifiers are decimal strings, because a provider
+identifier already exceeds what a JSON number holds exactly; and timestamps are
+the provider's own strings, unreformatted. Check runs and commit statuses keep
+their separate vocabularies under a `kind` discriminator — a commit status's
+`error` is not a check run's `failure`, and collapsing them would report that a
+check ran and failed when the provider said it never ran.
+
+Each component declares the exact array it binds, which is what makes `as`
+mandatory: an invocation that forgot it is refused before a credential is read
+or a request is sent. The records are closed on exact membership rather than on
+presence, so a payload carrying one member more than the contract names is
+refused rather than passed through to a binding. An identifier that cannot be
+held exactly is refused too: a rounded one names a different object.
+
+Two failures are told apart. *Unavailable* is a host that did not answer —
+transport, rate limit, credential, an unfinished page walk. *Protocol-invalid*
+is a host that answered about the wrong subject, or with an item outside the
+contract. Every field an answer is authenticated by is required, not optional: a
+review or comment that does not say which pull request it belongs to, a check or
+status that does not say which commit it describes, and a pull request that does
+not name its own number and repository are all refused. A well-formed answer to
+another question is still the wrong answer.
+
 
 ## 8. Agents inspect; XMD mutates
 
@@ -2839,11 +2976,12 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
+| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
-| workflow scheduling (watchers, unattended iteration, remote hosts) | blocked on #301 |
+| workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
 | history fork | built (§11); Deno provider only |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |

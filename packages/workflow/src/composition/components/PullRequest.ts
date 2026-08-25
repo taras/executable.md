@@ -74,7 +74,7 @@ import { content, hasContent } from "@executablemd/core";
 import type { PropsSchema, ReturnsSchema } from "@executablemd/core";
 import type { Operation } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import { GitComposition } from "../git-api.ts";
+import { PullRequestAPI } from "../pull-request-api.ts";
 import { currentRepository } from "../context.ts";
 import { PullRequestAuthorityError } from "../errors.ts";
 import { pullRequestResultJson } from "../pull-request-records.ts";
@@ -154,22 +154,23 @@ export default function* PullRequest(props: Record<string, Json>): Operation<Jso
     );
   }
 
-  const outcome = yield* GitComposition.operations.upsertPullRequest({
-    repository,
-    workingDirectory: yield* cwd(),
-    // Normalized once, here: absence is `null` from this point on, because the
-    // durable request is JSON and a member that is sometimes missing would be a
-    // second shape rather than a value.
-    number: typeof props.number === "number" ? props.number : null,
-    title: typeof props.title === "string" ? props.title : "",
-    // Verbatim. What a document wrote is the pull request's body, and trimming
-    // or reflowing it here would publish something nobody authored.
-    body,
-    draft: props.draft === true,
-    // The Repository's own initial branch, retained when it was created, rather
-    // than whatever its default branch is at the host right now.
-    base:
-      typeof props.base === "string" && props.base !== "" ? props.base : repository.primaryBranch,
-  });
-  return pullRequestResultJson(outcome.result);
+  const result = yield* PullRequestAPI.operations.upsert(
+    {
+      // Normalized once, here: absence is `null` from this point on, because
+      // the durable request is JSON and a member that is sometimes missing
+      // would be a second shape rather than a value.
+      number: typeof props.number === "number" ? props.number : null,
+      title: typeof props.title === "string" ? props.title : "",
+      // Verbatim. What a document wrote is the pull request's body, and
+      // trimming or reflowing it here would publish something nobody authored.
+      body,
+      draft: props.draft === true,
+      // The Repository's own initial branch, retained when it was created,
+      // rather than whatever its default branch is at the host right now.
+      base:
+        typeof props.base === "string" && props.base !== "" ? props.base : repository.primaryBranch,
+    },
+    { repository, workingDirectory: yield* cwd() },
+  );
+  return pullRequestResultJson(result);
 }

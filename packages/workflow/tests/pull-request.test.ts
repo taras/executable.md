@@ -421,7 +421,8 @@ describe("workflow PullRequest authority", () => {
 
       const failure = yield* raised(
         runWorkflowDocument(database, source, {
-          composition: { host: counting.host, gitHub: gitHubSource(fakeGitHubAccess(store)) },
+          composition: { host: counting.host },
+          gitHubPullRequests: { access: gitHubSource(fakeGitHubAccess(store)) },
         }),
       );
       expect(String(failure)).toContain("does not support this effect kind");
@@ -1016,8 +1017,10 @@ describe("workflow PullRequest containment", () => {
       );
 
       // There is no host-less fallback. A pull request that "ran" without a
-      // provider would say this run published something it never did.
-      expect(String(failure)).toContain("no Git composition provider is installed");
+      // provider would say this run published something it never did. Since
+      // #576 the surface reporting that is `PullRequestApi`, which carries both
+      // questions about a pull request; the property is the one it always was.
+      expect(String(failure)).toContain("no pull-request provider handles");
     });
   });
 });

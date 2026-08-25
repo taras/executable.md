@@ -80,7 +80,10 @@ function* open(root: string, runId: string, locator: string, endpoint: string): 
         ),
       );
     }),
-    { composition: { host: rewriting(locator), gitHub: gitHubSource(interrupted(endpoint)) } },
+    {
+      composition: { host: rewriting(locator) },
+      gitHubPullRequests: { access: gitHubSource(interrupted(endpoint)) },
+    },
   );
   report({ ready: false, reason: "the pull request was recorded" });
 }

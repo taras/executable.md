@@ -23,6 +23,7 @@
 import type { Operation } from "effection";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import type { GitHubIssuesOptions } from "../issue/github.ts";
+import type { GitHubPullRequestsOptions } from "../composition/pull-request-reads.ts";
 import type { HelperAssembly } from "../composition/credential-helper.ts";
 import { withWorkflowWorkspace as withBroadWorkspace } from "./host.ts";
 import type { WorkflowAgentInstaller } from "./host.ts";
@@ -36,6 +37,20 @@ import type { WorkflowAgentInstaller } from "./host.ts";
  */
 export interface WorkflowWorkspaceOptions {
   readonly gitHubIssues?: GitHubIssuesOptions;
+  /**
+   * Which pull requests this host allows a document to read.
+   *
+   * A host fact like the tracker beside it. Absent authorizes no URL read and
+   * disables nothing else: `<PullRequest>` upserts on this run's own Push
+   * evidence, which no configuration grants or withdraws.
+   *
+   * Its `access` member is deliberately *not* projected through here. A
+   * transport is a seam through which a credential this run acquires would
+   * become visible to whoever supplied it, and a host outside this package has
+   * no business installing one — the same reason there is no member for a
+   * substituted `RepositoryHost`.
+   */
+  readonly gitHubPullRequests?: Pick<GitHubPullRequestsOptions, "allowed" | "endpoint">;
   readonly helper?: HelperAssembly;
   /**
    * The Agent profile this host installs for a live or partial attachment.
@@ -58,6 +73,20 @@ export function withWorkflowWorkspace<T>(
   // else wrote gets to run.
   return withBroadWorkspace(database, operation, {
     ...(options.gitHubIssues === undefined ? {} : { gitHubIssues: options.gitHubIssues }),
+    ...(options.gitHubPullRequests === undefined
+      ? {}
+      : {
+          // Member by member here too, so a caller that put an `access` on the
+          // object cannot reach the transport seam through a published surface.
+          gitHubPullRequests: {
+            ...(options.gitHubPullRequests.allowed === undefined
+              ? {}
+              : { allowed: options.gitHubPullRequests.allowed }),
+            ...(options.gitHubPullRequests.endpoint === undefined
+              ? {}
+              : { endpoint: options.gitHubPullRequests.endpoint }),
+          },
+        }),
     ...(options.helper === undefined ? {} : { helper: options.helper }),
     ...(options.agent === undefined ? {} : { agent: options.agent }),
   });

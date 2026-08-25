@@ -141,7 +141,8 @@ describe("workflow PullRequest durability", () => {
 
       const replayed = String(
         yield* runWorkflowDocument(database, published(...pullRequest()), {
-          composition: { host: run.counting.host, gitHub: gitHubSource(unreachable()) },
+          composition: { host: run.counting.host },
+          gitHubPullRequests: { access: gitHubSource(unreachable()) },
         }),
       );
 
@@ -325,7 +326,8 @@ describe("workflow PullRequest durability", () => {
       yield* scoped(function* () {
         const task = yield* spawn(() =>
           runWorkflowDocument(database, published(...pullRequest()), {
-            composition: { host: run.counting.host, gitHub: gitHubSource(blocking) },
+            composition: { host: run.counting.host },
+            gitHubPullRequests: { access: gitHubSource(blocking) },
           }),
         );
         yield* creating.operation;
@@ -399,7 +401,8 @@ describe("workflow PullRequest durability", () => {
       yield* scoped(function* () {
         const task = yield* spawn(() =>
           runWorkflowDocument(database, published(...numbered(12)), {
-            composition: { host: run.counting.host, gitHub: gitHubSource(interrupted) },
+            composition: { host: run.counting.host },
+            gitHubPullRequests: { access: gitHubSource(interrupted) },
           }),
         );
         yield* observing.operation;

@@ -11,7 +11,7 @@
  */
 
 import type { Operation } from "effection";
-import { registerComponents } from "@executablemd/core";
+import { formDispatcher, registerComponents } from "@executablemd/core";
 import { COMPOSITION_ORIGIN, dirDefinition } from "./definitions.ts";
 import Repository, { props as repositoryProps } from "./components/Repository.ts";
 import Worktree, { props as worktreeProps } from "./components/Worktree.ts";
@@ -27,6 +27,15 @@ import PullRequest, {
   returns as pullRequestReturns,
 } from "./components/PullRequest.ts";
 import Issue, { props as issueProps, returns as issueReturns } from "./components/Issue.ts";
+import {
+  checksForm,
+  checksReturns,
+  commentsForm,
+  commentsReturns,
+  props as pullRequestReadProps,
+  reviewsForm,
+  reviewsReturns,
+} from "./components/PullRequestReads.ts";
 import IssueTracker, { props as issueTrackerProps } from "./components/IssueTracker.ts";
 
 export function useCompositionComponents(): Operation<void> {
@@ -83,6 +92,27 @@ export function useCompositionComponents(): Operation<void> {
       props: pullRequestProps,
       returns: pullRequestReturns,
       fn: PullRequest,
+    },
+    {
+      name: "PullRequest.Reviews",
+      origin: COMPOSITION_ORIGIN,
+      props: pullRequestReadProps,
+      returns: reviewsReturns,
+      fn: formDispatcher(reviewsForm),
+    },
+    {
+      name: "PullRequest.Comments",
+      origin: COMPOSITION_ORIGIN,
+      props: pullRequestReadProps,
+      returns: commentsReturns,
+      fn: formDispatcher(commentsForm),
+    },
+    {
+      name: "PullRequest.Checks",
+      origin: COMPOSITION_ORIGIN,
+      props: pullRequestReadProps,
+      returns: checksReturns,
+      fn: formDispatcher(checksForm),
     },
     {
       name: "IssueTracker",

@@ -159,10 +159,8 @@ describe("workflow PullRequest across a process boundary", () => {
       }
       const database = found.value;
       yield* runWorkflowDocument(database, published(...pullRequest()), {
-        composition: {
-          host: rewriting(remote.locator),
-          gitHub: gitHubSource(fakeGitHubAccess(store)),
-        },
+        composition: { host: rewriting(remote.locator) },
+        gitHubPullRequests: { access: gitHubSource(fakeGitHubAccess(store)) },
       });
 
       // The continuation observed, recognized its own pull request and adopted

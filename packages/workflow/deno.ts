@@ -51,6 +51,14 @@ export { APPLICATION_ID, SCHEMA_VERSION } from "./src/deno/schema.ts";
 // that could install one could read the credential this adapter is holding, so
 // none of that crosses this entrypoint; the suites that need it import from
 // source, inside the package.
+export {
+  GITHUB as GITHUB_PULL_REQUEST_PROVIDER,
+  parseGitHubPullRequestUrl,
+  pullRequestAllowed,
+  recognizesGitHubPullRequestUrl,
+  useGitHubPullRequests,
+} from "./src/deno/composition/pull-request-reads.ts";
+export type { GitHubPullRequestsOptions } from "./src/deno/composition/pull-request-reads.ts";
 export { withWorkflowWorkspace } from "./src/deno/workspace/published.ts";
 /**
  * What a host declares to the execution so an authored workflow document has
