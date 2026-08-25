@@ -141,11 +141,9 @@ describe(
       expect(bullet.stdout).toContain("- item");
     });
 
-    it("IE11: an empty document runs and produces nothing", function* () {
-      const { code, stdout } = yield* runCli(["-e", "", "--raw"]).join();
-      expect(code).toBe(0);
-      expect(stdout.trim()).toBe("");
-    });
+    // IE11 lives in packages/cli/tests/inline/inline.test.md: the claim is
+    // document behavior, so its evidence is the checked-in Markdown suite the
+    // tier launcher runs.
 
     it("IE12: inline frontmatter declares properties", function* () {
       const individual = yield* runCli(["-e", PROPS_DOC, "--props-name", "Ada", "--raw"]).expect();

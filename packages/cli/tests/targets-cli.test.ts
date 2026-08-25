@@ -353,17 +353,9 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     });
   });
 
-  it("CT7: an explicit run executes one target and excludes both siblings", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      const { code, stdout } = yield* runCli(["run", "doc.md#Beta", "--raw"], { cwd: dir }).join();
-      expect(code).toBe(0);
-      expect(stdout).toContain("PREAMBLE_MARKER");
-      expect(stdout).toContain("BETA_MARKER");
-      expect(stdout).toContain("NESTED_MARKER");
-      expect(stdout).not.toContain("ALPHA_MARKER");
-      expect(stdout).not.toContain("GAMMA_MARKER");
-    });
-  });
+  // CT7 lives in packages/cli/tests/targets/targets.test.md: the claim is
+  // document behavior, so its evidence is the checked-in Markdown suite the
+  // tier launcher runs.
 
   it("CT8: the default command selects the same target as the explicit one", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
