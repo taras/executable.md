@@ -21,6 +21,7 @@ import type { ComponentRegistration } from "@executablemd/core";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitOperationProtocolError, RepositoryStaleStateError } from "../src/composition/errors.ts";
 import { GitHostProtocolError } from "../src/git-host/errors.ts";
+import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { GitComposition } from "../src/composition/git-api.ts";
 import type { RepositoryRecord } from "../src/composition/records.ts";
@@ -65,6 +66,37 @@ function source(locator: string): string {
   return [
     `<Repository name="project" url="${locator}">`,
     `<Git.Switch branch="${BRANCH}" />`,
+    `<Git.Push />`,
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * One publication that advances a branch the remote already has.
+ *
+ * The checkout stays on the branch it was cloned on, so the destination this
+ * push observes is the commit the Repository was created at — an ancestor of
+ * the one it publishes, and the pre-state that records it.
+ */
+function advanced(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<File path="more.md">`,
+    "the second iteration",
+    "</File>",
+    `<Git.Add paths="more.md" />`,
+    `<Git.Commit message="record more.md" as="second" />`,
+    `<Git.Push />`,
+    "</Repository>",
+  ].join("\n");
+}
+
+/** Two publications of one commit: the creation, then the adoption of it. */
+function readopted(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Git.Switch branch="${BRANCH}" />`,
+    `<Git.Push />`,
     `<Git.Push />`,
     "</Repository>",
   ].join("\n");
@@ -149,6 +181,96 @@ describe("workflow Git.Push durability", () => {
       expect(yield* gitHostEvents(database)).toHaveLength(1);
       expect(publishedRoots(path)).toBe(published);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
+    });
+  });
+
+  /**
+   * An advance is retained as completely as a creation, and proves nothing
+   * twice.
+   *
+   * The ancestry behind a fast-forward is a fact this run established once, at
+   * the moment it published. A replay restores what was decided rather than
+   * re-deciding it: no control repository, no observation, and above all no
+   * second ancestry proof — which could not be made anyway against a remote
+   * that no longer exists.
+   */
+  it("replays an advance without observing or proving ancestry again", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(database, advanced(remote.locator));
+      const head = yield* headCommit(
+        database,
+        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+      );
+      expect(remoteBranch(remote, "main")).toBe(head.commit);
+
+      const retained = yield* gitHostOutcomes(database);
+      expect(retained).toHaveLength(1);
+      const advance = parseGitHostReconciliationRecord(retained[0]?.record);
+      expect(advance?.decision).toBe("performed");
+      expect(advance?.preState).toEqual({
+        remoteCommit: head.parents[0],
+        relation: "ancestor",
+      });
+
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const counting = countingHost();
+      yield* runWorkflowDocument(database, advanced(remote.locator), countingOptions(counting));
+
+      for (const command of ["init", "ls-remote", "merge-base", "fetch", "push"]) {
+        expect(subcommands(counting.counters)).not.toContain(command);
+      }
+      expect(yield* gitHostEvents(database)).toHaveLength(1);
+      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+    });
+  });
+
+  /**
+   * The two shapes that existed before an attested relation did.
+   *
+   * A creation over proven absence and an adoption of an equal destination are
+   * what every record written until now says, and both are still exactly what
+   * they were: the same JSON, the same decisions, and a replay that reaches no
+   * provider for either.
+   */
+  it("replays a creation and an adoption written without a relation", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(database, readopted(remote.locator));
+      const head = yield* headCommit(
+        database,
+        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+      );
+
+      const retained = yield* gitHostOutcomes(database);
+      expect(retained).toHaveLength(2);
+      const created = parseGitHostReconciliationRecord(retained[0]?.record);
+      const adopted = parseGitHostReconciliationRecord(retained[1]?.record);
+      expect(created?.decision).toBe("performed");
+      expect(created?.preState).toEqual({ remoteCommit: null });
+      expect(adopted?.decision).toBe("adopted");
+      expect(adopted?.preState).toEqual({ remoteCommit: head.commit });
+
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const counting = countingHost();
+      yield* runWorkflowDocument(database, readopted(remote.locator), countingOptions(counting));
+
+      for (const command of ["init", "ls-remote", "merge-base", "fetch", "push"]) {
+        expect(subcommands(counting.counters)).not.toContain(command);
+      }
+      expect(yield* gitHostOutcomes(database)).toEqual(retained);
     });
   });
 
@@ -270,6 +392,41 @@ describe("workflow Git.Push durability", () => {
       name: "names another Repository",
       damage: (record) => {
         Object(Object(record.result).repository).name = "ghost";
+      },
+    },
+    {
+      name: "attests a relation beside a destination proven absent",
+      damage: (record) => {
+        Object(record.preState).relation = "ancestor";
+      },
+    },
+    {
+      name: "attests a relation this version cannot account for",
+      damage: (record) => {
+        Object(record.preState).remoteCommit = "0".repeat(40);
+        Object(record.preState).relation = "descendant";
+      },
+    },
+    {
+      name: "carries a pre-state member the protocol does not declare",
+      damage: (record) => {
+        Object(record.preState).remoteCommit = "0".repeat(40);
+        Object(record.preState).relation = "ancestor";
+        Object(record.preState).proof = "the traversal that found it";
+      },
+    },
+    {
+      name: "adopts a destination it attested was behind",
+      damage: (record) => {
+        record.decision = "adopted";
+        Object(record.preState).remoteCommit = String(Object(record.result).sourceCommit);
+        Object(record.preState).relation = "ancestor";
+      },
+    },
+    {
+      name: "published over a predecessor it attested nothing about",
+      damage: (record) => {
+        Object(record.preState).remoteCommit = "0".repeat(40);
       },
     },
   ];

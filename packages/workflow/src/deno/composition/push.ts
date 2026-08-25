@@ -53,6 +53,7 @@ import {
 } from "../../composition/errors.ts";
 import { PUSH } from "../../composition/components/GitPush.ts";
 import {
+  ANCESTOR,
   destinationRefFor,
   filteredRepositoryIdentity,
   GIT_PUSH,
@@ -82,7 +83,14 @@ import type {
 } from "../../git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
-import { currentBranch, gitSession, observeRemoteRef, pushRefspec, resolveCommit } from "./git.ts";
+import {
+  commitPresent,
+  currentBranch,
+  gitSession,
+  observeRemoteRef,
+  pushRefspec,
+  resolveCommit,
+} from "./git.ts";
 import { objectSource, type PushObjectSource } from "./object-source.ts";
 import { useGitAuthentication } from "./host.ts";
 import type { RepositoryHost } from "./host.ts";
@@ -97,6 +105,51 @@ import { gitRefusal } from "./refusals.ts";
 
 function unusable(reason: string): never {
   throw new GitOperationInfrastructureError(PUSH, reason);
+}
+
+/**
+ * Whether the commit the destination holds is provably behind the one being
+ * published, decided entirely inside the authenticated object source.
+ *
+ * This is the whole of what turns an ordinary fast-forward into something this
+ * operation may perform, so it is proved rather than inferred, and proved from
+ * objects this run already authenticated. The control repository and its
+ * read-only alternate are the only place it reads: the selected checkout is
+ * configuration a document can write, and the remote has already said all it is
+ * going to say.
+ *
+ * A commit the source does not hold is not an answer, and it is not a question
+ * either. Fetching it would manufacture the very compatibility being asked
+ * about — the objects would then be here because this proof went and got them,
+ * not because the run had already published them — so an object that is absent
+ * is an ordinary conflict.
+ *
+ * Git answers ancestry with an exit status and nothing else: 0 is ancestry, 1 is
+ * divergence. Any other status means the proof did not run or did not decide —
+ * including the case where a source commit this run cannot read makes the
+ * traversal itself impossible — and a decision that was not reached is not a
+ * finding about the remote.
+ */
+function* provenAncestor(
+  source: PushObjectSource,
+  directory: string,
+  observed: string,
+  desired: string,
+): Operation<boolean> {
+  if (!(yield* commitPresent(source.git, directory, observed))) {
+    return false;
+  }
+  const outcome = yield* source.git.run(
+    ["merge-base", "--is-ancestor", observed, desired],
+    directory,
+  );
+  if (outcome.code === 0) {
+    return true;
+  }
+  if (outcome.code === 1) {
+    return false;
+  }
+  unusable("native Git could not decide whether the branch already holds an earlier commit");
 }
 
 /**
@@ -164,6 +217,21 @@ function pushProvider(
         return Ok({ state: "absent", preState: gitPushPreStateJson({ remoteCommit: null }) });
       }
       if (observed.commit !== inputs.sourceCommit) {
+        // The branch already exists somewhere behind this commit, which is what
+        // a second iteration on the same branch leaves. The completion is
+        // absent — the destination does not hold this commit — and the
+        // predecessor travels with the proof that publishing over it advances
+        // the branch rather than replacing it, so the shared state machine
+        // performs the same exact non-force push it performs against absence.
+        if (yield* provenAncestor(source, directory, observed.commit, inputs.sourceCommit)) {
+          return Ok({
+            state: "absent",
+            preState: gitPushPreStateJson({
+              remoteCommit: observed.commit,
+              relation: ANCESTOR,
+            }),
+          });
+        }
         return Ok({
           state: "conflict",
           preState: gitPushPreStateJson({ remoteCommit: observed.commit }),

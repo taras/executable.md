@@ -37,10 +37,12 @@ import type { WorkflowRunDatabase } from "../src/storage/api.ts";
 import { createRun, runPath, useStorageRoot, withStorage } from "./support/storage.ts";
 import {
   git as nativeGit,
+  moveRemoteBranch,
   remoteBranch,
   remoteRefs,
   useBareRemote,
 } from "./support/git-remotes.ts";
+import type { BareRemote } from "./support/git-remotes.ts";
 import { transactWorkspaceRoots } from "../src/deno/workspace/private.ts";
 import type { PrivateWorkspaceTransaction } from "../src/deno/workspace/private.ts";
 import {
@@ -61,6 +63,7 @@ import {
   workspaceText,
   writeCheckoutFile,
 } from "./support/composition.ts";
+import type { CountingHost } from "./support/composition.ts";
 import { committedRoot, latestRoot, publishedRoots } from "./support/replay.ts";
 
 const REMOTE = {
@@ -101,6 +104,78 @@ function published(locator: string, ...extra: string[]): string {
     `<Git.Commit message="prepare the release" as="commit" />`,
     ...extra,
   );
+}
+
+/** Record one more commit on the branch the checkout is on. */
+function committed(path: string, content: string, binding: string): string[] {
+  return [
+    `<File path="${path}">`,
+    content,
+    "</File>",
+    `<Git.Add paths="${path}" />`,
+    `<Git.Commit message="record ${path}" as="${binding}" />`,
+  ];
+}
+
+/** Every Git command of one subcommand this run ran, with its whole argument list. */
+function commandsNamed(counting: CountingHost, name: string): string[][] {
+  return counting.counters.commands.filter((command) => command[0] === name);
+}
+
+/**
+ * A test-owned component that moves a branch on the remote mid-document.
+ *
+ * Mid-document on purpose: the remote has to move after the Repository cloned
+ * it, because what a suite is arranging is the state a *second* party left
+ * behind while this run was working.
+ */
+function moveRemote(remote: BareRemote, branch: string, commit: string): ComponentRegistration {
+  return {
+    name: "MoveRemote",
+    origin: "test",
+    props: { type: "object", additionalProperties: true },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<string> {
+      moveRemoteBranch(remote, branch, commit);
+      return "";
+    },
+  };
+}
+
+/**
+ * A test-owned component that builds a commit on the remote and points a branch
+ * at it.
+ *
+ * The object a fast-forward proof cannot read. It has to be made *after* the
+ * Repository cloned, because a local clone copies the object database whole —
+ * unreachable objects included — so a commit built beforehand would be sitting
+ * in the checkout this run authenticated.
+ */
+function publishOnlyOnRemote(
+  remote: BareRemote,
+  branch: string,
+  into: { commit: string },
+): ComponentRegistration {
+  return {
+    name: "PublishUnseen",
+    origin: "test",
+    props: { type: "object", additionalProperties: true },
+    // deno-lint-ignore require-yield
+    *fn(): Operation<string> {
+      const tree = nativeGit(
+        ["rev-parse", "refs/heads/main^{tree}"],
+        remote.locator,
+        remote.locator,
+      );
+      into.commit = nativeGit(
+        ["commit-tree", "-m", "unseen", tree],
+        remote.locator,
+        remote.locator,
+      );
+      moveRemoteBranch(remote, branch, into.commit);
+      return "";
+    },
+  };
 }
 
 /** A well-formed Repository record naming a Repository nothing retains. */
@@ -351,26 +426,255 @@ describe("workflow Git.Push", () => {
     });
   });
 
-  it("refuses a destination that holds another commit, without forcing it", function* () {
+  /**
+   * The second iteration of a supervised loop, which is what this operation is
+   * written for.
+   *
+   * A branch is published, worked on and published again, and the second
+   * publication is an ordinary fast-forward: the remote holds a commit this one
+   * was built on top of. Advancing it is what "push this branch" means, so it
+   * is the same exact non-force refspec the first publication used — no force,
+   * no lease, no second remote, and nothing local rewritten to make it apply.
+   *
+   * There is an unpushed commit between the two, so what the second push proves
+   * is that the published commit is *somewhere* in this one's ancestry. A proof
+   * that only recognized equality or parenthood would fail here.
+   */
+  it("advances a branch it published to a later commit that contains it", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);
 
     yield* withStorage(root, function* () {
       const database = yield* createRun();
       const counting = countingHost();
-      const before = remoteBranch(remote, "release");
+      yield* runWorkflowDocument(
+        database,
+        published(
+          remote.locator,
+          `<Git.Push />`,
+          ...committed("middle.md", "between the two", "middle"),
+          ...committed("more.md", "the second iteration", "second"),
+          `<Git.Push />`,
+        ),
+        countingOptions(counting),
+      );
+
+      const head = yield* headCommit(database, yield* checkoutPath(database));
+      // The other end advanced: it holds the commit this run is on now.
+      expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
+
+      const outcomes = yield* gitHostOutcomes(database);
+      expect(outcomes).toHaveLength(2);
+      expect(outcomes[0]?.status).toBe("ok");
+      expect(outcomes[1]?.status).toBe("ok");
+      const first = parseGitHostReconciliationRecord(outcomes[0]?.record);
+      const second = parseGitHostReconciliationRecord(outcomes[1]?.record);
+      const published1 = String(Reflect.get(Object(first?.result), "sourceCommit"));
+      expect(first?.decision).toBe("performed");
+      expect(first?.preState).toEqual({ remoteCommit: null });
+      // Transitive rather than immediate: the commit the remote held is not a
+      // parent of the one that replaced it.
+      expect(head.parents).not.toContain(published1);
+
+      // The predecessor is retained, and so is the fact that made publishing
+      // over it an advance rather than a replacement.
+      expect(second?.decision).toBe("performed");
+      expect(second?.preState).toEqual({ remoteCommit: published1, relation: "ancestor" });
+      expect(second?.observations).toEqual({ remoteCommit: head.commit });
+      expect(second?.result).toEqual({
+        ...Object(first?.result),
+        refspec: `${head.commit}:${DESTINATION}`,
+        sourceCommit: head.commit,
+        observedRemoteCommit: head.commit,
+      });
+
+      // Observed before each mutation, and each publication is one push.
+      expect(subcommands(counting.counters).filter((name) => name === "ls-remote")).toHaveLength(2);
+      const pushed = commandsNamed(counting, "push");
+      // One exact refspec each, and nothing implicit around either of them.
+      expect(pushed.map((command) => command[command.length - 1])).toEqual([
+        `${published1}:${DESTINATION}`,
+        `${head.commit}:${DESTINATION}`,
+      ]);
+      for (const command of pushed) {
+        expect(command.join(" ")).not.toContain("--force");
+        expect(command.join(" ")).not.toContain("--set-upstream");
+      }
+      // Nothing fetched an object, and nothing moved local history to make the
+      // advance apply.
+      for (const forbidden of ["fetch", "reset", "merge", "rebase"]) {
+        expect(subcommands(counting.counters)).not.toContain(forbidden);
+      }
+      // And the advance establishes no tracking, exactly as a creation does not.
+      const configured = yield* checkoutConfig(database, yield* checkoutPath(database), [
+        `branch.${BRANCH}.remote`,
+        `branch.${BRANCH}.merge`,
+      ]);
+      expect(configured.get(`branch.${BRANCH}.remote`)).toBe(undefined);
+      expect(configured.get(`branch.${BRANCH}.merge`)).toBe(undefined);
+    });
+  });
+
+  /**
+   * A destination this commit does not contain, with nothing missing.
+   *
+   * Both commits are in the authenticated object source — the remote's own
+   * `release` commit came with the clone — so the refusal is proven divergence
+   * rather than an object the run could not read. That distinction is the whole
+   * of what separates this from the case below it.
+   */
+  it("refuses a destination holding a commit this one does not contain", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    // A commit on another line of the remote's history: the clone brought it
+    // along, and nothing this run commits is built on it.
+    const diverged = remote.heads.get("release") ?? "";
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
 
       const failure = yield* raised(
         runWorkflowDocument(
           database,
           document(
             remote.locator,
-            `<Git.Switch branch="release" />`,
-            `<File path="notes.md">`,
-            "diverged",
-            "</File>",
-            `<Git.Add paths="notes.md" />`,
-            `<Git.Commit message="diverge from the remote" as="commit" />`,
+            `<MoveRemote />`,
+            ...committed("notes.md", "diverged", "commit"),
+            `<Git.Push />`,
+            "",
+            LATER,
+          ),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([moveRemote(remote, "main", diverged)]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      expect(String(failure)).toContain("conflicts");
+      expect(String(failure)).not.toContain(LATER);
+      // The remote is exactly what the other party left: nothing was forced,
+      // reset, merged or rebased to make the push apply.
+      expect(remoteBranch(remote, "main")).toBe(diverged);
+      expect(subcommands(counting.counters)).not.toContain("push");
+      expect(subcommands(counting.counters)).not.toContain("fetch");
+      // Divergence was decided, rather than assumed from a missing object.
+      expect(subcommands(counting.counters)).toContain("merge-base");
+
+      const [outcome] = yield* gitHostOutcomes(database);
+      expect(outcome?.status).toBe("err");
+      expect(outcome?.name).toBe("GitHostConflictError");
+
+      // The commit really was readable here: what the destination holds is a
+      // commit this run has, and still does not contain.
+      const held = yield* inCheckout(database, yield* checkoutPath(database), function* (run) {
+        return (yield* run(["cat-file", "-t", diverged])).trim();
+      });
+      expect(held).toBe("commit");
+
+      // A refusal changes no tracking either. `main` is the branch the clone
+      // established tracking for; what matters is that the refused push left
+      // exactly that and did not repoint it.
+      const configured = yield* checkoutConfig(database, yield* checkoutPath(database), [
+        "branch.main.remote",
+        "branch.main.merge",
+      ]);
+      expect(configured.get("branch.main.remote")).toBe("origin");
+      expect(configured.get("branch.main.merge")).toBe("refs/heads/main");
+    });
+  });
+
+  /**
+   * A destination naming a commit this run has no way to read.
+   *
+   * Compatibility is something to prove, not something to go and get: fetching
+   * the object would manufacture the very ancestry being asked about. So an
+   * observation the authenticated source cannot decide is an ordinary conflict,
+   * and the proof stops before it asks Git about ancestry at all.
+   */
+  it("refuses a destination whose commit the authenticated source cannot read", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const counting = countingHost();
+      // Filled in mid-document, after this run cloned: an object no local
+      // database holds and nothing short of a fetch would bring here.
+      const unseen = { commit: "" };
+
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          published(remote.locator, `<PublishUnseen />`, `<Git.Push />`, "", LATER),
+          countingOptions(counting),
+          (run) =>
+            scoped(function* () {
+              yield* registerComponents([publishOnlyOnRemote(remote, BRANCH, unseen)]);
+              return yield* run();
+            }),
+        ),
+      );
+
+      expect(String(failure)).toContain("conflicts");
+      expect(String(failure)).not.toContain(LATER);
+      expect(remoteBranch(remote, BRANCH)).toBe(unseen.commit);
+      expect(subcommands(counting.counters)).not.toContain("push");
+      // Nothing went and got the object, and nothing asked about the ancestry
+      // of an object this run does not hold.
+      expect(subcommands(counting.counters)).not.toContain("fetch");
+      expect(subcommands(counting.counters)).not.toContain("merge-base");
+
+      const [outcome] = yield* gitHostOutcomes(database);
+      expect(outcome?.status).toBe("err");
+      expect(outcome?.name).toBe("GitHostConflictError");
+
+      // The object really was unreadable here, which is what makes the refusal
+      // this case rather than the divergence one above.
+      const reached = yield* raised(
+        inCheckout(database, yield* checkoutPath(database), function* (run) {
+          return yield* run(["cat-file", "-t", unseen.commit]);
+        }),
+      );
+      expect(reached).toBeInstanceOf(Error);
+    });
+  });
+
+  /**
+   * An ancestry proof that answers neither of the two things it can answer.
+   *
+   * `merge-base --is-ancestor` says ancestry with 0 and divergence with 1.
+   * Anything else means the proof did not run or did not decide — and a
+   * decision nobody reached is not a finding about the remote, so it fails at
+   * the boundary rather than becoming a conflict or an advance.
+   */
+  it("fails at the boundary when the ancestry proof cannot answer", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      const counting = countingHost({
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          if (invocation.args[0] === "merge-base") {
+            return { code: 3, stdout: "", stderr: "" };
+          }
+          return yield* inner.git(invocation);
+        },
+        useDirectory: inner.useDirectory,
+      });
+
+      const failure = yield* raised(
+        runWorkflowDocument(
+          database,
+          published(
+            remote.locator,
+            `<Git.Push />`,
+            ...committed("more.md", "the second iteration", "second"),
             `<Git.Push />`,
             "",
             LATER,
@@ -379,26 +683,76 @@ describe("workflow Git.Push", () => {
         ),
       );
 
-      expect(String(failure)).toContain("conflicts");
-      // The remote is exactly what it was: nothing was forced, reset, merged or
-      // rebased to make the push apply.
-      expect(remoteBranch(remote, "release")).toBe(before);
-      expect(subcommands(counting.counters)).not.toContain("push");
+      // One fixed, cause-free boundary failure: no outcome is published for it
+      // and the run fail-stops.
+      expect(String(failure)).toContain("executed and published nothing");
+      expect(String(failure)).not.toContain(LATER);
+      // The first publication is the only Git-host record, and the destination
+      // still holds exactly what that one published.
+      const outcomes = yield* gitHostOutcomes(database);
+      expect(outcomes).toHaveLength(1);
+      const published1 = Reflect.get(
+        Object(parseGitHostReconciliationRecord(outcomes[0]?.record)?.result),
+        "sourceCommit",
+      );
+      expect(remoteBranch(remote, BRANCH)).toBe(published1);
+      expect(commandsNamed(counting, "push")).toHaveLength(1);
+    });
+  });
 
-      const [outcome] = yield* gitHostOutcomes(database);
-      expect(outcome?.status).toBe("err");
-      expect(outcome?.name).toBe("GitHostConflictError");
+  /**
+   * A push that landed and said it had not.
+   *
+   * What Git printed is not evidence, and neither is its exit status on its
+   * own: the refspec may well have applied. One more exact observation is the
+   * whole of what a nonzero push earns, and it is the ref equalling the commit
+   * — not the status, not the output — that settles the attempt.
+   */
+  it("reobserves an uncertain advance once, and mutates the remote no further", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
 
-      // A refusal changes no tracking either. `release` is a branch the remote
-      // published, so switching to it established tracking the ordinary way;
-      // what matters is that the refused push left exactly that and did not
-      // repoint it.
-      const configured = yield* checkoutConfig(database, yield* checkoutPath(database), [
-        "branch.release.remote",
-        "branch.release.merge",
-      ]);
-      expect(configured.get("branch.release.remote")).toBe("origin");
-      expect(configured.get("branch.release.merge")).toBe("refs/heads/release");
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const inner = denoRepositoryHost();
+      let attempts = 0;
+      const counting = countingHost({
+        *git(invocation: GitInvocation): Operation<GitOutcome> {
+          const outcome = yield* inner.git(invocation);
+          if (invocation.args[0] !== "push") {
+            return outcome;
+          }
+          attempts += 1;
+          // The advance really lands; only the answer to it is lost.
+          return attempts === 2 ? { code: 1, stdout: "", stderr: "remote: ?" } : outcome;
+        },
+        useDirectory: inner.useDirectory,
+      });
+
+      yield* runWorkflowDocument(
+        database,
+        published(
+          remote.locator,
+          `<Git.Push />`,
+          ...committed("more.md", "the second iteration", "second"),
+          `<Git.Push />`,
+        ),
+        countingOptions(counting),
+      );
+
+      const head = yield* headCommit(database, yield* checkoutPath(database));
+      expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
+
+      const outcomes = yield* gitHostOutcomes(database);
+      expect(outcomes[1]?.status).toBe("ok");
+      const second = parseGitHostReconciliationRecord(outcomes[1]?.record);
+      expect(second?.decision).toBe("performed");
+      expect(second?.observations).toEqual({ remoteCommit: head.commit });
+
+      // Two publications, two pushes: the uncertain one earned exactly one
+      // extra observation and no second attempt at the remote.
+      expect(commandsNamed(counting, "push")).toHaveLength(2);
+      expect(subcommands(counting.counters).filter((name) => name === "ls-remote")).toHaveLength(3);
     });
   });
 

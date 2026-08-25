@@ -396,6 +396,55 @@ describe("workflow PullRequest authority", () => {
     });
   });
 
+  /**
+   * The iteration a supervised loop is on, decided against the branch history
+   * it has.
+   *
+   * A run publishes, works on, and publishes the same branch again, so by the
+   * time a pull request is opened the journal holds several Push records for
+   * one destination. What authorizes this pull request is the one naming the
+   * commit the checkout is on now — the earlier publication is history, not
+   * disagreement — and the negative above is the same scan finding no such
+   * record at all.
+   */
+  it("accepts this iteration's Push evidence after an earlier publication", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const run = fixture(remote, [stored({ number: 12, title: "Draft title" })]);
+      yield* runWorkflowDocument(
+        database,
+        published(
+          `<File path="more.md">`,
+          "more",
+          "</File>",
+          `<Git.Add paths="more.md" />`,
+          `<Git.Commit message="after the push" as="second" />`,
+          `<Git.Push />`,
+          ...numbered(12),
+        ),
+        run.options,
+      );
+
+      const head = yield* headCommit(database, yield* checkoutPath(database));
+      // Two publications of the branch, and the remote holds the later one.
+      const outcomes = yield* gitHostOutcomes(database);
+      expect(outcomes).toHaveLength(3);
+      expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
+
+      // The numbered pull request was brought up to date rather than refused.
+      expect(creations(run.store)).toBe(0);
+      expect(mutations(run.store)).toEqual(["patch"]);
+      expect(run.store.pullRequests[0]?.title).toBe(TITLE);
+      const record = Object(yield* pullRequestRecord(database, 2));
+      expect(record.decision).toBe("performed");
+      expect(Reflect.get(Object(record.result), "number")).toBe(12);
+      expect(Reflect.get(Object(record.result), "headSha")).toBe(head.commit);
+    });
+  });
+
   it("refuses a Repository this adapter does not open pull requests for", function* () {
     const root = yield* useStorageRoot();
     const remote = yield* useBareRemote(REMOTE);

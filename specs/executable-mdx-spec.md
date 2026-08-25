@@ -9835,6 +9835,24 @@ the production Deno adapter, on real run files.
 | WFH2 | One grammar | Every runtime renders the same `xmd workflow` help |
 | WFH4 | Unsupported delivery | Node and Bun refuse `answer` with the same sentence, write no delivery line and create no run store |
 
+### Tier WGP — Workflow Git push reconciliation
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §7.4, §9 and
+§10.2. Runs the real component against a real run database, a real local bare
+remote and a real `git`.
+
+| # | Test | Verify |
+|---|------|--------|
+| WGP1 | An ordinary advance | A branch published, worked on with at least one unpushed commit in between, and published again: the remote advances from the first commit to the second, and the run holds two successful Push records |
+| WGP2 | What the advance retains | That second record retains the predecessor, `relation: "ancestor"`, the published commit as its observation and result, and the decision `performed` |
+| WGP3 | Divergence | A destination holding a commit this one does not contain conflicts with both commits readable in the authenticated source, the ancestry question is asked and answered, and the destination ref does not move |
+| WGP4 | What cannot be proved | A destination naming a commit the authenticated source cannot read conflicts without fetching it and without asking about its ancestry; an ancestry proof that answers neither ancestry nor divergence is a boundary failure that publishes no outcome and moves nothing |
+| WGP5 | Preserved classifications | An unreachable observation is still temporary unavailability and an undecidable one is still ambiguity, and neither performs |
+| WGP6 | An uncertain completion | A push that lands while reporting failure earns exactly one more observation, is accepted only because the destination equals the commit, and mutates the remote no further; a killed process's publication is adopted by the next execution |
+| WGP7 | What an advance never does | No force, force-with-lease, upstream establishment, reset, merge, rebase, fetch, checkout mutation or second push attempt, in the command trace or the retained checkout configuration |
+| WGP8 | Pull-request evidence | A numbered `<PullRequest>` update accepts this iteration's Push record even after an earlier publication of the same branch, and a history holding only the earlier one is conflicting without the Git host being contacted |
+| WGP9 | Compatibility | An `ancestor`/`performed` record and the two shapes written before relations existed all replay without reaching `init`, `ls-remote`, `merge-base`, `fetch` or `push`; a relation beside a proven absence, an unknown relation, an undeclared pre-state member, an adoption carrying a relation and a performance over an unattested predecessor each fail the replay closed |
+
 ### Tier WAD — Delivering an answer to a durable wait
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.5. Runs

@@ -14,8 +14,9 @@
  * go wrong and each has its own word:
  *
  * - **missing** — no such Push is recorded. The document has to write one.
- * - **conflicting** — this run published this branch at another commit. The
- *   pull request would name a head this run never published.
+ * - **conflicting** — this run published this branch, and never at the commit
+ *   the checkout is on now. The pull request would name a head this run never
+ *   published.
  * - **unreadable** — a successful Git-host record this scan cannot read as one
  *   whole thing. A shape that will not parse, and a record whose natural key,
  *   inputs and result do not name the same publication, are both refused rather
@@ -74,11 +75,22 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
  * a workflow may publish several branches, and one of them being irrelevant is
  * ordinary. Everything else is decided:
  *
- * A relevant Push at another commit is conflicting rather than missing, because
- * the run did publish that branch and saying "push it first" would be advice to
- * do something it already did. One or more exact records authorize, and they
- * cannot disagree with each other: each of them was held to this same branch
- * and this same commit before it was counted.
+ * A branch is published more than once. A supervised iteration commits, pushes,
+ * commits again and pushes again, so the history a pull request is decided
+ * against is a sequence of publications of the same branch at successive
+ * commits — and what authorizes this pull request is the one naming the commit
+ * the checkout is on now. So the whole history is scanned rather than judged
+ * record by record: an exact record authorizes wherever it appears, and an
+ * earlier publication of the same branch at an earlier commit is what it is,
+ * not a disagreement.
+ *
+ * What that earlier record does decide is which refusal an unauthorized pull
+ * request gets. With no exact record and a relevant one at another commit, the
+ * run did publish this branch, and saying "push it first" would be advice to do
+ * something it already did.
+ *
+ * Every relevant record is read completely before it is counted or set aside,
+ * so a later exact proof never reads around a damaged one.
  *
  * Failed Git-host outcomes are not evidence of anything. A refused push
  * published nothing, and a record of it never authorizes.
@@ -89,6 +101,7 @@ export function admitPushEvidence(
 ): void {
   const destinationRef = destinationRefFor(inputs.headBranch);
   let proofs = 0;
+  let published = false;
 
   for (const event of events) {
     if (event.type !== "yield" || event.description.type !== GIT_HOST_EFFECT) {
@@ -138,16 +151,17 @@ export function admitPushEvidence(
     ) {
       refuse("unreadable");
     }
-    if (pushed.sourceCommit !== inputs.headSha) {
-      refuse("conflicting");
-    }
     if (parseGitPushRecord(record, pushExpectation(pushed)) === undefined) {
       refuse("unreadable");
     }
-    proofs += 1;
+    if (pushed.sourceCommit === inputs.headSha) {
+      proofs += 1;
+      continue;
+    }
+    published = true;
   }
 
   if (proofs === 0) {
-    refuse("missing");
+    refuse(published ? "conflicting" : "missing");
   }
 }

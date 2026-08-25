@@ -1167,12 +1167,47 @@ what the run retains — the filtered reconciliation record below is durable.
 **Where the remote sits.** The branch this publishes to belongs to a Git host,
 which no local transaction can enclose, so Push reconciles through §10.2 rather
 than through the Workspace transaction. It observes the destination before it
-mutates: a destination that already holds this exact commit is compatible
-completion and is adopted with nothing performed, a destination proven absent is
-published to once, and a destination holding another commit is a conflict. Push
-never force-pushes, resets, merges or rebases, and it never creates or changes
-`branch.<name>.remote` or `branch.<name>.merge` — on success, on refusal, on
-cancellation, on crash and on replay alike.
+mutates, and what it observed decides what it does:
+
+| The destination | What Push does |
+|---|---|
+| is proven absent | performs the exact non-force push, once |
+| already holds this exact commit | adopts it, and performs nothing |
+| holds a commit proven to be anywhere in this commit's ancestry | performs the same exact non-force push, once |
+| holds a commit this one does not contain | conflicts |
+| holds a commit the authenticated object source cannot read | conflicts, because compatibility was not proved |
+| could not be observed | is temporary unavailability, and authorizes nothing |
+| could not be decided | is ambiguity, and is refused |
+
+**Advancing a branch is publishing it.** A workflow publishes one branch
+repeatedly — a supervised iteration commits, pushes, commits again and pushes
+again — and the destination it finds the second time is the commit it published
+the first time. Advancing over it is what "push this branch" means, so there is
+no prop, no second component and no author-visible reconciliation vocabulary for
+it. The commit needs only to be *somewhere* in the ancestry of the one being
+published; the intervening commits do not have to have been published.
+
+That ancestry is proved locally, inside the authenticated object-source
+attachment of §10.2, from the objects that source already holds — the same ones
+the push would publish — and the proof has exactly two answers. It never
+fetches: an object retrieved in order to answer the question would be evidence
+the question created, so an observed commit the source cannot read is an
+ordinary conflict. A proof that reaches neither answer is a boundary failure
+like any other, and is not a finding about the remote.
+
+What authorizes the push is therefore wider; what the push *is* has not changed.
+The concurrency guard is still the exact `<commit>:<destination>` refspec, which
+native Git applies only where it fast-forwards, so a destination that moved
+between the observation and the push is refused by Git rather than overwritten.
+Push never force-pushes, resets, merges, rebases or fetches, never changes the
+checkout, and it never creates or changes `branch.<name>.remote` or
+`branch.<name>.merge` — on success, on refusal, on cancellation, on crash and on
+replay alike.
+
+**When a push says nothing conclusive.** A nonzero push earns exactly one more
+exact observation and nothing else. The destination equalling the commit is what
+settles it; anything else is a boundary failure, and no completion is invented.
+What Git printed is never read as evidence either way.
 
 Push is explicit. Neither Commit nor PullRequest publishes implicitly.
 
@@ -1230,12 +1265,34 @@ identity with the remote and the destination ref: the external resource is the
 Repository's origin branch, while the complete request and its durable
 fingerprint still discriminate a changed source commit.
 
+The pre-state is what the destination held, in one of exactly three shapes:
+
+```ts
+{ remoteCommit: null }                              // proven absent
+{ remoteCommit: GitObjectId }                       // that commit, and nothing claimed about it
+{ remoteCommit: GitObjectId; relation: "ancestor" } // that commit, proven behind this one
+```
+
+The relation is the provider's attestation, not the traversal that produced it:
+no Git object, path or command output is retained for it. The observations and
+the result name the commit this attempt published and nothing else, so what
+advanced and what it advanced from are read from two different members.
+
 A retained record is read back for the invocation that recorded it. Beyond the
 shape it describes a reconciliation this operation can reach: the remote is
 `origin`, the destination is that branch's ref, the refspec is that commit
 published to that destination, the observed commit is the one published, and the
-decision agrees with the pre-state — `performed` follows proven absence and
-`adopted` follows a destination that already held the commit.
+decision agrees with the pre-state. `performed` follows proven absence or an
+attested ancestor; `adopted` follows a destination that already held the commit,
+and never carries a relation, because a destination that was already there is
+not one this attempt advanced. A relation beside a proven absence, a relation
+this version does not know, and a member either shape does not declare are each
+a record this version cannot account for, and none of them is read around.
+
+**PullRequest reads this iteration's record.** The evidence scan of §7.5
+requires the Push record naming the commit the checkout is on now. An earlier
+publication of the same branch is history rather than disagreement, and does not
+authorize a pull request naming a later head.
 
 ### 7.5 Pull request
 
@@ -1281,11 +1338,22 @@ merged, closed or commented on.
 authorization to create or update one: the run must already hold its own
 successful `Git.Push` result for the same Repository identity, head branch, full
 destination ref and head SHA. That admission reads this run's own successful
-Git-host records and is closed — a record of another kind and a Push of another
-Repository or destination are ignored; a relevant Push at another commit is
-conflicting; and a successful Git-host record whose natural key, inputs and
-result do not describe one publication is unreadable, because a record that
-cannot be read as one whole thing cannot be shown to be about something else.
+Git-host records and is closed. A record of another kind and a Push of another
+Repository or destination are ignored. Every relevant one is read whole, and a
+successful Git-host record whose natural key, inputs and result do not describe
+one publication is unreadable, because a record that cannot be read as one whole
+thing cannot be shown to be about something else — an unreadable relevant record
+refuses the pull request wherever it appears, and a later exact record does not
+read around it.
+
+The scan looks at the complete history rather than at one record, because a
+branch is published more than once: an iteration commits, pushes, commits again
+and pushes again, so several relevant records describe successive publications
+of one destination. One naming this head commit authorizes, wherever in that
+sequence it appears. An earlier publication of the same branch at another commit
+is history rather than disagreement, and decides only which refusal an
+unauthorized pull request gets: with no record for this head commit, a relevant
+one at another commit is conflicting and no relevant record at all is missing.
 Missing, conflicting and unreadable evidence are three fixed local refusals:
 each names its category and, where there is one, its remedy, quotes no journal
 content, and happens before the Git host is observed. So do a missing or
@@ -1964,7 +2032,7 @@ durable observations and mutations restore.
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
 | Git.Add/Switch/Commit | restore transactional result |
-| Git.Push/PullRequest | restore the retained reconciliation record, or observe the Git host again under the same external identity and adopt only a proven compatible completion |
+| Git.Push/PullRequest | restore the retained reconciliation record — including a Push's attested `ancestor` pre-state, which is a fact this run established when it published and never proves again — or observe the Git host again under the same external identity and adopt only a proven compatible completion |
 | Issue read | restore the retained `IssueDetails` without reaching `IssueApi` at all, and therefore without network access |
 | Issue upsert | restore the retained `IssueReference` without reaching `IssueApi` at all, or call it again under the same idempotency key, which is what lets a provider recognize an issue an interrupted attempt already filed |
 
@@ -2007,7 +2075,13 @@ what that effect needed locally — a Push rebuilds its checkout from the Worksp
 in order to name the request it is asking about — and then hands back the
 retained record without selecting a provider, contacting the host or appending
 anything. The object-source attachment such a reconstruction produces is never
-durable and never reaches routing middleware.
+durable and never reaches routing middleware. Nothing about an advance is
+decided a second time: the ancestry a live attempt proved is retained as the
+relation in its pre-state, so a restored Push builds no control repository,
+observes no destination and asks no ancestry question — which it could not
+answer anyway against a remote that has since moved or gone. A live continuation
+of an *unrecorded* Push proves ancestry again, because it must observe the
+destination again in any case.
 
 A suspended root has no Close and is partial history. Resume reconstructs only
 the ephemeral structure reached on the path back to the request. Earlier
@@ -2117,7 +2191,12 @@ temporarily unobservable → fail as itself; explicit middleware may retry or su
 ```
 
 Proven absence is the only state that performs, and one attempt performs at most
-once. Temporary unavailability is neither absence nor conflict, and never
+once. What "absent" means is the effect's own: it says the requested completion
+is not there, and it may still carry what *is* — a numbered pull-request update
+observes the pull request it is about to change, and a Push that may advance a
+branch observes the commit it is about to advance from. The pre-state a
+performance retains is that observation, which is how the record says what the
+external resource held before this attempt moved it. Temporary unavailability is neither absence nor conflict, and never
 authorizes a mutation: a later explicit attempt starts again at observation.
 
 **The record.** A decision publishes one journal result holding the request, the
@@ -2173,8 +2252,10 @@ nothing.
 
 **What the provider may be given that the request does not carry.** A Git-host
 effect sometimes needs live local access the frozen request cannot describe. A
-Push needs the Git objects its commit is made of, and the destination it is
-authorized to reach. Both travel as an **object-source attachment**: adapter-private
+Push needs the Git objects its commit is made of, the destination it is
+authorized to reach, and — when that destination already names a commit — the
+one place it may prove the two are related. All of it travels as an
+**object-source attachment**: adapter-private
 composition data the trusted host builds for exactly one reconciliation, holds in
 the selected provider's own closure, and disposes with that invocation.
 
