@@ -339,6 +339,135 @@ describe("Tier PRR — pull-request evidence", () => {
     expect(status?.description).toBe(body);
   });
 
+  it("PRR3b: every published URL is the one a person opens, or null", function* () {
+    // Three URL families, none of which a payload could be confused for
+    // another: what a person opens, what the API answers on, and where a
+    // build lives. If a reader ever published the wrong one, a reviewer
+    // following the link would land on JSON or on a CI page rather than on
+    // the objection they were shown.
+    const HUMAN = "https://github.test";
+    const CI = "https://ci.test";
+
+    const host = server({
+      [REVIEWS]: {
+        body: JSON.stringify([
+          review(10, "APPROVED", "approved", { html_url: `${HUMAN}/pr/7#r10` }),
+        ]),
+      },
+      [CONVERSATION]: {
+        body: JSON.stringify([
+          {
+            id: 11,
+            user: { login: "watcher" },
+            body: "on the thread",
+            created_at: "2026-08-24T01:00:00Z",
+            updated_at: "2026-08-24T01:00:00Z",
+            html_url: `${HUMAN}/pr/7#c11`,
+            issue_url: ISSUE_SUBJECT,
+          },
+        ]),
+      },
+      [INLINE]: {
+        body: JSON.stringify([
+          {
+            id: 12,
+            // A comment left outside a review — GitHub says so with an
+            // explicit null, and it is an ordinary comment, not a malformed
+            // one. Rejecting it would drop the whole collection.
+            pull_request_review_id: null,
+            user: { login: "reviewer" },
+            body: "on the diff",
+            created_at: "2026-08-24T02:00:00Z",
+            updated_at: "2026-08-24T02:00:00Z",
+            html_url: `${HUMAN}/pr/7#d12`,
+            path: "packages/core/mod.ts",
+            diff_hunk: "@@ -1 +1 @@\n-old\n+new",
+            commit_id: HEAD,
+            original_commit_id: HEAD,
+            in_reply_to_id: null,
+            pull_request_url: SUBJECT,
+          },
+        ]),
+      },
+      [PULL]: { body: JSON.stringify(pullRequestPayload()) },
+      [RUNS]: {
+        body: JSON.stringify({
+          check_runs: [
+            {
+              id: 13,
+              head_sha: HEAD,
+              name: "with-page",
+              status: "completed",
+              conclusion: "success",
+              html_url: `${HUMAN}/run/13`,
+              details_url: `${CI}/build/13`,
+            },
+            {
+              id: 14,
+              head_sha: HEAD,
+              name: "without-page",
+              status: "completed",
+              conclusion: "success",
+              // No `html_url`. `details_url` is a different field naming a
+              // different place, and it is not a substitute for the missing one.
+              details_url: `${CI}/build/14`,
+            },
+          ],
+        }),
+      },
+      [STATUS]: {
+        body: JSON.stringify({
+          sha: HEAD,
+          statuses: [
+            {
+              id: 15,
+              context: "with-target",
+              state: "success",
+              target_url: `${CI}/status/15`,
+              created_at: "2026-08-24T04:00:00Z",
+              updated_at: "2026-08-24T04:00:00Z",
+            },
+            {
+              id: 16,
+              context: "without-target",
+              state: "success",
+              target_url: null,
+              created_at: "2026-08-24T05:00:00Z",
+              updated_at: "2026-08-24T05:00:00Z",
+            },
+          ],
+        }),
+      },
+    });
+
+    // A review is opened where a person reads it, not where the API answered
+    // about it — `pull_request_url` names this same review's subject.
+    const reviews = items(yield* read(host, "reviews"));
+    expect(reviews[0]?.url).toBe(`${HUMAN}/pr/7#r10`);
+    expect(reviews[0]?.url).not.toBe(SUBJECT);
+
+    const comments = yield* read(host, "comments");
+    expect(kinds(comments)).toEqual(["conversation", "review"]);
+    const [conversation, inline] = items(comments);
+    expect(conversation?.url).toBe(`${HUMAN}/pr/7#c11`);
+    expect(conversation?.url).not.toBe(ISSUE_SUBJECT);
+    expect(inline?.url).toBe(`${HUMAN}/pr/7#d12`);
+    expect(inline?.url).not.toBe(SUBJECT);
+    // The comment survived its null review, and says so rather than guessing.
+    expect(inline?.reviewId).toBe(null);
+
+    const checks = yield* read(host, "checks");
+    expect(kinds(checks)).toEqual(["check-run", "check-run", "commit-status", "commit-status"]);
+    const [withPage, withoutPage, withTarget, withoutTarget] = items(checks);
+    expect(withPage?.url).toBe(`${HUMAN}/run/13`);
+    expect(withPage?.url).not.toBe(`${CI}/build/13`);
+    // Absent stays absent. Falling back to `details_url` would send a reviewer
+    // to a build page while telling them it was the check's own.
+    expect(withoutPage?.url).toBe(null);
+    expect(withTarget?.url).toBe(`${CI}/status/15`);
+    expect(withoutTarget?.url).toBe(null);
+  });
+
   it("PRR4: a three-page collection returns every item once, in order", function* () {
     const page = (n: number) => `${ENDPOINT}${REVIEWS}?per_page=100&page=${n}`;
     const host = server({
