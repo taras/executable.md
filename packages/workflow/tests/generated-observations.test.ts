@@ -20,7 +20,8 @@ import { API } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent, Json } from "@executablemd/durable-streams";
-import { retainedSource } from "@executablemd/core";
+import { retainedSource, SOURCE_POSITION_FIELD } from "@executablemd/core";
+import type { SourcePosition } from "@executablemd/core";
 import { executeInstalled, pinnedFileRead } from "@executablemd/core/host";
 import type {
   GeneratedObservationResult,
@@ -90,13 +91,20 @@ function driven(work: () => Operation<void>): ExecutionInstallation {
 /**
  * Run one fragment under one policy, from the position a trusted host records
  * durable work from.
+ *
+ * `events` continues a retained journal instead of starting an empty one, and
+ * `position` stands in for the authored `<Evaluate>` element's own source.
  */
-function evaluate(source: string, policy: GeneratedEvaluationPolicy): Operation<Attempt> {
+function evaluate(
+  source: string,
+  policy: GeneratedEvaluationPolicy,
+  options: { events?: DurableEvent[]; position?: Readonly<SourcePosition> } = {},
+): Operation<Attempt> {
   return scoped(function* () {
-    const stream = new InMemoryStream();
+    const stream = new InMemoryStream(options.events ?? []);
     const captured: { result?: GeneratedObservationResult } = {};
     const installation = driven(function* () {
-      captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy);
+      captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy, options.position);
     });
     const execution = yield* executeInstalled(
       { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream, componentDirs: [] },
@@ -241,5 +249,75 @@ describe("Tier WGX — the reads a run is willing to state", () => {
     expect(transport.performed).toHaveLength(0);
     expect(admissions(attempt.events)).toHaveLength(1);
     expect(observations(attempt.events)).toHaveLength(0);
+  });
+});
+
+describe("Tier WGX — the authored site an admission retains", () => {
+  const POSITION: Readonly<SourcePosition> = Object.freeze({
+    path: ROOT_PATH,
+    offset: 42,
+    line: 7,
+    column: 3,
+  });
+
+  it("WGX8: the admission carries the outer authored source, and its replay stays aligned", function* () {
+    const transport = yield* useTransport();
+    const source = `<Fetch url="${URL_ONE}" />\n`;
+
+    const first = yield* evaluate(source, policy(), { position: POSITION });
+
+    expect(first.failure).toBe(undefined);
+    const [admission] = admissions(first.events);
+    if (admission?.type !== "yield") {
+      throw new Error("the run recorded no generated-XMD admission");
+    }
+    expect(admission.description.name).toBe("generated:turn-1");
+    expect(admission.description[SOURCE_POSITION_FIELD]).toEqual({
+      path: ROOT_PATH,
+      offset: 42,
+      line: 7,
+      column: 3,
+    });
+    expect(transport.performed).toHaveLength(1);
+
+    // A continuation of the retained history: the admission and the nested
+    // fetch replay aligned, so nothing is admitted twice and no request is
+    // performed again.
+    const retained = first.events.filter(
+      (event) => !(event.type === "close" && event.coroutineId === "root"),
+    );
+    const continuation = yield* evaluate(source, policy(), {
+      events: retained,
+      position: POSITION,
+    });
+
+    expect(continuation.failure).toBe(undefined);
+    expect(continuation.values).toEqual(first.values);
+    expect(admissions(continuation.events)).toHaveLength(1);
+    expect(transport.performed).toHaveLength(1);
+
+    // The position is diagnostic data, not identity: a continuation whose
+    // element moved still replays the same retained admission.
+    const moved = yield* evaluate(source, policy(), {
+      events: retained,
+      position: { path: ROOT_PATH, offset: 99, line: 9, column: 1 },
+    });
+
+    expect(moved.failure).toBe(undefined);
+    expect(admissions(moved.events)).toHaveLength(1);
+    expect(transport.performed).toHaveLength(1);
+  });
+
+  it("WGX9: an admission asked for without a position retains none", function* () {
+    yield* useTransport();
+
+    const attempt = yield* evaluate("nothing to observe here.\n", policy());
+
+    expect(attempt.failure).toBe(undefined);
+    const [admission] = admissions(attempt.events);
+    if (admission?.type !== "yield") {
+      throw new Error("the run recorded no generated-XMD admission");
+    }
+    expect(admission.description[SOURCE_POSITION_FIELD]).toBeUndefined();
   });
 });

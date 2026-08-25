@@ -28,10 +28,12 @@ import type {
 } from "../src/deno/composition/github.ts";
 import { createRun, runPath, tamper, useStorageRoot, withStorage } from "./support/storage.ts";
 import { useBareRemote } from "./support/git-remotes.ts";
+import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import {
   causedBy,
   gitHostEvents,
   gitHostOutcomes,
+  inlinePosition,
   raised,
   runWorkflowDocument,
 } from "./support/composition.ts";
@@ -150,7 +152,19 @@ describe("workflow PullRequest durability", () => {
       // credential read and no request sent.
       expect(replayed).toBe(first);
       expect(yield* gitHostOutcomes(database)).toEqual(retained);
-      expect(yield* gitHostEvents(database)).toHaveLength(2);
+      const effects = yield* gitHostEvents(database);
+      expect(effects).toHaveLength(2);
+      // Each retained effect names its own authored element — the `<Git.Push>`
+      // and the `<PullRequest>` — as diagnostic data beside the identity the
+      // replay above matched by type and name alone.
+      const document = published(...pullRequest());
+      const positions = effects.map((event) =>
+        event.type === "yield" ? event.description[SOURCE_POSITION_FIELD] : undefined,
+      );
+      expect(positions).toEqual([
+        inlinePosition(document, "<Git.Push />"),
+        inlinePosition(document, "<PullRequest "),
+      ]);
       expect(creations(run.store)).toBe(1);
     });
   });

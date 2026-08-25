@@ -1,5 +1,6 @@
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { suspend } from "effection";
 import type { Operation } from "effection";
 import {
   ContinuePastCloseDivergenceError,
@@ -8,12 +9,14 @@ import {
   EarlyReturnDivergenceError,
   InMemoryStream,
   ReplayGuard,
+  SOURCE_POSITION_FIELD,
   StaleInputError,
   TerminalDivergenceError,
   type Workflow,
   durableAll,
   durableCall,
   durableRun,
+  ephemeral,
   serializeDurableEvent,
 } from "../mod.ts";
 
@@ -268,6 +271,137 @@ describe("durable terminal boundary", () => {
     }
     expect(failure.cause).toBe(childFailure);
     expectUnchanged(stream, before);
+  });
+
+  it("names the first unreached retained yield when a completed child is removed", function* () {
+    const retained = yield* recordCompletedChild();
+    const stream = new InMemoryStream(retained);
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        // deno-lint-ignore require-yield
+        function* (): Workflow<string> {
+          return "child-removed";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(EarlyReturnDivergenceError);
+    if (!(failure instanceof EarlyReturnDivergenceError)) {
+      throw new Error("expected early-return divergence");
+    }
+    expect(failure.message).toContain('first unreached entry is call("child-step")');
+  });
+
+  it("a removed completed child with no yields names its retained Close", function* () {
+    const golden = new InMemoryStream();
+    yield* durableRun(
+      function* (): Workflow<string> {
+        const [value] = yield* durableAll([
+          // deno-lint-ignore require-yield
+          function* (): Workflow<string> {
+            return "empty";
+          },
+        ]);
+        return value;
+      },
+      { stream: golden },
+    );
+    const retained = golden.snapshot().filter((event) => event.coroutineId !== "root");
+    const stream = new InMemoryStream(retained);
+    const before = stream.snapshot();
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        // deno-lint-ignore require-yield
+        function* (): Workflow<string> {
+          return "child-removed";
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(EarlyReturnDivergenceError);
+    if (!(failure instanceof EarlyReturnDivergenceError)) {
+      throw new Error("expected early-return divergence");
+    }
+    expect(failure.message).toContain(
+      "first unreached entry is the Close of coroutine root.0",
+    );
+    // No fabricated effect or source: the Close is named as itself.
+    expect(failure.message).not.toContain(" at ");
+    expectUnchanged(stream, before);
+  });
+
+  it("child cancellation finalization names the first unreached retained entry", function* () {
+    const events: DurableEvent[] = [
+      {
+        type: "yield",
+        coroutineId: "root.0",
+        description: { type: "call", name: "child-first" },
+        result: { status: "ok", value: "first" },
+      },
+      {
+        type: "yield",
+        coroutineId: "root.0",
+        description: {
+          type: "call",
+          name: "child-second",
+          [SOURCE_POSITION_FIELD]: { path: "docs/Plan.md", offset: 88, line: 12, column: 1 },
+        },
+        result: { status: "ok", value: "second" },
+      },
+    ];
+    const stream = new InMemoryStream(events);
+    const sibling = new Error("sibling failed");
+    let failure: unknown;
+
+    try {
+      yield* durableRun(
+        function* (): Workflow<string> {
+          const [value] = yield* durableAll<string>([
+            function* (): Workflow<string> {
+              yield* durableCall("child-first", () => Promise.resolve("first"));
+              yield* ephemeral(suspend());
+              return "unreachable";
+            },
+            // deno-lint-ignore require-yield
+            function* (): Workflow<string> {
+              throw sibling;
+            },
+          ]);
+          return value;
+        },
+        { stream },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(TerminalDivergenceError);
+    if (!(failure instanceof TerminalDivergenceError)) {
+      throw new Error("expected terminal divergence");
+    }
+    expect(failure.message).toContain("cancelled before retained history was exhausted");
+    expect(failure.message).toContain(
+      'first unreached entry is call("child-second") at docs/Plan.md:12:1',
+    );
+    // The retained prefix is unchanged: no Close was appended over the
+    // unconsumed history of the cancelled child, and none for the root.
+    expect(
+      stream
+        .snapshot()
+        .filter((event) => event.type === "close")
+        .map((event) => event.coroutineId),
+    ).toEqual(["root.1"]);
+    expect(stream.snapshot().filter((event) => event.type === "yield")).toEqual(events);
   });
 
   it("does not serialize continue-past-close as a document outcome", function* () {

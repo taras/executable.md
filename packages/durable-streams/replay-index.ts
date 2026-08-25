@@ -21,7 +21,7 @@ export interface YieldEntry {
 }
 
 export class ReplayIndex {
-  private yields = new Map<CoroutineId, YieldEntry[]>();
+  private yields = new Map<CoroutineId, Yield[]>();
   /** Every retained Yield in stream order, each owning its own settled cells. */
   private retained: Yield[] = [];
   private cursors = new Map<CoroutineId, number>();
@@ -176,12 +176,20 @@ export class ReplayIndex {
     return false;
   }
 
-  /** Return the first retained coroutine not aligned with the current subtree. */
+  /**
+   * Return the first retained coroutine not aligned with the current subtree.
+   *
+   * `entry` is the first unmatched retained protocol entry itself — the Yield
+   * at the cursor, or for an unclaimed completed child its first Yield when it
+   * has one and otherwise its Close — so a terminal diagnostic can name what
+   * the terminating subtree did not reach, not just where it stopped.
+   */
   firstUnaligned(subtreeId: CoroutineId):
     | {
         coroutineId: CoroutineId;
         cursor: number;
         totalYields: number;
+        entry: Yield | Close;
       }
     | undefined {
     if (this.disabled.has(subtreeId)) {
@@ -196,17 +204,23 @@ export class ReplayIndex {
       if (this.disabled.has(coroutineId)) {
         continue;
       }
-      if (this.closes.has(coroutineId)) {
+      const close = this.closes.get(coroutineId);
+      if (close !== undefined) {
         if (!this.claimed.has(coroutineId)) {
           const entries = this.yields.get(coroutineId) ?? [];
-          return { coroutineId, cursor: 0, totalYields: entries.length };
+          return {
+            coroutineId,
+            cursor: 0,
+            totalYields: entries.length,
+            entry: entries[0] ?? close,
+          };
         }
         continue;
       }
       const entries = this.yields.get(coroutineId) ?? [];
       const cursor = this.cursors.get(coroutineId) ?? 0;
       if (cursor < entries.length) {
-        return { coroutineId, cursor, totalYields: entries.length };
+        return { coroutineId, cursor, totalYields: entries.length, entry: entries[cursor] };
       }
     }
     return undefined;

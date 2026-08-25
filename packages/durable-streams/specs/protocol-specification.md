@@ -666,6 +666,16 @@ workflow and surface the error to the operator. Implementations MAY
 provide an explicit non-default divergence policy that converts certain
 divergence cases into run-live behavior for controlled migrations.
 
+The default message renders each side as `type("name")`. When a
+description retains a well-formed authored source position under the
+stable `"executablemd.source-position"` field, its human spelling —
+`path:line:column`, or `line:column` when the normalized source has no
+path, never the offset — is appended to that side as ` at …`. The field
+is stored, filtered diagnostic data: it never takes part in the matching
+rules of §6.1, and a description without a well-formed source keeps the
+existing wording — formatting a diagnostic never introduces a new
+failure.
+
 ### 6.3 Terminal divergence cases
 
 Beyond per-effect matching, the reducer detects terminal divergence before it
@@ -692,6 +702,15 @@ index has a `Close` event for this coroutine but the generator has not
 finished after consuming all recorded yields. This means the current
 code produces more effects than the recorded run — effects were added
 without a version gate.
+
+Every terminal divergence diagnostic names the first retained protocol
+entry the terminating subtree did not reach, beside the consumed and
+total counts and the ordinary failure cause, which remain unchanged. An
+unreached `Yield` is rendered as its `type("name")` with its optional
+authored source, exactly as §6.2 renders a mismatch side. When the first
+unreached entry is a `Close` — a removed completed child that retained
+no `Yield` — the diagnostic names that `Close` and its coroutine rather
+than inventing an effect or a source.
 
 Terminal alignment covers the whole terminating coroutine subtree. All
 terminal divergence cases raise a durability error and leave the retained
@@ -1182,9 +1201,11 @@ These tests MUST pass for the protocol to be considered implemented.
 | 10  | **Reordered steps**                | Record with v1. Replay with v2 that swaps two effects.                                | `DivergenceError` at first swapped position.                            |
 | 11  | **Type mismatch**                  | Record a `call` effect. Replay code yields `sleep` at same position.                  | `DivergenceError` citing type mismatch.                                 |
 | 12  | **Name mismatch**                  | Record `call("fetchOrder")`. Replay yields `call("chargeCard")`.                      | `DivergenceError` citing name mismatch.                                 |
-| 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError`; no root `Close` is appended. |
-| 13b | **Generator fails early** | Record a partial stream with a retained yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError`; the original error is its cause and no root `Close` is appended. |
-| 13c | **Completed child removed** | Record a child `Yield` and `Close`, omit the root `Close`, then remove the child from the current definition. | Root return and root failure both reject the unchanged prefix; the compatible definition still replays it. |
+| 12b | **Positioned mismatch** | Record a description carrying `"executablemd.source-position"`. Replay yields a differently named effect carrying its own position. | `DivergenceError` names both authored sites, one per side; identical extra metadata still matches. |
+| 13  | **Generator finishes early**       | Record a partial stream with 5 yields and no root close. Replay code produces only 3 yields then returns. | `EarlyReturnDivergenceError` naming the first unreached retained `Yield`; no root `Close` is appended. |
+| 13b | **Generator fails early** | Record a partial stream with a retained yield and no root close. Replay code throws before reaching it. | `TerminalDivergenceError` naming the first unreached retained `Yield`; the original error is its cause and no root `Close` is appended. |
+| 13c | **Completed child removed** | Record a child `Yield` and `Close`, omit the root `Close`, then remove the child from the current definition. | Root return and root failure both reject the unchanged prefix, naming the child's first retained `Yield` — or its `Close` when it retained none; the compatible definition still replays it. |
+| 13d | **Child cancellation finalization** | Record a child with retained history, then cancel that child before its history is exhausted. | The cancellation `TerminalDivergenceError` names the first unreached retained entry like every other terminal path. |
 | 14  | **Generator continues past close** | Record stream with close after 3 yields. Replay code produces 5 yields.               | `DivergenceError`: journal shows close but generator hasn't finished.   |
 
 ### Tier 3 — Structured concurrency

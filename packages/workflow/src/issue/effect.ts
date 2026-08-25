@@ -43,7 +43,7 @@ import {
   type Json,
   type Workflow,
 } from "@executablemd/durable-streams";
-import { getExpansion } from "@executablemd/core";
+import { getExpansion, sourceDescription } from "@executablemd/core";
 import { getWorkflowRun, retainedIssueIdentitiesHere } from "../run.ts";
 import { claimRetainedIssueIdentity, exhaustRetainedIssueIdentities } from "./identities.ts";
 import { ISSUE_EFFECT } from "./effect-type.ts";
@@ -203,6 +203,7 @@ function* effectIdentity(): Operation<{ runId: string; expansionId: string }> {
 }
 
 function* describe(request: IssueRequest): Operation<EffectDescription> {
+  const expansion = yield* getExpansion();
   return {
     type: ISSUE_EFFECT,
     name: yield* issueRequestFingerprint(request),
@@ -210,6 +211,10 @@ function* describe(request: IssueRequest): Operation<EffectDescription> {
     // for. The identity table reads it back to recognize a record a fork
     // inherited, and it holds only what a document wrote.
     request: issueRequestJson(request),
+    // Where the authored component asking for this effect was written —
+    // diagnostic journal data, never part of the fingerprint, the request, or
+    // the identity table.
+    ...sourceDescription(expansion.position),
   };
 }
 

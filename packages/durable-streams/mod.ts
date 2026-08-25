@@ -48,10 +48,12 @@ export type { HttpDurableStreamHandle, HttpDurableStreamOptions } from "./http-s
 // Errors
 export {
   ContinuePastCloseDivergenceError,
+  describeEffect,
   DivergenceError,
   DurablePersistenceError,
   EarlyReturnDivergenceError,
   MalformedDurableEventError,
+  SOURCE_POSITION_FIELD,
   StaleInputError,
   TerminalDivergenceError,
 } from "./errors.ts";
