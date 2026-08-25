@@ -572,18 +572,6 @@ interface DocumentConfig {
 
 export interface DocumentMode {
   testing: boolean;
-  /**
-   * Whether this host profile answers `<Elicit>` with the browser form.
-   *
-   * Required, and stated by each trusted profile rather than derived from
-   * `testing`: whether an execution activates the testing stack and whether
-   * this host owns elicitation are two independent decisions, and a host that
-   * already installed a provider of its own — a workflow attachment installs
-   * the suspending one — must not have a second, nearer provider assembled
-   * underneath it. Making it required is what keeps a profile added later from
-   * inheriting the browser form by omission.
-   */
-  webElicitation: boolean;
   agent?: AgentFlags;
   /**
    * What this host states about machine-wide agent sessions: who owns one,
@@ -640,21 +628,18 @@ export function* installDocumentComponents(mode: DocumentMode, verbose: boolean)
   // repository's own WebForm.md or WebForm.ts still wins.
   yield* installWebComponents();
 
-  // `<Elicit>` reaches a person through the same form — but only where the
-  // profile said this host owns the question.
+  // No elicitation provider is assembled here, for any command. Who answers
+  // `<Elicit>` is not a property of the components a document runs with: it is
+  // whichever host attached this run, and a host says so by installing its own
+  // provider in the scope it composes around this one. `xmd run` and the nested
+  // run profile install the browser form there; `xmd test` and `xmd workflow`
+  // install nothing there, and the workflow attachment's suspending provider is
+  // the only one a workflow document can reach.
   //
-  // Under `xmd test` a document that elicits without supplying an answer would
-  // open a browser and wait for somebody who is not coming, which is a hang
-  // rather than a test result. Under `xmd workflow` the workflow attachment
-  // already installed the suspending provider around this scope, and both are
-  // installed `{ at: "min" }`, so a provider assembled here would be the nearer
-  // one and would answer with a form the run has no reader for. Leaving it out
-  // makes an unowned elicitation fail immediately with "no elicitation provider
-  // configured", and an `<Answers>` region stays the way a document says what
-  // the answer is.
-  if (mode.webElicitation) {
-    yield* installWebElicitation();
-  }
+  // Deciding it here instead would put the answer in the one assembly every
+  // profile shares, where a provider is only ever a scope away from the wrong
+  // run — and where the workflow's provider, installed further out, would lose
+  // to it at the same `{ at: "min" }`.
 
   // Agent flags are exclusive to `xmd run` — `xmd test` drives agents
   // through the deterministic TestAgent stack instead.
@@ -948,9 +933,7 @@ function* test(
     announceSecretDetection(config.secretDetection);
     const result = yield* runScopedDocument(
       { ...config, root: { path } },
-      // `xmd test` owns no elicitation: a document that asks without an
-      // `<Answers>` region fails rather than opening a form nobody is at.
-      { testing: true, webElicitation: false },
+      { testing: true },
       installService,
     );
     if (!result.ok) {
@@ -990,7 +973,7 @@ function* test(
         root: { path: document.path },
         componentDir: componentSearchPath(document, target.root, config.componentDir),
       },
-      { testing: true, webElicitation: false },
+      { testing: true },
       installService,
     );
     if (!result.ok) {
@@ -1712,28 +1695,34 @@ function* dispatch(
       }
       const root = propsPhase.root;
       announceSecretDetection(config.secretDetection);
-      const result = yield* runScopedDocument(
-        { ...config, root, retainProcessOutput: keepsProcessOutput(config.journal) },
-        {
-          testing: false,
-          // `xmd run` is the command a person is sitting in front of, so it is
-          // the one that may ask them through the browser form.
-          webElicitation: true,
-          props: props.value,
-          // Only `xmd run` receives it. Every other command assembles none of
-          // it, which is what keeps a machine session from being acted on by a
-          // command that never said it could own one.
-          ...(sessions === undefined ? {} : { machineSessions: sessions }),
-          agent: {
-            agentProvider: config.agentProvider,
-            defaultAgent: config.defaultAgent,
-            approveAll: config.approveAll,
-            approveReads: config.approveReads,
-            denyAll: config.denyAll,
+      const result = yield* scoped(function* (): Operation<Result<void>> {
+        // `<Elicit>` reaches a person through the browser form, and `xmd run`
+        // is the command a person is sitting in front of. Composed here, in the
+        // scope this profile assembles around its own document, because that is
+        // what owning the question *is*: a host that answers installs a
+        // provider, and one that does not installs none. Nothing downstream
+        // reads a profile, so nothing downstream can read one wrong.
+        yield* installWebElicitation();
+        return yield* runScopedDocument(
+          { ...config, root, retainProcessOutput: keepsProcessOutput(config.journal) },
+          {
+            testing: false,
+            props: props.value,
+            // Only `xmd run` receives it. Every other command assembles none of
+            // it, which is what keeps a machine session from being acted on by
+            // a command that never said it could own one.
+            ...(sessions === undefined ? {} : { machineSessions: sessions }),
+            agent: {
+              agentProvider: config.agentProvider,
+              defaultAgent: config.defaultAgent,
+              approveAll: config.approveAll,
+              approveReads: config.approveReads,
+              denyAll: config.denyAll,
+            },
           },
-        },
-        installService,
-      );
+          installService,
+        );
+      });
       if (!result.ok) {
         // The document is reread between preparation and execution, so the
         // exact target this run decided on can be gone by the time it runs.
@@ -1855,17 +1844,11 @@ function* dispatch(
               // already produced; the fork's own execution renders it again.
               ...(execution.discardOutput === true ? { discardOutput: true } : {}),
             },
-            {
-              testing: false,
-              // The workflow host attached this execution and installed the
-              // suspending provider around it. A browser form assembled here
-              // would sit nearer and answer first, and a workflow's question is
-              // answered by `xmd workflow answer`, not by a reader who would
-              // have to still be at the terminal when the run reaches it.
-              webElicitation: false,
-              props: execution.props,
-              installations: execution.installations,
-            },
+            // No elicitation provider is composed around this document. The
+            // workflow host attached the execution and installed the suspending
+            // one already; a browser form here would sit nearer, answer first,
+            // and wait for a reader the run has no way to reach.
+            { testing: false, props: execution.props, installations: execution.installations },
             // The workflow authority boundary sits exactly where a host
             // service adapter would: installed inside the execution scope,
             // before the root document is imported.
