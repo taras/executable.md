@@ -21,6 +21,10 @@ import { Buffer } from "node:buffer";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
+import type { Json } from "@executablemd/durable-streams";
+import { SUSPENSION_ANSWER } from "../../src/suspension/answer.ts";
+import { parseSuspensionRequest, suspensionRequestFingerprint } from "../../src/suspension/api.ts";
+import { SUSPENSION_REQUEST, suspensionId } from "../../src/suspension/suspend.ts";
 import { parseWorkflowDefinition } from "../../src/storage/definition.ts";
 import type { GitWorkflowDefinitionV1 } from "../../src/storage/definition.ts";
 import {
@@ -35,6 +39,46 @@ const encoder = new TextEncoder();
 
 /** The commit every source in this fixture is pinned to. */
 export const PINNED_COMMIT = "9fceb02d0ae598e95dc970b74767f19372d61af8";
+
+/** The run every derived identity in this fixture belongs to. */
+export const RUN_ID = "release-1.4";
+
+/**
+ * One durable wait, as the two events a live run publishes for it.
+ *
+ * Built with the live descriptions rather than with hand-written objects, so a
+ * fixture cannot drift from the shape the verifier authenticates against. The
+ * request carries the wait's identity twice over and the schema an answer is
+ * judged by; the publication is what makes an answer consumed rather than
+ * pending, and carries the value that was retained.
+ */
+export function wait(id: string, request: Json, responseSchema: Json) {
+  const parsed = parseSuspensionRequest({ request, responseSchema });
+  return {
+    id,
+    request: {
+      type: "yield",
+      coroutineId: "root",
+      description: {
+        type: SUSPENSION_REQUEST,
+        name: id,
+        suspensionId: id,
+        request: parsed.request,
+        responseSchema: parsed.responseSchema,
+      },
+      result: { status: "ok", value: id },
+    } satisfies DurableEvent,
+    fingerprint: suspensionRequestFingerprint(parsed),
+    publication(value: Json): DurableEvent {
+      return {
+        type: "yield",
+        coroutineId: "root",
+        description: { type: SUSPENSION_ANSWER, name: id, suspensionId: id },
+        result: { status: "ok", value },
+      };
+    },
+  };
+}
 
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -173,6 +217,27 @@ export function definitionOf(
   return parsed.value;
 }
 
+/**
+ * The two waits this fixture's history is built from.
+ *
+ * Module-level so a test can name the same identities the snapshot retains,
+ * rather than restating them and drifting. Derived the way a run derives them —
+ * from the run and the durable position — so the fixture is a snapshot some
+ * execution could actually have produced.
+ */
+export const SUSPENSIONS = {
+  consumed: wait(
+    suspensionId(RUN_ID, { coroutineId: "root", index: 1 }),
+    { kind: "approval", release: "1.4" },
+    { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+  ),
+  pending: wait(
+    suspensionId(RUN_ID, { coroutineId: "root", index: 4 }),
+    { kind: "confirmation", question: "ship it?" },
+    { type: "string" },
+  ),
+} as const;
+
 const ROOT_DOCUMENT = "# Release\n\n<Checklist />\n";
 const CHECKLIST = "- [ ] tag\n";
 const UNUSED = "This component was declared and never expanded.\n";
@@ -221,11 +286,22 @@ export function richArtifact(): DetachedXmdArtifact {
           type: "yield",
           coroutineId: "root",
           description: { type: "call", name: "workflow_run" },
-          result: { status: "ok", value: { runId: "release-1.4" } },
+          result: { status: "ok", value: { runId: RUN_ID } },
         },
         3,
       ),
       root: first.rootId,
+    },
+    // The answered wait: its request, then the answer that ended it.
+    { event: sourced(SUSPENSIONS.consumed.request, 5), root: first.rootId },
+    { event: SUSPENSIONS.consumed.publication({ approved: true }), root: first.rootId },
+    {
+      event: {
+        type: "close",
+        coroutineId: "root.0",
+        result: { status: "ok", value: null },
+      },
+      root: second.rootId,
     },
     {
       // A retained external effect keeps its own journal record and nothing
@@ -241,23 +317,18 @@ export function richArtifact(): DetachedXmdArtifact {
       ),
       root: second.rootId,
     },
-    {
-      event: {
-        type: "close",
-        coroutineId: "root",
-        result: { status: "err", error: { message: "the release step failed" } },
-      },
-      root: second.rootId,
-    },
+    // The wait this snapshot stopped at. Its answer is delivered and not yet
+    // published, which is exactly what a pending row is.
+    { event: sourced(SUSPENSIONS.pending.request, 14), root: second.rootId },
   ];
 
   const journal = events.map((each, index) => ({
     eventId: `event-${index}`,
     record: serializeDurableEvent(each.event),
     workspaceRootId: each.root,
-    // The first two rows arrived from the run this one was forked from; the
-    // last is one this run wrote itself, and its absence is what says so.
-    ...(index < 2
+    // The first three rows arrived from the run this one was forked from; the
+    // rest are ones this run wrote itself, and their absence is what says so.
+    ...(index < 3
       ? { inherited: { sourceRunId: "release-1.3", sourceEventId: `origin-${index}` } }
       : {}),
   }));
@@ -266,17 +337,17 @@ export function richArtifact(): DetachedXmdArtifact {
 
   return {
     frontier: {
-      sourceRunId: "release-1.4",
-      finalEventId: "event-2",
+      sourceRunId: RUN_ID,
+      finalEventId: "event-5",
       currentWorkspaceRootId: second.rootId,
     },
     run: {
-      runId: "release-1.4",
+      runId: RUN_ID,
       definition,
       base: "main",
       props: { channel: "stable", retries: 2 },
-      status: "failed",
-      stopReason: { kind: "journal", eventId: "event-2" },
+      status: "suspended",
+      stopReason: { kind: "journal", eventId: "event-5" },
       createdAt: "2026-01-02T03:04:05.000Z",
       updatedAt: "2026-01-02T03:44:05.000Z",
     },
@@ -292,8 +363,8 @@ export function richArtifact(): DetachedXmdArtifact {
         executionId: "execution-1",
         startedAt: "2026-01-02T03:24:05.000Z",
         stoppedAt: "2026-01-02T03:44:05.000Z",
-        stopStatus: "failed",
-        stopReason: { kind: "journal", eventId: "event-2" },
+        stopStatus: "suspended",
+        stopReason: { kind: "journal", eventId: "event-5" },
       },
     ],
     lineage: {
@@ -330,18 +401,18 @@ export function richArtifact(): DetachedXmdArtifact {
     ],
     answers: [
       {
-        suspensionId: "suspension-0",
+        suspensionId: SUSPENSIONS.consumed.id,
         requestEventId: "event-1",
-        requestFingerprint: sha256Hex(encoder.encode("first question")),
+        requestFingerprint: SUSPENSIONS.consumed.fingerprint,
         answer: { approved: true },
         state: "consumed",
         createdAt: "2026-01-02T03:20:00.000Z",
         consumedAt: "2026-01-02T03:24:00.000Z",
       },
       {
-        suspensionId: "suspension-1",
-        requestEventId: "event-2",
-        requestFingerprint: sha256Hex(encoder.encode("second question")),
+        suspensionId: SUSPENSIONS.pending.id,
+        requestEventId: "event-5",
+        requestFingerprint: SUSPENSIONS.pending.fingerprint,
         answer: "ship it",
         state: "pending",
         createdAt: "2026-01-02T03:40:00.000Z",

@@ -124,7 +124,7 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     // is refused here, where there is still nothing on disk to remove.
     const entries = encodeXmdArtifactInventory(contents);
     const detached = decodeXmdArtifactInventory(entries, path);
-    verifyXmdArtifactSemantics(detached, path);
+    yield* verifyXmdArtifactSemantics(detached, path);
     const built = buildXmdArtifactManifest(entries, (kind) => {
       throw new XmdArtifactInventoryError(
         path,

@@ -38,7 +38,7 @@ import { XMD_ARTIFACT_APPLICATION_ID } from "../src/deno/artifact/schema.ts";
 import { APPLICATION_ID as LIVE_RUN_APPLICATION_ID } from "../src/deno/schema.ts";
 import * as publishedDeno from "../deno.ts";
 import * as publishedRoot from "../mod.ts";
-import { richArtifact } from "./support/artifact-fixture.ts";
+import { richArtifact, SUSPENSIONS } from "./support/artifact-fixture.ts";
 
 const encoder = new TextEncoder();
 
@@ -290,13 +290,13 @@ describe("XMD artifact container version 1", () => {
     // The copy this one was damaged from still opens, so the damage is what
     // decides the outcome rather than something the fixture was already wrong
     // about.
-    expect((yield* opened(path)).run.status).toBe("failed");
+    expect((yield* opened(path)).run.status).toBe("suspended");
 
     // The early status row is still perfectly readable, and the open still
     // returns nothing at all.
-    expect(storedText(broken, "workflow-run", "null")).toContain('"status":"failed"');
+    expect(storedText(broken, "workflow-run", "null")).toContain('"status":"suspended"');
     const failure = yield* refused(broken);
-    expect(failure.message).not.toContain("failed"); // no lifecycle leaked into the answer
+    expect(failure.message).not.toContain("suspended"); // no lifecycle leaked into the answer
     expect(yield* readXmdArtifact(broken)).toMatchObject({ ok: false });
   });
 
@@ -658,16 +658,68 @@ describe("XMD artifact container version 1", () => {
           content,
         );
     });
-    const suspensionRequest = yield* damaged(path, join(directory, "suspension.xmd"), (target) => {
-      const identity = firstIdentity(path, "suspension-answer");
-      const answer = storedRecord(path, "suspension-answer", identity);
-      rewrite(
-        target,
-        "suspension-answer",
-        identity,
-        canonicalJsonText({ ...answer, requestEventId: "no-such-event" }),
+    // Every way a retained answer can fail to be an answer to the history it
+    // names. Each rewrites one member of one row and leaves the rest of the
+    // artifact exactly as it was.
+    const answerIdentity = (suspension: "consumed" | "pending"): string =>
+      canonicalJsonText(
+        suspension === "consumed" ? SUSPENSIONS.consumed.id : SUSPENSIONS.pending.id,
       );
-    });
+    const damageAnswer = (
+      name: string,
+      suspension: "consumed" | "pending",
+      edit: (answer: JsonObject) => JsonObject,
+    ) =>
+      damaged(path, join(directory, name), (target) => {
+        const identity = answerIdentity(suspension);
+        rewrite(
+          target,
+          "suspension-answer",
+          identity,
+          canonicalJsonText(edit(storedRecord(path, "suspension-answer", identity))),
+        );
+      });
+
+    const suspensionRequest = yield* damageAnswer("suspension-absent.xmd", "pending", (answer) => ({
+      ...answer,
+      requestEventId: "no-such-event",
+    }));
+    // event-4 is the retained Git effect: a real event, and not a wait.
+    const suspensionNotARequest = yield* damageAnswer(
+      "suspension-not-a-request.xmd",
+      "pending",
+      (answer) => ({ ...answer, requestEventId: "event-4" }),
+    );
+    // event-1 is the *other* wait's request: a real suspension request, for
+    // somebody else.
+    const suspensionWrongWait = yield* damageAnswer(
+      "suspension-wrong-wait.xmd",
+      "pending",
+      (answer) => ({ ...answer, requestEventId: "event-1" }),
+    );
+    const suspensionFingerprint = yield* damageAnswer(
+      "suspension-fingerprint.xmd",
+      "pending",
+      (answer) => ({ ...answer, requestFingerprint: "c".repeat(64) }),
+    );
+    // The pending wait's schema is `{"type":"string"}`.
+    const suspensionSchema = yield* damageAnswer("suspension-schema.xmd", "pending", (answer) => ({
+      ...answer,
+      answer: { not: "a string" },
+    }));
+    const suspensionUnpublished = yield* damageAnswer(
+      "suspension-unpublished.xmd",
+      "pending",
+      (answer) => ({ ...answer, state: "consumed", consumedAt: "2026-01-02T03:45:00.000Z" }),
+    );
+    const suspensionAlreadyPublished = yield* damageAnswer(
+      "suspension-already-published.xmd",
+      "consumed",
+      (answer) => {
+        const { consumedAt: _consumed, ...rest } = answer;
+        return { ...rest, state: "pending" };
+      },
+    );
     const agentMapping = yield* damaged(path, join(directory, "agent.xmd"), (target) => {
       const identity = firstIdentity(path, "agent-session");
       const session = storedRecord(path, "agent-session", identity);
@@ -699,6 +751,12 @@ describe("XMD artifact container version 1", () => {
       blobBytes,
       worktreeRelation,
       suspensionRequest,
+      suspensionNotARequest,
+      suspensionWrongWait,
+      suspensionFingerprint,
+      suspensionSchema,
+      suspensionUnpublished,
+      suspensionAlreadyPublished,
       agentMapping,
       closureHash,
       closureMembership,

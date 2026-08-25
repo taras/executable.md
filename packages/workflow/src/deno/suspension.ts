@@ -55,6 +55,7 @@ import { canonicalFingerprint } from "@executablemd/core";
 import type { EffectDescription } from "@executablemd/durable-streams";
 import {
   parseSuspensionRequest,
+  suspensionRequestFingerprint,
   WorkflowSuspension,
   type WorkflowSuspensionRequest,
 } from "../suspension/api.ts";
@@ -341,7 +342,7 @@ function answerProvider(
               "execution before this one could publish it.",
           );
         }
-        if (retained.requestFingerprint !== fingerprintOf(authority.request)) {
+        if (retained.requestFingerprint !== suspensionRequestFingerprint(authority.request)) {
           throw new WorkflowRequestError(
             `the answer retained for ${authority.suspensionId} was delivered against a ` +
               "different request, so it is not an answer to the wait this execution reached.",
@@ -375,11 +376,4 @@ function answerProvider(
       return claimed.value;
     },
   };
-}
-
-function fingerprintOf(request: WorkflowSuspensionRequest): string {
-  return canonicalFingerprint({
-    request: request.request,
-    responseSchema: request.responseSchema,
-  });
 }

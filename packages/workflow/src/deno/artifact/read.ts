@@ -92,7 +92,7 @@ function isXmdArtifactEncoding(value: unknown): value is XmdArtifactEncoding {
 export function* readXmdArtifact(path: string): Operation<Result<VerifiedXmdArtifact>> {
   try {
     yield* admitPath(path);
-    return Ok(openArtifact(path));
+    return Ok(yield* recognized(detach(path), path));
   } catch (error) {
     if (error instanceof WorkflowStorageError) {
       return Err(error);
@@ -101,7 +101,23 @@ export function* readXmdArtifact(path: string): Operation<Result<VerifiedXmdArti
   }
 }
 
-function openArtifact(path: string): VerifiedXmdArtifact {
+/** What one connection hands over before it is closed. */
+interface SealedContent {
+  readonly entries: readonly XmdArtifactContentEntry[];
+  readonly manifest: Uint8Array;
+  readonly identity: string;
+}
+
+/**
+ * Gates 2 through 7, and then the connection is gone.
+ *
+ * Everything the rest of recognition needs is in memory before this returns, so
+ * no later gate is reading through a handle and nothing a caller could observe
+ * outlives the file being open. It is also what lets the semantic pass be an
+ * operation: judging a retained answer means compiling the schema its wait
+ * retained, and that cannot happen inside a synchronous SQLite transaction.
+ */
+function detach(path: string): SealedContent {
   let database: DatabaseSync;
   try {
     database = new DatabaseSync(path, { readOnly: true });
@@ -114,7 +130,7 @@ function openArtifact(path: string): VerifiedXmdArtifact {
     // a reader that could change the file would not be reading evidence.
     database.exec("PRAGMA foreign_keys = ON");
     database.exec("PRAGMA busy_timeout = 5000");
-    return readTransaction(database, () => verified(database, path));
+    return readTransaction(database, () => sealedContent(database, path));
   } catch (error) {
     throw translateArtifactSqliteError(error, path);
   } finally {
@@ -153,7 +169,7 @@ function* admitPath(path: string): Operation<void> {
   }
 }
 
-function verified(database: DatabaseSync, path: string): VerifiedXmdArtifact {
+function sealedContent(database: DatabaseSync, path: string): SealedContent {
   // Gate 3 and the first half of gate 4: integrity, the family marker, and the
   // container schema version — all of which a container answers before any
   // question about what its rows mean.
@@ -173,26 +189,40 @@ function verified(database: DatabaseSync, path: string): VerifiedXmdArtifact {
   checkXmdArtifactForeignKeys(database, path);
   const header = readHeader(database, path, container.containerVersion);
 
-  // Gate 6: everything into detached memory, so nothing a caller can observe
-  // outlives the connection.
-  const entries = readContent(database, path);
+  // Gates 6 and 7: every entry held to what its own row declares, and all of it
+  // into detached memory.
+  return Object.freeze({
+    entries: readContent(database, path),
+    manifest: header.manifest,
+    identity: header.identity,
+  });
+}
 
+/**
+ * Gates 8 through 10, with nothing open.
+ *
+ * Nothing here can reach the file again, which is the point: what is being
+ * decided is whether the bytes already in hand describe one snapshot a live
+ * workflow contract accepts, and then whether the manifest they produce is the
+ * one stored beside them.
+ */
+function* recognized(sealed: SealedContent, path: string): Operation<VerifiedXmdArtifact> {
   // Gate 8: the records themselves, and every reference between them.
-  const contents = decodeXmdArtifactInventory(entries, path);
-  verifyXmdArtifactSemantics(contents, path);
+  const contents = decodeXmdArtifactInventory(sealed.entries, path);
+  yield* verifyXmdArtifactSemantics(contents, path);
 
   // Gate 9: the manifest this content produces, against the one stored beside
   // it, and the identity that manifest derives against the stored identity.
-  const rebuilt = buildXmdArtifactManifest(entries, (kind) => {
+  const rebuilt = buildXmdArtifactManifest(sealed.entries, (kind) => {
     throw new XmdArtifactInventoryError(
       path,
       `it holds more than one ${kind} record under one identity`,
     );
   });
-  if (Buffer.compare(Buffer.from(rebuilt.bytes), Buffer.from(header.manifest)) !== 0) {
+  if (Buffer.compare(Buffer.from(rebuilt.bytes), Buffer.from(sealed.manifest)) !== 0) {
     throw new XmdArtifactManifestMismatchError(path);
   }
-  if (rebuilt.identity !== header.identity) {
+  if (rebuilt.identity !== sealed.identity) {
     throw new XmdArtifactIdentityMismatchError(path);
   }
 

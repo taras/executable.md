@@ -27,8 +27,17 @@
 
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
+import type { Operation } from "effection";
+import { prepareElicitation, validateParsed } from "@executablemd/core";
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import type { Json } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import { SUSPENSION_ANSWER } from "../../suspension/answer.ts";
+import {
+  parseSuspensionRequest,
+  suspensionRequestFingerprint,
+  type WorkflowSuspensionRequest,
+} from "../../suspension/api.ts";
+import { SUSPENSION_REQUEST } from "../../suspension/suspend.ts";
 import { readEventSource } from "../../lifecycle/history.ts";
 import type { InheritedEventProvenance } from "../../lifecycle/history.ts";
 import {
@@ -1193,7 +1202,10 @@ function inventoryFailure(path: string): Reject {
  * to the commit the definition pins — so all of that is asked here, and it is
  * asked before any of it is handed to a caller.
  */
-export function verifyXmdArtifactSemantics(contents: XmdArtifactContents, path: string): void {
+export function* verifyXmdArtifactSemantics(
+  contents: XmdArtifactContents,
+  path: string,
+): Operation<void> {
   const reject: Reject = inventoryFailure(path);
 
   const eventIds = new Set(contents.journal.map((row) => row.eventId));
@@ -1214,7 +1226,7 @@ export function verifyXmdArtifactSemantics(contents: XmdArtifactContents, path: 
   const manifests = verifyContentStore(contents, reject);
   verifyRoots(contents, manifests, path, reject);
   verifyCheckouts(contents, reject);
-  verifySuspensions(contents, eventIds, reject);
+  yield* verifySuspensions(contents, path, reject);
   verifyAgentSessions(contents, reject);
   verifyDefinitionClosure(contents, reject);
 }
@@ -1396,21 +1408,144 @@ function verifyCheckouts(contents: XmdArtifactContents, reject: Reject): void {
   }
 }
 
-function verifySuspensions(
+/**
+ * Every retained answer, authenticated against the history it claims to answer.
+ *
+ * A row naming an event the journal holds proves nothing on its own: what has
+ * to be true is that the named event *is* the wait, that it is *this* wait, that
+ * the request it retained is the one the value was judged against, that the
+ * value could still end that wait, and that the row's state agrees with whether
+ * the journal published an answer for it.
+ *
+ * Every one of those questions is asked with the live contracts rather than
+ * with an encoding of this module's own — the same `parseSuspensionRequest`,
+ * the same fingerprint, the same schema compilation a delivery and a resume
+ * use. A second spelling of any of them would be a second answer to a question
+ * a live run has already settled.
+ */
+function* verifySuspensions(
   contents: XmdArtifactContents,
-  eventIds: ReadonlySet<string>,
+  path: string,
   reject: Reject,
-): void {
+): Operation<void> {
+  const journal = contents.journal.map((row) => ({
+    eventId: row.eventId,
+    event: parseJournalEvent(row.record, path),
+  }));
+  const requests = new Map<string, { readonly at: number; readonly event: DurableEvent }>();
+  const publications = new Map<string, number>();
+
+  for (const [at, entry] of journal.entries()) {
+    const event = entry.event;
+    if (event.type !== "yield") {
+      continue;
+    }
+    if (event.description.type === SUSPENSION_REQUEST) {
+      requests.set(entry.eventId, { at, event });
+    }
+    if (event.description.type === SUSPENSION_ANSWER) {
+      const named = event.description.name;
+      if (typeof named !== "string" || publications.has(named)) {
+        reject("it publishes more than one answer for one wait");
+      }
+      publications.set(named, at);
+    }
+  }
+
   const suspensions = new Set<string>();
   for (const answer of contents.answers) {
     if (suspensions.has(answer.suspensionId)) {
       reject("it holds one suspension answer twice");
     }
     suspensions.add(answer.suspensionId);
-    if (!eventIds.has(answer.requestEventId)) {
-      reject("a suspension answer names a request event this artifact does not hold");
+
+    const request = requests.get(answer.requestEventId);
+    if (request === undefined) {
+      reject("a suspension answer names an event that is not a retained request for a wait");
+    }
+    const description = request.event.type === "yield" ? request.event.description : undefined;
+    if (description === undefined) {
+      reject("a suspension answer names an event that is not a retained request for a wait");
+    }
+    if (
+      description["name"] !== answer.suspensionId ||
+      description["suspensionId"] !== answer.suspensionId
+    ) {
+      reject("a suspension answer names a request published for a different wait");
+    }
+
+    // Parsed rather than read. The request reached the journal through a public
+    // durable operation, so what the description holds is a claim about a
+    // request until this walks it — and a schema nothing could validate against
+    // must not be the schema an answer is judged by.
+    let wait: WorkflowSuspensionRequest;
+    try {
+      wait = parseSuspensionRequest({
+        request: description["request"],
+        responseSchema: description["responseSchema"],
+      });
+    } catch {
+      // The live parser's sentence describes a request a document offered; what
+      // this artifact holds is a retained one, and the value stays out of it.
+      reject("a retained suspension request does not describe a wait");
+    }
+
+    if (suspensionRequestFingerprint(wait) !== answer.requestFingerprint) {
+      reject("a suspension answer was delivered against a request this artifact does not hold");
+    }
+    yield* judgeRetainedAnswer(wait, answer.answer, reject);
+
+    const publishedAt = publications.get(answer.suspensionId);
+    if (answer.state === "consumed" && publishedAt === undefined) {
+      reject("a consumed suspension answer has no published answer in this artifact's history");
+    }
+    if (answer.state === "pending" && publishedAt !== undefined) {
+      reject("a pending suspension answer was already published in this artifact's history");
+    }
+    if (publishedAt !== undefined && publishedAt <= request.at) {
+      reject("a suspension answer is published before the request it answers");
     }
   }
+
+  for (const suspension of publications.keys()) {
+    if (!suspensions.has(suspension)) {
+      reject("it publishes an answer for a wait it retains no answer for");
+    }
+  }
+}
+
+/**
+ * The value, judged by the schema the wait itself retained.
+ *
+ * The same compilation a delivery and an `<Elicit>` use, so what this artifact
+ * accepts as an answer is exactly what a live run would have. The refusal says
+ * that it does not satisfy the schema and never which part of it failed: the
+ * issues quote the value, and a value is retained content.
+ */
+function* judgeRetainedAnswer(
+  wait: WorkflowSuspensionRequest,
+  answer: Json,
+  reject: Reject,
+): Operation<void> {
+  let issues;
+  try {
+    const prepared = yield* prepareElicitation(wait.responseSchema, "artifact answer");
+    issues = validateParsed(prepared.validate, answer);
+  } catch {
+    reject("a retained response schema cannot judge the answer stored against it");
+  }
+  if (issues.length > 0) {
+    reject("a retained answer does not satisfy the response schema its wait retained");
+  }
+}
+
+/** One retained record, as the durable event it claims to be. */
+function parseJournalEvent(record: string, path: string): DurableEvent {
+  const parsed = parseDurableEvent(record);
+  if (!parsed.ok) {
+    throw new XmdArtifactRecordError(path, "journal-record", "it is not a durable event");
+  }
+  return parsed.value;
 }
 
 /**
