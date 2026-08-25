@@ -30,7 +30,7 @@ import { Buffer } from "node:buffer";
 import type { Operation } from "effection";
 import { prepareElicitation, validateParsed } from "@executablemd/core";
 import { parseDurableEvent } from "@executablemd/durable-streams";
-import type { DurableEvent, Json } from "@executablemd/durable-streams";
+import type { DurableEvent, EffectDescription, Json, Result } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../../suspension/answer.ts";
 import {
   parseSuspensionRequest,
@@ -1408,48 +1408,85 @@ function verifyCheckouts(contents: XmdArtifactContents, reject: Reject): void {
   }
 }
 
+/** One retained Yield, at the durable position its coroutine gave it. */
+interface DurableYield {
+  readonly eventId: string;
+  readonly coroutineId: string;
+  /** The count of settled yields this coroutine had before this one. */
+  readonly index: number;
+  readonly description: EffectDescription;
+  readonly result: Result;
+}
+
+/** One published answer, and where in its coroutine it was published. */
+interface AnswerPublication {
+  readonly suspensionId: string;
+  readonly at: DurableYield;
+}
+
 /**
  * Every retained answer, authenticated against the history it claims to answer.
  *
- * A row naming an event the journal holds proves nothing on its own: what has
+ * A row naming an event the journal holds proves nothing on its own. What has
  * to be true is that the named event *is* the wait, that it is *this* wait, that
  * the request it retained is the one the value was judged against, that the
- * value could still end that wait, and that the row's state agrees with whether
- * the journal published an answer for it.
+ * value could still end that wait, and — when the row says the wait is over —
+ * that the journal published exactly that value at exactly the position a
+ * publication occupies.
  *
- * Every one of those questions is asked with the live contracts rather than
- * with an encoding of this module's own — the same `parseSuspensionRequest`,
- * the same fingerprint, the same schema compilation a delivery and a resume
- * use. A second spelling of any of them would be a second answer to a question
- * a live run has already settled.
+ * That last part is a position, not an ordering. `suspendFor()` publishes the
+ * request and then the answer as two durable operations in one coroutine, back
+ * to back, so an answer sits at the request's index plus one *in that
+ * coroutine*. Accepting any later row anywhere in the journal would accept a
+ * publication belonging to some other wait, in some other coroutine, as
+ * evidence that this one ended.
+ *
+ * Every question is asked with the live contracts rather than with an encoding
+ * of this module's own — the same `parseSuspensionRequest`, the same
+ * fingerprint, the same schema compilation a delivery and a resume use. A
+ * second spelling of any of them would be a second answer to a question a live
+ * run has already settled.
  */
 function* verifySuspensions(
   contents: XmdArtifactContents,
   path: string,
   reject: Reject,
 ): Operation<void> {
-  const journal = contents.journal.map((row) => ({
-    eventId: row.eventId,
-    event: parseJournalEvent(row.record, path),
-  }));
-  const requests = new Map<string, { readonly at: number; readonly event: DurableEvent }>();
-  const publications = new Map<string, number>();
+  const yields = durableYields(contents, path);
+  const requests = new Map<string, DurableYield>();
+  const byPosition = new Map<string, DurableYield>();
+  const published = new Map<string, AnswerPublication>();
 
-  for (const [at, entry] of journal.entries()) {
-    const event = entry.event;
-    if (event.type !== "yield") {
+  for (const entry of yields) {
+    byPosition.set(positionKey(entry.coroutineId, entry.index), entry);
+    if (entry.description.type === SUSPENSION_REQUEST) {
+      requests.set(entry.eventId, entry);
+    }
+  }
+
+  for (const entry of yields) {
+    if (entry.description.type !== SUSPENSION_ANSWER) {
       continue;
     }
-    if (event.description.type === SUSPENSION_REQUEST) {
-      requests.set(entry.eventId, { at, event });
+    const named = entry.description["name"];
+    if (typeof named !== "string" || named !== entry.description["suspensionId"]) {
+      reject("a published answer does not name one wait");
     }
-    if (event.description.type === SUSPENSION_ANSWER) {
-      const named = event.description.name;
-      if (typeof named !== "string" || publications.has(named)) {
-        reject("it publishes more than one answer for one wait");
-      }
-      publications.set(named, at);
+    if (published.has(named)) {
+      reject("it publishes more than one answer for one wait");
     }
+    // Structural, and asked of every publication whether or not a row claims
+    // it: an answer is published directly behind the request it answers, so one
+    // standing anywhere else answers nothing this artifact holds.
+    const behind = byPosition.get(positionKey(entry.coroutineId, entry.index - 1));
+    if (
+      behind === undefined ||
+      behind.description.type !== SUSPENSION_REQUEST ||
+      behind.description["name"] !== named
+    ) {
+      reject("an answer is published somewhere other than behind the request it answers");
+    }
+    published.set(named, Object.freeze({ suspensionId: named, at: entry }));
   }
 
   const suspensions = new Set<string>();
@@ -1463,13 +1500,9 @@ function* verifySuspensions(
     if (request === undefined) {
       reject("a suspension answer names an event that is not a retained request for a wait");
     }
-    const description = request.event.type === "yield" ? request.event.description : undefined;
-    if (description === undefined) {
-      reject("a suspension answer names an event that is not a retained request for a wait");
-    }
     if (
-      description["name"] !== answer.suspensionId ||
-      description["suspensionId"] !== answer.suspensionId
+      request.description["name"] !== answer.suspensionId ||
+      request.description["suspensionId"] !== answer.suspensionId
     ) {
       reject("a suspension answer names a request published for a different wait");
     }
@@ -1481,8 +1514,8 @@ function* verifySuspensions(
     let wait: WorkflowSuspensionRequest;
     try {
       wait = parseSuspensionRequest({
-        request: description["request"],
-        responseSchema: description["responseSchema"],
+        request: request.description["request"],
+        responseSchema: request.description["responseSchema"],
       });
     } catch {
       // The live parser's sentence describes a request a document offered; what
@@ -1495,23 +1528,65 @@ function* verifySuspensions(
     }
     yield* judgeRetainedAnswer(wait, answer.answer, reject);
 
-    const publishedAt = publications.get(answer.suspensionId);
-    if (answer.state === "consumed" && publishedAt === undefined) {
+    const publication = published.get(answer.suspensionId);
+    if (answer.state === "pending") {
+      if (publication !== undefined) {
+        reject("a pending suspension answer was already published in this artifact's history");
+      }
+      continue;
+    }
+    if (publication === undefined) {
       reject("a consumed suspension answer has no published answer in this artifact's history");
     }
-    if (answer.state === "pending" && publishedAt !== undefined) {
-      reject("a pending suspension answer was already published in this artifact's history");
+    if (
+      publication.at.coroutineId !== request.coroutineId ||
+      publication.at.index !== request.index + 1
+    ) {
+      reject("a consumed suspension answer was published away from the wait it ended");
     }
-    if (publishedAt !== undefined && publishedAt <= request.at) {
-      reject("a suspension answer is published before the request it answers");
+    if (publication.at.result.status !== "ok") {
+      reject("a consumed suspension answer was published without a value that ended the wait");
+    }
+    if (
+      canonicalJsonText(publication.at.result.value ?? null) !== canonicalJsonText(answer.answer)
+    ) {
+      reject("a consumed suspension answer was published carrying a different value");
     }
   }
+}
 
-  for (const suspension of publications.keys()) {
-    if (!suspensions.has(suspension)) {
-      reject("it publishes an answer for a wait it retains no answer for");
+function positionKey(coroutineId: string, index: number): string {
+  return `${JSON.stringify(coroutineId)} ${index}`;
+}
+
+/**
+ * Every retained Yield, with the durable position its coroutine gave it.
+ *
+ * A position is a count of that coroutine's settled yields, so it is recovered
+ * by counting them in append order. A Close terminates a coroutine and settles
+ * no operation, so it occupies no position and is not counted.
+ */
+function durableYields(contents: XmdArtifactContents, path: string): readonly DurableYield[] {
+  const counts = new Map<string, number>();
+  const entries: DurableYield[] = [];
+  for (const row of contents.journal) {
+    const event = parseJournalEvent(row.record, path);
+    if (event.type !== "yield") {
+      continue;
     }
+    const index = counts.get(event.coroutineId) ?? 0;
+    counts.set(event.coroutineId, index + 1);
+    entries.push(
+      Object.freeze({
+        eventId: row.eventId,
+        coroutineId: event.coroutineId,
+        index,
+        description: event.description,
+        result: event.result,
+      }),
+    );
   }
+  return Object.freeze(entries);
 }
 
 /**

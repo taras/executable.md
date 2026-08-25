@@ -133,6 +133,11 @@ function storedRecord(path: string, kind: string, identity: string): JsonObject 
   );
 }
 
+/** One member of a parsed record, as the object it has to be. */
+function parsedObject(value: unknown): JsonObject {
+  return parseJsonObject(value, "$", (reason) => new Error(`the member ${reason}`));
+}
+
 /** One text column of one row, checked rather than coerced. */
 function textColumn(row: Record<string, unknown> | undefined, column: string): string {
   const value = row?.[column];
@@ -229,7 +234,11 @@ describe("XMD artifact container version 1", () => {
     expect(read.journal).toEqual(contents.journal);
     expect(read.repositories).toEqual(contents.repositories);
     expect(read.worktrees).toEqual(contents.worktrees);
-    expect(read.answers).toEqual(contents.answers);
+    // Compared as a set: the reader returns content in canonical identity
+    // order, which is a property of the format rather than of the fixture.
+    const bySuspension = (rows: readonly { suspensionId: string }[]) =>
+      [...rows].sort((left, right) => left.suspensionId.localeCompare(right.suspensionId));
+    expect(bySuspension(read.answers)).toEqual(bySuspension(contents.answers));
     expect(read.agentSessions).toEqual(contents.agentSessions);
     expect(read.definition).toEqual(contents.definition);
 
@@ -720,6 +729,95 @@ describe("XMD artifact container version 1", () => {
         return { ...rest, state: "pending" };
       },
     );
+    // The publication side. Each rewrites the retained record of the answer
+    // event this run published, leaving the row that points at it untouched, so
+    // what refuses them is the authentication of the publication itself.
+    const damagePublication = (name: string, edit: (event: JsonObject) => JsonObject) =>
+      damaged(path, join(directory, name), (target) => {
+        const identity = canonicalJsonText("event-6");
+        const published = parseJsonObject(
+          JSON.parse(storedText(path, "journal-record", identity)),
+          "$",
+          (reason) => new Error(`the published answer ${reason}`),
+        );
+        rewrite(target, "journal-record", identity, JSON.stringify(edit(published)));
+      });
+
+    const publicationIdentity = yield* damagePublication("publication-identity.xmd", (event) => ({
+      ...event,
+      description: {
+        ...parsedObject(event["description"]),
+        suspensionId: SUSPENSIONS.pending.id,
+      },
+    }));
+    const publicationPosition = yield* damagePublication("publication-position.xmd", (event) => ({
+      ...event,
+      // Another coroutine entirely, where the yield behind it is the retained
+      // Git effect rather than the request it claims to answer.
+      coroutineId: "root.0",
+    }));
+    const publicationFailed = yield* damagePublication("publication-failed.xmd", (event) => ({
+      ...event,
+      result: { status: "err", error: { message: "the wait was never ended" } },
+    }));
+    const publicationValue = yield* damagePublication("publication-value.xmd", (event) => ({
+      ...event,
+      result: { status: "ok", value: { approved: false } },
+    }));
+    // The inherited publication rewritten to claim this run's answered wait:
+    // two publications for one wait, and one of them nowhere near its request.
+    const publicationDuplicate = yield* damaged(
+      path,
+      join(directory, "publication-duplicate.xmd"),
+      (target) => {
+        const identity = canonicalJsonText("event-2");
+        const published = parseJsonObject(
+          JSON.parse(storedText(path, "journal-record", identity)),
+          "$",
+          (reason) => new Error(`the published answer ${reason}`),
+        );
+        rewrite(
+          target,
+          "journal-record",
+          identity,
+          JSON.stringify({
+            ...published,
+            description: {
+              type: "suspension_answer",
+              name: SUSPENSIONS.consumed.id,
+              suspensionId: SUSPENSIONS.consumed.id,
+            },
+          }),
+        );
+      },
+    );
+    // A publication for a wait no request in this artifact ever opened.
+    const publicationStray = yield* damaged(
+      path,
+      join(directory, "publication-stray.xmd"),
+      (target) => {
+        const identity = canonicalJsonText("event-2");
+        const published = parseJsonObject(
+          JSON.parse(storedText(path, "journal-record", identity)),
+          "$",
+          (reason) => new Error(`the published answer ${reason}`),
+        );
+        rewrite(
+          target,
+          "journal-record",
+          identity,
+          JSON.stringify({
+            ...published,
+            description: {
+              type: "suspension_answer",
+              name: "0".repeat(32),
+              suspensionId: "0".repeat(32),
+            },
+          }),
+        );
+      },
+    );
+
     const agentMapping = yield* damaged(path, join(directory, "agent.xmd"), (target) => {
       const identity = firstIdentity(path, "agent-session");
       const session = storedRecord(path, "agent-session", identity);
@@ -757,6 +855,12 @@ describe("XMD artifact container version 1", () => {
       suspensionSchema,
       suspensionUnpublished,
       suspensionAlreadyPublished,
+      publicationIdentity,
+      publicationPosition,
+      publicationFailed,
+      publicationValue,
+      publicationDuplicate,
+      publicationStray,
       agentMapping,
       closureHash,
       closureMembership,
