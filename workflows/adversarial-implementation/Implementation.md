@@ -315,6 +315,10 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
         {proposal.report}
       </PullRequest>
 
+      <PullRequest.Reviews url={pullRequest.url} as="reviews" />
+      <PullRequest.Comments url={pullRequest.url} as="comments" />
+      <PullRequest.Checks url={pullRequest.url} as="checks" />
+
       <Agent name={props.planner}>
         <Session name="planner">
           <Prompt as="verdictCandidate" throwOnError>
@@ -346,14 +350,28 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
             head {pullRequest.headSha} onto base {pullRequest.baseSha}
             commit {commit}
 
+            Reviews already on it:
+
+            <Json value={reviews} />
+
+            Comments already on it:
+
+            <Json value={comments} />
+
+            Checks at the observed head:
+
+            <Json value={checks} />
+
             Result contract:
 
             {pullRequestVerdictSchema}
 
             Review the change at {pullRequest.headSha} against
-            {pullRequest.baseSha}, together with the authorized plan and the
-            instruction content above. You have neither repository nor network
-            access: everything you may judge is rendered here.
+            {pullRequest.baseSha}, together with the authorized plan, the
+            instruction content, and the objections and check results above.
+            You have neither repository nor network access: everything you may
+            judge is rendered here, and an objection nobody rendered is one this
+            review does not have.
 
             A verdict is about one head. If the head moves, this verdict no
             longer describes the pull request and a fresh review is required.
@@ -417,6 +435,21 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
 
         #{pullRequest.number} ({pullRequest.state}) {pullRequest.url}
         head {pullRequest.headSha} onto base {pullRequest.baseSha}
+
+        ## What the pull request already holds
+
+        These are the exact retained reads the planner reviewed, not a summary
+        of them. Reviews:
+
+        <Json value={reviews} />
+
+        Comments:
+
+        <Json value={comments} />
+
+        Checks at the observed head:
+
+        <Json value={checks} />
 
         ## Planner review
 
@@ -656,9 +689,10 @@ omitted before prop validation and before the durable JSON boundary, so the
 component never receives `undefined` and no journal or replay stores it. A
 required prop that evaluates to `undefined` still fails validation as missing,
 `null` stays an explicit value passed only where a schema accepts it, and an
-unbound name still fails. Today the engine refuses such a prop instead of
-omitting it, so the seeded `number={pullRequest.number}` is still the one part
-of this loop that does not run.
+unbound name still fails. Omission is shipped (#537, delivered by #541), so the
+seeded `number={pullRequest.number}` runs: the first pass omits `number` and
+takes the unnumbered create-or-adopt path, and every later pass carries the
+retained positive number into the numbered update of that exact pull request.
 
 ## The reviewer sees what it judges
 
@@ -673,25 +707,28 @@ identity, number, URL, state, head SHA and base SHA. Reviews, comments and check
 results are *not* fields on it, because a creation result that pretended to stay
 fresh would be lying about a remote that keeps changing. They are separate reads.
 
-**That read has a component now.** `<Fetch>` reads over HTTP from Markdown and
-retains what it read (#456, shipped), which is what a network-denied reviewer
-needs: the document fetches a pull request's existing reviews, comments and
-check results and renders them into the prompt, while the Agent itself stays
-denied the network. The requirement is unchanged and still worth stating
-exactly, because it is what makes the review adversarial rather than uninformed:
+**Those reads have their own components, and this stage writes them.**
+`<PullRequest.Reviews>`, `<PullRequest.Comments>` and `<PullRequest.Checks>`
+each take the bound pull request's own `url` and bind its normalized retained
+collection (#576, delivered by #580). They are three independent durable
+effects: completing one manufactures neither of the others, each replays alone,
+and a completed replay performs no HTTP at all. Nothing about them is
+authored twice — no repository, no number, no credential — because the URL the
+upsert already returned is what names the subject.
 
-- the reviewer must receive every existing review with its body, every comment,
-  and every check result, iterated rather than stringified; and
-- the user's checkpoint must carry the same consequential content, so a person
-  approving the change reads the original objections in their own words rather
-  than the planner's summary of them.
+The requirement they satisfy is what makes the review adversarial rather than
+uninformed, and both halves of it are now met:
 
-This stage does not write those fetches yet, so today it reviews the change it
-just made against the plan and the material rendered into the prompt, and an
-objection raised by anyone other than the planner reaches neither surface. A
-generated fragment can carry `<Fetch>` only when the run's own policy states the
-exact requests it may perform (#497); the public component a document would
-write to expand such a fragment stays #369's.
+- the reviewer receives every existing review with its body, every comment, and
+  every check result at the observed head, rendered as the exact retained values
+  through `<Json>` rather than stringified or summarized; and
+- the user's checkpoint carries the same collections, so a person approving the
+  change reads the original objections in their own words rather than the
+  planner's account of them.
+
+The Agent stays denied the network throughout: the document performs the reads
+and renders their results. A generated fragment reaches none of them — they are
+outside the admitted effect classes entirely.
 
 The verdict names one head. The prompt reviews the change at `headSha` against
 `baseSha`, and a moved head requires a fresh review — the same rule #295 states
@@ -794,7 +831,8 @@ revision turn, or acceptance.
 | `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
 | shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and the components over it |
-| the forge read that returns reviews, comments and checks | `<Fetch>` (#456) | shipped — this stage does not write it yet |
+| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` | #576, delivered by #580 | shipped — URL-addressed reads of the bound pull request, written by this stage |
+| a durable checkpoint that suspends the run and releases the executor | #577 | shipped — the workflow host's own `<Elicit>` registration |
 
 There is no longer an unbuilt name in this stage. The agent, parsing, binding
 and control-flow syntax runs; the observation loop runs; the admitted mutation
