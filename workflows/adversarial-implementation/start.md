@@ -544,9 +544,12 @@ resolution is unchanged — there the five resolve as ordinary repository
 components on its search path, and `<Repository>`, `<Worktree>` and `<Dir>` do
 *not* resolve, because plain `xmd run` composes no workflow.
 
-What #301 still owes is the supervised composition itself — scheduling the loop
-and continuing it unattended. The bundle makes the stage names reachable; it
-does not make the workflow run.
+What #301 slice 2 owes is the composition itself: the authored loop that runs
+discovery, planning, authorization, evaluation, Git, the pull request, its
+evidence reads, review, deferred issues and acceptance as one workflow run. That
+is what this document now writes. Scheduling, watchers and unattended
+continuation are deliberately outside it — a resume stays an explicit act, and
+the later scheduling slice is #300's.
 
 ## Rendered data flow
 
