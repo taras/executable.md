@@ -1461,22 +1461,7 @@ upserts on this run's own matching Push evidence, which no configuration grants
 or withdraws. Nothing of the credential, the endpoint, the raw
 response or the pagination state is retained: what the journal holds is the
 complete normalized request and the normalized evidence, across the ordinary
-secret gate. The retained request is the Repository identity Push retains —
-without its Workspace checkout path — plus the number and the collection, and
-the effect's fingerprint is taken over those same members, so a document edited
-to read a different number or collection in the same place is a different effect
-rather than one replaying the first answer. The full Repository record and the
-working directory stay live provider-private attachment data: the provider needs
-them to select a checkout and resolve a locator, and neither belongs in a
-journal.
-
-A read that could not be completed retains its refusal and no array, and one
-interrupted in flight retains no successful result at all — the access session
-unwinds with the scope that opened it and a continuation performs the whole
-collection. There is never a partial collection in the journal for a
-continuation to restore.
-
-The retained request is the whole normalized question: the operation, the
+secret gate. The retained request is the whole normalized question: the operation, the
 canonical URL, the provider discriminator, the collection, the run and the
 expansion. The effect's name covers the question rather than the run — a fork is
 a different run reaching the same position with the same question, and a name
@@ -2980,7 +2965,7 @@ fetch operation requires its own language and durability contract.
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |
 | `<Issue>` read and upsert, and the `issue_effect` boundary (§10.3) | built by #296; GitHub middleware, Deno host |
-| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub adapter, Deno host. Ordinary durable reads rather than reconciled effects; the request crosses a public request-only route and the evidence crosses none; complete or unavailable, never truncated |
+| `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` (§7.7) | built by #576; GitHub middleware, Deno host. Named by canonical URL and asked of `PullRequestApi`, which carries the upsert too; ordinary durable reads rather than reconciled effects, inheritable by a fork; complete or unavailable, never truncated. Which URLs may be read is operator configuration |
 | lifecycle status/list/history | built by #367 |
 | lifecycle cancel/delete and executor lock | built by #367 |
 | durable suspension request and executor-lock release | built by #367 |

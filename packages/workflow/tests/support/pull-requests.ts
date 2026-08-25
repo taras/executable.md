@@ -99,9 +99,9 @@ export function fixture(remote: BareRemote, pullRequests: StoredPullRequest[] = 
     counting,
     store,
     options: {
+      gitHubPullRequests: { access: gitHubSource(fakeGitHubAccess(store)) },
       composition: {
         host: counting.host,
-        gitHub: gitHubSource(fakeGitHubAccess(store)),
         observe: {
           effect: (kind, name) => counting.counters.effects.push(`${kind}:${name}`),
           attachment: (kind, name) => counting.counters.attachments.push(`${kind}:${name}`),

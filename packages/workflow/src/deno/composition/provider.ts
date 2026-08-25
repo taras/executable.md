@@ -57,7 +57,6 @@ import { createGitSwitch } from "./switch.ts";
 import { createGitAdd } from "./add.ts";
 import { createGitCommit } from "./commit.ts";
 import { createGitPush } from "./push.ts";
-import type { GitHubSource } from "./github.ts";
 
 export { WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE } from "./effects.ts";
 export { WORKSPACE_GIT_SWITCH } from "./switch.ts";
@@ -79,16 +78,6 @@ export interface CompositionObserver {
 export interface CompositionProviderOptions {
   readonly host?: RepositoryHost;
   readonly observe?: CompositionObserver;
-  /**
-   * The Git host `<PullRequest>` reaches, when it is not the platform's own.
-   *
-   * Adapter-private, and deliberately not a contextual surface: a suite drives
-   * the whole adapter against a local server or a fake without there being
-   * anything for a document, a middleware or another package to install,
-   * observe or route through. Absent, the provider builds the default access,
-   * which reaches `api.github.com` and the process environment.
-   */
-  readonly gitHub?: GitHubSource;
   /**
    * What the host lends a Git command that transports to a remote.
    *

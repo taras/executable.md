@@ -190,14 +190,23 @@ describe("Tier PRR — forking a run that already read a pull request", () => {
         "source-1",
         `--at=${checkpoint}`,
         "--id=changed-1",
-        `--props-url=${EIGHT}`,
+        // The property follows the positional. Configliere stops at the first
+        // option it does not define, so a `--props-*` written ahead of the
+        // definition hides it — and the fork would be refused for its
+        // arguments rather than for the URL this case is about.
         DEFINITION,
+        `--props-url=${EIGHT}`,
       ]).join();
 
       // Branch 2: a different pull request at the same durable position. It is
       // refused rather than answered, and the refusal costs no request — so the
       // earlier collection is neither restored nor bound.
       expect(changed.code).not.toBe(0);
+      // Refused *as a divergence at this position*, which is the only reason
+      // that means anything here: an argument or usage failure would also be a
+      // non-zero exit and would prove nothing about the retained read.
+      expect(changed.stderr).toContain("diverges");
+      expect(changed.stderr).toContain(checkpoint);
       expect(changed.stdout).not.toContain("reviews: 2");
       expect(reviewReads(server)).toBe(before);
     });

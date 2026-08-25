@@ -417,6 +417,42 @@ describe("Tier PRR — pull-request evidence", () => {
   });
 
   it("PRR7: an answer about another subject is refused, not published", function* () {
+    // The number collides; the repository does not. Matching the trailing
+    // number alone would render someone else's objection as this change's.
+    const foreign = server({
+      [REVIEWS]: {
+        body: JSON.stringify([
+          {
+            ...(review(1, "CHANGES_REQUESTED", "this is about another project") as Record<
+              string,
+              unknown
+            >),
+            pull_request_url: `${ENDPOINT}/repos/someone/else/pulls/7`,
+          },
+        ]),
+      },
+    });
+    expect((yield* read(foreign, "reviews")).state).toBe("protocol-invalid");
+
+    // The same collision on the conversation collection.
+    const foreignComment = server({
+      [CONVERSATION]: {
+        body: JSON.stringify([
+          {
+            id: 2,
+            user: { login: "watcher" },
+            body: "another project's thread",
+            created_at: "2026-08-24T01:00:00Z",
+            updated_at: "2026-08-24T01:00:00Z",
+            html_url: "https://github.test/pr/7#c2",
+            issue_url: `${ENDPOINT}/repos/someone/else/issues/7`,
+          },
+        ]),
+      },
+      [INLINE]: { body: "[]" },
+    });
+    expect((yield* read(foreignComment, "comments")).state).toBe("protocol-invalid");
+
     // The pull request answers with a different number.
     const wrongNumber = server({
       [PULL]: { body: JSON.stringify(pullRequestPayload({ number: 8 })) },

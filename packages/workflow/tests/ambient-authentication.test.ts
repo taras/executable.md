@@ -1300,7 +1300,8 @@ describe("workflow GitHub source sessions", () => {
       };
       const replay = pullRequestFixture(remote);
       yield* runWorkflowDocument(database, source, {
-        composition: { ...replay.options.composition, gitHub: refusing },
+        composition: replay.options.composition,
+        gitHubPullRequests: { access: refusing },
       });
 
       expect(opened).toEqual([]);

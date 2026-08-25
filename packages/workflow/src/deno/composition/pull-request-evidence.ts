@@ -201,10 +201,11 @@ function collectionUrl(
   return `${prefix}${path}?per_page=${PAGE_SIZE}${query}`;
 }
 
-function readReview(number: number, payload: unknown): ReviewEvidence | undefined {
-  // The review says which pull request it belongs to; one that does not, or
-  // that names another, is not this read's evidence.
-  if (!belongsToPullRequest(member(payload, "pull_request_url"), number)) {
+function readReview(subject: Subject, payload: unknown): ReviewEvidence | undefined {
+  // The review says which pull request it belongs to, and it has to be this
+  // one: the endpoint, the owner, the repository, the collection and the
+  // number, compared whole.
+  if (!belongsTo(member(payload, "pull_request_url"), subject.pulls)) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -230,8 +231,8 @@ function readReview(number: number, payload: unknown): ReviewEvidence | undefine
   };
 }
 
-function readConversationComment(number: number, payload: unknown): CommentEvidence | undefined {
-  if (!belongsToIssue(member(payload, "issue_url"), number)) {
+function readConversationComment(subject: Subject, payload: unknown): CommentEvidence | undefined {
+  if (!belongsTo(member(payload, "issue_url"), subject.issues)) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -256,8 +257,8 @@ function readConversationComment(number: number, payload: unknown): CommentEvide
   };
 }
 
-function readReviewComment(number: number, payload: unknown): CommentEvidence | undefined {
-  if (!belongsToPullRequest(member(payload, "pull_request_url"), number)) {
+function readReviewComment(subject: Subject, payload: unknown): CommentEvidence | undefined {
+  if (!belongsTo(member(payload, "pull_request_url"), subject.pulls)) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -371,26 +372,29 @@ function readCommitStatus(headSha: string, payload: unknown): CheckEvidence | un
 }
 
 /**
- * Whether a subject URL names the pull request this read is about.
+ * The complete API subject one read is about.
  *
- * The last path segment is the number, so a review carried over from another
- * pull request — or one this adapter cannot place at all — is refused rather
- * than rendered as an objection to this change.
+ * Built from the request rather than from anything an answer says, and compared
+ * whole. Matching the trailing number alone would accept a review from
+ * `someone/else` for `octo/project` — the numbers collide constantly, and a
+ * well-formed payload about the wrong repository is still well formed.
  */
-function belongsTo(value: unknown, number: number, collection: string): boolean {
-  const url = nonEmpty(value);
-  if (url === undefined) {
-    return false;
-  }
-  return new RegExp(`/${collection}/([0-9]+)$`).exec(url)?.[1] === String(number);
+interface Subject {
+  readonly pulls: string;
+  readonly issues: string;
 }
 
-function belongsToPullRequest(value: unknown, number: number): boolean {
-  return belongsTo(value, number, "pulls");
+function subjectFor(access: GitHubAccess, name: GitHubRepositoryName, number: number): Subject {
+  const repository = `${access.endpoint}/repos/${name.owner}/${name.repository}`;
+  return {
+    pulls: `${repository}/pulls/${number}`,
+    issues: `${repository}/issues/${number}`,
+  };
 }
 
-function belongsToIssue(value: unknown, number: number): boolean {
-  return belongsTo(value, number, "issues");
+/** Whether a subject URL is the exact one this read is about. */
+function belongsTo(value: unknown, expected: string): boolean {
+  return nonEmpty(value) === expected;
 }
 
 /** The head this numbered pull request is at, checked against the request. */
@@ -480,11 +484,12 @@ export function* readPullRequestEvidence(
   number: number,
   kind: PullRequestReadKind,
 ): Operation<EvidenceReading> {
+  const subject = subjectFor(access, name, number);
   if (kind === "reviews") {
     const reviews = yield* collect(
       access,
       collectionUrl(access, name, `/pulls/${number}/reviews`),
-      (payload) => readReview(number, payload),
+      (payload) => readReview(subject, payload),
     );
     return reviews.ok
       ? { state: "read", result: { kind: "reviews", items: reviews.value } }
@@ -497,7 +502,7 @@ export function* readPullRequestEvidence(
     const conversation = yield* collect(
       access,
       collectionUrl(access, name, `/issues/${number}/comments`),
-      (payload) => readConversationComment(number, payload),
+      (payload) => readConversationComment(subject, payload),
     );
     if (!conversation.ok) {
       return refusal(conversation.error);
@@ -505,7 +510,7 @@ export function* readPullRequestEvidence(
     const inline = yield* collect(
       access,
       collectionUrl(access, name, `/pulls/${number}/comments`),
-      (payload) => readReviewComment(number, payload),
+      (payload) => readReviewComment(subject, payload),
     );
     if (!inline.ok) {
       return refusal(inline.error);

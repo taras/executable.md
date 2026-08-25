@@ -106,19 +106,25 @@ export class NoPullRequestProvider extends Error {
   override name = "NoPullRequestProvider";
 
   readonly operation: PullRequestOperation;
-  readonly url: string;
+  /** The URL a read named, or the Repository an upsert named. */
+  readonly subject: string;
   readonly provider: string | undefined;
 
-  constructor(operation: PullRequestOperation, url: string, provider: string | undefined) {
-    const what = operation === "read" ? "read the pull request at" : "open a pull request in";
+  constructor(operation: PullRequestOperation, subject: string, provider: string | undefined) {
+    // A read names a URL and an upsert names a Repository, so the sentence says
+    // which it is rather than calling a Repository a URL.
+    const named =
+      operation === "read"
+        ? `the pull request at ${subject}`
+        : `pull requests for the Repository named ${JSON.stringify(subject)}`;
     super(
       provider === undefined
-        ? `no pull-request provider handles ${url}. Install one, or name the provider so a ` +
-            `provider that does not recognize the URL can still be asked to ${what} it.`
-        : `no pull-request provider is installed under ${provider}, so nothing can ${what} ${url}.`,
+        ? `no pull-request provider handles ${named}. Install one, or name the provider so a ` +
+            "provider that does not recognize it can still be asked."
+        : `no pull-request provider is installed under ${provider}, so nothing handles ${named}.`,
     );
     this.operation = operation;
-    this.url = url;
+    this.subject = subject;
     this.provider = provider;
   }
 }

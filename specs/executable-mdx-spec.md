@@ -7063,20 +7063,18 @@ An `<Answers>` region still answers first — it installs at `{ at: "min" }` in 
 nested scope — so a document that says what the answer is never suspends, under
 either host.
 
-**A host registration may close over authority a document cannot name.** The
-workflow host's `Elicit` is one shape of that: an ordinary registration whose
-body reaches something only the host has. `<PullRequest.Reviews>`,
-`<PullRequest.Comments>` and `<PullRequest.Checks>` are another, and they show
-the boundary it draws. They name a pull request by canonical URL and ask a public contextual Api,
-`executablemd.workflow.pull-request`, where a provider is ordinary middleware:
-it recognizes the URLs it can act on, delegates the rest untouched, and once it
-matches, its answer and its refusal are final. What such a registration closes
-over — the run's storage, its Git-host transport — is reachable from its own
-body and nowhere else, which is what makes the difference between a component a
-host installs and one a document could impersonate. What such a registration closes over is reachable from its own body
-and from nowhere else — not by name, not through a context, and not from a
-second loaded copy of the package that registered it. See §7.7 of the workflow
-Workspace specification for the surface itself.
+**A host installs behavior; a component stays ordinary.** The workflow host's
+`Elicit` is one shape of that — an ordinary registration whose body reaches
+something only the host has. `<PullRequest.Reviews>`, `<PullRequest.Comments>`
+and `<PullRequest.Checks>` are the other shape, and the difference is worth
+naming. They are ordinary registered defaults: they name a pull request by
+canonical URL and ask a public contextual Api,
+`executablemd.workflow.pull-request`. What the host installs is *middleware* on
+that Api — a provider that recognizes the URLs it can act on, delegates the rest
+untouched, and once it matches, owns the answer. The component closes over
+nothing; the authority is in the middleware and in the operator configuration
+that bounds it. See §7.7 of the workflow Workspace specification for the surface
+itself.
 
 `Elicit.test.md` is the authoring contract in Markdown.
 

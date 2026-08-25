@@ -39,7 +39,7 @@ export interface ServerOptions {
   readonly pullRequests?: readonly ServedPullRequest[];
 }
 
-function review(owner: string, repository: string, pull: number, index: number, body: string) {
+function review(store: Store, pull: number, index: number, body: string) {
   return {
     id: pull * 100 + index,
     user: { login: "reviewer" },
@@ -47,8 +47,10 @@ function review(owner: string, repository: string, pull: number, index: number, 
     body,
     submitted_at: "2026-08-24T00:00:00Z",
     commit_id: "a".repeat(40),
-    html_url: `https://github.com/${owner}/${repository}/pull/${pull}#r${index}`,
-    pull_request_url: `/repos/${owner}/${repository}/pulls/${pull}`,
+    html_url: `https://github.com/${store.owner}/${store.repository}/pull/${pull}#r${index}`,
+    // Absolute against this server's own origin: a subject the adapter can hold
+    // the answer to is the whole API URL, not a trailing number.
+    pull_request_url: `${store.origin}/repos/${store.owner}/${store.repository}/pulls/${pull}`,
   };
 }
 
@@ -59,6 +61,7 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
     const token = options.token ?? "pull-request-server-credential";
     const served = options.pullRequests ?? [];
     const requests: ServedRequest[] = [];
+    let origin = "";
 
     const server = createServer((incoming: IncomingMessage, outgoing: ServerResponse) => {
       incoming.resume();
@@ -70,7 +73,7 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
             : undefined;
         requests.push({ method: incoming.method ?? "GET", path: url.pathname, authorization });
 
-        const answer = respond({ owner, repository, token, served }, url, authorization);
+        const answer = respond({ owner, repository, token, served, origin }, url, authorization);
         // `Connection: close` for the reason the issue tracker's server does it:
         // an idle keep-alive socket makes closing the listener wait on a
         // connection nobody is using.
@@ -92,7 +95,8 @@ export function usePullRequestServer(options: ServerOptions = {}): Operation<Pul
     if (address === null || typeof address === "string") {
       throw new Error("the pull-request server did not listen on a TCP port");
     }
-    yield* provide({ url: `http://127.0.0.1:${address.port}`, requests });
+    origin = `http://127.0.0.1:${address.port}`;
+    yield* provide({ url: origin, requests });
   });
 }
 
@@ -101,6 +105,7 @@ interface Store {
   readonly repository: string;
   readonly token: string;
   readonly served: readonly ServedPullRequest[];
+  readonly origin: string;
 }
 
 function respond(
@@ -125,9 +130,7 @@ function respond(
     return {
       status: 200,
       body: JSON.stringify(
-        pull.reviews.map((body, index) =>
-          review(store.owner, store.repository, pull.number, index, body),
-        ),
+        pull.reviews.map((body, index) => review(store, pull.number, index, body)),
       ),
     };
   }
