@@ -145,6 +145,17 @@ describe(
     // document behavior, so its evidence is the checked-in Markdown suite the
     // tier launcher runs.
 
+    it("IE11a: --eval accepts an explicitly empty value", function* () {
+      // eval-source.ts takes the following argv token verbatim, and only
+      // undefined means the option ran out of argv — so an explicit "" is a
+      // value, never a missing one. Deterministic argv coverage pending #581's
+      // in-process command surface; what the empty document renders is IE11's
+      // evidence, not this row's.
+      const { code, stderr } = yield* runCli(["-e", "", "--raw"]).join();
+      expect(code).toBe(0);
+      expect(stderr).not.toContain("requires a markdown document");
+    });
+
     it("IE12: inline frontmatter declares properties", function* () {
       const individual = yield* runCli(["-e", PROPS_DOC, "--props-name", "Ada", "--raw"]).expect();
       expect(individual.stdout).toContain("Hello Ada");
