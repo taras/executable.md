@@ -20,6 +20,7 @@ import {
   toHex,
   validateCanonicalPath,
   validatePathName,
+  type WorkspaceRejection,
   type WorkspaceRootEntry,
   workspaceRoot,
   WORKSPACE_ROOT_FORMAT,
@@ -446,26 +447,44 @@ export function readDofsManifest(
   if (toHex(sha256(encoded)) !== hash) {
     corrupt(databasePath, "a DOFS manifest hash does not match its bytes");
   }
+  const decoded = decodeDofsManifest(encoded, (reason) => corrupt(databasePath, reason));
+  if (decoded.size !== size) {
+    corrupt(databasePath, "a DOFS manifest size does not equal its chunks");
+  }
+  for (const chunk of decoded.chunks) {
+    validateBlob(database, chunk.hash, chunk.size, databasePath);
+  }
+  return decoded;
+}
+
+/**
+ * The manifest one encoding describes, without a database to look anything up in.
+ *
+ * Separated from the row that holds it because the same bytes are validated in
+ * two places: by a live run reading its own content store, and by a reader
+ * checking a detached copy where there is no store to consult. The chunks it
+ * names are proven to exist by whoever called; what is decided here is only
+ * whether these bytes are a canonically encoded DOFS manifest at all, and what
+ * size the chunks it lists add up to.
+ */
+export function decodeDofsManifest(encoded: Uint8Array, reject: WorkspaceRejection): DofsManifest {
   let text: string;
   let offered: unknown;
   try {
     text = decoder.decode(encoded);
     offered = JSON.parse(text);
   } catch {
-    corrupt(databasePath, "a DOFS manifest is not canonical UTF-8 JSON");
+    reject("a DOFS manifest is not canonical UTF-8 JSON");
   }
   const parsed = dofsManifestSchema.safeParse(offered);
   if (!parsed.success || JSON.stringify(parsed.data) !== text) {
-    corrupt(databasePath, "a DOFS manifest is not canonically encoded");
+    reject("a DOFS manifest is not canonically encoded");
   }
   const total = parsed.data.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-  if (!Number.isSafeInteger(total) || total !== size) {
-    corrupt(databasePath, "a DOFS manifest size does not equal its chunks");
+  if (!Number.isSafeInteger(total)) {
+    reject("a DOFS manifest names more bytes than a size can hold");
   }
-  for (const chunk of parsed.data.chunks) {
-    validateBlob(database, chunk.hash, chunk.size, databasePath);
-  }
-  return Object.freeze({ size, chunks: Object.freeze(parsed.data.chunks) });
+  return Object.freeze({ size: total, chunks: Object.freeze(parsed.data.chunks) });
 }
 
 function parseStoredRoot(

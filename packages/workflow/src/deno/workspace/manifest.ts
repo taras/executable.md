@@ -96,23 +96,38 @@ export function encodeWorkspaceManifest(
   return JSON.stringify(manifest);
 }
 
+/**
+ * How a caller other than a live run reports a Workspace root it cannot accept.
+ *
+ * The default names the run database the root was read from, which is what
+ * every live caller is holding. A sealed XMD artifact is not a run database and
+ * says so in its own words, so it supplies one of these rather than borrowing a
+ * sentence that would tell an operator to restore a run from a backup.
+ */
+export type WorkspaceRejection = (reason: string) => never;
+
+function rejecting(databasePath: string): WorkspaceRejection {
+  return (reason: string) => corrupt(databasePath, reason);
+}
+
 export function parseWorkspaceManifest(
   manifest: string,
   databasePath: string,
+  reject: WorkspaceRejection = rejecting(databasePath),
 ): WorkspaceRootManifest {
   let offered: unknown;
   try {
     offered = JSON.parse(manifest);
   } catch {
-    corrupt(databasePath, "one of its retained Workspace roots is not JSON");
+    reject("one of its retained Workspace roots is not JSON");
   }
   const parsed = rootManifestSchema.safeParse(offered);
   if (!parsed.success) {
-    corrupt(databasePath, "one of its retained Workspace roots has an invalid manifest");
+    reject("one of its retained Workspace roots has an invalid manifest");
   }
-  validateWorkspaceEntries(parsed.data.entries, databasePath);
+  validateWorkspaceEntries(parsed.data.entries, databasePath, reject);
   if (JSON.stringify(parsed.data) !== manifest) {
-    corrupt(databasePath, "one of its retained Workspace roots is not canonically encoded");
+    reject("one of its retained Workspace roots is not canonically encoded");
   }
   return parsed.data;
 }
@@ -120,9 +135,10 @@ export function parseWorkspaceManifest(
 export function validateWorkspaceEntries(
   entries: readonly WorkspaceRootEntry[],
   databasePath: string,
+  reject: WorkspaceRejection = rejecting(databasePath),
 ): void {
   if (entries.length === 0 || entries[0]?.path !== "/" || entries[0]?.kind !== "directory") {
-    corrupt(databasePath, "a Workspace root does not begin with its root directory");
+    reject("a Workspace root does not begin with its root directory");
   }
 
   let previous: string | undefined;
@@ -132,14 +148,14 @@ export function validateWorkspaceEntries(
   const hardlinkFirst = new Map<string, WorkspaceRootEntry & { kind: "file" }>();
 
   for (const entry of entries) {
-    validateCanonicalPath(entry.path, databasePath);
+    validateCanonicalPath(entry.path, databasePath, reject);
     if (previous !== undefined && compareUtf8(previous, entry.path) >= 0) {
-      corrupt(databasePath, "a Workspace root's paths are duplicated or out of canonical order");
+      reject("a Workspace root's paths are duplicated or out of canonical order");
     }
     previous = entry.path;
 
     if (entry.path !== "/" && !directories.has(parentPath(entry.path))) {
-      corrupt(databasePath, "a Workspace root contains an entry without a parent directory");
+      reject("a Workspace root contains an entry without a parent directory");
     }
     if (entry.kind === "directory") {
       directories.add(entry.path);
@@ -148,13 +164,13 @@ export function validateWorkspaceEntries(
       entry.kind === "symlink" &&
       (entry.target.includes("\0") || hasUnpairedSurrogate(entry.target))
     ) {
-      corrupt(databasePath, "a Workspace root contains an invalid symbolic-link target");
+      reject("a Workspace root contains an invalid symbolic-link target");
     }
     if (entry.kind === "file" && entry.hardlink !== null) {
       const first = hardlinkFirst.get(entry.hardlink);
       if (first === undefined) {
         if (entry.hardlink !== `h${nextHardlink}`) {
-          corrupt(databasePath, "a Workspace root's hardlinks are not canonically numbered");
+          reject("a Workspace root's hardlinks are not canonically numbered");
         }
         nextHardlink += 1;
         hardlinkFirst.set(entry.hardlink, entry);
@@ -164,7 +180,7 @@ export function validateWorkspaceEntries(
         first.size !== entry.size ||
         first.manifest !== entry.manifest
       ) {
-        corrupt(databasePath, "a Workspace root's hardlink group has inconsistent metadata");
+        reject("a Workspace root's hardlink group has inconsistent metadata");
       }
       hardlinkMembers.set(entry.hardlink, (hardlinkMembers.get(entry.hardlink) ?? 0) + 1);
     }
@@ -172,12 +188,16 @@ export function validateWorkspaceEntries(
 
   for (const count of hardlinkMembers.values()) {
     if (count < 2) {
-      corrupt(databasePath, "a Workspace root contains a one-member hardlink group");
+      reject("a Workspace root contains a one-member hardlink group");
     }
   }
 }
 
-export function validateCanonicalPath(value: string, databasePath: string): void {
+export function validateCanonicalPath(
+  value: string,
+  databasePath: string,
+  reject: WorkspaceRejection = rejecting(databasePath),
+): void {
   if (value === "/") {
     return;
   }
@@ -187,11 +207,11 @@ export function validateCanonicalPath(value: string, databasePath: string): void
     value.includes("\0") ||
     hasUnpairedSurrogate(value)
   ) {
-    corrupt(databasePath, "a Workspace root contains a noncanonical path");
+    reject("a Workspace root contains a noncanonical path");
   }
   for (const part of value.slice(1).split("/")) {
     if (part === "" || part === "." || part === "..") {
-      corrupt(databasePath, "a Workspace root contains a noncanonical path component");
+      reject("a Workspace root contains a noncanonical path component");
     }
   }
 }

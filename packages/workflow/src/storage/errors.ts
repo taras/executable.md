@@ -267,3 +267,245 @@ export class WorkflowDefinitionError extends WorkflowStorageError {
     this.path = path;
   }
 }
+
+/**
+ * The base of every expected XMD artifact outcome.
+ *
+ * An artifact is discovered from the path a caller supplied and from nothing
+ * else, so every one of these names that path. None of them quotes a retained
+ * byte: an artifact holds whatever the run wrote into its Workspace, and a
+ * refusal that repeated part of it would publish the content the file was
+ * being refused for.
+ *
+ * The conditions below are separate because callers act on them differently. A
+ * foreign container is somebody's other file, a live run database is XMD's own
+ * writable state offered as evidence, a future version is a file a later build
+ * reads, and a mismatch is evidence that no longer describes itself. Collapsing
+ * them would leave an operator guessing which of those they are holding.
+ */
+export class XmdArtifactError extends WorkflowStorageError {
+  override name = "XmdArtifactError";
+
+  /** The artifact path the caller supplied. */
+  readonly path: string;
+
+  constructor(path: string, sentence: string) {
+    super(sentence);
+    this.path = path;
+  }
+}
+
+/** The path does not name a regular `.xmd` file. */
+export class XmdArtifactPathError extends XmdArtifactError {
+  override name = "XmdArtifactPathError";
+
+  constructor(path: string, reason: string) {
+    super(path, `The path ${path} does not name an XMD artifact: ${reason}.`);
+  }
+}
+
+/** Nothing at this path can be opened. */
+export class XmdArtifactUnreadableError extends XmdArtifactError {
+  override name = "XmdArtifactUnreadableError";
+
+  constructor(path: string, reason: string) {
+    super(path, `The XMD artifact at ${path} could not be opened: ${reason}.`);
+  }
+}
+
+/** A SQLite database that belongs to another program. */
+export class XmdArtifactForeignContainerError extends XmdArtifactError {
+  override name = "XmdArtifactForeignContainerError";
+
+  constructor(path: string, reason: string) {
+    super(path, `The file at ${path} is not an XMD artifact: ${reason}. It is left unchanged.`);
+  }
+}
+
+/**
+ * A live workflow-run database, offered where an artifact was expected.
+ *
+ * Its own category rather than a foreign container, because this file is XMD's
+ * and the mistake is what it is being used *as*. A run store is writable
+ * authority over a run id; an artifact is evidence nobody can advance. Reading
+ * one as the other is how two downloaded copies would come to believe they
+ * coordinate a single live identity.
+ */
+export class XmdArtifactLiveRunError extends XmdArtifactError {
+  override name = "XmdArtifactLiveRunError";
+
+  constructor(path: string) {
+    super(
+      path,
+      `The file at ${path} is a live workflow-run database, not an XMD artifact. A run store ` +
+        "is writable authority over its run; export it as an artifact rather than renaming it.",
+    );
+  }
+}
+
+/** The container schema version is one this build does not implement. */
+export class XmdArtifactContainerVersionError extends XmdArtifactError {
+  override name = "XmdArtifactContainerVersionError";
+
+  readonly stored: number;
+  readonly supported: number;
+
+  constructor(path: string, stored: number, supported: number) {
+    super(
+      path,
+      `The XMD artifact at ${path} uses container schema version ${stored}, and this build ` +
+        `implements version ${supported}. It is neither migrated nor rewritten.`,
+    );
+    this.stored = stored;
+    this.supported = supported;
+  }
+}
+
+/** The artifact format version is one this build does not implement. */
+export class XmdArtifactFormatVersionError extends XmdArtifactError {
+  override name = "XmdArtifactFormatVersionError";
+
+  readonly stored: number;
+  readonly supported: number;
+
+  constructor(path: string, stored: number, supported: number) {
+    super(
+      path,
+      `The XMD artifact at ${path} declares artifact format version ${stored}, and this build ` +
+        `implements version ${supported}. It is neither migrated nor rewritten.`,
+    );
+    this.stored = stored;
+    this.supported = supported;
+  }
+}
+
+/** The container claims this version and is not shaped like it. */
+export class XmdArtifactSchemaError extends XmdArtifactError {
+  override name = "XmdArtifactSchemaError";
+
+  constructor(path: string, reason: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} disagrees with the version it declares: ${reason}. ` +
+        "It is left unchanged.",
+    );
+  }
+}
+
+/** A retained record does not describe what its kind claims. */
+export class XmdArtifactRecordError extends XmdArtifactError {
+  override name = "XmdArtifactRecordError";
+
+  /** Which entry kind failed to parse, never the content it held. */
+  readonly kind: string;
+
+  constructor(path: string, kind: string, reason: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} holds a ${kind} record that does not describe one: ` +
+        `${reason}. It is left unchanged.`,
+    );
+    this.kind = kind;
+  }
+}
+
+/** The accepted content is not the inventory the artifact is required to hold. */
+export class XmdArtifactInventoryError extends XmdArtifactError {
+  override name = "XmdArtifactInventoryError";
+
+  constructor(path: string, reason: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} does not hold a complete inventory: ${reason}. ` +
+        "It is left unchanged.",
+    );
+  }
+}
+
+/** A stored entry's bytes are not the bytes its own row declares. */
+export class XmdArtifactContentError extends XmdArtifactError {
+  override name = "XmdArtifactContentError";
+
+  readonly kind: string;
+
+  constructor(path: string, kind: string, reason: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} holds ${kind} content that does not match its declared ` +
+        `${reason}. It is left unchanged.`,
+    );
+    this.kind = kind;
+  }
+}
+
+/** The stored manifest is not the manifest this artifact's content produces. */
+export class XmdArtifactManifestMismatchError extends XmdArtifactError {
+  override name = "XmdArtifactManifestMismatchError";
+
+  constructor(path: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} stores an artifact manifest that its own content does not ` +
+        "produce, so it no longer describes the run it claims to. It is left unchanged.",
+    );
+  }
+}
+
+/** The stored identity is not the identity this artifact's manifest derives. */
+export class XmdArtifactIdentityMismatchError extends XmdArtifactError {
+  override name = "XmdArtifactIdentityMismatchError";
+
+  constructor(path: string) {
+    super(
+      path,
+      `The XMD artifact at ${path} stores an artifact identity its own manifest does not ` +
+        "derive. It is left unchanged.",
+    );
+  }
+}
+
+/** Nothing may be written at the destination an artifact was asked for. */
+export class XmdArtifactDestinationError extends XmdArtifactError {
+  override name = "XmdArtifactDestinationError";
+
+  constructor(path: string, reason: string) {
+    super(path, `No XMD artifact was written at ${path}: ${reason}.`);
+  }
+}
+
+/**
+ * The file was written and does not read back as what was sealed into it.
+ *
+ * Reported rather than returned as an artifact, because the alternative is
+ * handing back a path whose contents this build has just failed to recognize.
+ */
+export class XmdArtifactWriteVerificationError extends XmdArtifactError {
+  override name = "XmdArtifactWriteVerificationError";
+
+  constructor(path: string, reason: string) {
+    super(
+      path,
+      `The XMD artifact written at ${path} does not read back as the snapshot it was given: ` +
+        `${reason}. No artifact is reported.`,
+    );
+  }
+}
+
+/**
+ * Incomplete staging state could not be removed.
+ *
+ * Names the leftover path because that is the one case where an operator has
+ * something to do. A failure here never reports a successful artifact: a file
+ * nobody could finish writing is not evidence.
+ */
+export class XmdArtifactCleanupError extends XmdArtifactError {
+  override name = "XmdArtifactCleanupError";
+
+  constructor(path: string, reason: string) {
+    super(
+      path,
+      `The incomplete XMD artifact staging state at ${path} could not be removed: ${reason}. ` +
+        "No artifact is reported. Remove it when you no longer need it.",
+    );
+  }
+}

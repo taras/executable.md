@@ -296,6 +296,81 @@ The semantic identity remains stable if a later implementation can encode the
 same manifest in a different physical container. The SHA-256 of the final file
 does not; it identifies transferred bytes and is reported separately.
 
+#### 4.1.1 Version 1 manifest encoding
+
+Version 1 fixes the manifest as compact canonical JSON encoded as UTF-8 with no
+byte-order mark and no trailing newline. Object keys are in the stable sorted
+order every other XMD identity uses; arrays keep the order the manifest states.
+The value is:
+
+```ts
+interface XmdArtifactManifestV1 {
+  readonly version: 1;
+  readonly entries: readonly XmdArtifactManifestEntryV1[];
+}
+
+interface XmdArtifactManifestEntryV1 {
+  readonly kind: string;
+  readonly identity: Json;
+  readonly encoding: "canonical-json" | "utf8" | "bytes";
+  readonly length: number;
+  readonly sha256: string;
+}
+```
+
+`identity` is that kind's complete logical natural key as a canonical JSON
+scalar or array, never a delimiter-joined string: two different natural keys can
+join to one string, and an inventory that merged them would hold fewer records
+than the artifact does. A singleton kind writes `null`.
+
+Entries are sorted first by `kind` and then by the UTF-8 byte order of the
+canonical JSON encoding of `identity`. A duplicate `(kind, identity)` pair is
+forbidden. `length` is the exact byte length of the stored content and `sha256`
+is that content's lowercase SHA-256.
+
+`encoding` says how the bytes are to be read, not how they were produced.
+Structured records this format defines are `canonical-json`. Text another
+contract already fixed — a filtered journal record, an authored Markdown source,
+a Workspace root manifest — is `utf8` and is preserved exactly rather than
+re-encoded. Content with no text meaning is `bytes`.
+
+#### 4.1.2 The version 1 inventory is closed
+
+Version 1 enumerates every XMD-owned semantic record and retained byte in these
+groups, and admits nothing else:
+
+- the artifact frontier: the source run id, the final committed event id when
+  the journal holds one, and the current Workspace root id;
+- the workflow run record, without definition retrieval metadata;
+- every document-execution record, in its retained order;
+- the prior workflow-fork lineage, when the source run was itself a fork;
+- every journal row in append order: its event id, the exact filtered protocol
+  record, its Workspace-root association, and its inherited provenance when it
+  has one. The authored source position lives inside the record and is
+  validated from it rather than projected beside it, and so does every retained
+  external-effect request, identity and filtered result;
+- every retained Workspace root, its exact canonical manifest bytes, and its
+  declared root-to-manifest and root-to-blob references;
+- every retained DOFS manifest record and its exact encoded bytes, and every
+  retained blob record and its exact bytes, that those roots require;
+- every Workspace Repository and Worktree creation record, carrying the
+  credential-free locator and the logical Workspace checkout path — never
+  retrieval metadata or a host checkout path;
+- every suspension-answer record, with its request identity, its pending or
+  consumed state, and its timestamps;
+- every retained workflow Agent session mapping and its compatibility
+  attributes, without any provider-owned conversation store or session
+  directory; and
+- the workflow definition source closure: the root descriptor and exact root
+  Markdown bytes, plus every declared component's name, canonical path, object
+  identity and exact Markdown bytes, including a component the run never
+  expanded.
+
+An unknown content kind inside a version-1 container is an undeclared semantic
+record, and therefore corruption. It is not ignored for forward compatibility: a
+reader that skipped it would be returning a snapshot whose inventory nobody
+checked. A later version declares its own set.
+
 ### 4.2 Integrity is not authenticity
 
 Manifest verification detects accidental corruption and unsophisticated
@@ -316,6 +391,12 @@ SQLite is the first container encoding and an internal protocol choice. The
 artifact uses a distinct SQLite application ID from a live workflow-run
 database and carries both an artifact format version and a container schema
 version.
+
+Version 1 fixes those values. The artifact format version is `1`. The container
+schema version is `1`, stored as the SQLite `user_version`. The application
+marker is the four bytes `XMDA`, the integer `0x584d4441`; the live
+workflow-run marker is `XMD1`, `0x584d4431`, and recognizing that one is the
+categorical live-run refusal rather than the foreign-container refusal.
 
 Raw tables, views, indexes, triggers, PRAGMAs and SQL queries are not public API.
 The supported readers are XMD lifecycle commands and libraries that implement
@@ -407,6 +488,6 @@ Architecture review freezes these invariants before implementation:
 | `xmd workflow export` | specified; unbuilt |
 | artifact status/history and manifest verification | specified; unbuilt |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |
-| SQLite artifact container version 1 | specified as the initial encoding; unbuilt |
+| SQLite artifact container version 1 | specified as the initial encoding; the sealed container, its canonical manifest and its total read-only verifier are built. The physical schema is private and no raw table, SQL or connection is public API |
 | CI upload, digest attestation and retention policy | host integration; not an XMD execution contract |
 | redacted diagnostic report | outside this format |
