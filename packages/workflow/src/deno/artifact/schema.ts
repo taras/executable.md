@@ -142,12 +142,18 @@ export interface XmdArtifactContainerVersions {
 }
 
 /**
- * Refuse anything that is not a version-1 XMD artifact container.
+ * Recognize the container itself: is this ours, and is it a layout we read?
  *
- * Structure and declared version only. Whether the rows describe one workflow
- * run's evidence is a separate question, asked after this one succeeds.
+ * Integrity, the family marker and the container schema version, and nothing
+ * else. Deliberately stops short of comparing the declared schema, because the
+ * artifact format version is asked between the two: a build that changed the
+ * format may have changed the tables that carry it, and reporting that file as
+ * a schema disagreeing with itself would be this build guessing about a version
+ * it does not implement. The structural comparison is
+ * `verifyXmdArtifactStructure`, and the reader calls it after the format
+ * version has been accepted.
  */
-export function verifyXmdArtifactContainer(
+export function recognizeXmdArtifactContainer(
   database: DatabaseSync,
   path: string,
 ): XmdArtifactContainerVersions {
@@ -179,7 +185,6 @@ export function verifyXmdArtifactContainer(
     );
   }
 
-  verifyStructure(database, path);
   return Object.freeze({ containerVersion });
 }
 
@@ -199,13 +204,14 @@ export function verifyXmdArtifactFormatVersion(stored: number, path: string): vo
 }
 
 /**
- * Hold a recognized container to the schema this build writes.
+ * Hold a container to the schema this build writes.
  *
- * The header already claims version 1, so anything missing, differently shaped,
- * or declared by nobody is the file disagreeing with itself rather than a
- * version this build has not learned yet.
+ * Reached only once the container version and the artifact format version are
+ * both ones this build implements, so anything missing, differently shaped, or
+ * declared by nobody is the file disagreeing with itself rather than a version
+ * this build has not learned yet.
  */
-function verifyStructure(database: DatabaseSync, path: string): void {
+export function verifyXmdArtifactStructure(database: DatabaseSync, path: string): void {
   const objects = schemaObjects(database, path);
 
   for (const object of objects) {

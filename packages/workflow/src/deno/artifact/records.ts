@@ -112,7 +112,7 @@ function json(kind: string, identity: Json, value: Json): XmdArtifactContentEntr
   return Object.freeze({
     kind,
     identity,
-    encoding: "canonical-json" as const,
+    encoding: "canonical-json",
     content: canonicalJsonBytes(value),
   });
 }
@@ -121,7 +121,7 @@ function utf8(kind: string, identity: Json, text: string): XmdArtifactContentEnt
   return Object.freeze({
     kind,
     identity,
-    encoding: "utf8" as const,
+    encoding: "utf8",
     content: encoder.encode(text),
   });
 }
@@ -134,7 +134,7 @@ function utf8(kind: string, identity: Json, text: string): XmdArtifactContentEnt
  * hash has already been taken.
  */
 function raw(kind: string, identity: Json, bytes: Uint8Array): XmdArtifactContentEntry {
-  return Object.freeze({ kind, identity, encoding: "bytes" as const, content: bytes.slice() });
+  return Object.freeze({ kind, identity, encoding: "bytes", content: bytes.slice() });
 }
 
 function stopReasonToJson(reason: WorkflowStopReason): Json {
@@ -352,8 +352,14 @@ class Inventory {
   }
 
   /** Every identity present under one kind, in canonical identity order. */
-  identities(kind: string): string[] {
-    return [...(this.#byKind.get(kind)?.keys() ?? [])].sort(compareUtf8);
+  identities(kind: string): Json[] {
+    const group = this.#byKind.get(kind);
+    if (group === undefined) {
+      return [];
+    }
+    return [...group.values()]
+      .map((entry) => entry.identity)
+      .sort((left, right) => compareUtf8(canonicalJsonText(left), canonicalJsonText(right)));
   }
 
   has(kind: string, identity: Json): boolean {
@@ -656,13 +662,13 @@ function decodeExecutions(inventory: Inventory, path: string): readonly Document
   const kind = "document-execution";
   const rows = inventory.identities(kind).map((identity) => {
     const parsed = members(
-      structured(inventory.take(kind, JSON.parse(identity) as Json), path),
+      structured(inventory.take(kind, identity), path),
       ["position", "executionId", "startedAt", "stoppedAt", "stopStatus", "stopReason"],
       path,
       kind,
     );
     const executionId = required(parsed, "executionId", path, kind);
-    if (canonicalJsonText(executionId) !== identity) {
+    if (canonicalJsonText(executionId) !== canonicalJsonText(identity)) {
       throw new XmdArtifactInventoryError(
         path,
         "a document-execution record is stored under an identity it does not carry",
@@ -719,21 +725,20 @@ function decodeLineage(inventory: Inventory, path: string): XmdArtifactForkLinea
 function decodeJournal(inventory: Inventory, path: string): readonly XmdArtifactJournalRow[] {
   const kind = "journal-event";
   const rows = inventory.identities(kind).map((identity) => {
-    const eventIdentity = JSON.parse(identity) as Json;
     const parsed = members(
-      structured(inventory.take(kind, eventIdentity), path),
+      structured(inventory.take(kind, identity), path),
       ["position", "eventId", "workspaceRootId", "inherited"],
       path,
       kind,
     );
     const eventId = required(parsed, "eventId", path, kind);
-    if (canonicalJsonText(eventId) !== identity) {
+    if (canonicalJsonText(eventId) !== canonicalJsonText(identity)) {
       throw new XmdArtifactInventoryError(
         path,
         "a journal record is stored under an identity it does not carry",
       );
     }
-    const record = textOf(inventory.take("journal-record", eventIdentity), path);
+    const record = textOf(inventory.take("journal-record", identity), path);
     const event = parseDurableEvent(record);
     if (!event.ok) {
       throw new XmdArtifactRecordError(path, "journal-record", "it is not a durable event");
@@ -787,21 +792,20 @@ function decodeRoots(inventory: Inventory, path: string): readonly StoredWorkspa
   const kind = "workspace-root";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
-      const rootIdentity = JSON.parse(identity) as Json;
       const parsed = members(
-        structured(inventory.take(kind, rootIdentity), path),
+        structured(inventory.take(kind, identity), path),
         ["rootId", "manifestHashes", "blobHashes"],
         path,
         kind,
       );
       const rootId = required(parsed, "rootId", path, kind);
-      if (canonicalJsonText(rootId) !== identity) {
+      if (canonicalJsonText(rootId) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a Workspace root is stored under an identity it does not carry",
         );
       }
-      const manifest = textOf(inventory.take("workspace-root-manifest", rootIdentity), path);
+      const manifest = textOf(inventory.take("workspace-root-manifest", identity), path);
       // Parsed with this module's own refusal: the live default names a run
       // database and tells an operator to restore it from a backup, which is
       // advice about a file an artifact is not.
@@ -853,15 +857,14 @@ function decodeManifests(inventory: Inventory, path: string): readonly RetainedM
   const kind = "dofs-manifest";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
-      const hashIdentity = JSON.parse(identity) as Json;
       const parsed = members(
-        structured(inventory.take(kind, hashIdentity), path),
+        structured(inventory.take(kind, identity), path),
         ["hash", "size", "lastSeen"],
         path,
         kind,
       );
       const hash = required(parsed, "hash", path, kind);
-      if (canonicalJsonText(hash) !== identity) {
+      if (canonicalJsonText(hash) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a DOFS manifest is stored under an identity it does not carry",
@@ -870,7 +873,7 @@ function decodeManifests(inventory: Inventory, path: string): readonly RetainedM
       return Object.freeze({
         hash: hex(hash, path, kind, "a DOFS manifest identity"),
         size: whole(parsed, "size", path, kind),
-        encoded: bytesOf(inventory.take("dofs-manifest-bytes", hashIdentity), path),
+        encoded: bytesOf(inventory.take("dofs-manifest-bytes", identity), path),
         lastSeen: whole(parsed, "lastSeen", path, kind),
       });
     }),
@@ -881,15 +884,14 @@ function decodeBlobs(inventory: Inventory, path: string): readonly RetainedBlob[
   const kind = "dofs-blob";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
-      const hashIdentity = JSON.parse(identity) as Json;
       const parsed = members(
-        structured(inventory.take(kind, hashIdentity), path),
+        structured(inventory.take(kind, identity), path),
         ["hash", "size", "lastSeen"],
         path,
         kind,
       );
       const hash = required(parsed, "hash", path, kind);
-      if (canonicalJsonText(hash) !== identity) {
+      if (canonicalJsonText(hash) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a DOFS blob is stored under an identity it does not carry",
@@ -899,7 +901,7 @@ function decodeBlobs(inventory: Inventory, path: string): readonly RetainedBlob[
         hash: hex(hash, path, kind, "a DOFS blob identity"),
         size: whole(parsed, "size", path, kind),
         lastSeen: whole(parsed, "lastSeen", path, kind),
-        content: bytesOf(inventory.take("dofs-blob-bytes", hashIdentity), path),
+        content: bytesOf(inventory.take("dofs-blob-bytes", identity), path),
       });
     }),
   );
@@ -910,7 +912,7 @@ function decodeRepositories(inventory: Inventory, path: string): readonly Retain
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
       const parsed = members(
-        structured(inventory.take(kind, JSON.parse(identity) as Json), path),
+        structured(inventory.take(kind, identity), path),
         [
           "name",
           "locator",
@@ -925,7 +927,7 @@ function decodeRepositories(inventory: Inventory, path: string): readonly Retain
         kind,
       );
       const name = required(parsed, "name", path, kind);
-      if (canonicalJsonText(name) !== identity) {
+      if (canonicalJsonText(name) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a Repository record is stored under an identity it does not carry",
@@ -957,7 +959,7 @@ function decodeWorktrees(inventory: Inventory, path: string): readonly RetainedW
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
       const parsed = members(
-        structured(inventory.take(kind, JSON.parse(identity) as Json), path),
+        structured(inventory.take(kind, identity), path),
         [
           "repositoryName",
           "name",
@@ -971,7 +973,7 @@ function decodeWorktrees(inventory: Inventory, path: string): readonly RetainedW
       );
       const repositoryName = required(parsed, "repositoryName", path, kind);
       const name = required(parsed, "name", path, kind);
-      if (canonicalJsonText([repositoryName, name]) !== identity) {
+      if (canonicalJsonText([repositoryName, name]) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a Worktree record is stored under an identity it does not carry",
@@ -1029,7 +1031,7 @@ function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAns
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
       const parsed = members(
-        structured(inventory.take(kind, JSON.parse(identity) as Json), path),
+        structured(inventory.take(kind, identity), path),
         [
           "suspensionId",
           "requestEventId",
@@ -1043,16 +1045,13 @@ function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAns
         kind,
       );
       const suspensionId = required(parsed, "suspensionId", path, kind);
-      if (canonicalJsonText(suspensionId) !== identity) {
+      if (canonicalJsonText(suspensionId) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a suspension answer is stored under an identity it does not carry",
         );
       }
-      const state = required(parsed, "state", path, kind);
-      if (state !== "pending" && state !== "consumed") {
-        throw new XmdArtifactRecordError(path, kind, "its state is neither pending nor consumed");
-      }
+      const state = answerState(required(parsed, "state", path, kind), path, kind);
       const consumedAt = optionalInstant(parsed, "consumedAt", path, kind);
       if ((state === "consumed") !== (consumedAt !== undefined)) {
         throw new XmdArtifactRecordError(
@@ -1066,7 +1065,7 @@ function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAns
         requestEventId: required(parsed, "requestEventId", path, kind),
         requestFingerprint: fingerprint(parsed, "requestFingerprint", path, kind),
         answer: parseJsonValue(parsed.get("answer"), "$.answer", failing(path, kind)),
-        state: state as RetainedAnswerState,
+        state,
         createdAt: instant(parsed, "createdAt", path, kind),
         consumedAt,
       });
@@ -1074,12 +1073,20 @@ function decodeAnswers(inventory: Inventory, path: string): readonly RetainedAns
   );
 }
 
+/** Whether a retained answer is still waiting to be published, or already was. */
+function answerState(value: string, path: string, kind: string): RetainedAnswerState {
+  if (value === "pending" || value === "consumed") {
+    return value;
+  }
+  throw new XmdArtifactRecordError(path, kind, "its state is neither pending nor consumed");
+}
+
 function decodeAgentSessions(inventory: Inventory, path: string): readonly AgentSessionRecord[] {
   const kind = "agent-session";
   return Object.freeze(
     inventory.identities(kind).map((identity) => {
       const parsed = members(
-        structured(inventory.take(kind, JSON.parse(identity) as Json), path),
+        structured(inventory.take(kind, identity), path),
         [
           "sessionKey",
           "provider",
@@ -1093,7 +1100,7 @@ function decodeAgentSessions(inventory: Inventory, path: string): readonly Agent
         kind,
       );
       const sessionKey = required(parsed, "sessionKey", path, kind);
-      if (canonicalJsonText(sessionKey) !== identity) {
+      if (canonicalJsonText(sessionKey) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "an Agent session mapping is stored under an identity it does not carry",
@@ -1147,15 +1154,14 @@ function decodeDefinitionClosure(inventory: Inventory, path: string): XmdArtifac
   const components: XmdArtifactDefinitionComponent[] = inventory
     .identities(componentKind)
     .map((identity) => {
-      const nameIdentity = JSON.parse(identity) as Json;
       const entry = members(
-        structured(inventory.take(componentKind, nameIdentity), path),
+        structured(inventory.take(componentKind, identity), path),
         ["name", "path", "blobId"],
         path,
         componentKind,
       );
       const name = required(entry, "name", path, componentKind);
-      if (canonicalJsonText(name) !== identity) {
+      if (canonicalJsonText(name) !== canonicalJsonText(identity)) {
         throw new XmdArtifactInventoryError(
           path,
           "a definition component is stored under an identity it does not carry",
@@ -1165,7 +1171,7 @@ function decodeDefinitionClosure(inventory: Inventory, path: string): XmdArtifac
         name,
         path: required(entry, "path", path, componentKind),
         blobId: required(entry, "blobId", path, componentKind),
-        content: textOf(inventory.take("definition-source-component-content", nameIdentity), path),
+        content: textOf(inventory.take("definition-source-component-content", identity), path),
       });
     });
 

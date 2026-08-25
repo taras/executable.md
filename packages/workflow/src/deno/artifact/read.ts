@@ -28,6 +28,13 @@ import { DatabaseSync } from "node:sqlite";
 import { lstat } from "@effectionx/fs";
 import { Err, Ok, type Operation, type Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
+import type { WorkflowDefinition } from "../../storage/definition.ts";
+import { type JsonObject, parseJsonValue } from "../../storage/members.ts";
+import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
+import type { RetainedAnswer } from "../answers.ts";
+import type { RetainedBlob, RetainedManifest } from "../fork-source.ts";
+import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
+import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
 import {
   WorkflowStorageError,
   XmdArtifactContentError,
@@ -45,15 +52,19 @@ import {
   artifactOpenFailure,
   checkXmdArtifactForeignKeys,
   translateArtifactSqliteError,
-  verifyXmdArtifactContainer,
+  recognizeXmdArtifactContainer,
   verifyXmdArtifactFormatVersion,
+  verifyXmdArtifactStructure,
   XMD_ARTIFACT_EXTENSION,
 } from "./schema.ts";
 import {
   XMD_ARTIFACT_CONTENT_KINDS,
-  type XmdArtifactContentEntry,
-  type XmdArtifactEncoding,
   type VerifiedXmdArtifact,
+  type XmdArtifactContentEntry,
+  type XmdArtifactContents,
+  type XmdArtifactDefinitionClosure,
+  type XmdArtifactEncoding,
+  type XmdArtifactJournalRow,
 } from "./types.ts";
 
 const SELECT_HEADER_VERSION = "SELECT artifact_version FROM xmd_artifact_header WHERE id = 1";
@@ -63,7 +74,11 @@ const SELECT_CONTENT =
   "SELECT kind, identity, encoding, length, sha256, content FROM xmd_artifact_content";
 
 const KINDS: ReadonlySet<string> = new Set(XMD_ARTIFACT_CONTENT_KINDS);
-const ENCODINGS: ReadonlySet<string> = new Set(["canonical-json", "utf8", "bytes"]);
+
+/** Whether a stored column names one of the three ways bytes may be read. */
+function isXmdArtifactEncoding(value: unknown): value is XmdArtifactEncoding {
+  return value === "canonical-json" || value === "utf8" || value === "bytes";
+}
 
 /**
  * Read one XMD artifact, or say categorically why it is not one.
@@ -139,18 +154,22 @@ function* admitPath(path: string): Operation<void> {
 }
 
 function verified(database: DatabaseSync, path: string): VerifiedXmdArtifact {
-  // Gates 3 and 4a: integrity, the family marker, and the container schema
-  // version — all of which a container answers before it has any tables.
-  const container = verifyXmdArtifactContainer(database, path);
+  // Gate 3 and the first half of gate 4: integrity, the family marker, and the
+  // container schema version — all of which a container answers before any
+  // question about what its rows mean.
+  const container = recognizeXmdArtifactContainer(database, path);
 
-  // Gate 4b: the artifact format version, read through a targeted statement so
-  // a later format that also changed the container is reported as a version
-  // this build does not implement rather than as a schema that disagrees with
-  // itself. A missing header is that second thing, and says so.
+  // The second half of gate 4, and it comes before the structural comparison
+  // rather than after it. A build that changed the artifact format may have
+  // changed the tables carrying it, so a file that declares a format this one
+  // does not implement is an unsupported version whatever its schema looks
+  // like. Read through a targeted statement: a header that is missing or is
+  // not shaped to answer this is a schema failure, and says so.
   verifyXmdArtifactFormatVersion(declaredFormatVersion(database, path), path);
 
   // Gate 5: the complete declared schema, the declared references, and the
   // singleton the header is.
+  verifyXmdArtifactStructure(database, path);
   checkXmdArtifactForeignKeys(database, path);
   const header = readHeader(database, path, container.containerVersion);
 
@@ -178,7 +197,7 @@ function verified(database: DatabaseSync, path: string): VerifiedXmdArtifact {
   }
 
   // Gate 10: one immutable value, without the path it was read from.
-  return deepFreeze({ ...contents, identity: rebuilt.identity });
+  return immutableArtifact(contents, rebuilt.identity);
 }
 
 /** The artifact format version the header declares, whatever the schema is. */
@@ -252,7 +271,7 @@ function readContent(database: DatabaseSync, path: string): XmdArtifactContentEn
       );
     }
     const encoding = row["encoding"];
-    if (typeof encoding !== "string" || !ENCODINGS.has(encoding)) {
+    if (!isXmdArtifactEncoding(encoding)) {
       throw new XmdArtifactContentError(path, kind, "encoding");
     }
     const content = row["content"];
@@ -270,7 +289,7 @@ function readContent(database: DatabaseSync, path: string): XmdArtifactContentEn
       Object.freeze({
         kind,
         identity: identityOf(row["identity"], path, kind),
-        encoding: encoding as XmdArtifactEncoding,
+        encoding,
         content,
       }),
     );
@@ -295,7 +314,11 @@ function identityOf(value: unknown, path: string, kind: string): Json {
   } catch {
     throw new XmdArtifactInventoryError(path, `a ${kind} record's identity is not JSON`);
   }
-  const identity = offered as Json;
+  const identity = parseJsonValue(
+    offered,
+    "$",
+    () => new XmdArtifactInventoryError(path, `a ${kind} record's identity is not a JSON value`),
+  );
   if (canonicalJsonText(identity) !== value) {
     throw new XmdArtifactInventoryError(
       path,
@@ -315,19 +338,185 @@ function count(value: unknown, path: string, label: string): number {
 }
 
 /**
- * Freeze the whole returned graph.
+ * Gate 10, in full: one value whose every leaf refuses to be edited.
  *
- * Typed arrays are left alone because `Object.freeze` refuses one that holds
- * elements. Their contents are a copy of what the connection read and no longer
- * back anything: writing into one changes this value and nothing on disk, and
- * the next read produces a fresh copy from the file's own bytes.
+ * Built member by member rather than by walking the decoded graph, because the
+ * two halves of "immutable" need different mechanisms and a generic walk can
+ * only apply one of them.
+ *
+ * Ordinary members are frozen. Byte-bearing members cannot be: `Object.freeze`
+ * refuses a typed array that holds elements, and this runtime offers no
+ * immutable `ArrayBuffer` to build one over — a write-refusing `Proxy` is not
+ * an answer either, because one fails `ArrayBuffer.isView`, `Buffer.from` and
+ * `TextDecoder.decode`, which would leave a caller holding bytes nothing can
+ * hash, copy or read. So each byte leaf is a sealed original behind an accessor
+ * that answers with a copy. Both routes a caller could take to edit the
+ * evidence fail: replacing the member is refused by the frozen accessor, and
+ * writing into what a read returned lands on a copy nobody else holds.
+ *
+ * The consequence is that a byte member is a fresh array on every read rather
+ * than a stable reference. Nothing in this contract promised one, and buying
+ * that back would mean handing out the sealed array itself.
  */
-function deepFreeze<T>(value: T): T {
-  if (value === null || typeof value !== "object" || ArrayBuffer.isView(value)) {
+function immutableArtifact(contents: XmdArtifactContents, identity: string): VerifiedXmdArtifact {
+  return Object.freeze({
+    identity,
+    frontier: Object.freeze({ ...contents.frontier }),
+    run: frozenRun(contents.run),
+    executions: Object.freeze(contents.executions.map(frozenExecution)),
+    ...(contents.lineage === undefined ? {} : { lineage: Object.freeze({ ...contents.lineage }) }),
+    journal: Object.freeze(contents.journal.map(frozenJournalRow)),
+    roots: Object.freeze(contents.roots.map(frozenRoot)),
+    manifests: Object.freeze(contents.manifests.map(frozenManifest)),
+    blobs: Object.freeze(contents.blobs.map(frozenBlob)),
+    repositories: Object.freeze(contents.repositories.map((each) => Object.freeze({ ...each }))),
+    worktrees: Object.freeze(contents.worktrees.map((each) => Object.freeze({ ...each }))),
+    answers: Object.freeze(contents.answers.map(frozenAnswer)),
+    agentSessions: Object.freeze(contents.agentSessions.map(frozenAgentSession)),
+    definition: frozenClosure(contents.definition),
+  });
+}
+
+/**
+ * A byte leaf nothing can edit, as the accessor that serves it.
+ *
+ * The sealed array is captured in the closure and never handed out; every read
+ * is a copy of it, so a caller writing into what it received is writing into
+ * something only that caller holds.
+ */
+function sealedBytes(bytes: Uint8Array): () => Uint8Array {
+  const sealed = bytes.slice();
+  return () => sealed.slice();
+}
+
+function frozenRun(run: WorkflowRunRecord): WorkflowRunRecord {
+  return Object.freeze({
+    runId: run.runId,
+    definition: frozenDefinition(run.definition),
+    base: run.base,
+    props: frozenJsonObject(run.props),
+    status: run.status,
+    ...(run.stopReason === undefined ? {} : { stopReason: Object.freeze({ ...run.stopReason }) }),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+  });
+}
+
+function frozenDefinition(definition: WorkflowDefinition): WorkflowDefinition {
+  return Object.freeze({
+    version: definition.version,
+    kind: definition.kind,
+    objectFormat: definition.objectFormat,
+    objectId: definition.objectId,
+    rootDocumentPath: definition.rootDocumentPath,
+    ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
+    ...(definition.components === undefined
+      ? {}
+      : {
+          components: Object.freeze(
+            definition.components.map((component) => Object.freeze({ ...component })),
+          ),
+        }),
+  });
+}
+
+function frozenExecution(execution: DocumentExecutionRecord): DocumentExecutionRecord {
+  return Object.freeze({
+    ...execution,
+    ...(execution.stopReason === undefined
+      ? {}
+      : { stopReason: Object.freeze({ ...execution.stopReason }) }),
+  });
+}
+
+function frozenJournalRow(row: XmdArtifactJournalRow): XmdArtifactJournalRow {
+  return Object.freeze({
+    eventId: row.eventId,
+    record: row.record,
+    workspaceRootId: row.workspaceRootId,
+    ...(row.inherited === undefined ? {} : { inherited: Object.freeze({ ...row.inherited }) }),
+  });
+}
+
+function frozenRoot(root: StoredWorkspaceRoot): StoredWorkspaceRoot {
+  return Object.freeze({
+    rootId: root.rootId,
+    manifest: root.manifest,
+    manifestHashes: Object.freeze([...root.manifestHashes]),
+    blobHashes: Object.freeze([...root.blobHashes]),
+  });
+}
+
+function frozenManifest(manifest: RetainedManifest): RetainedManifest {
+  const hash = sealedBytes(manifest.hash);
+  const encoded = sealedBytes(manifest.encoded);
+  return Object.freeze({
+    get hash() {
+      return hash();
+    },
+    size: manifest.size,
+    get encoded() {
+      return encoded();
+    },
+    lastSeen: manifest.lastSeen,
+  });
+}
+
+function frozenBlob(blob: RetainedBlob): RetainedBlob {
+  const hash = sealedBytes(blob.hash);
+  const content = sealedBytes(blob.content);
+  return Object.freeze({
+    get hash() {
+      return hash();
+    },
+    size: blob.size,
+    lastSeen: blob.lastSeen,
+    get content() {
+      return content();
+    },
+  });
+}
+
+function frozenAnswer(answer: RetainedAnswer): RetainedAnswer {
+  return Object.freeze({ ...answer, answer: frozenJson(answer.answer) });
+}
+
+function frozenAgentSession(session: AgentSessionRecord): AgentSessionRecord {
+  return Object.freeze({ ...session, assertion: Object.freeze({ ...session.assertion }) });
+}
+
+function frozenClosure(closure: XmdArtifactDefinitionClosure): XmdArtifactDefinitionClosure {
+  return Object.freeze({
+    root: Object.freeze({ ...closure.root }),
+    components: Object.freeze(closure.components.map((each) => Object.freeze({ ...each }))),
+  });
+}
+
+/**
+ * A JSON value whose every level is frozen.
+ *
+ * Members are defined rather than assigned: `object[key] = value` reaches
+ * `Object.prototype`'s setter for `__proto__`, which one runtime honours and
+ * another does not, so a retained value declaring that name would come back
+ * differently depending on where it was read.
+ */
+function frozenJson(value: Json): Json {
+  if (Array.isArray(value)) {
+    const members: Json[] = value.map(frozenJson);
+    Object.freeze(members);
+    return members;
+  }
+  if (value === null || typeof value !== "object") {
     return value;
   }
-  for (const member of Object.values(value as Record<string, unknown>)) {
-    deepFreeze(member);
+  return frozenJsonObject(value);
+}
+
+function frozenJsonObject(value: JsonObject): JsonObject {
+  const members: JsonObject = {};
+  for (const [key, member] of Object.entries(value)) {
+    Object.defineProperty(members, key, { value: frozenJson(member), enumerable: true });
   }
-  return Object.freeze(value);
+  Object.freeze(members);
+  return members;
 }

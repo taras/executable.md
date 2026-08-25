@@ -33,6 +33,7 @@ import type {
 } from "../src/deno/artifact/mod.ts";
 import { XmdArtifactContainerLayout } from "../src/deno/artifact/write.ts";
 import { canonicalJsonText, sha256Hex } from "../src/deno/artifact/manifest.ts";
+import { type JsonObject, parseJsonObject } from "../src/storage/members.ts";
 import { XMD_ARTIFACT_APPLICATION_ID } from "../src/deno/artifact/schema.ts";
 import { APPLICATION_ID as LIVE_RUN_APPLICATION_ID } from "../src/deno/schema.ts";
 import * as publishedDeno from "../deno.ts";
@@ -108,10 +109,37 @@ function storedText(path: string, kind: string, identity: string): string {
     const row = database
       .prepare("SELECT content FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
       .get(kind, identity);
-    return new TextDecoder().decode(row?.["content"] as Uint8Array);
+    const content = row?.["content"];
+    if (!(content instanceof Uint8Array)) {
+      throw new Error(`no ${kind} record is stored under ${identity}`);
+    }
+    return new TextDecoder().decode(content);
   } finally {
     database.close();
   }
+}
+
+/**
+ * One stored record, parsed as the JSON object it is.
+ *
+ * Parsed rather than asserted, so a damage helper that edits a member builds
+ * its replacement out of a value the same parser the reader uses admitted.
+ */
+function storedRecord(path: string, kind: string, identity: string): JsonObject {
+  return parseJsonObject(
+    JSON.parse(storedText(path, kind, identity)),
+    "$",
+    (reason) => new Error(`the stored ${kind} record ${reason}`),
+  );
+}
+
+/** One text column of one row, checked rather than coerced. */
+function textColumn(row: Record<string, unknown> | undefined, column: string): string {
+  const value = row?.[column];
+  if (typeof value !== "string") {
+    throw new Error(`the row carries no ${column}`);
+  }
+  return value;
 }
 
 /** A SQLite database that is not an artifact, under an artifact's name. */
@@ -250,7 +278,7 @@ describe("XMD artifact container version 1", () => {
           "SELECT kind, identity FROM xmd_artifact_content ORDER BY kind DESC, identity DESC",
         )
         .get();
-      last = { kind: String(row?.["kind"]), identity: String(row?.["identity"]) };
+      last = { kind: textColumn(row, "kind"), identity: textColumn(row, "identity") };
     } finally {
       database.close();
     }
@@ -303,6 +331,9 @@ describe("XMD artifact container version 1", () => {
     const extraIndex = yield* damaged(path, join(directory, "extra-index.xmd"), (target) => {
       target.exec("CREATE INDEX by_encoding ON xmd_artifact_content(encoding)");
     });
+    const extraTrigger = yield* damaged(path, join(directory, "extra-trigger.xmd"), (target) => {
+      target.exec("CREATE TRIGGER guard AFTER INSERT ON xmd_artifact_content BEGIN SELECT 1; END");
+    });
     const missingTable = yield* damaged(path, join(directory, "missing-table.xmd"), (target) => {
       target.exec("DROP TABLE xmd_artifact_content");
     });
@@ -335,11 +366,9 @@ describe("XMD artifact container version 1", () => {
       path,
       join(directory, "duplicate-record.xmd"),
       (target) => {
-        const repository = JSON.parse(
-          storedText(path, "workspace-repository", canonicalJsonText("product")),
-        ) as Record<string, unknown>;
+        const repository = storedRecord(path, "workspace-repository", canonicalJsonText("product"));
         const twin = { ...repository, name: "product-twin" };
-        const content = encoder.encode(canonicalJsonText(twin as never));
+        const content = encoder.encode(canonicalJsonText(twin));
         target
           .prepare(
             "INSERT INTO xmd_artifact_content (kind, identity, encoding, length, sha256, content) " +
@@ -349,15 +378,12 @@ describe("XMD artifact container version 1", () => {
       },
     );
     const danglingRoot = yield* damaged(path, join(directory, "dangling-root.xmd"), (target) => {
-      const row = JSON.parse(storedText(path, "journal-event", journalIdentity)) as Record<
-        string,
-        unknown
-      >;
+      const row = storedRecord(path, "journal-event", journalIdentity);
       rewrite(
         target,
         "journal-event",
         journalIdentity,
-        canonicalJsonText({ ...row, workspaceRootId: "0".repeat(64) } as never),
+        canonicalJsonText({ ...row, workspaceRootId: "0".repeat(64) }),
       );
     });
     const unparseableRecord = yield* damaged(path, join(directory, "unparseable.xmd"), (target) => {
@@ -403,6 +429,7 @@ describe("XMD artifact container version 1", () => {
       [futureFormat, "XmdArtifactFormatVersionError"],
       [extraView, "XmdArtifactSchemaError"],
       [extraIndex, "XmdArtifactSchemaError"],
+      [extraTrigger, "XmdArtifactSchemaError"],
       [missingTable, "XmdArtifactSchemaError"],
       [changedTable, "XmdArtifactSchemaError"],
       [missingEntry, "XmdArtifactInventoryError"],
@@ -421,6 +448,30 @@ describe("XMD artifact container version 1", () => {
       answers.push((yield* refused(candidate)).name);
     }
     expect(answers).toEqual(cases.map(([, name]) => name));
+
+    // Which of two answers a file gets when it has earned both. The artifact
+    // format version is asked before the schema is compared, so a container
+    // declaring a format this build does not implement is an unsupported
+    // version whatever its tables look like — this build has no way to know
+    // whether the object it does not recognize is damage or is what that later
+    // format declares.
+    const futureFormatAndSchema = yield* damaged(
+      path,
+      join(directory, "future-format-and-schema.xmd"),
+      (target) => {
+        target.exec("UPDATE xmd_artifact_header SET artifact_version = 2");
+        target.exec("CREATE VIEW later AS SELECT kind FROM xmd_artifact_content");
+      },
+    );
+    expect((yield* refused(futureFormatAndSchema)).name).toBe("XmdArtifactFormatVersionError");
+
+    // The other side of that order: a version this build does implement, whose
+    // structure it does not, is still damage rather than a version.
+    const missingHeader = yield* damaged(path, join(directory, "missing-header.xmd"), (target) => {
+      target.exec("DROP TABLE xmd_artifact_header");
+    });
+    expect((yield* refused(missingHeader)).name).toBe("XmdArtifactSchemaError");
+    expect((yield* refused(missingTable)).name).toBe("XmdArtifactSchemaError");
 
     // A symbolic link is refused as itself rather than followed into the file
     // it currently happens to name.
@@ -462,6 +513,7 @@ describe("XMD artifact container version 1", () => {
     const contents = richArtifact();
     const { path } = yield* sealed(directory, "evidence.xmd", contents);
     const read = yield* opened(path);
+    const sealedFixture = richArtifact();
 
     const forbiddenNames =
       /retrieval|credential|token|password|secret|connection|statement|transaction|database|lock|handle|sessionDirectory|hostPath/i;
@@ -474,8 +526,13 @@ describe("XMD artifact container version 1", () => {
     });
 
     // The caller's own snapshot is no longer connected to what was sealed.
-    (contents.journal as unknown as { eventId: string }[])[0]!.eventId = "tampered";
-    (contents.blobs[0]!.content as Uint8Array)[0] = 0;
+    // `Reflect.set` rather than a cast: the members are readonly because they
+    // are, and the test is about what happens at runtime.
+    expect(Reflect.set(contents.journal[0] ?? {}, "eventId", "tampered")).toBe(true);
+    const callerBlob = contents.blobs[0];
+    if (callerBlob !== undefined) {
+      callerBlob.content[0] = (callerBlob.content[0] ?? 0) ^ 0xff;
+    }
     const rereadAfterCallerMutation = yield* opened(path);
     expect(rereadAfterCallerMutation.identity).toBe(read.identity);
     expect(rereadAfterCallerMutation.journal[0]?.eventId).toBe("event-0");
@@ -484,9 +541,50 @@ describe("XMD artifact container version 1", () => {
     expect(Object.isFrozen(read)).toBe(true);
     expect(Object.isFrozen(read.journal)).toBe(true);
     expect(Object.isFrozen(read.run)).toBe(true);
-    expect(() => {
-      (read as { identity: string }).identity = "rewritten";
-    }).toThrow();
+    expect(Object.isFrozen(read.run.props)).toBe(true);
+    expect(Reflect.set(read, "identity", "rewritten")).toBe(false);
+    expect(read.identity).not.toBe("rewritten");
+
+    // Byte-bearing leaves are the ones a freeze cannot reach, so each is proved
+    // by attempting the two edits a caller could make: replacing the member,
+    // and writing into what a read of it returned. The second is re-read
+    // through the member again rather than through the array that was handed
+    // over — the claim is about the evidence, not about the caller's copy.
+    const leaves: readonly (() => Uint8Array | undefined)[] = [
+      () => read.blobs[0]?.content,
+      () => read.blobs[0]?.hash,
+      () => read.manifests[0]?.encoded,
+      () => read.manifests[0]?.hash,
+    ];
+    for (const leaf of leaves) {
+      const before = leaf();
+      expect(before).toBeInstanceOf(Uint8Array);
+      expect(before?.length ?? 0).toBeGreaterThan(0);
+      const handed = leaf() ?? new Uint8Array();
+      handed[0] = (handed[0] ?? 0) ^ 0xff;
+      expect(Buffer.from(leaf() ?? new Uint8Array()).toString("hex")).toBe(
+        Buffer.from(before ?? new Uint8Array()).toString("hex"),
+      );
+    }
+    expect(Reflect.set(read.blobs[0] ?? {}, "content", new Uint8Array([1]))).toBe(false);
+    expect(Reflect.set(read.manifests[0] ?? {}, "encoded", new Uint8Array([1]))).toBe(false);
+    // And after every one of those attempts the bytes are still the ones that
+    // were sealed. Matched by hash rather than by position: the reader returns
+    // its content in canonical identity order, which is not the order a fixture
+    // happened to list it in.
+    const returnedBlob = read.blobs[0];
+    const sealedBlob = sealedFixture.blobs.find(
+      (candidate) =>
+        Buffer.compare(
+          Buffer.from(candidate.hash),
+          Buffer.from(returnedBlob?.hash ?? new Uint8Array()),
+        ) === 0,
+    );
+    expect(sealedBlob).toBeDefined();
+    expect(Buffer.from(returnedBlob?.content ?? new Uint8Array()).toString("hex")).toBe(
+      Buffer.from(sealedBlob?.content ?? new Uint8Array()).toString("hex"),
+    );
+
     const reread = yield* opened(path);
     expect(reread.identity).toBe(read.identity);
   });
@@ -496,7 +594,7 @@ describe("XMD artifact container version 1", () => {
     const { path } = yield* sealed(directory);
 
     const stopReason = yield* damaged(path, join(directory, "stop-reason.xmd"), (target) => {
-      const run = JSON.parse(storedText(path, "workflow-run", "null")) as Record<string, unknown>;
+      const run = storedRecord(path, "workflow-run", "null");
       rewrite(
         target,
         "workflow-run",
@@ -504,31 +602,25 @@ describe("XMD artifact container version 1", () => {
         canonicalJsonText({
           ...run,
           stopReason: { kind: "journal", eventId: "no-such-event" },
-        } as never),
+        }),
       );
     });
     const currentRoot = yield* damaged(path, join(directory, "current-root.xmd"), (target) => {
-      const frontier = JSON.parse(storedText(path, "artifact-frontier", "null")) as Record<
-        string,
-        unknown
-      >;
+      const frontier = storedRecord(path, "artifact-frontier", "null");
       rewrite(
         target,
         "artifact-frontier",
         "null",
-        canonicalJsonText({ ...frontier, currentWorkspaceRootId: "1".repeat(64) } as never),
+        canonicalJsonText({ ...frontier, currentWorkspaceRootId: "1".repeat(64) }),
       );
     });
     const frontierEvent = yield* damaged(path, join(directory, "frontier-event.xmd"), (target) => {
-      const frontier = JSON.parse(storedText(path, "artifact-frontier", "null")) as Record<
-        string,
-        unknown
-      >;
+      const frontier = storedRecord(path, "artifact-frontier", "null");
       rewrite(
         target,
         "artifact-frontier",
         "null",
-        canonicalJsonText({ ...frontier, finalEventId: "event-0" } as never),
+        canonicalJsonText({ ...frontier, finalEventId: "event-0" }),
       );
     });
     const rootReferences = yield* damaged(
@@ -536,16 +628,8 @@ describe("XMD artifact container version 1", () => {
       join(directory, "root-references.xmd"),
       (target) => {
         const rootId = rootIdentities(path)[0]!;
-        const root = JSON.parse(storedText(path, "workspace-root", rootId)) as Record<
-          string,
-          unknown
-        >;
-        rewrite(
-          target,
-          "workspace-root",
-          rootId,
-          canonicalJsonText({ ...root, blobHashes: [] } as never),
-        );
+        const root = storedRecord(path, "workspace-root", rootId);
+        rewrite(target, "workspace-root", rootId, canonicalJsonText({ ...root, blobHashes: [] }));
       },
     );
     const blobBytes = yield* damaged(path, join(directory, "blob-bytes.xmd"), (target) => {
@@ -556,15 +640,12 @@ describe("XMD artifact container version 1", () => {
     });
     const worktreeRelation = yield* damaged(path, join(directory, "worktree.xmd"), (target) => {
       const identity = firstIdentity(path, "workspace-worktree");
-      const worktree = JSON.parse(storedText(path, "workspace-worktree", identity)) as Record<
-        string,
-        unknown
-      >;
+      const worktree = storedRecord(path, "workspace-worktree", identity);
       target
         .prepare("DELETE FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
         .run("workspace-worktree", identity);
       const replaced = { ...worktree, repositoryName: "absent" };
-      const content = encoder.encode(canonicalJsonText(replaced as never));
+      const content = encoder.encode(canonicalJsonText(replaced));
       target
         .prepare(
           "INSERT INTO xmd_artifact_content (kind, identity, encoding, length, sha256, content) " +
@@ -579,28 +660,22 @@ describe("XMD artifact container version 1", () => {
     });
     const suspensionRequest = yield* damaged(path, join(directory, "suspension.xmd"), (target) => {
       const identity = firstIdentity(path, "suspension-answer");
-      const answer = JSON.parse(storedText(path, "suspension-answer", identity)) as Record<
-        string,
-        unknown
-      >;
+      const answer = storedRecord(path, "suspension-answer", identity);
       rewrite(
         target,
         "suspension-answer",
         identity,
-        canonicalJsonText({ ...answer, requestEventId: "no-such-event" } as never),
+        canonicalJsonText({ ...answer, requestEventId: "no-such-event" }),
       );
     });
     const agentMapping = yield* damaged(path, join(directory, "agent.xmd"), (target) => {
       const identity = firstIdentity(path, "agent-session");
-      const session = JSON.parse(storedText(path, "agent-session", identity)) as Record<
-        string,
-        unknown
-      >;
+      const session = storedRecord(path, "agent-session", identity);
       rewrite(
         target,
         "agent-session",
         identity,
-        canonicalJsonText({ ...session, sessionIdentity: "somebody else's session" } as never),
+        canonicalJsonText({ ...session, sessionIdentity: "somebody else's session" }),
       );
     });
     const closureHash = yield* damaged(path, join(directory, "closure.xmd"), (target) => {
@@ -640,14 +715,11 @@ describe("XMD artifact container version 1", () => {
 
   // deno-lint-ignore require-yield
   it("C9 keeps the private encoding out of every published entrypoint", function* () {
-    const surfaces: Record<string, unknown>[] = [
-      publishedDeno as unknown as Record<string, unknown>,
-      publishedRoot as unknown as Record<string, unknown>,
-    ];
+    const surfaces = [Object.entries(publishedDeno), Object.entries(publishedRoot)];
     const encodingNames =
       /^(XMD_ARTIFACT_|readXmdArtifact|writeXmdArtifact|initializeXmdArtifactSchema|verifyXmdArtifact)/;
     for (const surface of surfaces) {
-      for (const [name, value] of Object.entries(surface)) {
+      for (const [name, value] of surface) {
         expect(encodingNames.test(name)).toBe(false);
         if (typeof value === "string") {
           expect(value.includes("xmd_artifact_")).toBe(false);
@@ -699,7 +771,7 @@ function rootIdentities(path: string): string[] {
         "SELECT identity FROM xmd_artifact_content WHERE kind = 'workspace-root' ORDER BY identity",
       )
       .all()
-      .map((row) => String(row["identity"]));
+      .map((row) => textColumn(row, "identity"));
   } finally {
     database.close();
   }
@@ -711,7 +783,7 @@ function firstIdentity(path: string, kind: string): string {
     const row = database
       .prepare("SELECT identity FROM xmd_artifact_content WHERE kind = ? ORDER BY identity")
       .get(kind);
-    return String(row?.["identity"]);
+    return textColumn(row, "identity");
   } finally {
     database.close();
   }
@@ -768,7 +840,7 @@ function walk(
   }
   seen.add(value);
   for (const key of Reflect.ownKeys(value)) {
-    const member = (value as Record<PropertyKey, unknown>)[key];
+    const member: unknown = Reflect.get(value, key);
     visit(String(key), member);
     walk(member, visit, seen);
   }

@@ -159,7 +159,7 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     return Object.freeze({
       identity: built.identity,
       fileSha256,
-      artifact: opened.value as VerifiedXmdArtifact,
+      artifact: opened.value,
     });
   });
 }
