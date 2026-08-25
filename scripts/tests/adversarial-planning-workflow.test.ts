@@ -205,12 +205,16 @@ function stubProvider(trace: Trace): AgentProviderFactory {
   };
 }
 
-function stream(text: string, options: PromptOptions | undefined): Stream<AgentPromptEvent, string> {
+function stream(
+  text: string,
+  options: PromptOptions | undefined,
+): Stream<AgentPromptEvent, string> {
   return {
     *[Symbol.iterator]() {
-      const session: Session = typeof options?.session === "object"
-        ? options.session
-        : { sessionKey: "default", cwd: "/" };
+      const session: Session =
+        typeof options?.session === "object"
+          ? options.session
+          : { sessionKey: "default", cwd: "/" };
       const events: AgentPromptEvent[] = [
         { type: "started", agent: options?.agent ?? "stub", session },
         { type: "text_delta", text },
@@ -267,7 +271,12 @@ returns:
 `;
 
 function* runPlanning(): Operation<{ value: JsonObject; calls: Call[]; trace: Trace }> {
-  const trace: Trace = { calls: [], factoryOptions: [], agentSelections: [], sessionSelections: [] };
+  const trace: Trace = {
+    calls: [],
+    factoryOptions: [],
+    agentSelections: [],
+    sessionSelections: [],
+  };
   const calls = trace.calls;
   const dir = path.join(os.tmpdir(), `xmd-290-${randomUUID()}`);
   yield* ensureDir(dir);
@@ -278,11 +287,14 @@ function* runPlanning(): Operation<{ value: JsonObject; calls: Call[]; trace: Tr
 
     const root = path.join(dir, "exhaustion-root.md");
     yield* writeTextFile(root, ROOT);
-    const execution = yield* executeInstalled({
-      path: root,
-      stream: new InMemoryStream(),
-      componentDirs: COMPONENT_DIRS,
-    }, [{ components: agentIdentityComponents() }]);
+    const execution = yield* executeInstalled(
+      {
+        path: root,
+        stream: new InMemoryStream(),
+        componentDirs: COMPONENT_DIRS,
+      },
+      [{ components: agentIdentityComponents() }],
+    );
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -383,10 +395,13 @@ returns:
 const ROOT_INSTRUCTION = "ROOT-INSTRUCTION prefer evidence over assertion.";
 const NESTED_INSTRUCTION = "NESTED-INSTRUCTION never edit a test to make it pass.";
 
-function* runBoundary(
-  inject?: (dir: string) => string,
-): Operation<{ trace: Trace; dir: string }> {
-  const trace: Trace = { calls: [], factoryOptions: [], agentSelections: [], sessionSelections: [] };
+function* runBoundary(inject?: (dir: string) => string): Operation<{ trace: Trace; dir: string }> {
+  const trace: Trace = {
+    calls: [],
+    factoryOptions: [],
+    agentSelections: [],
+    sessionSelections: [],
+  };
   const dir = path.join(os.tmpdir(), `xmd-302-${randomUUID()}`);
   yield* ensureDir(path.join(dir, "nested"));
   return yield* scoped(function* () {
@@ -394,7 +409,14 @@ function* runBoundary(
     // The instructions are read relative to the contextual working directory,
     // exactly as a workflow run's `<Dir>` would establish it — so the document
     // names repository-relative paths and never an absolute one.
-    yield* API.Env.around({ *cwd() { return dir; } }, { at: "min" });
+    yield* API.Env.around(
+      {
+        *cwd() {
+          return dir;
+        },
+      },
+      { at: "min" },
+    );
     yield* useHostFiles();
     yield* writeTextFile(path.join(dir, "AGENTS.md"), `${ROOT_INSTRUCTION}\n`);
     yield* writeTextFile(path.join(dir, "nested", "AGENTS.md"), `${NESTED_INSTRUCTION}\n`);
@@ -409,11 +431,14 @@ function* runBoundary(
 
     const root = path.join(dir, "boundary-root.md");
     yield* writeTextFile(root, BOUNDARY_ROOT);
-    const execution = yield* executeInstalled({
-      path: root,
-      stream: new InMemoryStream(),
-      componentDirs: COMPONENT_DIRS,
-    }, [{ components: agentIdentityComponents() }]);
+    const execution = yield* executeInstalled(
+      {
+        path: root,
+        stream: new InMemoryStream(),
+        componentDirs: COMPONENT_DIRS,
+      },
+      [{ components: agentIdentityComponents() }],
+    );
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
     while (!next.done) {
@@ -477,7 +502,9 @@ describe("#302 — an Agent reasons only over what a prompt renders", () => {
 
     // The repository-relative paths appear only inside the rendered
     // instruction material, never as a standalone Agent-facing input.
-    const standalone = facing.filter((value) => value === "AGENTS.md" || value === "nested/AGENTS.md");
+    const standalone = facing.filter(
+      (value) => value === "AGENTS.md" || value === "nested/AGENTS.md",
+    );
     expect(standalone).toHaveLength(0);
   });
 
