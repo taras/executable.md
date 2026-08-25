@@ -89,7 +89,7 @@ import type {
 } from "@executablemd/core/host";
 import type { ComponentInvocation } from "@executablemd/core";
 import type { IdentityClaimant, IdentityComponent } from "@executablemd/core/host";
-import type { Json, Workflow } from "@executablemd/durable-streams";
+import type { Json } from "@executablemd/durable-streams";
 import type { FunctionComponent } from "@executablemd/core";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import {
@@ -300,7 +300,7 @@ function createEvaluate(
 }
 
 /** The admission itself, and the only part of this that is journaled. */
-function* admit(id: string, source: string, policy: GeneratedEvaluationPolicy): Workflow<Json> {
+function* admit(id: string, source: string, policy: GeneratedEvaluationPolicy): Operation<Json> {
   const result = yield* evaluateGeneratedFragment(id, source, policy);
   return observationValue(result);
 }

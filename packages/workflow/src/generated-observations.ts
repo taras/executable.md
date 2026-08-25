@@ -36,7 +36,7 @@ import type {
   GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
-import type { Workflow } from "@executablemd/durable-streams";
+import type { Operation } from "effection";
 
 /** A generated fragment this run will not admit under its own ceilings. */
 export class GeneratedEvaluationPolicyError extends Error {
@@ -86,7 +86,7 @@ export function* evaluateGeneratedFragment(
   id: string,
   source: string,
   policy: GeneratedEvaluationPolicy,
-): Workflow<GeneratedObservationResult> {
+): Operation<GeneratedObservationResult> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
     throw new GeneratedEvaluationPolicyError(

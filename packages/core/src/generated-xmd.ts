@@ -94,8 +94,8 @@
  * without asking anyone anything a second time.
  */
 
-import { createDurableOperation, ephemeral } from "@executablemd/durable-streams";
-import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import type { Json as DurableJson } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
@@ -1248,7 +1248,7 @@ function* persistAdmission(
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
-): Workflow<Json> {
+): Operation<Json> {
   const stored = yield createDurableOperation<DurableJson>(
     { type: GENERATED_XMD, name: `generated:${id}`, input: policyRecord(policy) },
     () => admitSource(source, table, ceilings, policy),
@@ -1348,18 +1348,21 @@ function expand(
 /**
  * Admit one generated fragment and perform what it asks for.
  *
- * A `Workflow`, because what it records belongs in the run's journal: a trusted
- * host reaches it from a `DurablePreparation`, and a partial continuation
- * restores the admission and every observation that already committed rather
- * than performing them again.
+ * An `Operation`, so its durable records belong to the caller's own durable
+ * sequence: the production workflow reaches it through the host-declared
+ * `<Evaluate>` component inside the owning document expansion, and the
+ * admission together with every durable effect the admitted fragment performs
+ * is offered inline there, in authored order. A partial continuation offers
+ * the same sequence and restores the admission and every observation that
+ * already committed rather than performing them again.
  */
 export function* evaluateGeneratedXmd(
   request: GeneratedXmdRequest,
-): Workflow<GeneratedObservationResult> {
+): Operation<GeneratedObservationResult> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);
-  const ceilings = yield* ephemeral(normalizedCeilings(entries));
+  const ceilings = yield* normalizedCeilings(entries);
   const policy = currentPolicy(request, allow, entries, ceilings);
 
   const stored = yield* persistAdmission(request.id, request.source, table, ceilings, policy);
@@ -1379,6 +1382,6 @@ export function* evaluateGeneratedXmd(
 
   // The retained source is what expands, so a continuation runs the fragment
   // this run admitted rather than whatever a later caller happens to hold.
-  const restored = yield* ephemeral(preflight(decided.source, table, ceilings));
-  return yield* ephemeral(expand(request.id, restored.segments, restored.named));
+  const restored = yield* preflight(decided.source, table, ceilings);
+  return yield* expand(request.id, restored.segments, restored.named);
 }
