@@ -65,12 +65,13 @@ what makes exhaustion a distinct outcome without a separate label, which is what
 #290 settled: an exhausted loop is neither convergence nor ordinary successful
 completion, it starts no implementation and no later durable effect, and it asks
 the user for direction rather than answering on the stage's own account. A
-a composed workflow is meant to turn that request into a durable suspension. The
-substrate for one is shipped — `suspendFor()` waits, gives the executor lock
-back, and a typed answer can be delivered to the waiting run (#367, #300) — but
-it is an Api operation, not something this Markdown calls: nothing here converts
-a checkpoint into a suspension. So exhaustion asks in the report today, and
-resume never reads exhaustion, silence, or an unchanged verdict as approval.
+exhausted loop is not the same thing as a checkpoint that needs a person, and
+the two end differently. A checkpoint that needs a person suspends the run
+durably (#577, shipped). Exhaustion does not: the loop has already asked its
+final checkpoint and been told to continue, and what it reaches is its bound.
+It authorizes nothing, starts no later durable effect, and reports awaiting
+direction as the end of that run. Resume never reads exhaustion, silence, or an
+unchanged verdict as approval.
 
 `proceed: true` authorizes the exact transition and effects the checkpoint
 assessed, and nothing more. The rule binds the material as much as the decision:
@@ -101,16 +102,23 @@ single-executor ownership and atomic transitions owned by the executor lock
 (#466); `suspendFor()`, which suspends a run durably and releases its lock
 (#367); and typed delivery of an answer to a waiting run (#300).
 
-What is missing is the join, not the parts. `suspendFor()` is an Api operation a
-host or component calls — there is no v1 Markdown element that spells it, and a
-suspension is a different thing from `<Elicit>`, which asks a question inside the
-execution that is already running. This workflow contains no component or
-middleware that turns its `<Elicit>` calls into `suspendFor()`, so its
-checkpoints do not release the executor today. Consuming that substrate belongs
-to #301's supervised composition. `<Stage>` is not the answer: it was
-rejected as architecture, because the root document is the workflow and a durable
-run may continue through several document executions without inventing
-subdivisions between them (#298, closed).
+The join is shipped too. Under `xmd workflow`, the host's own `<Elicit>`
+registration is what turns a checkpoint into a suspension (#577): it publishes
+one retained suspension request, settles the run `suspended`, and gives the
+executor lock back, so neither the process nor the Agent sessions stay alive
+while a person thinks. `xmd workflow answer` retains a typed answer and executes
+nothing; `xmd workflow resume` continues from the retained request, and only the
+exact validated answer may continue it. Both remain explicit acts — nothing
+schedules a resume and no watcher waits, and scheduling and unattended
+continuation stay outside this composition with #300.
+
+The same document under ordinary `xmd run` is unchanged: `<Elicit>` asks inside
+the execution that is already running, which is a different thing from
+suspending it, and which host answers is the host's decision rather than this
+document's. `<Stage>` is not the answer either: it was rejected as architecture,
+because the root document is the workflow and a durable run may continue through
+several document executions without inventing subdivisions between them (#298,
+closed).
 
 ## Smallest complete path
 
@@ -912,7 +920,9 @@ managing implementation mechanics and focus on the design of the workflow.
 ## First exercise
 
 The first exercise uses this workflow to design its own initial automation.
-The user triggers each stage manually. Required content is rendered directly into
+The composed root runs its stages itself, in one workflow run; a person is
+reached where a checkpoint says a decision is theirs, which is a suspension
+rather than a hand-started stage. Required content is rendered directly into
 later prompts from restored values, and generated artifacts do not appear in a
 checkout unless the user explicitly exports them.
 
@@ -928,8 +938,8 @@ unattended are excluded here, and the later scheduling slice is #300's.
 
 The exercise succeeds when:
 
-1. Each manually invoked stage declares its props, publishes explicit results,
-   and returns.
+1. Each invoked stage declares its props, publishes explicit results, and
+   returns.
 2. The planner completes the technical interview and produces an implementor
    handoff.
 3. The user validates the handoff.

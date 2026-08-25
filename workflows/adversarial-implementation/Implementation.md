@@ -681,16 +681,16 @@ retained positive number and selects the numbered update contract for that exact
 pull request. `<Loop>` opens no binding scope, which is what lets one iteration
 read what the previous one bound.
 
-The seed is shipped; the omission it relies on is not. `<Let value>` binds the
-empty object and nothing more — it does not make an ordinary component prop
-whose expression evaluates to `undefined` become omitted. That is the engine
-contract **#301's amendment settles and nothing has built yet**: such a prop is
-omitted before prop validation and before the durable JSON boundary, so the
-component never receives `undefined` and no journal or replay stores it. A
+The seed and the omission it relies on are both shipped. `<Let value>` binds the
+empty object and nothing more; what makes an ordinary component prop whose
+expression evaluates to `undefined` become omitted is the engine contract
+**#537 settles, delivered by #541**: such a prop is omitted before prop
+validation and before the durable JSON boundary, so the component never receives
+`undefined` and no journal or replay stores it. A
 required prop that evaluates to `undefined` still fails validation as missing,
 `null` stays an explicit value passed only where a schema accepts it, and an
-unbound name still fails. Omission is shipped (#537, delivered by #541), so the
-seeded `number={pullRequest.number}` runs: the first pass omits `number` and
+unbound name still fails. So the seeded `number={pullRequest.number}` runs: the
+first pass omits `number` and
 takes the unnumbered create-or-adopt path, and every later pass carries the
 retained positive number into the numbered update of that exact pull request.
 
@@ -772,7 +772,18 @@ exhaustion looks like: the user kept approving and the verdict never passed. The
 caller's gate rejects that pair, so an exhausted review cannot reach acceptance
 and starts no later durable effect. As in `Planning`, exhaustion is a request
 for user direction rather than a terminal answer of the stage's own (#290,
-settled); a composed workflow suspends there for it (#367, shipped).
+settled).
+
+**It is not a suspension.** Every `reviewCheckpoint` above is an ordinary
+`<Elicit>`, and under `xmd workflow` the host's own registration suspends the
+run there durably (#577, shipped) — one retained request, the run settled
+`suspended`, the executor lock released, and continuation only through
+`xmd workflow answer` and an explicit `xmd workflow resume`. Exhaustion happens
+after the fifth of those checkpoints has already been answered, so nothing is
+pending and nothing waits: the stage returns the pair, the caller's gate refuses
+it, and the root reports awaiting direction as the end of that run. No second
+wait is created to ask about it, and no scheduler or watcher continues it —
+scheduling and unattended resume stay outside this composition with #300.
 
 ## Approval precedes durable effects
 

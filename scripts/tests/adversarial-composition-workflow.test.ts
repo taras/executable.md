@@ -131,6 +131,7 @@ type Turn =
   | "observation"
   | "implementationVerdict"
   | "revision"
+  | "planRevision"
   | "repair"
   | "unknown";
 
@@ -151,6 +152,12 @@ function classify(content: string): Turn {
   }
   if (content.includes("You cannot open this repository")) {
     return "observation";
+  }
+  // Planning's revision names the plan, so it is checked first: the
+  // implementation marker is not a prefix of it, but the reverse reading is the
+  // easy mistake and this makes the order explicit.
+  if (content.includes("Revise the implementation plan using this review:")) {
+    return "planRevision";
   }
   if (content.includes("Revise the implementation using this review:")) {
     return "revision";
@@ -199,7 +206,8 @@ function agentFacing(trace: Trace): string[] {
 interface Script {
   /** Assessments answer in order; a checkpoint consumes one per invocation. */
   readonly checkpoints: readonly Record<string, unknown>[];
-  readonly planVerdict: Record<string, unknown>;
+  /** One verdict per planning round, in order. */
+  readonly planVerdicts: readonly Record<string, unknown>[];
   /** One verdict per implementation iteration, in order. */
   readonly implementationVerdicts: readonly Record<string, unknown>[];
   /** One proposal per implementation iteration, in order. */
@@ -232,6 +240,8 @@ function scriptedProvider(trace: Trace, script: Script): AgentProviderFactory {
   let proposal = 0;
   let verdict = 0;
   let revision = 0;
+  let planVerdict = 0;
+  let planRevision = 0;
   return function* (options) {
     trace.factoryOptions.push({ ...options });
     yield* Agent.around(
@@ -273,7 +283,13 @@ function scriptedProvider(trace: Trace, script: Script): AgentProviderFactory {
               reply = "PLAN-V1: add the /health route behind the existing router mount.";
               break;
             case "planVerdict":
-              reply = JSON.stringify(script.planVerdict);
+              reply = JSON.stringify(at(script.planVerdicts, planVerdict));
+              planVerdict += 1;
+              break;
+            case "planRevision":
+              // Planning's own revision prompt binds nothing either.
+              planRevision += 1;
+              reply = `PLAN-REVISION-ACKNOWLEDGED-${planRevision}`;
               break;
             case "observation": {
               if (observation < script.observations.length) {
@@ -998,6 +1014,7 @@ function runForge(forged: Forge, script: Script): Operation<Attempt> {
  * lock, and the shipped suspension controller — and each attempt is one
  * process's worth of work, ending where the document waited.
  */
+/** The default run a single-run scenario uses; AC6 names one run per gate. */
 const RUN_ID = "adversarial-composition";
 
 function definition() {
@@ -1033,26 +1050,27 @@ function attemptRun(
   action: "start" | "resume",
   forged: Forge,
   script: Script,
+  runId: string = RUN_ID,
 ): Operation<Suspending> {
   return scoped(function* () {
     const transitions = yield* useWorkflowRunHost({ root });
-    const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(RUN_ID);
+    const acquired = yield* WorkflowLifecycle.operations.acquireExecutor(runId);
     if (!acquired.ok) {
       throw acquired.error;
     }
     if (acquired.value.kind !== "acquired") {
-      throw new Error(`the run ${RUN_ID} already has a live workflow executor`);
+      throw new Error(`the run ${runId} already has a live workflow executor`);
     }
     const lock = acquired.value.lock;
     const begun = yield* transitions.begin(
       lock,
       action === "start"
         ? {
-            runId: RUN_ID,
+            runId,
             action,
             creation: { definition: definition(), base: "main", props: PROPS },
           }
-        : { runId: RUN_ID, action },
+        : { runId, action },
     );
     if (!begun.ok) {
       throw begun.error;
@@ -1151,11 +1169,16 @@ function attemptRun(
 }
 
 /** Retain one typed answer for one wait, the way `xmd workflow answer` does. */
-function answer(root: string, suspensionId: string, value: Json): Operation<void> {
+function answer(
+  root: string,
+  suspensionId: string,
+  value: Json,
+  runId: string = RUN_ID,
+): Operation<void> {
   return scoped(function* () {
     yield* useWorkflowInputDelivery({ root });
     const delivered = yield* WorkflowInputDelivery.operations.deliver({
-      runId: RUN_ID,
+      runId,
       suspensionId,
       value,
       secretDetection: true,
@@ -1280,7 +1303,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
   it("AC2: the composition drives all five stages to the first forge effect", function* () {
     const attempt = yield* runComposition({
       checkpoints: [continues("the handoff is clear")],
-      planVerdict: { passed: true, review: "REVIEW-PASS", revisionPrompt: "" },
+      planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [
         { passed: true, review: "PR-REVIEW-PASS", revisionPrompt: "", findings: [] },
       ],
@@ -1376,7 +1399,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         continues("the second review is the planner's to act on"),
         continues("the change is complete"),
       ],
-      planVerdict: { passed: true, review: "REVIEW-PASS", revisionPrompt: "" },
+      planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [FIRST_VERDICT, SECOND_VERDICT],
       proposals: [FIRST_PROPOSAL, SECOND_PROPOSAL],
       observations: [],
@@ -1595,7 +1618,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         ASKS,
         continues("the change is complete"),
       ],
-      planVerdict: { passed: true, review: "REVIEW-PASS", revisionPrompt: "" },
+      planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [SECOND_VERDICT],
       proposals: [FIRST_PROPOSAL],
       observations: [],
@@ -1715,6 +1738,413 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     expect(resumed.trace.calls.map((turn) => classify(turn.content))).toEqual(["checkpoint"]);
   });
 
+  /** A checkpoint that declines: the authored `<Elicit>` branch, answered `false`. */
+  interface Gate {
+    /** Which `<UserCheckpoint>` invocation asks, counting from the handoff. */
+    readonly index: number;
+    /** The heading `start.md` renders once this gate declines. */
+    readonly report: string;
+    readonly name: string;
+  }
+
+  /**
+   * One supervised run declined at `gate`, from start through explicit resume.
+   *
+   * `turns` is every Agent turn the run took *live*, across both executions. A
+   * continuation replays earlier prompts from the journal rather than asking
+   * them again, so neither execution's trace alone is the run's turn history.
+   */
+  function* declineAt(
+    root: string,
+    gate: Gate,
+    forged: Forge,
+    script: Script,
+  ): Operation<{
+    started: Suspending;
+    resumed: Suspending;
+    rationale: string;
+    turns: Turn[];
+  }> {
+    const runId = `declined-${gate.name}`;
+    const rationale = `RATIONALE-DECLINED-${gate.name.toUpperCase()}`;
+    const started = yield* attemptRun(root, "start", forged, script, runId);
+    const suspensionId = waited(started);
+    yield* answer(
+      root,
+      suspensionId,
+      { proceed: false, response: `RESPONSE-DECLINED-${gate.name.toUpperCase()}`, rationale },
+      runId,
+    );
+    const resumed = yield* attemptRun(root, "resume", forged, script, runId);
+    const turns = [...started.trace.calls, ...resumed.trace.calls].map((turn) =>
+      classify(turn.content),
+    );
+    return { started, resumed, rationale, turns };
+  }
+
+  /** The checkpoint script that asks at `index` and continues everywhere else. */
+  function asksAt(index: number, total = 5): readonly Record<string, unknown>[] {
+    return Array.from({ length: total }, (_, at) =>
+      at === index ? ASKS : continues(`checkpoint ${at} needs nobody`),
+    );
+  }
+
+  /**
+   * AC6 — every declined gate stops before its first unauthorized effect.
+   *
+   * A decline is only meaningful if it happens *before* the thing it was
+   * supposed to prevent, so each case names the first effect the next stage
+   * would have performed and proves the run never reached it. The rendered
+   * report is checked too, but it is never the whole claim: a document can say
+   * "stopped" after having already pushed.
+   *
+   * Every gate here is a real `<Elicit>` under the workflow host — the only way
+   * to reach `proceed: false`, since the authored `<Else>` branch always parses
+   * an explicit `true`. So each case is a supervised run: start, suspend,
+   * deliver a typed answer out of band, resume.
+   *
+   * Refusal of an invalid or duplicate answer is not restated here. That is one
+   * provider contract and `packages/cli/tests/workflow-suspension.test.ts`
+   * "CK5: an invalid and a duplicate delivery are refused, byte for byte" owns
+   * it against a production host.
+   */
+  it("AC6: every declined gate stops before its first unauthorized effect", function* () {
+    const root = yield* useTempDirectory("xmd-declined-runs-");
+
+    // ── the handoff is not validated ────────────────────────────────────────
+    // Nothing downstream of discovery may run: no planning turn, no proposal,
+    // no mutation, and no forge call of any kind.
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const { resumed, rationale, turns } = yield* declineAt(
+        root,
+        { index: 0, name: "handoff", report: "# Stopped: the handoff was not validated" },
+        forged,
+        {
+          checkpoints: asksAt(0),
+          planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
+          implementationVerdicts: [SECOND_VERDICT],
+          proposals: [FIRST_PROPOSAL],
+          observations: [],
+        },
+      );
+      expect(resumed.failure).toBeUndefined();
+
+      // The first thing a validated handoff authorizes is the planning turn.
+      for (const forbidden of ["plan", "planVerdict", "observation", "implementationVerdict"]) {
+        expect(turns).not.toContain(forbidden);
+      }
+      for (const forbidden of [
+        "generated_xmd",
+        "workspace_git_add",
+        "workspace_git_commit",
+        "git_host_effect",
+        "pull_request_read",
+      ]) {
+        expect(resumed.kinds).not.toContain(forbidden);
+      }
+      expect(forged.calls).toEqual([]);
+      expect(forged.store.pullRequests).toHaveLength(0);
+      expect(forged.store.issues).toHaveLength(0);
+      expect(commits(resumed.events)).toEqual([]);
+      // The report corroborates what the absent effects already proved.
+      expect(String(resumed.output)).toContain("# Stopped: the handoff was not validated");
+      expect(String(resumed.output)).toContain(rationale);
+    }
+
+    // ── implementation is not authorized ────────────────────────────────────
+    // Planning converged and was reviewed; the first thing authorization
+    // authorizes is the implementor's observation turn, and past it the
+    // admitted mutation.
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const { resumed, rationale, turns } = yield* declineAt(
+        root,
+        { index: 2, name: "authorization", report: "# Stopped: implementation was not authorized" },
+        forged,
+        {
+          checkpoints: asksAt(2),
+          planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
+          implementationVerdicts: [SECOND_VERDICT],
+          proposals: [FIRST_PROPOSAL],
+          observations: [],
+        },
+      );
+      expect(resumed.failure).toBeUndefined();
+
+      // Planning ran; implementation did not.
+      expect(turns).toContain("plan");
+      expect(turns).toContain("planVerdict");
+      for (const forbidden of ["observation", "implementationVerdict", "revision"]) {
+        expect(turns).not.toContain(forbidden);
+      }
+      for (const forbidden of [
+        "generated_xmd",
+        "workspace_git_add",
+        "workspace_git_commit",
+        "git_host_effect",
+        "pull_request_read",
+      ]) {
+        expect(resumed.kinds).not.toContain(forbidden);
+      }
+      expect(forged.calls).toEqual([]);
+      expect(commits(resumed.events)).toEqual([]);
+      expect(String(resumed.output)).toContain("# Stopped: implementation was not authorized");
+      expect(String(resumed.output)).toContain(rationale);
+    }
+
+    // ── the pull-request review is declined ─────────────────────────────────
+    // One iteration published and was reviewed. Declining stops the loop, so
+    // the run must never revise, never file a deferred issue, and never ask
+    // for acceptance — even though the verdict itself passed.
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const { resumed, rationale, turns } = yield* declineAt(
+        root,
+        { index: 3, name: "review", report: "# Stopped: the pull-request review was declined" },
+        forged,
+        {
+          checkpoints: asksAt(3),
+          planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
+          implementationVerdicts: [DEFERRING_VERDICT],
+          proposals: [FIRST_PROPOSAL],
+          observations: [],
+        },
+      );
+      expect(resumed.failure).toBeUndefined();
+
+      // Exactly one iteration ran, and exactly four checkpoints were assessed —
+      // the fourth being the one that declined. No acceptance was requested.
+      expect(turns.filter((turn) => turn === "observation")).toHaveLength(1);
+      expect(turns.filter((turn) => turn === "checkpoint")).toHaveLength(4);
+      expect(turns).not.toContain("revision");
+      expect(resumed.kinds.filter((kind) => kind === "generated_xmd")).toHaveLength(1);
+      expect(resumed.kinds.filter((kind) => kind === "git_host_effect")).toHaveLength(2);
+      expect(commits(resumed.events)).toHaveLength(1);
+
+      // The verdict carried a `defer` finding, and declining the review is what
+      // keeps it unfiled: the authored `<IssueTracker>` sits inside the branch
+      // this decision closed.
+      expect(DEFERRING_VERDICT.findings[0]?.disposition).toBe("defer");
+      expect(forged.calls.filter((made) => made.startsWith("issues:"))).toEqual([]);
+      expect(forged.store.issues).toHaveLength(0);
+      expect(String(resumed.output)).toContain("# Stopped: the pull-request review was declined");
+      expect(String(resumed.output)).toContain(rationale);
+    }
+
+    // ── final acceptance is declined ────────────────────────────────────────
+    // The change was completed and reviewed. Declining acceptance rejects it
+    // and appends nothing: no further turn, no further effect, no forge call.
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const script: Script = {
+        checkpoints: asksAt(4),
+        planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
+        implementationVerdicts: [SECOND_VERDICT],
+        proposals: [FIRST_PROPOSAL],
+        observations: [],
+      };
+      const runId = "declined-acceptance";
+      const started = yield* attemptRun(root, "start", forged, script, runId);
+      const suspensionId = waited(started);
+      const retained = effects(started.kinds);
+      const before = forged.calls.length;
+      const rationale = "RATIONALE-DECLINED-ACCEPTANCE";
+      yield* answer(
+        root,
+        suspensionId,
+        { proceed: false, response: "RESPONSE-DECLINED-ACCEPTANCE", rationale },
+        runId,
+      );
+      const resumed = yield* attemptRun(root, "resume", forged, script, runId);
+
+      expect(resumed.failure).toBeUndefined();
+
+      // The continuation spent the answer and did nothing else: no turn, no
+      // durable effect, no forge call after it.
+      expect(effects(resumed.kinds).slice(0, retained.length)).toEqual(retained);
+      expect(effects(resumed.kinds).slice(retained.length)).toEqual(["suspension_answer"]);
+      expect(resumed.trace.calls).toEqual([]);
+      expect(forged.calls.slice(before)).toEqual([]);
+      expect(forged.store.issues).toHaveLength(0);
+      expect(String(resumed.output)).toContain("# Rejected at acceptance");
+      expect(String(resumed.output)).toContain(rationale);
+      expect(String(resumed.output)).not.toContain("# Accepted");
+    }
+  });
+
+  /** Five failing rounds, each distinguishable from the others. */
+  const FIVE_PLAN_VERDICTS = Array.from({ length: 5 }, (_, round) => ({
+    passed: false,
+    review: `PLAN-REVIEW-FAIL-${round + 1}`,
+    revisionPrompt: `PLAN-REVISION-PROMPT-${round + 1}`,
+  }));
+
+  const FIVE_PROPOSALS = Array.from({ length: 5 }, (_, round) => ({
+    changes: `<File path="health.md">the health route, attempt ${round + 1}</File>`,
+    title: `Add a health endpoint, attempt ${round + 1}`,
+    commitMessage: `ATTEMPT-${round + 1}-COMMIT add a health endpoint`,
+    report: `ATTEMPT-${round + 1}-IMPLEMENTOR-REPORT`,
+  }));
+
+  const FIVE_FAILING_VERDICTS = Array.from({ length: 5 }, (_, round) => ({
+    passed: false,
+    review: `PR-REVIEW-FAIL-${round + 1}`,
+    revisionPrompt: `PR-REVISION-PROMPT-${round + 1}`,
+    findings: [],
+  }));
+
+  /**
+   * AC7 — both authored loops stop at five failures and await direction.
+   *
+   * `<Loop max={5}>` bounds each stage, and the caller's gate reads the pair it
+   * returns: a checkpoint that kept approving with a verdict that never passed
+   * is exhaustion, which is neither approval nor rejection. What the composed
+   * root does with that is ask, and what it must not do is proceed.
+   *
+   * Neither subcase suspends. Exhaustion is reached with every checkpoint
+   * continuing, so there is no `<Elicit>`, no retained wait and no resume here
+   * — and nothing in this suite adds one. The awaiting-direction report is the
+   * end of the run, not a durable question.
+   *
+   * The planning subcase asserts the composed outcome rather than restating
+   * `scripts/tests/adversarial-planning-workflow.test.ts`, which owns the exact
+   * internal routing of those twenty turns.
+   */
+  it("AC7: both authored loops stop at five failures and await direction", function* () {
+    // ── planning never converges ────────────────────────────────────────────
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const attempt = yield* runForge(forged, {
+        checkpoints: [continues("nobody is needed for any of this")],
+        planVerdicts: FIVE_PLAN_VERDICTS,
+        implementationVerdicts: [SECOND_VERDICT],
+        proposals: [FIRST_PROPOSAL],
+        observations: [],
+      });
+      expect(attempt.failure).toBeUndefined();
+
+      const turns = attempt.trace.calls.map((turn) => classify(turn.content));
+      // Five rounds, each one plan, one verdict, one checkpoint and one
+      // revision — the fifth revision included, because the loop ends by
+      // reaching its bound rather than by breaking out of it.
+      expect(turns.filter((turn) => turn === "plan")).toHaveLength(5);
+      expect(turns.filter((turn) => turn === "planVerdict")).toHaveLength(5);
+      expect(turns.filter((turn) => turn === "planRevision")).toHaveLength(5);
+      // The handoff checkpoint plus one per round. A seventh would be
+      // authorization, and authorization is exactly what exhaustion withholds.
+      expect(turns.filter((turn) => turn === "checkpoint")).toHaveLength(6);
+
+      // Every round's own review reached the implementor that had to answer it.
+      const revisions = attempt.trace.calls.filter(
+        (turn) => classify(turn.content) === "planRevision",
+      );
+      for (const [round, prompt] of revisions.entries()) {
+        expect(prompt.content).toContain(`PLAN-REVIEW-FAIL-${round + 1}`);
+        expect(prompt.content).toContain(`PLAN-REVISION-PROMPT-${round + 1}`);
+      }
+
+      expect(String(attempt.output)).toContain(
+        "# Awaiting direction: the plan review never passed",
+      );
+      // Not a rejection and not an approval.
+      expect(String(attempt.output)).not.toContain("# Stopped");
+      expect(String(attempt.output)).not.toContain("# Accepted");
+
+      // Nothing implementation authorizes ever ran.
+      for (const forbidden of ["observation", "implementationVerdict", "revision"]) {
+        expect(turns).not.toContain(forbidden);
+      }
+      for (const forbidden of [
+        "generated_xmd",
+        "workspace_git_add",
+        "workspace_git_commit",
+        "git_host_effect",
+        "pull_request_read",
+      ]) {
+        expect(attempt.kinds).not.toContain(forbidden);
+      }
+      expect(forged.calls).toEqual([]);
+      expect(commits(attempt.events)).toEqual([]);
+      // And no durable wait was created to ask about it.
+      expect(attempt.kinds).not.toContain("suspension_request");
+    }
+
+    // ── the pull-request review never passes ────────────────────────────────
+    {
+      const remote = yield* useBareRemote(SEED);
+      const forged = forge(remote, [RETAINED]);
+      const attempt = yield* runForge(forged, {
+        checkpoints: [continues("nobody is needed for any of this")],
+        planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
+        implementationVerdicts: FIVE_FAILING_VERDICTS,
+        proposals: FIVE_PROPOSALS,
+        observations: [],
+      });
+      expect(attempt.failure).toBeUndefined();
+
+      const turns = attempt.trace.calls.map((turn) => classify(turn.content));
+      // Checked first, because it is the claim: handoff, the one planning
+      // round, authorization, and one per iteration. A ninth checkpoint would
+      // be the acceptance request, and exhaustion never makes one.
+      expect(turns.filter((turn) => turn === "checkpoint")).toHaveLength(8);
+      expect(turns.filter((turn) => turn === "observation")).toHaveLength(5);
+      expect(turns.filter((turn) => turn === "implementationVerdict")).toHaveLength(5);
+      expect(turns.filter((turn) => turn === "revision")).toHaveLength(5);
+
+      // All five authored iterations really performed their work: five
+      // admitted mutations, five commits, five publications and five pull
+      // requests, each with its own three evidence reads.
+      expect(attempt.kinds.filter((kind) => kind === "generated_xmd")).toHaveLength(5);
+      expect(attempt.kinds.filter((kind) => kind === "workspace_git_add")).toHaveLength(5);
+      expect(attempt.kinds.filter((kind) => kind === "workspace_git_commit")).toHaveLength(5);
+      expect(attempt.kinds.filter((kind) => kind === "git_host_effect")).toHaveLength(10);
+      expect(attempt.kinds.filter((kind) => kind === "pull_request_read")).toHaveLength(15);
+
+      const made = commits(attempt.events);
+      expect(made).toHaveLength(5);
+      expect(new Set(made).size).toBe(5);
+
+      // Five publications of one branch: the first creates it, the next four
+      // advance it, and the remote ends at the fifth commit.
+      const records = hostRecords(attempt.events);
+      const pushes = records.filter((record) => record.request.kind === "git-push");
+      expect(pushes).toHaveLength(5);
+      expect(pushes.map((record) => record.decision)).toEqual(Array(5).fill("performed"));
+      expect(pushes[0]?.preState).toEqual({ remoteCommit: null });
+      for (const [index, push] of pushes.slice(1).entries()) {
+        expect(push.preState).toEqual({ remoteCommit: made[index], relation: "ancestor" });
+      }
+      expect(remoteRefs(remote).get("refs/heads/agent/adversarial-implementation")).toBe(made[4]);
+
+      // One pull request, created once and brought up to date four times.
+      expect(forged.calls.filter((forgeCall) => forgeCall === "pulls:create")).toHaveLength(1);
+      expect(forged.calls.filter((forgeCall) => forgeCall === "pulls:update")).toHaveLength(4);
+      expect(forged.store.pullRequests).toHaveLength(1);
+      expect(forged.store.pullRequests[0]?.title).toBe(FIVE_PROPOSALS[4]?.title);
+
+      // No sixth iteration, no acceptance, no deferred issue, no later effect.
+      // AC5 owns the positive: a `defer` finding does file one.
+      expect(turns).not.toContain("planRevision");
+      expect(forged.calls.filter((forgeCall) => forgeCall.startsWith("issues:"))).toEqual([]);
+      expect(forged.store.issues).toHaveLength(0);
+      expect(attempt.kinds).not.toContain("suspension_request");
+
+      expect(String(attempt.output)).toContain(
+        "# Awaiting direction: the pull-request review never passed",
+      );
+      expect(String(attempt.output)).not.toContain("# Accepted");
+      expect(String(attempt.output)).not.toContain("# Rejected at acceptance");
+      // The last review is what the report carries forward.
+      expect(String(attempt.output)).toContain("PR-REVIEW-FAIL-5");
+    }
+  });
+
   it("AC5: a deferred finding becomes exactly one issue, and another disposition none", function* () {
     const remote = yield* useBareRemote(SEED);
     const forged = forge(remote, [RETAINED]);
@@ -1726,7 +2156,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         continues(APPROVAL),
         continues("the change is complete"),
       ],
-      planVerdict: { passed: true, review: "REVIEW-PASS", revisionPrompt: "" },
+      planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [DEFERRING_VERDICT],
       proposals: [FIRST_PROPOSAL],
       observations: [],
@@ -1784,7 +2214,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         continues(APPROVAL),
         continues("the change is complete"),
       ],
-      planVerdict: { passed: true, review: "REVIEW-PASS", revisionPrompt: "" },
+      planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [FIXING_VERDICT],
       proposals: [FIRST_PROPOSAL],
       observations: [],
