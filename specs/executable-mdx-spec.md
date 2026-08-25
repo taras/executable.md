@@ -3646,9 +3646,13 @@ path literally.
 
 Tier CT — CLI document targets covers the described catalog, its ordering and
 duplicates, an absent section for a targetless file, help running and installing
-nothing, encoded filenames, both run forms, wildcards, the failure diagnostics,
-the exact-before-execute replacement, exotic headings, and target failure
-outranking a schema failure. Tier CH covers the help surfaces and the absence of
+nothing, encoded filenames, both run forms, and the failure diagnostics and
+exact-before-execute replacement as command tests in `targets-cli.test.ts`. The
+document rows — exact target projection, wildcards, exotic headings, and target
+failure outranking a schema failure — are owned by the checked-in Markdown
+suite at `packages/cli/tests/document-suites/targets/Targets.test.md`, whose
+children run through the production run host; the tier launcher runs it once
+per runtime corpus. Tier CH covers the help surfaces and the absence of
 a `targets` command, Tier PC properties and targets in one response, Tier VR
 targeted value and `<Output>` roots, Tier IE an inline root's absent target
 section, and Tier DT description extraction, the catalog's agreement with the

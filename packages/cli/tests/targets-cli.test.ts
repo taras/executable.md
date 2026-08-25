@@ -184,14 +184,6 @@ const EXOTIC_REFERENCES: readonly [string, string][] = [
   ["doc.md#%C3%9Cn%C3%AFc%C3%B8d%C3%A9", "UNICODE_MARKER"],
 ];
 
-function* eachRuns(dir: string, expected: readonly [string, string][]): Operation<void> {
-  for (const [reference, marker] of expected) {
-    const ran = yield* runCli(["run", reference, "--raw"], { cwd: dir }).join();
-    expect({ reference, code: ran.code }).toEqual({ reference, code: 0 });
-    expect(ran.stdout).toContain(marker);
-  }
-}
-
 /** The target section of one help response, or "" when it has none. */
 function targetSection(stdout: string): string {
   const at = stdout.indexOf("Targets in ");
@@ -353,9 +345,9 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     });
   });
 
-  // CT7 lives in packages/cli/tests/targets/targets.test.md: the claim is
-  // document behavior, so its evidence is the checked-in Markdown suite the
-  // tier launcher runs.
+  // CT7 lives in packages/cli/tests/document-suites/targets/Targets.test.md:
+  // the claim is document behavior, so its evidence is the checked-in Markdown
+  // suite the tier launcher runs.
 
   it("CT8: the default command selects the same target as the explicit one", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
@@ -368,23 +360,9 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     });
   });
 
-  it("CT9: a wildcard resolving to one target executes that target", function* () {
-    yield* useFixture({ "doc.md": REPORT }, function* (dir) {
-      const trailing = yield* runCli(["run", "doc.md#Al*", "--raw"], { cwd: dir }).join();
-      expect(trailing.code).toBe(0);
-      expect(trailing.stdout).toContain("ALPHA_MARKER");
-      expect(trailing.stdout).not.toContain("BETA_MARKER");
-
-      const embedded = yield* runCli(["run", "doc.md#G*a", "--raw"], { cwd: dir }).join();
-      expect(embedded.code).toBe(0);
-      expect(embedded.stdout).toContain("GAMMA_MARKER");
-
-      const recursive = yield* runCli(["run", "doc.md#**/Nested", "--raw"], { cwd: dir }).join();
-      expect(recursive.code).toBe(0);
-      expect(recursive.stdout).toContain("NESTED_MARKER");
-      expect(recursive.stdout).not.toContain("ALPHA_MARKER");
-    });
-  });
+  // CT9 lives in packages/cli/tests/document-suites/targets/Targets.test.md:
+  // the claim is document behavior, so its evidence is the checked-in Markdown
+  // suite the tier launcher runs.
 
   it("CT10: no match fails before expansion and lists every available reference", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
@@ -490,34 +468,10 @@ describe("Tier CT — CLI document targets", { sanitizeOps: false, sanitizeResou
     });
   });
 
-  it("CT13a: a heading holding syntax runs through its reference", function* () {
-    yield* useFixture({ "doc.md": EXOTIC }, function* (dir) {
-      yield* eachRuns(dir, EXOTIC_REFERENCES.slice(0, 3));
-    });
-  });
-
-  it("CT13b: a heading holding whitespace or Unicode runs through its reference", function* () {
-    yield* useFixture({ "doc.md": EXOTIC }, function* (dir) {
-      yield* eachRuns(dir, EXOTIC_REFERENCES.slice(3));
-    });
-  });
-
-  it("CT16: a target failure outranks an invalid props schema and runs nothing", function* () {
-    yield* useFixture({ "doc.md": BROKEN_SCHEMA }, function* (dir) {
-      const missing = yield* runCli(["run", "doc.md#Absent", "--raw"], { cwd: dir }).join();
-      expect(missing.code).toBe(1);
-      expect(missing.stderr).toContain('"Absent" matches no document target.');
-      expect(missing.stderr).toContain("  doc.md#Kept");
-      expect(yield* exists(path.join(dir, "schema-effect.txt"))).toBe(false);
-
-      // A target the document does offer lets the schema failure be reported.
-      const resolvable = yield* runCli(["run", "doc.md#Kept", "--raw"], { cwd: dir }).join();
-      expect(resolvable.code).toBe(1);
-      expect(resolvable.stderr).not.toContain("matches no document target");
-      expect(resolvable.stderr).toContain("invalid props schema");
-      expect(yield* exists(path.join(dir, "schema-effect.txt"))).toBe(false);
-    });
-  });
+  // CT13a, CT13b and CT16 live in
+  // packages/cli/tests/document-suites/targets/Targets.test.md: the claims are
+  // document behavior, so their evidence is the checked-in Markdown suite the
+  // tier launcher runs.
 
   it("CT-text: a targeted text root keeps its stdout and printed-error contract", function* () {
     yield* useFixture({ "doc.md": REPORT }, function* (dir) {
