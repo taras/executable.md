@@ -209,24 +209,20 @@ that already knows the answer — a test, a demo, a non-interactive region — w
 this component in an `<Answers>` region and supplies it with `<Answer>` matchers,
 which changes who answers without changing this file.
 
-Under `xmd workflow` this stays an `<Elicit>`. The workflow host installs the
-same WebForm provider `xmd run` does, so an unanswered question opens a loopback
-browser form and blocks the run: it stays `running`, publishes no validated
-answer and no suspension request, never settles `suspended`, and never gives the
-executor lock back. The `<Answers>` region above is how a document answers it
-without a person. A resume restores a journaled answer rather than asking again
-(#366).
+Under `xmd workflow` this stays an `<Elicit>`, and the workflow host answers it
+differently (#577, shipped). It publishes one retained suspension request,
+settles the run `suspended`, and gives the executor lock back — so the process,
+the Workspace attachment and the Agent processes need not stay alive while a
+person thinks. `xmd workflow answer` retains the typed answer and executes
+nothing; `xmd workflow resume` continues from the retained request. Both remain
+explicit acts: nothing schedules a resume, and no watcher waits.
 
-The durable wait this checkpoint is eventually meant to become is a different
-mechanism, and its substrate is shipped: `suspendFor()` records a pending
-request, gives the executor lock back, and lets `xmd workflow resume <run-id>`
-continue once an answer is available (#367), with the ownership that decides who
-may continue (#466) and typed delivery of that answer (#300) alongside it.
-
-This component does not call it. `suspendFor()` is an Api operation with no v1
-Markdown element, and nothing here converts an `<Elicit>` into one — so no
-checkpoint releases the executor today, delivery executes nothing, and nothing
-schedules a resume. Consuming that substrate is #301's supervised composition.
+The workflow registration deliberately performs no `elicit` durable record of
+its own. A durable wait has to be the outermost durable thing at its position,
+so the wait is retained by the suspension protocol rather than by the
+elicitation journal — one record of the answer, not two. The `<Answers>` region
+above still answers without a person, and a resume restores a retained answer
+rather than asking again.
 
 `<SafeParse>` exposes validation failures as data so the document can show the
 repair turn explicitly. It absorbs JSON syntax and schema-validation failures

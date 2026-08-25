@@ -121,12 +121,13 @@ must render everything the reviewer has to judge rather than pointing at it.
 
 Three outcomes are distinct, and none of them is a failure of the document:
 
-- **Suspension.** A run that calls `suspendFor()` records its pending request
-  and the Workspace frontier, gives the executor lock back, and returns with a
-  run ID and stop reason on standard error; `resume` continues when the answer
-  is available (#367, shipped). It is an Api operation rather than a v1 Markdown
-  element, and this workflow calls nothing that suspends, so no checkpoint here
-  reaches it.
+- **Suspension.** A checkpoint's `<Elicit>` publishes one retained suspension
+  request, settles the run `suspended`, gives the executor lock back, and
+  returns with a run ID and stop reason on standard error (#577, shipped, over
+  #367's substrate). `xmd workflow answer` retains the typed answer and executes
+  nothing; `xmd workflow resume` continues from the retained request. The
+  document names none of that — it writes an ordinary `<Elicit>`, and where the
+  asking happens is the host's decision.
 - **Interruption.** Losing the executor outside an authored wait, including
   Ctrl-C, leaves the run `interrupted` and resumable at the journal frontier.
 - **Cancellation.** `xmd workflow cancel <run-id>` never reaches into a live
@@ -170,11 +171,15 @@ the foreground process, and Ctrl-C tears the scope down in order, publishes
 management host acquires the lock and publishes `cancelled` inside the
 transaction that validates it.
 
-The wait is here too, as substrate. `suspendFor()` suspends a run durably and
-gives its executor lock back (#367), and a typed answer can be delivered to it
-(#300). What is missing is anything that reaches or acts on it: `suspendFor()`
-is an Api operation with no v1 element spelling it, this document calls nothing
-that suspends, delivery executes nothing, and no scheduler resumes a run.
+The wait is here, and this document reaches it. `suspendFor()` suspends a run
+durably and gives its executor lock back (#367), and the workflow host's own
+`<Elicit>` registration is what calls it (#577, shipped): each checkpoint
+publishes one retained suspension request, settles the run `suspended`, and
+releases the executor. A typed answer is delivered to that request (#300) and
+executes nothing; `xmd workflow resume` continues from it. `suspendFor()` is
+still an Api operation with no v1 element spelling it — the document writes an
+ordinary `<Elicit>` — and nothing automatic remains: no scheduler resumes a run,
+so answering and resuming are two explicit acts.
 
 Explicit history forks are shipped (#368, delivered by #498) — compatible forks,
 `history --forkable`, forkability reasons, lineage, changed-definition replay
@@ -206,20 +211,21 @@ An automated iteration stops on the first applicable signal:
 
 Signal 3 has a shipped in-run form: `<Elicit>` asks a person a schema-validated
 question during execution, and under `xmd run` the WebForm provider answers it
-in a browser. Under `xmd workflow` it is the same `<Elicit>` and the same
-provider: an unanswered question opens a loopback form and blocks the run, which
-stays `running`, settles nothing as `suspended`, records no suspension request,
-and keeps its executor lock. An authored `<Answers>` region answers it instead.
+in a browser. Under `xmd workflow` it is the same `<Elicit>`, and the host
+answers it durably (#577, shipped): one retained suspension request, the run
+settled `suspended`, and the executor lock given back, so the process, the
+Workspace attachment and the Agent processes need not stay alive. `xmd workflow
+answer` retains the typed answer and executes nothing (#300); `xmd workflow
+resume` continues from the retained request. An authored `<Answers>` region
+answers it without any of that.
 
-A durable suspension is a different mechanism, and it is shipped as substrate:
-`suspendFor()` suspends a run and gives its executor lock back (#367), and a
-typed answer can be delivered to the waiting run
-([#300](https://github.com/taras/executable.md/issues/300)). `suspendFor()` is an
-Api operation — there is no v1 Markdown element for it — and this workflow
-installs no component or middleware that turns an `<Elicit>` into one, so no
-checkpoint here releases the executor. Delivery executes nothing, arbitration
-between signals is not implemented, nothing schedules a resumption, and
-premature watcher semantics are deliberately excluded.
+The workflow registration performs no `elicit` durable record of its own: a
+durable wait has to be the outermost durable thing at its position, so the
+suspension protocol retains the wait and there is one record of the answer
+rather than two. What is still deliberately absent is anything automatic —
+arbitration between signals is not implemented, nothing schedules a resumption,
+and premature watcher semantics are excluded. Answering and resuming are two
+explicit acts.
 
 `<Loop>` already records part of this: it journals every iteration it enters and
 one terminal record whose outcome is `break`, `exhausted`, or `error`, and it
