@@ -14,9 +14,9 @@
  * go wrong and each has its own word:
  *
  * - **missing** — no such Push is recorded. The document has to write one.
- * - **conflicting** — this run published this branch, and never at the commit
- *   the checkout is on now. The pull request would name a head this run never
- *   published.
+ * - **conflicting** — this run's last publication of this branch names another
+ *   commit. The pull request would name a head the run has since published
+ *   past, or never published at all.
  * - **unreadable** — a successful Git-host record this scan cannot read as one
  *   whole thing. A shape that will not parse, and a record whose natural key,
  *   inputs and result do not name the same publication, are both refused rather
@@ -76,21 +76,23 @@ function refuse(reason: "missing" | "conflicting" | "unreadable"): never {
  * ordinary. Everything else is decided:
  *
  * A branch is published more than once. A supervised iteration commits, pushes,
- * commits again and pushes again, so the history a pull request is decided
- * against is a sequence of publications of the same branch at successive
- * commits — and what authorizes this pull request is the one naming the commit
- * the checkout is on now. So the whole history is scanned rather than judged
- * record by record: an exact record authorizes wherever it appears, and an
- * earlier publication of the same branch at an earlier commit is what it is,
- * not a disagreement.
+ * commits again and pushes again, so the history holds a sequence of
+ * publications of one destination at successive commits — and what a pull
+ * request is decided against is where that sequence *ended*. The last relevant
+ * record is the run's own account of what the branch holds now: naming this
+ * head, it authorizes, and every earlier publication is history rather than
+ * disagreement; naming another commit, this run has published past the head the
+ * pull request would name, whether that record came before an exact one or
+ * after it.
  *
- * What that earlier record does decide is which refusal an unauthorized pull
- * request gets. With no exact record and a relevant one at another commit, the
- * run did publish this branch, and saying "push it first" would be advice to do
- * something it already did.
+ * Counting exact records instead would authorize from a publication the run
+ * itself superseded. Reading only the last one would be worse: an unreadable
+ * record earlier in the sequence would go unnoticed. So every relevant record
+ * is read completely, in order, and the last one decides.
  *
- * Every relevant record is read completely before it is counted or set aside,
- * so a later exact proof never reads around a damaged one.
+ * With no relevant record at all the document has to write a Push. With one
+ * that names another commit, saying "push it first" would be advice to do
+ * something it already did, so that is conflicting rather than missing.
  *
  * Failed Git-host outcomes are not evidence of anything. A refused push
  * published nothing, and a record of it never authorizes.
@@ -100,8 +102,8 @@ export function admitPushEvidence(
   inputs: PullRequestInputs,
 ): void {
   const destinationRef = destinationRefFor(inputs.headBranch);
-  let proofs = 0;
-  let published = false;
+  /** What the last relevant record so far says the branch was published at. */
+  let published: "this head" | "another commit" | undefined;
 
   for (const event of events) {
     if (event.type !== "yield" || event.description.type !== GIT_HOST_EFFECT) {
@@ -154,14 +156,10 @@ export function admitPushEvidence(
     if (parseGitPushRecord(record, pushExpectation(pushed)) === undefined) {
       refuse("unreadable");
     }
-    if (pushed.sourceCommit === inputs.headSha) {
-      proofs += 1;
-      continue;
-    }
-    published = true;
+    published = pushed.sourceCommit === inputs.headSha ? "this head" : "another commit";
   }
 
-  if (proofs === 0) {
-    refuse(published ? "conflicting" : "missing");
+  if (published !== "this head") {
+    refuse(published === undefined ? "missing" : "conflicting");
   }
 }

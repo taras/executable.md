@@ -132,16 +132,26 @@ const EMPTY = ["# Release", "", "Nothing happens here.", ""].join("\n");
  * `<Git.Push>` is the shipped external-effect surface, and a completed push
  * retains a reconciliation record — the pre-state, the observations, the
  * decision and the result — that replays without contacting anything.
+ *
+ * `before` is written between the commit and the push, which is where a suite
+ * arranges what the destination holds by the time the push looks at it. The
+ * remote has to move *after* the run cloned: a destination that already exists
+ * when the clone happens is where `<Git.Switch>` starts the branch, so
+ * whatever it holds is an ancestor of what the run then publishes. It closes
+ * the Repository around itself, because a command runs where the element is
+ * written and the checkout is not a host directory to run one in.
  */
-function pushing(remote: string, tail: string): string {
+function pushing(remote: string, tail: string, before: string[] = []): string {
+  const repository = '<Repository name="project" url="' + remote + '">';
   return [
-    '<Repository name="project" url="' + remote + '">',
+    repository,
     '<Git.Switch branch="publish/1" />',
     '<File path="notes.md">',
     "prepared",
     "</File>",
     '<Git.Add paths="notes.md" />',
     '<Git.Commit message="prepare" as="commit" />',
+    ...(before.length === 0 ? [] : ["</Repository>", ...before, repository]),
     "<Git.Push />",
     "</Repository>",
     "",
@@ -150,6 +160,23 @@ function pushing(remote: string, tail: string): string {
     "```",
     "",
   ].join("\n");
+}
+
+/**
+ * The destination this run's branch does not descend from, put there mid-run.
+ *
+ * `refs/heads/diverged` is a second line of history the clone brought along, so
+ * the commit is readable to the push and provably not in its ancestry — which
+ * is what makes the refusal a conflict rather than an object nobody could read.
+ */
+function diverting(remote: string): string[] {
+  return [
+    "",
+    "```bash exec",
+    `git --git-dir=${remote} update-ref refs/heads/publish/1 refs/heads/diverged`,
+    "```",
+    "",
+  ];
 }
 
 /** A bare remote with one commit on `main`, and optionally one that refuses pushes. */
@@ -170,10 +197,17 @@ function* useRemote(root: string, refusing = false): Operation<string> {
   yield* git(root, ["init", "-q", "--bare", "--initial-branch=main", bare]);
   yield* git(seed, ["push", "-q", bare, "main"]);
   if (refusing) {
-    // The destination ref already exists, at a commit the run's own branch does
-    // not descend from. The push observes that and refuses, so what the run
-    // retains is a Git-host effect that established no completion.
-    yield* git(seed, ["push", "-q", bare, "main:refs/heads/publish/1"]);
+    // A second line of history, published under a name the run does not push
+    // to. A clone copies it along with everything else, so the objects are
+    // readable inside the run — and `<Git.Switch>` does not start the branch
+    // there, because it is not the destination's name. The document moves the
+    // destination onto it mid-run, and the push then observes a commit its own
+    // branch does not descend from: a Git-host effect that establishes no
+    // completion.
+    yield* writeTextFile(join(seed, "which.txt"), "diverged\n");
+    yield* git(seed, ["add", "-A"]);
+    yield* git(seed, ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "diverged"]);
+    yield* git(seed, ["push", "-q", bare, "HEAD:refs/heads/diverged"]);
   }
   return bare;
 }
@@ -747,7 +781,11 @@ describe("Tier WFF — xmd workflow fork", () => {
   it("WFF11: a Git-host effect that established nothing is not forkable", function* () {
     yield* useFixture({ [DEFINITION]: "# placeholder\n" }, function* (fixture) {
       const remote = yield* useRemote(join(fixture.repository, ".."), true);
-      yield* commit(fixture, { [DEFINITION]: pushing(remote, "echo original") }, "pushing");
+      yield* commit(
+        fixture,
+        { [DEFINITION]: pushing(remote, "echo original", diverting(remote)) },
+        "pushing",
+      );
 
       const started = yield* xmd(fixture, [
         "workflow",

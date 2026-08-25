@@ -1297,10 +1297,10 @@ retains two records, and each is reconstructed from the Workspace root its own
 journal event was appended against, so a continuation asks each position the
 question that position asked. §9 states the rule and what it may not disturb.
 
-**PullRequest reads this iteration's record.** The evidence scan of §7.5
-requires the Push record naming the commit the checkout is on now. An earlier
-publication of the same branch is history rather than disagreement, and does not
-authorize a pull request naming a later head.
+**PullRequest reads this iteration's record.** The evidence scan of §7.5 is
+decided by this run's last publication of that branch, which has to name the
+commit the checkout is on now. An earlier publication is history rather than
+disagreement; a later one at another commit is the branch having moved on.
 
 ### 7.5 Pull request
 
@@ -1354,14 +1354,17 @@ thing cannot be shown to be about something else — an unreadable relevant reco
 refuses the pull request wherever it appears, and a later exact record does not
 read around it.
 
-The scan looks at the complete history rather than at one record, because a
-branch is published more than once: an iteration commits, pushes, commits again
-and pushes again, so several relevant records describe successive publications
-of one destination. One naming this head commit authorizes, wherever in that
-sequence it appears. An earlier publication of the same branch at another commit
-is history rather than disagreement, and decides only which refusal an
-unauthorized pull request gets: with no record for this head commit, a relevant
-one at another commit is conflicting and no relevant record at all is missing.
+The scan reads the complete history in order, because a branch is published more
+than once: an iteration commits, pushes, commits again and pushes again, so
+several relevant records describe successive publications of one destination.
+What authorizes is where that sequence ended — the **last** relevant record is
+this run's own account of what the branch holds now. Naming this head commit it
+authorizes, and the earlier publications behind it are history rather than
+disagreement. Naming another commit it refuses, whether it came before an exact
+record or after one: a run that has published past the head a pull request would
+name is not evidence for that head. No relevant record at all is missing, and a
+last one at another commit is conflicting rather than missing, because saying
+"push it first" would be advice to do something the run already did.
 Missing, conflicting and unreadable evidence are three fixed local refusals:
 each names its category and, where there is one, its remedy, quotes no journal
 content, and happens before the Git host is observed. So do a missing or
