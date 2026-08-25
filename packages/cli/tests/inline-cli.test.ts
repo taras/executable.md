@@ -2,10 +2,11 @@
  * Tier IE — `xmd run -e` / `xmd -e`, the inline root document (issue #76).
  *
  * Shells out with captured stdio, so exit status and both streams are observed
- * the way a caller sees them. Two things are measured that no core test can
+ * the way a caller sees them. What is measured here is what no core test can
  * reach: that the document's own text survives argv untouched — a document may
- * be `42`, or `--props`, or `-h` — and that a supplied root changes neither
- * where relative paths point nor what is left on disk afterwards.
+ * be `42`, or `--props`, or `-h` — and that inline execution adds no top-level
+ * filesystem entry of any kind. Where relative paths point is document
+ * behavior, proven by the checked-in Markdown suite in document-suites/inline.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -141,9 +142,10 @@ describe(
       expect(bullet.stdout).toContain("- item");
     });
 
-    // IE11 lives in packages/cli/tests/inline/inline.test.md: the claim is
-    // document behavior, so its evidence is the checked-in Markdown suite the
-    // tier launcher runs.
+    // IE11, IE15, IE16 and IE23 live in
+    // packages/cli/tests/document-suites/inline/Inline.test.md: the claims are
+    // document behavior, so their evidence is the checked-in Markdown suite
+    // the tier launcher runs.
 
     it("IE11a: --eval accepts an explicitly empty value", function* () {
       // eval-source.ts takes the following argv token verbatim, and only
@@ -192,41 +194,6 @@ describe(
       expect(verbose.stderr).toContain("rendered body");
     });
 
-    /**
-     * The identity reaches a diagnostic the same way a filename does. Both halves
-     * are asserted, because the compiled smoke greps for the inline form and its
-     * premise is the file-backed one.
-     */
-    it("IE15: positioned diagnostics name the root, file-backed or inline", function* () {
-      const stray = "<Else>orphan</Else>\n";
-      const root = yield* useWorkspace({ "Doc.md": stray });
-
-      // Nothing recovers the stray element, so each run reports its diagnostic
-      // and exits 1. What is being checked is the identity in it.
-      const file = yield* runCli(["run", "Doc.md", "--raw"], { cwd: root }).join();
-      expect(file.code).toBe(1);
-      expect(file.stderr).toContain("(Doc.md:1:1)");
-
-      const inline = yield* runCli(["-e", stray, "--raw"], { cwd: root }).join();
-      expect(inline.code).toBe(1);
-      expect(inline.stderr).toContain("(<eval>:1:1)");
-    });
-
-    it("IE16: a relative path resolves against the invocation directory", function* () {
-      const withNotes = yield* useWorkspace({ "notes.md": "notes from the working directory\n" });
-      const without = yield* useWorkspace({});
-      const document = '<File path="notes.md" />\n';
-
-      const found = yield* runCli(["-e", document, "--raw"], { cwd: withNotes }).expect();
-      expect(found.stdout).toContain("notes from the working directory");
-
-      // The same command, one directory over: nothing about `<eval>` supplies a
-      // base directory, so the file is simply not there.
-      const missing = yield* runCli(["-e", document, "--raw"], { cwd: without }).expect();
-      expect(missing.stdout).not.toContain("notes from the working directory");
-      expect(missing.stdout).toContain("notes.md");
-    });
-
     it("IE17: repository components resolve from the invocation directory", function* () {
       const root = yield* useWorkspace({});
       yield* writeTextFile(join(root, "Greeting.md"), "Hello from a component\n");
@@ -241,6 +208,11 @@ describe(
     });
 
     it("IE18: running an inline document leaves the directory as it was", function* () {
+      // The distinct fault this retained row catches: inline execution must
+      // not add any top-level filesystem entry — a file, a directory, or a
+      // symlink. readdir() observes every entry kind; the Markdown suite's
+      // <Glob> observes only regular files, so this row stays a focused
+      // subprocess test pending #581's deterministic in-process CLI surface.
       const root = yield* useWorkspace({ "Greeting.md": "Hello from a component\n" });
       const before = yield* entries(root);
 
@@ -321,20 +293,6 @@ describe(
       expect(stdout).not.toContain("LATER-PROSE");
       expect(stderr).toContain("stage classifier failed");
       expect(stderr.split("stage classifier failed")).toHaveLength(2);
-    });
-
-    it("IE23: an inline document addresses no target, so a `#` in it is text", function* () {
-      // Document references are file paths; the inline text is never split at
-      // a `#`, and a heading it happens to contain stays a heading.
-      const { code, stdout } = yield* runCli([
-        "-e",
-        "# Title\n\n## Alpha\n\nALPHA_MARKER\n\n## Beta\n\nBETA_MARKER\n",
-        "--raw",
-      ]).join();
-
-      expect(code).toBe(0);
-      expect(stdout).toContain("ALPHA_MARKER");
-      expect(stdout).toContain("BETA_MARKER");
     });
   },
 );

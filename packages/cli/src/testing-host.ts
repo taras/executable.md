@@ -24,6 +24,7 @@
 import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
+import { useHostFiles } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { fileSource, inlineSource } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
@@ -93,6 +94,12 @@ function* runProfileChild(
   const stream = new InMemoryStream();
 
   yield* installDocumentComponents({ testing: false }, false);
+  // Document filesystem access resolves in the caller's own filesystem, as it
+  // does for `xmd run`. The entrypoint installs its provider process-wide, but
+  // the child runs in an isolated scope, so the child's assembly must restate
+  // it — `API.Files` has no host default, and a child without one refuses
+  // every document filesystem operation.
+  yield* useHostFiles();
   // Native service authority belongs only to document execution, here as in the
   // command that owns it.
   yield* settings.installService();
