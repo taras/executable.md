@@ -38,7 +38,10 @@ import { XMD_ARTIFACT_APPLICATION_ID } from "../src/deno/artifact/schema.ts";
 import { APPLICATION_ID as LIVE_RUN_APPLICATION_ID } from "../src/deno/schema.ts";
 import * as publishedDeno from "../deno.ts";
 import * as publishedRoot from "../mod.ts";
-import { richArtifact, SUSPENSIONS } from "./support/artifact-fixture.ts";
+import { richArtifact, SUSPENSIONS, wait } from "./support/artifact-fixture.ts";
+import { serializeDurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent } from "@executablemd/durable-streams";
+import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
 
 const encoder = new TextEncoder();
 
@@ -131,6 +134,59 @@ function storedRecord(path: string, kind: string, identity: string): JsonObject 
     "$",
     (reason) => new Error(`the stored ${kind} record ${reason}`),
   );
+}
+
+/** The same snapshot, with some journal records replaced by event id. */
+function withRecords(
+  contents: DetachedXmdArtifact,
+  replacements: Readonly<Record<string, DurableEvent>>,
+): DetachedXmdArtifact {
+  return {
+    ...contents,
+    journal: contents.journal.map((row) => {
+      const replacement = replacements[row.eventId];
+      return replacement === undefined
+        ? row
+        : { ...row, record: serializeDurableEvent(replacement) };
+    }),
+  };
+}
+
+/**
+ * The answered wait, re-cut so its answer is `null` and its publication carries
+ * no value member.
+ *
+ * The wait's schema is rebuilt to accept null, and its fingerprint with it, so
+ * what refuses this snapshot is the missing member rather than a value the
+ * schema would have rejected first.
+ */
+function valuelessConsumedAnswer(): DetachedXmdArtifact {
+  const contents = richArtifact();
+  const nullWait = wait(
+    SUSPENSIONS.consumed.id,
+    { kind: "approval", release: "1.4" },
+    {
+      type: "null",
+    },
+  );
+  const valueless: DurableEvent = {
+    type: "yield",
+    coroutineId: "root",
+    description: {
+      type: SUSPENSION_ANSWER,
+      name: nullWait.id,
+      suspensionId: nullWait.id,
+    },
+    result: { status: "ok" },
+  };
+  return {
+    ...withRecords(contents, { "event-5": nullWait.request, "event-6": valueless }),
+    answers: contents.answers.map((row) =>
+      row.suspensionId === nullWait.id
+        ? { ...row, answer: null, requestFingerprint: nullWait.fingerprint }
+        : row,
+    ),
+  };
 }
 
 /** One member of a parsed record, as the object it has to be. */
@@ -865,6 +921,40 @@ describe("XMD artifact container version 1", () => {
       closureHash,
       closureMembership,
     ];
+    // Two the writer must refuse outright. Neither can be produced by damaging
+    // a sealed file, because a sealed file is one this build already accepted —
+    // these are snapshots that would otherwise be written and given a canonical
+    // identity, so the refusal has to happen before any container exists.
+    const unwritable: readonly (readonly [string, DetachedXmdArtifact])[] = [
+      // An inherited request agreeing with its adjacent publication about the
+      // wait's name and disagreeing about its identity. No answer row points at
+      // it, so only the structural pairing can catch it.
+      [
+        "inherited-identity.xmd",
+        withRecords(richArtifact(), {
+          "event-1": {
+            ...SUSPENSIONS.inherited.request,
+            description: {
+              ...SUSPENSIONS.inherited.request.description,
+              suspensionId: "9".repeat(32),
+            },
+          },
+        }),
+      ],
+      // A consumed answer of `null`, published as a success that carries no
+      // value at all. Normalizing the absent member to null would read these
+      // two different histories as one.
+      ["valueless-publication.xmd", valuelessConsumedAnswer()],
+    ];
+
+    for (const [name, snapshot] of unwritable) {
+      const written = yield* writeXmdArtifact(join(directory, name), snapshot);
+      expect(written.ok).toBe(false);
+      expect(written.ok ? "" : written.error.name).toBe("XmdArtifactInventoryError");
+      // Refused before a container is accepted, so nothing is left behind.
+      expect(yield* exists(join(directory, name))).toBe(false);
+    }
+
     // Each refusal is named, because the manifest comparison that runs after
     // these gates would refuse every one of them too — and a suite that only
     // asked "did it fail" could not tell which check was doing the work.

@@ -1479,12 +1479,16 @@ function* verifySuspensions(
     // it: an answer is published directly behind the request it answers, so one
     // standing anywhere else answers nothing this artifact holds.
     const behind = byPosition.get(positionKey(entry.coroutineId, entry.index - 1));
-    if (
-      behind === undefined ||
-      behind.description.type !== SUSPENSION_REQUEST ||
-      behind.description["name"] !== named
-    ) {
+    if (behind === undefined || behind.description.type !== SUSPENSION_REQUEST) {
       reject("an answer is published somewhere other than behind the request it answers");
+    }
+    // Both fields, not just the one this publication happens to be read by. A
+    // request describes its wait twice over, and a pair that agrees about one
+    // and not the other names two waits — which is not a wait either of them
+    // could have ended. Asked of every publication, including one that
+    // inherited history legitimately retains no answer row for.
+    if (behind.description["name"] !== named || behind.description["suspensionId"] !== named) {
+      reject("an answer is published behind a request that names a different wait");
     }
     published.set(named, Object.freeze({ suspensionId: named, at: entry }));
   }
@@ -1544,12 +1548,21 @@ function* verifySuspensions(
     ) {
       reject("a consumed suspension answer was published away from the wait it ended");
     }
-    if (publication.at.result.status !== "ok") {
+    const result = publication.at.result;
+    if (result.status !== "ok") {
       reject("a consumed suspension answer was published without a value that ended the wait");
     }
-    if (
-      canonicalJsonText(publication.at.result.value ?? null) !== canonicalJsonText(answer.answer)
-    ) {
+    // Presence, and never normalized. A publication carrying no value at all is
+    // not a publication of `null`: reading it as one would let a wait that
+    // ended with nothing stand as evidence for a wait whose retained answer is
+    // null, and those are different histories. The member is asked for by name
+    // — a record parsed out of JSON cannot hold an explicit `undefined`, so
+    // absence is the only way past this.
+    const ended = "value" in result ? result.value : undefined;
+    if (ended === undefined) {
+      reject("a consumed suspension answer was published without a value that ended the wait");
+    }
+    if (canonicalJsonText(ended) !== canonicalJsonText(answer.answer)) {
       reject("a consumed suspension answer was published carrying a different value");
     }
   }
