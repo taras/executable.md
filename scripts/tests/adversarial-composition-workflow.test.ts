@@ -69,6 +69,8 @@ import { countingHost } from "../../packages/workflow/tests/support/composition.
 import { gitHubStore, respond } from "../../packages/workflow/tests/support/github.ts";
 import type { GitHubStore } from "../../packages/workflow/tests/support/github.ts";
 import { gitHubSource } from "../../packages/workflow/src/deno/composition/github.ts";
+import { parseGitHostReconciliationRecord } from "../../packages/workflow/src/git-host/records.ts";
+import type { GitHostReconciliationRecord } from "../../packages/workflow/src/git-host/records.ts";
 import type {
   GitHubAccess,
   GitHubHttpRequest,
@@ -577,7 +579,20 @@ function forgeAccess(
       const made = label(request);
       calls.push(made);
       if (!isRead(made)) {
-        return respond(store, request);
+        const answered = respond(store, request);
+        if (made === "pulls:create" && answered.status === 201) {
+          // A pull request's head follows its branch. The store records the
+          // concrete commit a creation resolved, which would then report this
+          // head forever; GitHub reports a reading of the branch. Blanking it
+          // is how `stored()` in the shipped `<PullRequest>` fixture spells
+          // "whatever that branch holds when this is read", and a revision
+          // iteration is exactly when the difference shows.
+          const opened = store.pullRequests[store.pullRequests.length - 1];
+          if (opened !== undefined) {
+            opened.headSha = "";
+          }
+        }
+        return answered;
       }
       if (request.headers["Authorization"] !== `Bearer ${store.token}`) {
         return { status: 401, body: JSON.stringify({ message: "Bad credentials" }) };
@@ -780,6 +795,25 @@ const NOISE = ["import_component", "loop", "loop_iteration", "workflow_run"];
 
 function effects(kinds: readonly string[]): string[] {
   return kinds.filter((kind) => !NOISE.includes(kind));
+}
+
+/**
+ * The record each Git-host effect retained, in order.
+ *
+ * The reconciliation record *is* the result value — not a `record` member on
+ * it — which is how `gitHostOutcomes()` in the owning suite reads it.
+ */
+function hostRecords(events: readonly DurableEvent[]): GitHostReconciliationRecord[] {
+  return events
+    .filter((event) => event.type === "yield" && event.description.type === "git_host_effect")
+    .map((event) => {
+      const result = Object(Reflect.get(event, "result"));
+      const parsed = parseGitHostReconciliationRecord(Reflect.get(result, "value"));
+      if (parsed === undefined) {
+        throw new Error(`a Git-host effect retained something that is not a record`);
+      }
+      return parsed;
+    });
 }
 
 /** The commit each `<Git.Commit>` retained, in order. */
@@ -1313,27 +1347,24 @@ describe("Tier AC — the adversarial workflow, composed", () => {
   });
 
   /**
-   * AC3 — the revision loop, driven to where the composition stops.
+   * AC3 — one pull request, revised across two iterations.
    *
-   * The scenario asked for is two full iterations ending in a numbered update
-   * of one pull request. What the composition does is publish the first
-   * iteration, review it, take the revision turn, commit the second iteration
-   * — and then refuse its own second `<Git.Push>`.
+   * The whole supervised revision loop, end to end: the implementor proposes,
+   * the change is admitted and committed, the branch is published, a pull
+   * request is opened, the planner reviews what it holds and fails it, the
+   * implementor revises in the same session, and the second publication
+   * *advances* the branch it already published rather than colliding with it.
    *
-   * That refusal is shipped behaviour, not a fixture accident:
-   * `<Git.Push>` reconciles a destination ref to one exact commit, so a
-   * destination holding any other commit is a conflict, and the commit it
-   * holds here is the one this same run published one iteration earlier
-   * (`packages/workflow/tests/git-push.test.ts` states the same rule against a
-   * branch someone else moved). `Implementation.md` pushes the same
-   * `props.branch` on every pass, so the numbered-update contract its prose
-   * reasons about at length is unreachable through the effects it writes.
+   * That advance is #588. Before it, `<Git.Push>` reconciled a destination to
+   * one exact commit and refused any other, so this loop stopped at its own
+   * second push. Now a destination holding a commit the source contains is an
+   * ordinary non-force fast-forward, and the record keeps the attested
+   * relation that authorized it.
    *
-   * This case therefore asserts the whole ordered sequence up to that refusal,
-   * and pins the refusal itself: what is proven is where the composition
-   * stops, and that it stops without forcing anything.
+   * Distinctive values throughout, so a later correct call cannot stand in for
+   * an earlier missing or misrouted one.
    */
-  it("AC3: a revision iteration commits, and the composition refuses its own second push", function* () {
+  it("AC3: a failing review revises one pull request across two iterations", function* () {
     const remote = yield* useBareRemote(SEED);
     const forged = forge(remote, [EVIDENCE_ONE, EVIDENCE_TWO]);
     const attempt = yield* runForge(forged, {
@@ -1350,9 +1381,11 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       proposals: [FIRST_PROPOSAL, SECOND_PROPOSAL],
       observations: [],
     });
-    // Both iterations ran, in authored order: the first envelope, its verdict
-    // and review checkpoint, the revision turn in the same implementor
-    // session, and the second iteration's own envelope.
+    expect(attempt.failure).toBeUndefined();
+
+    // Two iterations, in authored order: the first envelope, its verdict and
+    // review checkpoint, the revision turn in the same implementor session,
+    // then the second iteration's own envelope, verdict and checkpoint.
     expect(attempt.trace.calls.map((turn) => classify(turn.content))).toEqual([
       "discovery",
       "checkpoint",
@@ -1365,11 +1398,10 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "checkpoint",
       "revision",
       "observation",
+      "implementationVerdict",
+      "checkpoint",
+      "checkpoint",
     ]);
-
-    // Every turn of both iterations went to the session its document names,
-    // and the revision turn went to the same implementor session that made the
-    // proposal it revises.
     expect(attempt.trace.calls.map((turn) => turn.session)).toEqual([
       "planner",
       "user-checkpoint",
@@ -1382,14 +1414,15 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "user-checkpoint",
       "implementor",
       "implementor",
+      "planner",
+      "user-checkpoint",
+      "user-checkpoint",
     ]);
 
-    // The complete ordered forge trace. The first iteration observes the
-    // remote, publishes, observes the pull requests from this head, creates
-    // one, and reads all three evidence collections — the checks read looking
-    // the pull request up first, because the head it reads checks at is the
-    // one the host reports rather than one this run asserts. The second
-    // iteration reaches exactly one call: the observation its push makes.
+    // The complete ordered forge trace. The second iteration observes the
+    // remote and advances it, then takes the *numbered* path — look the pull
+    // request up, bring it up to date, read it back — where the first created
+    // one from a listing.
     expect(forged.calls).toEqual([
       "git:ls-remote",
       "git:push",
@@ -1403,12 +1436,21 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "read:check-runs",
       "read:status",
       "git:ls-remote",
+      "git:push",
+      "pulls:lookup",
+      "pulls:update",
+      "pulls:lookup",
+      "read:reviews",
+      "read:conversation",
+      "read:inline",
+      "pulls:lookup",
+      "read:check-runs",
+      "read:status",
     ]);
 
-    // The complete ordered effect sequence the run retained. Each iteration
-    // admits its proposal, writes it, stages it and commits it before any
-    // remote effect, and the pull request follows the push of its own
-    // iteration rather than standing beside it.
+    // The complete ordered effect sequence. Each iteration admits its
+    // proposal, writes it, stages it and commits it before any remote effect,
+    // and each pull request follows the push of its own iteration.
     expect(effects(attempt.kinds)).toEqual([
       "workspace_repository",
       "workspace_worktree",
@@ -1439,58 +1481,109 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "workspace_git_add",
       "workspace_git_commit",
       "git_host_effect",
+      "git_host_effect",
+      "pull_request_read",
+      "pull_request_read",
+      "pull_request_read",
+      // The second verdict, its review checkpoint, and the acceptance
+      // checkpoint `start.md` reaches once the loop breaks.
+      "agent_prompt",
+      "agent_prompt",
+      "agent_prompt",
     ]);
 
-    // Two commits, and they are different commits: the second iteration's
-    // proposal was admitted and performed rather than replaying the first.
-    const made = commits(attempt.events);
-    expect(made).toHaveLength(2);
-    expect(made[0]).not.toBe(made[1]);
+    // Two commits, and they are different: the second proposal was admitted
+    // and performed rather than replaying the first.
+    const [commitA, commitB] = commits(attempt.events);
+    expect(commitA).toBeDefined();
+    expect(commitB).toBeDefined();
+    expect(commitA).not.toBe(commitB);
 
-    // The one pull request this forge holds is the first iteration's, opened
-    // from the commit the first `<Git.Commit>` retained and the first
-    // `<Git.Push>` published — matching evidence from its own iteration.
+    // Four Git-host effects, all successful, alternating publish and publish
+    // the pull request that describes it.
+    const records = hostRecords(attempt.events);
+    expect(records.map((record) => record.request.kind)).toEqual([
+      "git-push",
+      "pull-request",
+      "git-push",
+      "pull-request",
+    ]);
+    expect(records.map((record) => record.decision)).toEqual([
+      "performed",
+      "performed",
+      "performed",
+      "performed",
+    ]);
+
+    // Push A creates the destination: nothing was there, and it published A.
+    const [pushA, openPr, pushB, updatePr] = records;
+    expect(pushA?.preState).toEqual({ remoteCommit: null });
+    expect(pushA?.observations).toEqual({ remoteCommit: commitA });
+    expect(Reflect.get(Object(pushA?.result), "sourceCommit")).toBe(commitA);
+
+    // Push B is the ordinary non-force fast-forward #588 settled. The record
+    // retains the predecessor it advanced over, the relation that made
+    // advancing legitimate rather than a replacement, and the commit it left
+    // there — the whole of what authorized publishing over an existing branch.
+    expect(pushB?.preState).toEqual({ remoteCommit: commitA, relation: "ancestor" });
+    expect(pushB?.observations).toEqual({ remoteCommit: commitB });
+    expect(Reflect.get(Object(pushB?.result), "sourceCommit")).toBe(commitB);
+    expect(Reflect.get(Object(pushB?.result), "observedRemoteCommit")).toBe(commitB);
+
+    // The remote ends at B.
+    expect(remoteRefs(remote).get("refs/heads/agent/adversarial-implementation")).toBe(commitB);
+
+    // Each publication is one exact refspec, and neither forces anything nor
+    // touches upstream tracking. Nothing fetched an object and nothing moved
+    // local history to make the advance apply.
+    const pushes = forged.commands.filter((command) => command[0] === "push");
+    expect(pushes).toHaveLength(2);
+    expect(pushes.map((command) => command[command.length - 1])).toEqual([
+      `${commitA}:refs/heads/agent/adversarial-implementation`,
+      `${commitB}:refs/heads/agent/adversarial-implementation`,
+    ]);
+    const everyGitCommand = forged.commands.map((command) => command.join(" "));
+    for (const forbidden of ["--force", "--set-upstream", "-f "]) {
+      expect(everyGitCommand.join("\n")).not.toContain(forbidden);
+    }
+    for (const forbidden of ["fetch", "reset", "merge", "rebase"]) {
+      expect(forged.commands.map((command) => command[0])).not.toContain(forbidden);
+    }
+
+    // One pull request exists, and it was created once and updated once —
+    // the numbered pass brought the existing one up to date instead of asking
+    // for a second one to exist.
+    expect(forged.calls.filter((made) => made === "pulls:create")).toHaveLength(1);
+    expect(forged.calls.filter((made) => made === "pulls:update")).toHaveLength(1);
     expect(forged.store.pullRequests).toHaveLength(1);
-    const [opened] = forged.store.pullRequests;
-    expect(opened?.number).toBe(1);
-    expect(opened?.headSha).toBe(made[0]);
-    expect(opened?.title).toBe(FIRST_PROPOSAL.title);
-    expect(opened?.body).toContain(FIRST_PROPOSAL.report);
-    expect(opened?.body).not.toContain(SECOND_PROPOSAL.report);
+    expect(Reflect.get(Object(openPr?.result), "number")).toBe(1);
+    expect(Reflect.get(Object(updatePr?.result), "number")).toBe(1);
+
+    // And the update stands on *this* iteration's Push evidence. The first
+    // publication is history rather than disagreement: what the second pull
+    // request retains is B's head, never A's, and the pre-state it reconciled
+    // against had already advanced to B.
+    expect(Reflect.get(Object(openPr?.result), "headSha")).toBe(commitA);
+    expect(Reflect.get(Object(updatePr?.result), "headSha")).toBe(commitB);
+    const beforeUpdate = Object(Reflect.get(Object(updatePr?.preState), "pullRequest"));
+    expect(Reflect.get(beforeUpdate, "headSha")).toBe(commitB);
+    expect(Reflect.get(beforeUpdate, "number")).toBe(1);
+
+    // The second iteration's own words reached the pull request, and the
+    // first iteration's did not survive as its body.
+    const [held] = forged.store.pullRequests;
+    expect(held?.title).toBe(SECOND_PROPOSAL.title);
+    expect(held?.body).toContain(SECOND_PROPOSAL.report);
+    expect(held?.body).not.toContain(FIRST_PROPOSAL.report);
 
     // The revision turn carried the first iteration's own verdict, so the
     // second iteration was asked for by the review it answers.
     const revision = attempt.trace.calls.find((turn) => classify(turn.content) === "revision");
     expect(revision?.content).toContain(FIRST_VERDICT.review);
     expect(revision?.content).toContain(FIRST_VERDICT.revisionPrompt);
-
-    // And there the composition stops. The second push is refused as a
-    // conflict against the commit this run itself published, so no second
-    // pull-request call is made and the numbered update never happens.
-    expect(attempt.failure).toContain("already holds state this effect conflicts with");
-    expect(forged.calls.filter((forgeCall) => forgeCall.startsWith("pulls:"))).toEqual([
-      "pulls:list",
-      "pulls:list",
-      "pulls:create",
-      "pulls:lookup",
-    ]);
-
-    // Nothing was forced: the remote still holds the first iteration's commit,
-    // and the second iteration's commit was never published.
-    const refs = remoteRefs(remote);
-    expect(refs.get("refs/heads/agent/adversarial-implementation")).toBe(made[0]);
-    expect([...refs.values()]).not.toContain(made[1]);
   });
 
-  /**
-   * AC4 — what the reviewer is shown, and what a resume can reach.
-   *
-   * The projection half is provable in full: the exact retained reads reach
-   * both the reviewing planner's prompt and the material the checkpoint
-   * assesses, byte for byte. The replay half is not, and the reason is
-   * recorded here rather than worked around.
-   */
-  it("AC4: the retained evidence reaches the reviewer, and a resume cannot reach it", function* () {
+  it("AC4: the retained evidence reaches the reviewer, and survives an explicit resume", function* () {
     const root = yield* useTempDirectory("xmd-composition-runs-");
     const remote = yield* useBareRemote(SEED);
     const forged = forge(remote, [RETAINED]);
@@ -1565,33 +1658,61 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     // Delivery retains and executes nothing: no forge call belongs to it.
     expect(forged.calls).toHaveLength(before);
 
-    // The resume cannot reach the reads, and the reason is not the reads.
-    //
-    // `Implementation.md` admits its proposal with `<Evaluate>`, whose
-    // fragment performs a durable write, and a run cannot replay past an
-    // `<Evaluate>` whose fragment performed a durable effect: the replayed
-    // root terminates at the retained `generated_xmd` and never re-offers the
-    // effect the fragment performed, so every element written after it —
-    // including all three evidence reads — is unreachable on a resume.
-    //
-    // The same document with the same wait and no `<Evaluate>` resumes and
-    // completes, and so does one whose evaluated fragment performs no durable
-    // effect, so what this pins is the effect-bearing fragment rather than
-    // suspension, delivery or replay in general.
-    const resumed = yield* attemptRun(root, "resume", forged, script);
-    // It diverges at the position of the write the evaluated fragment
-    // performed — the generated `health.md` — which is the first thing after
-    // the retained `generated_xmd` the replayed root fails to offer.
-    expect(resumed.failure).toContain("Divergence");
-    expect(resumed.failure).toContain("expected workspace_file");
-    expect(resumed.failure).toContain("health.md");
-    expect(resumed.output).toBeUndefined();
+    // Everything the start execution retained, in authored order: the
+    // generated admission, the write its admitted fragment performed, the
+    // effects written after it, and the wait — one sequence, no reordering.
+    const retained = effects(started.kinds);
+    expect(retained.slice(retained.indexOf("generated_xmd"))).toEqual([
+      "generated_xmd",
+      "workspace_file",
+      "workspace_git_add",
+      "workspace_git_commit",
+      "git_host_effect",
+      "git_host_effect",
+      "pull_request_read",
+      "pull_request_read",
+      "pull_request_read",
+      "agent_prompt",
+      "agent_prompt",
+      "suspension_request",
+    ]);
 
-    // What can still be said about the reads: the resumed attempt asked the
-    // evidence provider nothing. That is consistent with retention, and it is
-    // not proof of it — the execution died before the reads were positioned —
-    // so the retention claim stays open rather than being claimed here.
-    expect(forged.calls.slice(before).filter(isRead)).toEqual([]);
+    const resumed = yield* attemptRun(root, "resume", forged, script);
+    expect(resumed.failure).toBeUndefined();
+
+    // The continuation completed rather than waiting again, and it reached the
+    // root's accepted branch — which only the delivered decision opens.
+    expect(resumed.notice).toBeUndefined();
+    expect(String(resumed.output)).toContain("# Accepted");
+    expect(resumed.kinds.filter((kind) => kind === "suspension_answer")).toHaveLength(1);
+
+    // The retained sequence was continued, not rewritten: everything the start
+    // execution wrote is still there in the same order, and the continuation
+    // only appended — the answer it spent, and the one turn left to take.
+    expect(effects(resumed.kinds).slice(0, retained.length)).toEqual(retained);
+    expect(effects(resumed.kinds).slice(retained.length)).toEqual([
+      "suspension_answer",
+      "agent_prompt",
+    ]);
+
+    // Nothing completed ran twice. The admitted fragment's write and the
+    // commit that staged it stayed at one apiece across both executions, and
+    // the run holds one commit rather than a second identical one.
+    for (const once of ["generated_xmd", "workspace_git_add", "workspace_git_commit"]) {
+      expect(resumed.kinds.filter((kind) => kind === once)).toHaveLength(1);
+    }
+    expect(commits(resumed.events)).toHaveLength(1);
+    expect(resumed.kinds.filter((kind) => kind === "pull_request_read")).toHaveLength(3);
+
+    // No provider was asked anything on the way back. Not the evidence reads,
+    // and not the Git host either: the whole continuation made zero forge
+    // calls, so every completed provider result came from what was retained.
+    expect(forged.calls.slice(before)).toEqual([]);
+
+    // And exactly one Agent turn was taken live — the acceptance checkpoint
+    // the run had not reached yet. Every earlier prompt replayed from the
+    // journal rather than being asked again.
+    expect(resumed.trace.calls.map((turn) => classify(turn.content))).toEqual(["checkpoint"]);
   });
 
   it("AC5: a deferred finding becomes exactly one issue, and another disposition none", function* () {
