@@ -141,10 +141,19 @@ describe(
       expect(bullet.stdout).toContain("- item");
     });
 
-    it("IE11: an empty document runs and produces nothing", function* () {
-      const { code, stdout } = yield* runCli(["-e", "", "--raw"]).join();
+    // IE11 lives in packages/cli/tests/inline/inline.test.md: the claim is
+    // document behavior, so its evidence is the checked-in Markdown suite the
+    // tier launcher runs.
+
+    it("IE11a: --eval accepts an explicitly empty value", function* () {
+      // eval-source.ts takes the following argv token verbatim, and only
+      // undefined means the option ran out of argv — so an explicit "" is a
+      // value, never a missing one. Deterministic argv coverage pending #581's
+      // in-process command surface; what the empty document renders is IE11's
+      // evidence, not this row's.
+      const { code, stderr } = yield* runCli(["-e", "", "--raw"]).join();
       expect(code).toBe(0);
-      expect(stdout.trim()).toBe("");
+      expect(stderr).not.toContain("requires a markdown document");
     });
 
     it("IE12: inline frontmatter declares properties", function* () {
