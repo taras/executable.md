@@ -3656,7 +3656,14 @@ per runtime corpus. Tier CH covers the help surfaces and the absence of
 a `targets` command, Tier PC properties and targets in one response, Tier VR
 targeted value and `<Output>` roots, Tier IE an inline root's absent target
 section, and Tier DT description extraction, the catalog's agreement with the
-canonical target array, and the unchanged `xmd test` path grammar.
+canonical target array, and the unchanged `xmd test` path grammar. Tier IE's
+inline document rows — the empty document, positioned root identities,
+invocation-directory resolution, an unchanged invocation directory, and `#` as
+document text — are owned by the checked-in Markdown suite at
+`packages/cli/tests/document-suites/inline/Inline.test.md`, whose children run
+through the production run host; the tier launcher runs it once per runtime
+corpus, and the retained IE rows in `inline-cli.test.ts` prove argv,
+environment, help, and value-root process routing.
 
 ### 5.5 The Component Api
 
