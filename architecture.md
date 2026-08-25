@@ -1160,10 +1160,36 @@ transaction that does not commit publishes nothing. Replay after that
 transaction commits restores the recorded answer event without reaching the live
 controller and without consuming or publishing again.
 
-Scheduling — automatic resume, watchers, unattended iteration and remote host
-selection — is #300's and is not part of this behavior. Nothing here waits on
-it: a suspended run continues through `xmd workflow answer` followed by an
-explicit `xmd workflow resume`.
+### Explicit host scheduling
+
+Scheduling decides when to invoke resume. A trusted host that has independently
+observed a successful delivery calls it with one public run ID, and that call
+invokes the same ordinary resume operation the foreground command invokes and
+answers with that operation's ordinary outcome. The request carries no answer,
+suspension ID, definition, root props, document path, Agent identity,
+transcript, executor token, database handle or provider-private state, so a
+delivery receipt is trigger evidence for the host rather than authority the
+document execution ever sees. Delivery stays ignorant of it: nothing schedules
+on delivery's behalf, and a refused delivery schedules nothing.
+
+Scheduled and manual resume compete for the one non-blocking executor lock. The
+acquirer advances the run and the other caller receives the ordinary
+already-running outcome, so duplicate scheduling creates no second executor and
+a schedule arriving after the winner settled performs the ordinary completed
+replay. Only the resumed `suspendFor()` claims the retained answer, inside the
+transaction that publishes the answer event and consumes the delivery together,
+so one answer is spent once however many hosts asked for it.
+
+A scheduled resume belongs to the scope that asked for it. Ending that scope
+before the claim transaction commits rolls the claim back and settles the run
+`interrupted` with the answer still pending, and a later scheduled or manual
+resume claims it; ending it after the commit leaves that answer event and
+consumed delivery in place, and replay restores the value without another live
+claim. There is no scheduling ledger, queue, retry loop, heartbeat, generation,
+watcher, polling source, new run status or combined deliver-and-resume
+operation, and no scheduling request survives host exit — the retained answer is
+the recovery point. Configured source watching, unattended iteration
+arbitration and public remote-host selection stay outside this boundary.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -5401,7 +5427,8 @@ Status is measured against main.
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
 | `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
 | `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all | built by #576 |
-| workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
+| explicit host scheduling | a trusted host that has independently observed a successful delivery invokes the ordinary resume operation with one public run ID and receives its ordinary outcome; scheduled and manual callers compete for the one non-blocking executor lock, only the resumed `suspendFor()` claims the retained answer, and the scheduled operation stays inside the scope that asked for it | built by #300 |
+| workflow scheduling (watchers, unattended iteration, remote host selection) | — | outside #300, which built the explicit host call above |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 
