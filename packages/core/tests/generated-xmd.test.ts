@@ -835,13 +835,19 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
   it("GX18a: a generated read and a later parent marker replay as one offered sequence", function* () {
     const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
     const executed: string[] = [];
-    const candidate = () => request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+    const candidate = () =>
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
 
     const first = yield* evaluate(candidate(), { after: marker(executed) });
     expect(first.failure).toBe(undefined);
     expect(transport.performed).toHaveLength(1);
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(first.events)).toEqual(["generated_xmd", "fetch", "test_preparation", "import_component"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "fetch",
+      "test_preparation",
+      "import_component",
+    ]);
 
     // The continuation runs after the run's own progress: one more retained
     // root, and the run stands on it. The admission's basis is still retained,
@@ -860,7 +866,12 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     // completed marker restore from their retained records.
     expect(transport.performed).toHaveLength(1);
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(again.events)).toEqual(["generated_xmd", "fetch", "test_preparation", "import_component"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "fetch",
+      "test_preparation",
+      "import_component",
+    ]);
     expect(admissions(again.events)).toEqual(admissions(first.events));
   });
 
@@ -878,7 +889,12 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     // no observation and no receipt to the value the host reads back.
     expect(executed).toEqual(["write:proposed", "parent-marker"]);
     expect(first.values).toEqual([]);
-    expect(offered(first.events)).toEqual(["generated_xmd", "generated_write", "test_preparation", "import_component"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "generated_write",
+      "test_preparation",
+      "import_component",
+    ]);
 
     // The continuation runs after the run's own progress — the very progress a
     // committed generated write makes: one more retained root, now current.
@@ -893,7 +909,12 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
     expect(executed).toEqual(["write:proposed", "parent-marker"]);
-    expect(offered(again.events)).toEqual(["generated_xmd", "generated_write", "test_preparation", "import_component"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "generated_write",
+      "test_preparation",
+      "import_component",
+    ]);
     expect(admissions(again.events)).toEqual(admissions(first.events));
   });
 
@@ -904,7 +925,11 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     const first = yield* evaluate(candidate(), { after: marker(executed) });
     expect(first.failure).toBe(undefined);
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(first.events)).toEqual(["generated_xmd", "test_preparation", "import_component"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
 
     const again = yield* evaluate(candidate(), {
       after: marker(executed),
@@ -915,7 +940,11 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(again.output).toBe(first.output);
     expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(again.events)).toEqual(["generated_xmd", "test_preparation", "import_component"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
   });
 
   it("GX18d: a rendered-only fragment keeps its output and invents no nested effect on replay", function* () {
@@ -926,7 +955,11 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(first.failure).toBe(undefined);
     expect(first.output).toContain("The fragment renders and performs nothing.");
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(first.events)).toEqual(["generated_xmd", "test_preparation", "import_component"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
 
     const again = yield* evaluate(candidate(), {
       after: marker(executed),
@@ -937,7 +970,11 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(again.output).toBe(first.output);
     expect(again.values).toEqual(first.values);
     expect(executed).toEqual(["parent-marker"]);
-    expect(offered(again.events)).toEqual(["generated_xmd", "test_preparation", "import_component"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
   });
 });
 

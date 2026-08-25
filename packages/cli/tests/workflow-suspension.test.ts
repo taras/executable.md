@@ -905,9 +905,12 @@ function useRepositoryGit(repository: string): Operation<void> {
         return repository;
       },
       *revParse([revision]): Operation<string> {
-        return (
-          yield* git(repository, ["rev-parse", "--verify", "--end-of-options", revision])
-        ).trim();
+        return (yield* git(repository, [
+          "rev-parse",
+          "--verify",
+          "--end-of-options",
+          revision,
+        ])).trim();
       },
       *readObject([commit, path]): Operation<string> {
         return yield* git(repository, ["cat-file", "blob", `${commit}:${path}`]);
@@ -1338,8 +1341,7 @@ decision: {decision.proceed}
     {
       what: "read",
       componentName: "Observe",
-      component:
-        `<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
+      component: `<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
       setup: `
 <File path="notes.md">
 the retained note
@@ -1351,8 +1353,7 @@ the retained note
     {
       what: "write",
       componentName: "Propose",
-      component:
-        `<Evaluate source={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
+      component: `<Evaluate source={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
       setup: "",
       nested: [{ operation: "write", target: "proposed.md" }],
       files: 2,
