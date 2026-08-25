@@ -123,6 +123,7 @@ function* runDurableChild<T extends WorkflowValue>(
           unaligned.totalYields,
           {
             message: `Divergence: coroutine ${childId} was cancelled before retained history was exhausted`,
+            unconsumed: unaligned.entry,
           },
         );
         rememberDurabilityFailure(childCtx, failure);
@@ -160,6 +161,7 @@ function* runDurableChild<T extends WorkflowValue>(
         unaligned.coroutineId,
         unaligned.cursor,
         unaligned.totalYields,
+        unaligned.entry,
       );
       rememberDurabilityFailure(childCtx, failure);
       throw failure;
@@ -187,7 +189,7 @@ function* runDurableChild<T extends WorkflowValue>(
         unaligned.coroutineId,
         unaligned.cursor,
         unaligned.totalYields,
-        { cause: primary },
+        { cause: primary, unconsumed: unaligned.entry },
       );
       rememberDurabilityFailure(childCtx, failure);
       throw failure;

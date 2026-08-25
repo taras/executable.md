@@ -2,7 +2,73 @@
  * Error types for the durable execution protocol.
  */
 
-import type { CoroutineId, EffectDescription } from "./types.ts";
+import type { Close, CoroutineId, EffectDescription, Json, Yield } from "./types.ts";
+
+/**
+ * The description field an authored source position occupies.
+ *
+ * A durable effect's identity is its `type` and `name` and nothing else, so a
+ * position travels beside them under this stable namespaced field. It is
+ * stored, filtered diagnostic data: never compared during divergence
+ * detection, never part of admission.
+ */
+export const SOURCE_POSITION_FIELD = "executablemd.source-position";
+
+/**
+ * Render one effect description for a divergence diagnostic.
+ *
+ * The identity renders as `type("name")`. When the description retains the
+ * exact normalized source shape under `SOURCE_POSITION_FIELD` — an optional
+ * non-empty `path`, an integer `offset` of at least 0, integer `line` and
+ * `column` of at least 1, and no other member — its human spelling,
+ * `path:line:column` or `line:column` without a path, never the offset, is
+ * appended as ` at …`. Anything else renders nothing at all: formatting a
+ * diagnostic must not introduce a new failure.
+ */
+export function describeEffect(description: EffectDescription): string {
+  return `${description.type}("${description.name}")${renderedSource(description)}`;
+}
+
+const SOURCE_MEMBERS = ["path", "offset", "line", "column"];
+
+function renderedSource(description: EffectDescription): string {
+  const field = description[SOURCE_POSITION_FIELD];
+  if (field === null || typeof field !== "object" || Array.isArray(field)) {
+    return "";
+  }
+  if (Object.keys(field).some((member) => !SOURCE_MEMBERS.includes(member))) {
+    return "";
+  }
+  const { path, offset, line, column } = field;
+  if (!isCoordinate(offset, 0) || !isCoordinate(line, 1) || !isCoordinate(column, 1)) {
+    return "";
+  }
+  if (path === undefined) {
+    return ` at ${line}:${column}`;
+  }
+  if (typeof path !== "string" || path === "") {
+    return "";
+  }
+  return ` at ${path}:${line}:${column}`;
+}
+
+function isCoordinate(value: Json | undefined, least: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= least;
+}
+
+/**
+ * The terminal-divergence message, naming the first retained entry the
+ * terminating subtree did not reach when one was selected.
+ */
+function withUnreached(message: string, unconsumed: Yield | Close | undefined): string {
+  if (unconsumed === undefined) {
+    return message;
+  }
+  if (unconsumed.type === "close") {
+    return `${message}; first unreached entry is the Close of coroutine ${unconsumed.coroutineId}`;
+  }
+  return `${message}; first unreached entry is ${describeEffect(unconsumed.description)}`;
+}
 
 /**
  * Raised when a durable event cannot be persisted.
@@ -70,8 +136,7 @@ export class DivergenceError extends Error {
     super(
       message ??
         `Divergence at ${coroutineId}[${position}]: ` +
-          `expected ${expected.type}("${expected.name}"), ` +
-          `got ${actual.type}("${actual.name}")`,
+          `expected ${describeEffect(expected)}, got ${describeEffect(actual)}`,
     );
     this.coroutineId = coroutineId;
     this.position = position;
@@ -91,22 +156,28 @@ export class TerminalDivergenceError extends Error {
   coroutineId: CoroutineId;
   consumedCount: number;
   totalCount: number;
+  /** The first retained entry the terminating subtree did not reach. */
+  unconsumed?: Yield | Close;
 
   constructor(
     coroutineId: CoroutineId,
     consumedCount: number,
     totalCount: number,
-    options: { cause?: unknown; message?: string } = {},
+    options: { cause?: unknown; message?: string; unconsumed?: Yield | Close } = {},
   ) {
     super(
-      options.message ??
-        `Divergence: workflow ${coroutineId} terminated after ${consumedCount} yields, ` +
-          `but journal has ${totalCount} yield entries`,
+      withUnreached(
+        options.message ??
+          `Divergence: workflow ${coroutineId} terminated after ${consumedCount} yields, ` +
+            `but journal has ${totalCount} yield entries`,
+        options.unconsumed,
+      ),
       { cause: options.cause },
     );
     this.coroutineId = coroutineId;
     this.consumedCount = consumedCount;
     this.totalCount = totalCount;
+    this.unconsumed = options.unconsumed;
   }
 }
 
@@ -117,11 +188,17 @@ export class TerminalDivergenceError extends Error {
 export class EarlyReturnDivergenceError extends TerminalDivergenceError {
   override name = "EarlyReturnDivergenceError";
 
-  constructor(coroutineId: CoroutineId, consumedCount: number, totalCount: number) {
+  constructor(
+    coroutineId: CoroutineId,
+    consumedCount: number,
+    totalCount: number,
+    unconsumed?: Yield | Close,
+  ) {
     super(coroutineId, consumedCount, totalCount, {
       message:
         `Divergence: generator ${coroutineId} returned after ${consumedCount} yields, ` +
         `but journal has ${totalCount} yield entries`,
+      unconsumed,
     });
   }
 }

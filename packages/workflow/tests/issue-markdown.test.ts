@@ -13,9 +13,12 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { until } from "effection";
 import type { Operation } from "effection";
-import { runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
+import { SOURCE_POSITION_FIELD } from "@executablemd/core";
+import { issueYields, runScenario, useScenarioFixture } from "./support/issue-scenario.ts";
 import type { ScenarioObservation } from "./support/issue-scenario.ts";
 
 /** The scenarios, in the order a reader meets them. */
@@ -69,6 +72,32 @@ describe("workflow Issue scenarios", () => {
     yield* fixture.stage("IssueDurability.attempt.stage.md");
     yield* fixture.stage("IssueDurability.attempt.stage.md");
     yield* stated(yield* fixture.observe(pathOf("IssueDurability.test.md")));
+  });
+
+  it("an issue effect retains where its <Issue> was written", function* () {
+    const fixture = yield* useScenarioFixture();
+    yield* fixture.stage("IssueDurability.attempt.stage.md");
+
+    const [effect] = issueYields(fixture.journal());
+    if (effect?.type !== "yield") {
+      throw new Error("the attempt journaled no Issue effect");
+    }
+
+    // The retained effect names the authored `<Issue>` element in the staged
+    // document itself — diagnostic data beside the identity, computed here
+    // from the checked-in source rather than trusted from the journal.
+    const path = fileURLToPath(
+      new URL("./scenarios/IssueDurability.attempt.stage.md", import.meta.url),
+    );
+    const text = yield* until(readFile(path, "utf8"));
+    const offset = text.indexOf("<Issue ");
+    const before = text.slice(0, offset);
+    expect(effect.description[SOURCE_POSITION_FIELD]).toEqual({
+      path,
+      offset,
+      line: before.split("\n").length,
+      column: offset - before.lastIndexOf("\n"),
+    });
   });
 
   it("IssueReadDurability.test.md states a contract that holds", function* () {

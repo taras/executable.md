@@ -34,13 +34,15 @@ nothing — two independent statements of the same thing.
 
 ## What the run retained
 
-The retained Issue effect holds the normalized request and the normalized public
-result, and none of the things a provider knows that a document must never hold.
+The retained Issue effect holds the normalized request, the normalized public
+result and where this document wrote its `<Issue>`, and none of the things a
+provider knows that a document must never hold.
 
 This is a statement about what `<Issue>` wrote, not about the whole run. The
 run's own `import_component` records carry the host path of every module it
 loaded; that is the run's business, and no Issue effect either causes it or can
-prevent it.
+prevent it. The authored position is that same run-owned class: it names the
+run's own document and element, not the provider or the deployment.
 
 <Test name="the retained read holds nothing private to the provider or the host">
 <IssueJournal as="journal" />

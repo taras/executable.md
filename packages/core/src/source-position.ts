@@ -13,10 +13,11 @@
  * a document that has been edited since would answer a different question.
  */
 
+import { SOURCE_POSITION_FIELD } from "@executablemd/durable-streams";
 import type { Json, SourcePosition } from "./types.ts";
 
 /** The description field an authored position occupies. */
-export const SOURCE_POSITION_FIELD = "executablemd.source-position";
+export { SOURCE_POSITION_FIELD };
 
 /**
  * The description fields a position contributes, or none when it has none.

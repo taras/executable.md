@@ -19,7 +19,7 @@ import { ensure, scoped, type Operation } from "effection";
 import type { Result } from "effection";
 import { fileURLToPath } from "node:url";
 import { basename } from "node:path";
-import { registerComponents } from "@executablemd/core";
+import { registerComponents, SOURCE_POSITION_FIELD } from "@executablemd/core";
 import type { DocumentExecution, Json, PropsSchema } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { InMemoryStream } from "@executablemd/durable-streams";
@@ -137,6 +137,8 @@ export interface ScenarioFixture {
    * No testing session: a staged attempt is a previous *run*, not a test.
    */
   stage(document: string): Operation<AttemptOutcome>;
+  /** The staged attempts' retained journal, as the next attempt inherits it. */
+  journal(): DurableEvent[];
   /**
    * Run a scenario document under its own complete testing session.
    *
@@ -169,6 +171,9 @@ export function* useScenarioFixture(): Operation<ScenarioFixture> {
       const outcome = yield* stageAttempt(server, held, attempting, document, staged.length + 1);
       staged.push(outcome);
       return outcome;
+    },
+    journal(): DurableEvent[] {
+      return held.snapshot(RUN.runId);
     },
     observe(path: string): Operation<ScenarioObservation> {
       return observeDocument(path, held, `observing:${basename(path)}`);
@@ -625,8 +630,22 @@ function useScenarioComponents(
         // answer — `import_component` retains the host path of every module the
         // run loaded, which is the run's business and not something `<Issue>`
         // may either cause or prevent.
+        //
+        // The authored source position is that same run-owned class: it names
+        // where the run's own document wrote the `<Issue>`, and this harness
+        // loads that document by absolute path. It is removed before the scan
+        // so the probe still catches a provider's or deployment's data leaking
+        // anywhere else in the retained effect.
         const events = held.snapshot(RUN.runId);
-        const text = JSON.stringify(issueYields(events));
+        const scanned = issueYields(events).map((event) => {
+          if (event.type !== "yield") {
+            return event;
+          }
+          const description = { ...event.description };
+          delete description[SOURCE_POSITION_FIELD];
+          return { ...event, description };
+        });
+        const text = JSON.stringify(scanned);
         return {
           effects: issueYields(events).length,
           retains: {

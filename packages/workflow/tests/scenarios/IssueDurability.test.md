@@ -43,11 +43,14 @@ in which nobody ever calls anything.
 
 ## What the run retained
 
-An upsert retains the normalized request and a reference — a URL and nothing
-else. The marker in particular is not in it: the tracker carries the marker, so
-that an interrupted attempt can be recognized by the next one, and the run
-carries the key it is a digest of. Retaining the marker as well would put a
-run's internal identity into the document that asked the question.
+An upsert retains the normalized request, a reference — a URL — and where this
+document wrote its `<Issue>`, and nothing else. The marker in particular is not
+in it: the tracker carries the marker, so that an interrupted attempt can be
+recognized by the next one, and the run carries the key it is a digest of.
+Retaining the marker as well would put a run's internal identity into the
+document that asked the question. The authored position is the run's own
+document naming its own element — diagnostic data like `import_component`'s
+retained paths, never the provider's or the deployment's.
 
 <Test name="the retained upsert holds nothing private to the provider or the host">
 <IssueJournal as="journal" />

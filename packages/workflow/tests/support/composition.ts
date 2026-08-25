@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { until } from "effection";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitComposition } from "../../src/composition/git-api.ts";
-import { collect, execute, inlineSource } from "@executablemd/core";
+import { collect, execute, INLINE_SOURCE_PATH, inlineSource } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
 import { GIT_HOST_EFFECT } from "../../src/git-host/effect.ts";
@@ -194,6 +194,24 @@ export function runWorkflowDocument(
       options,
     );
   });
+}
+
+/**
+ * Where one authored element sits in an inline document, as the value its
+ * durable description retains under the stable source-position field.
+ */
+export function inlinePosition(source: string, anchor: string): Record<string, unknown> {
+  const offset = source.indexOf(anchor);
+  if (offset === -1) {
+    throw new Error(`the document does not contain ${anchor}`);
+  }
+  const before = source.slice(0, offset);
+  return {
+    path: INLINE_SOURCE_PATH,
+    offset,
+    line: before.split("\n").length,
+    column: offset - before.lastIndexOf("\n"),
+  };
 }
 
 /** Every Git-host effect event this run journaled, in order. */

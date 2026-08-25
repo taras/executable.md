@@ -77,7 +77,8 @@
  */
 
 import type { Operation } from "effection";
-import { hasContent } from "@executablemd/core";
+import { getExpansion, hasContent } from "@executablemd/core";
+import type { SourcePosition } from "@executablemd/core";
 import {
   pinnedFileDelete,
   pinnedFileRead,
@@ -299,13 +300,24 @@ function createEvaluate(
       writes,
       ...(allow === undefined ? {} : { allow }),
     };
-    return yield* admit(id, source, policy);
+
+    // Where this authored `<Evaluate>` was written, as diagnostic journal data
+    // beside the admission. A generated fragment's own elements are scanned
+    // from a dynamic string and carry no authored position of their own.
+    const expansion = yield* getExpansion();
+
+    return yield* admit(id, source, policy, expansion.position);
   };
 }
 
 /** The admission itself, and the only part of this that is journaled. */
-function* admit(id: string, source: string, policy: GeneratedEvaluationPolicy): Operation<Json> {
-  const result = yield* evaluateGeneratedFragment(id, source, policy);
+function* admit(
+  id: string,
+  source: string,
+  policy: GeneratedEvaluationPolicy,
+  position: Readonly<SourcePosition> | undefined,
+): Operation<Json> {
+  const result = yield* evaluateGeneratedFragment(id, source, policy, position);
   return observationValue(result);
 }
 

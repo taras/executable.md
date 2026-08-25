@@ -91,7 +91,7 @@ import type {
 } from "@executablemd/durable-streams";
 import { Err, ensure, Ok, scoped } from "effection";
 import type { Operation, Result } from "effection";
-import { getExpansion } from "@executablemd/core";
+import { getExpansion, sourceDescription } from "@executablemd/core";
 import { getWorkflowRun, retainedGitHostIdentitiesHere } from "../run.ts";
 import { GIT_HOST_EFFECT } from "./effect-type.ts";
 import { claimRetainedGitHostIdentity, exhaustRetainedGitHostIdentities } from "./identities.ts";
@@ -659,6 +659,10 @@ export function* reconcileGitHostEffect(
   const description: EffectDescription = {
     type: GIT_HOST_EFFECT,
     name: yield* gitHostRequestFingerprint(complete),
+    // Where the authored component asking for this effect was written —
+    // diagnostic journal data, never part of the fingerprint, the request, or
+    // the reconciliation record.
+    ...sourceDescription(expansion.position),
   };
 
   let retained: unknown;
