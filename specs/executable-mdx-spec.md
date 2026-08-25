@@ -9852,6 +9852,8 @@ remote and a real `git`.
 | WGP7 | What an advance never does | No force, force-with-lease, upstream establishment, reset, merge, rebase, fetch, checkout mutation or second push attempt, in the command trace or the retained checkout configuration |
 | WGP8 | Pull-request evidence | A numbered `<PullRequest>` update accepts this iteration's Push record even after an earlier publication of the same branch, and a history holding only the earlier one is conflicting without the Git host being contacted |
 | WGP9 | Compatibility | An `ancestor`/`performed` record and the two shapes written before relations existed all replay without reaching `init`, `ls-remote`, `merge-base`, `fetch` or `push`; a relation beside a proven absence, an unknown relation, an undeclared pre-state member, an adoption carrying a relation and a performance over an unattested predecessor each fail the replay closed |
+| WGP10 | Resuming a branch published twice | A run that publishes A, commits B and publishes B resumes after only its root `Close` is removed: both Push records restore in order with their own source commits, the run stays at B, and no `init`, `ls-remote`, `merge-base`, `fetch` or `push` runs — each completed Push names its request from the Workspace root its own journal event was appended against, and reading that root publishes nothing and moves no frontier |
+| WGP11 | Equality is never an attested advance | A record pairing `performed` with `{ remoteCommit: <the commit it published>, relation: "ancestor" }` is unreadable, directly and through a replay, while the adoption it would have to have been still reads |
 
 ### Tier WAD — Delivering an answer to a durable wait
 

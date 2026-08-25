@@ -22,6 +22,21 @@ import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitOperationProtocolError, RepositoryStaleStateError } from "../src/composition/errors.ts";
 import { GitHostProtocolError } from "../src/git-host/errors.ts";
 import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
+import {
+  ANCESTOR,
+  GIT_PUSH,
+  gitPushInputsJson,
+  gitPushNaturalKeyJson,
+  gitPushObservationsJson,
+  gitPushPreStateJson,
+  gitPushResultJson,
+  parseGitPushRecord,
+  pushExpectation,
+  PUSH_REMOTE,
+  refspecFor,
+  type GitPushInputs,
+  type GitPushRepositoryIdentity,
+} from "../src/composition/git-push-records.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { GitComposition } from "../src/composition/git-api.ts";
 import type { RepositoryRecord } from "../src/composition/records.ts";
@@ -81,6 +96,28 @@ function source(locator: string): string {
 function advanced(locator: string): string {
   return [
     `<Repository name="project" url="${locator}">`,
+    `<File path="more.md">`,
+    "the second iteration",
+    "</File>",
+    `<Git.Add paths="more.md" />`,
+    `<Git.Commit message="record more.md" as="second" />`,
+    `<Git.Push />`,
+    "</Repository>",
+  ].join("\n");
+}
+
+/**
+ * The shape a supervised iteration has: publish, work, publish again.
+ *
+ * Two Push elements, one branch, two commits. What each of them asked for is a
+ * question about the moment it ran, which is what makes this the document a
+ * partial replay has to reconstruct rather than recompute.
+ */
+function republished(locator: string): string {
+  return [
+    `<Repository name="project" url="${locator}">`,
+    `<Git.Switch branch="${BRANCH}" />`,
+    `<Git.Push />`,
     `<File path="more.md">`,
     "the second iteration",
     "</File>",
@@ -228,6 +265,68 @@ describe("workflow Git.Push durability", () => {
       }
       expect(yield* gitHostEvents(database)).toHaveLength(1);
       expect(yield* gitHostOutcomes(database)).toEqual(retained);
+    });
+  });
+
+  /**
+   * A run that published its branch twice, resumed.
+   *
+   * Each Push named its request from the checkout as it stood when it ran, so
+   * the first one asked about A and the second about B. Reconstructing either
+   * from the frontier the run ended on would ask the journal a question that
+   * position never asked — the first Push would arrive at A's retained record
+   * holding B's request — and the run could never be resumed at all.
+   *
+   * The remote is deleted before the continuation, so the two restored records
+   * are the whole of what the run knows about what it published.
+   */
+  it("resumes a run that published one branch twice", function* () {
+    const root = yield* useStorageRoot();
+    const remote = yield* useBareRemote(REMOTE);
+    const path = runPath(root, "release-1.4");
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      yield* runWorkflowDocument(database, republished(remote.locator));
+
+      const head = yield* headCommit(
+        database,
+        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+      );
+      const first = head.parents[0] ?? "";
+      const retained = yield* gitHostOutcomes(database);
+      expect(retained).toHaveLength(2);
+      const sources = retained.map((outcome) =>
+        Reflect.get(
+          Object(parseGitHostReconciliationRecord(outcome.record)?.result),
+          "sourceCommit",
+        ),
+      );
+      expect(sources).toEqual([first, head.commit]);
+      // The branch really did advance before anything was removed.
+      expect(remoteBranch(remote, BRANCH)).toBe(head.commit);
+
+      dropRootClose(path);
+      yield* remote.remove();
+
+      const counting = countingHost();
+      yield* runWorkflowDocument(database, republished(remote.locator), countingOptions(counting));
+
+      // Both restored, in order, unchanged — and neither of them asked the
+      // Git host, proved ancestry, fetched or pushed anything again.
+      expect(yield* gitHostEvents(database)).toHaveLength(2);
+      expect(yield* gitHostOutcomes(database)).toEqual(retained);
+      for (const command of ["init", "ls-remote", "merge-base", "fetch", "push"]) {
+        expect(subcommands(counting.counters)).not.toContain(command);
+      }
+      // Reading history is not returning to it: the run is still at B.
+      const resumed = yield* headCommit(
+        database,
+        (yield* retainedRepositories(database))[0]?.record.checkoutPath ?? "",
+      );
+      expect(resumed.commit).toBe(head.commit);
+      expect(committedRoot(path)).toBe(latestRoot(path));
+      expect(yield* survivingRoots(counting.counters)).toEqual([]);
     });
   });
 
@@ -416,6 +515,13 @@ describe("workflow Git.Push durability", () => {
       },
     },
     {
+      name: "attests that a destination already holding this commit was behind it",
+      damage: (record) => {
+        Object(record.preState).remoteCommit = String(Object(record.result).sourceCommit);
+        Object(record.preState).relation = "ancestor";
+      },
+    },
+    {
       name: "adopts a destination it attested was behind",
       damage: (record) => {
         record.decision = "adopted";
@@ -456,6 +562,83 @@ describe("workflow Git.Push durability", () => {
       });
     });
   }
+
+  /**
+   * The one relation the arithmetic allows and this operation cannot reach.
+   *
+   * A commit is its own ancestor, so nothing about ancestry itself refuses a
+   * record saying the destination held exactly the commit it then published.
+   * The state machine is what refuses it: observing the destination at this
+   * commit is adoption, and there is no path from it to a performance. Read
+   * directly rather than through a run, because what is under test is the
+   * parser a hand-edited or foreign database is read with.
+   */
+  // deno-lint-ignore require-yield
+  it("refuses a record that published over the commit it says was already there", function* () {
+    const repository: GitPushRepositoryIdentity = Object.freeze({
+      name: "project",
+      locatorFingerprint: "a".repeat(64),
+      requestedBase: null,
+      creationCommit: "1".repeat(40),
+      primaryBranch: "main",
+      objectFormat: "sha1",
+    });
+    const sourceCommit = "2".repeat(40);
+    const inputs: GitPushInputs = Object.freeze({
+      repository,
+      remote: PUSH_REMOTE,
+      branch: BRANCH,
+      destinationRef: DESTINATION,
+      sourceCommit,
+    });
+    const request = Object.freeze({
+      identity: Object.freeze({ runId: "release-1.4", expansionId: "one-push" }),
+      kind: GIT_PUSH,
+      inputs: gitPushInputsJson(inputs),
+      naturalKey: gitPushNaturalKeyJson({
+        repository,
+        remote: PUSH_REMOTE,
+        destinationRef: DESTINATION,
+      }),
+    });
+    const settled = {
+      request,
+      observations: gitPushObservationsJson({ remoteCommit: sourceCommit }),
+      result: gitPushResultJson({
+        repository,
+        remote: PUSH_REMOTE,
+        branch: BRANCH,
+        destinationRef: DESTINATION,
+        refspec: refspecFor(sourceCommit, DESTINATION),
+        sourceCommit,
+        observedRemoteCommit: sourceCommit,
+      }),
+    };
+    const expectation = pushExpectation(inputs);
+
+    expect(
+      parseGitPushRecord(
+        {
+          ...settled,
+          preState: gitPushPreStateJson({ remoteCommit: sourceCommit, relation: ANCESTOR }),
+          decision: "performed",
+        },
+        expectation,
+      ),
+    ).toBe(undefined);
+
+    // The record it would have to have been, still read exactly as before.
+    expect(
+      parseGitPushRecord(
+        {
+          ...settled,
+          preState: gitPushPreStateJson({ remoteCommit: sourceCommit }),
+          decision: "adopted",
+        },
+        expectation,
+      )?.decision,
+    ).toBe("adopted");
+  });
 
   it("fails a replay whose retained record answers a different request", function* () {
     const root = yield* useStorageRoot();

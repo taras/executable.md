@@ -469,10 +469,17 @@ export function parseGitPushResult(
  * published, and it publishes for two reasons: the destination was proven
  * absent, or it named a commit the provider attested is in this source's
  * ancestry. `adopted` means the destination already named this exact commit,
- * and nothing was performed — an attested relation beside it would be a record
- * claiming the destination both was and was not already there. A record pairing
- * a word with a pre-state that does not support it describes a reconciliation
- * the state machine cannot reach.
+ * and nothing was performed. A record pairing a word with a pre-state that does
+ * not support it describes a reconciliation the state machine cannot reach.
+ *
+ * A commit is its own ancestor, and that is the one place where the arithmetic
+ * and this operation disagree. Observing the destination at exactly this commit
+ * is what adoption *is*, so an attested relation is never how equality was
+ * reached: a `performed` record whose predecessor is the commit it published
+ * describes a push over a destination that already held it, and an `adopted`
+ * record carrying a relation describes a destination that both was and was not
+ * already there. Neither is reachable, so a valid attested predecessor is a
+ * commit other than the source.
  */
 export function parseGitPushRecord(
   record: GitHostReconciliationRecord,
@@ -491,7 +498,8 @@ export function parseGitPushRecord(
   const attested = "relation" in preState;
   const supported =
     record.decision === "performed"
-      ? preState.remoteCommit === null || attested
+      ? preState.remoteCommit === null ||
+        (attested && preState.remoteCommit !== result.sourceCommit)
       : !attested && preState.remoteCommit === result.sourceCommit;
   return supported ? Object.freeze({ decision: record.decision, result }) : undefined;
 }

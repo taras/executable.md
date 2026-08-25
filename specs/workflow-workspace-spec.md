@@ -1283,11 +1283,19 @@ shape it describes a reconciliation this operation can reach: the remote is
 `origin`, the destination is that branch's ref, the refspec is that commit
 published to that destination, the observed commit is the one published, and the
 decision agrees with the pre-state. `performed` follows proven absence or an
-attested ancestor; `adopted` follows a destination that already held the commit,
-and never carries a relation, because a destination that was already there is
-not one this attempt advanced. A relation beside a proven absence, a relation
+attested ancestor **other than the commit it published**; `adopted` follows a
+destination that already held the commit, and never carries a relation. A commit
+is its own ancestor, and that is the one place where the arithmetic and this
+operation part company: observing the destination at exactly this commit is what
+adoption is, so a performance over it and an adoption claiming to have advanced
+are both reconciliations the state machine cannot reach. A relation beside a proven absence, a relation
 this version does not know, and a member either shape does not declare are each
 a record this version cannot account for, and none of them is read around.
+
+**A resumed Push reads the moment it published from.** A branch published twice
+retains two records, and each is reconstructed from the Workspace root its own
+journal event was appended against, so a continuation asks each position the
+question that position asked. §9 states the rule and what it may not disturb.
 
 **PullRequest reads this iteration's record.** The evidence scan of §7.5
 requires the Push record naming the commit the checkout is on now. An earlier
@@ -2075,7 +2083,32 @@ what that effect needed locally — a Push rebuilds its checkout from the Worksp
 in order to name the request it is asking about — and then hands back the
 retained record without selecting a provider, contacting the host or appending
 anything. The object-source attachment such a reconstruction produces is never
-durable and never reaches routing middleware. Nothing about an advance is
+durable and never reaches routing middleware.
+
+**Which moment such a reconstruction reads.** A Push names its request from the
+checkout — the branch it is on, and the commit that branch holds — and that is a
+question about the moment it ran. A run publishes one branch repeatedly, so by
+the time it is resumed the Workspace has moved on, and reconstructing an earlier
+Push from the frontier would ask the journal about a request that position never
+made. The root each completed Push is reconstructed from is therefore the one
+its own journal event was appended against, which is the retained association
+the run made when it wrote that event. Nothing else stands in for it: the
+current pointer and the branch name describe where the run got to, and the
+retained Push payload would be answering for itself.
+
+Reading that root is a read of history, not a return to it. The historical root
+is materialized, the checkout family is exported from it, and everything the
+materialization wrote is discarded on every path out — success, failure and
+cancellation alike. The current root, the retained roots, the retained metadata
+and the journal are exactly what they were, no root is published, and the run's
+frontier stays where the run left it. What leaves is the exported host tree the
+reconstruction reads its branch and commit from.
+
+A position with no retained successful Push is a live attempt and names its
+request from the current root, as it always did. The root selected here decides
+only what question is asked: the request it produces still has to be the one the
+retained position asked, so a reconstruction that named the wrong moment refuses
+the replay rather than answering it, and it can authorize no Git-host work. Nothing about an advance is
 decided a second time: the ancestry a live attempt proved is retained as the
 relation in its pre-state, so a restored Push builds no control repository,
 observes no destination and asks no ancestry question — which it could not

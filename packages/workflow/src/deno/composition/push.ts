@@ -47,6 +47,7 @@
  */
 
 import { Err, Ok, scoped, type Operation, type Result } from "effection";
+import { getExpansion } from "@executablemd/core";
 import {
   GitOperationInfrastructureError,
   GitOperationProtocolError,
@@ -70,19 +71,23 @@ import {
   sameRepositoryIdentity,
   type GitPushInputs,
   type GitPushOutcome,
+  type GitPushRepositoryIdentity,
   type GitPushRequest,
   type GitPushResult,
 } from "../../composition/git-push-records.ts";
 import type { GitHostProvider } from "../../git-host/api.ts";
 import { reconcileGitHostEffect, withGitHostProvider } from "../../git-host/effect.ts";
+import { GIT_HOST_EFFECT } from "../../git-host/effect-type.ts";
 import { GitHostUnavailableError } from "../../git-host/errors.ts";
-import type {
-  CompleteGitHostEffectRequest,
-  GitHostCompletion,
-  GitHostObservation,
+import {
+  parseGitHostReconciliationRecord,
+  type CompleteGitHostEffectRequest,
+  type GitHostCompletion,
+  type GitHostObservation,
 } from "../../git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../storage/api.ts";
 import { transactWorkspaceRoots } from "../workspace/private.ts";
+import type { PrivateWorkspaceTransaction } from "../workspace/private.ts";
 import {
   commitPresent,
   currentBranch,
@@ -99,7 +104,9 @@ import {
   exportCheckoutFamily,
   prepareCheckout,
   selectGitCheckout,
+  type ExportedCheckouts,
   type GitCheckout,
+  type GitCheckoutSelection,
 } from "./operations.ts";
 import { gitRefusal } from "./refusals.ts";
 
@@ -150,6 +157,80 @@ function* provenAncestor(
     return false;
   }
   unusable("native Git could not decide whether the branch already holds an earlier commit");
+}
+
+/**
+ * The Workspace root this invocation's own retained Push was written against,
+ * or `undefined` when it has none and this is a live attempt.
+ *
+ * A Push names its request from the checkout: the branch it is on and the
+ * commit that branch holds. That reading is a question about a moment, and a
+ * replay asks it after the run has moved on — a document that publishes a
+ * branch, commits again and publishes it again would otherwise reconstruct its
+ * first Push out of the second commit and ask the journal about a request that
+ * position never made.
+ *
+ * So a completed Push is reconstructed from the root its own journal row was
+ * appended against. That association was made when the event was written and is
+ * the only thing here that says where this position was; the current pointer,
+ * the branch name and the retained payload all describe somewhere else, or
+ * describe it circularly.
+ *
+ * Reading history is all this does. The root it names still has to produce the
+ * exact request whose fingerprint the shared engine is looking for, so a wrong
+ * one refuses the replay rather than answering it, and no root selected here
+ * can authorize live Git-host work.
+ */
+function* retainedPushRoot(
+  database: WorkflowRunDatabase,
+  expansionId: string,
+  repository: GitPushRepositoryIdentity,
+): Operation<string | undefined> {
+  const entries = yield* database.readJournalEntries();
+  if (!entries.ok) {
+    throw entries.error;
+  }
+  let selected: string | undefined;
+  for (const entry of entries.value) {
+    const event = entry.event;
+    if (event.type !== "yield" || event.description.type !== GIT_HOST_EFFECT) {
+      continue;
+    }
+    if (event.result.status !== "ok") {
+      continue;
+    }
+    const record = parseGitHostReconciliationRecord(event.result.value);
+    const inputs =
+      record?.request.kind === GIT_PUSH && record.request.identity.expansionId === expansionId
+        ? parseGitPushInputs(record.request.inputs)
+        : undefined;
+    // A record this position cannot read as a Push of the Repository it
+    // admitted is not one to reconstruct from. It is not read around either:
+    // the shared engine holds every retained record at this position to the
+    // request being made, and refuses one that answers a different question.
+    if (inputs === undefined || !sameRepositoryIdentity(inputs.repository, repository)) {
+      continue;
+    }
+    if (selected !== undefined) {
+      unusable("this run retains more than one published branch for the same invocation");
+    }
+    selected = entry.workspaceRootId;
+  }
+  return selected;
+}
+
+/** The checkout family this invocation names its request from, exported to `root`. */
+function* exportRequestSource(
+  workspace: PrivateWorkspaceTransaction,
+  retained: string | undefined,
+  root: string,
+  selection: GitCheckoutSelection,
+): Operation<ExportedCheckouts> {
+  const family = () => exportCheckoutFamily(workspace.filesystem, root, selection);
+  if (retained === undefined || retained === (yield* workspace.currentRoot())) {
+    return yield* family();
+  }
+  return yield* workspace.readRetainedRoot(retained, family);
 }
 
 /**
@@ -340,13 +421,23 @@ export function* createGitPush(
     const root = yield* host.useDirectory();
     const git = gitSession(host, root);
 
+    // Which moment this invocation is naming its request from. Read before the
+    // transaction, because it is a question about retained history rather than
+    // about the Workspace, and a transaction here cannot nest inside itself.
+    const expansion = yield* getExpansion();
+    const retained = yield* retainedPushRoot(
+      database,
+      expansion.id,
+      filteredRepositoryIdentity(admitted.repository),
+    );
+
     // Held open for the export alone. Everything after this reads files, and a
     // remote round trip must never keep the run's database locked.
     const prepared = yield* transactWorkspaceRoots(database, function* (workspace) {
       const selection = selectGitCheckout(workspace.metadata, PUSH, admitted);
       return {
         selection,
-        exported: yield* exportCheckoutFamily(workspace.filesystem, root, selection),
+        exported: yield* exportRequestSource(workspace, retained, root, selection),
       };
     });
     if (!prepared.ok) {
