@@ -7310,8 +7310,11 @@ reaching the live route again.
 
 A host retains one such answer with `xmd workflow answer <run-id>
 <suspension-id> <json>`, which is delivery and not execution: it takes no
-executor lock and leaves the run `suspended` until somebody resumes it. Resume
-scheduling belongs to #300.
+executor lock and leaves the run `suspended` until somebody resumes it. A
+trusted host that has independently observed that delivery may schedule the
+ordinary resume with the public run ID alone: scheduling decides when to invoke
+resume, carries no answer authority, and competes for the same non-blocking
+executor lock the manual entry point takes.
 
 Suspension is distinct from `<Elicit>` under `xmd run`, where the provider is a
 live interaction and its validated answer is the one durable effect. Under
@@ -9884,6 +9887,25 @@ against the production Deno adapter, on real run files.
 | WAD9 | The resume spends it | One `suspension_answer` event naming the wait, the pending state consumed, and `suspendFor()` returning the delivered value |
 | WAD10 | Replay | A later resume restores the answer from its retained event, reaching no live controller, publishing no second event and consuming nothing again |
 | WAD11/WAD12 | One transaction | A journal insertion that fails, and a consumption that fails, each leave the answer pending and no answer event; the next resume publishes exactly one |
+
+### Tier SCH — Explicit scheduled resume
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §3.5. Runs
+against the production Deno adapter, on real run files. Tier WAD owns delivery,
+schema, secret and answer-transaction behavior and is the prerequisite evidence
+for it; the cases here add only what scheduling discriminates.
+
+| # | Test | Verify |
+|---|------|--------|
+| SCH1 | Delivery schedules nothing | A delivery against a suspended run leaves status, execution records, history and effect counts as the suspension left them, and the scheduler is called zero times until a host calls it |
+| SCH2 | Scheduling is ordinary resume | One run ID and nothing else crosses the boundary into the same resume operation the foreground command runs, and the real run claims its answer and completes |
+| SCH3 | One executor lock | Holding either entry point on the lock refuses the other with the ordinary already-running outcome and no execution record of its own; swapping which starts first swaps the winner |
+| SCH4 | Duplicate and late | Two schedules for one pending answer retain one `suspension_answer`, one consumed delivery and one continuation effect; a schedule after the winner settled performs only the completed replay |
+| SCH5 | Cancellation winners | Cancellation first leaves `cancelled` with no execution and no claim; scheduling first makes cancellation report the live executor while the scheduled owner keeps its run |
+| SCH6 | Halted mid-claim | Halting the scheduled scope inside the open claim transaction publishes no answer event, leaves the delivery pending, completes teardown and settles `interrupted`; the next resume claims exactly once |
+| SCH7 | Halted after claim | Stopping between the committed claim and the next authored effect keeps one answer event and one consumed delivery and settles `interrupted`; a later resume restores the answer without a live claim and performs that effect once |
+| SCH8 | No scheduler memory | A host ended before the claim commits is replaced by a fresh one that resumes from retained storage alone, and the run's schema gains no scheduling table, status or event |
+| SCH9 | The reviewed consumer | The stacked base is the exact reviewed head, and the delta changes no workflow document of that base and no composition test |
 
 ### Tier WAP — The strict workflow Agent profile
 
