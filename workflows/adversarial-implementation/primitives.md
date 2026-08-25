@@ -354,8 +354,12 @@ the component from its retained source rather than from a mutable checkout. A
 same-named file beside the definition answers nothing, an undeclared name
 resolves to nothing at all, and ordinary `xmd run` resolution is unchanged.
 
-What #301 still owes is the supervised composition itself: scheduling the loop
-and continuing it unattended. Reachable stage names are not a running workflow.
+What #301 slice 2 owes is the composition itself: the authored loop that runs
+discovery, planning, authorization, evaluation, Git, the pull request, its
+evidence reads, review, deferred issues and acceptance as one workflow run. That
+is what this document now writes. Scheduling, watchers and unattended
+continuation are deliberately outside it — a resume stays an explicit act, and
+the later scheduling slice is #300's.
 
 **2. Repository and deterministic Git composition.**
 
@@ -480,10 +484,11 @@ whole. This workflow performs those itself, as authored effects after
 | synchronize this living target with settled contracts | #292 | this change |
 | prove the shipped planning-document logic | #290 | this change — the proof lands here; #290 closes on delivery |
 | a root's declared component bundle, resolved from its pinned commit | #301 slice, delivered by #493 | shipped |
-| compose the supervised workflow — scheduling the loop, continuing it unattended | #301 | open |
+| compose the supervised workflow — the authored loop from discovery to acceptance under one run | #301 slice 2 | this change |
+| schedule a resume, or continue a run unattended | #300 slice 2 | open — deliberately outside #301 slice 2 |
 | omit an expression prop that evaluates to `undefined`, before validation and before the durable JSON boundary | #301 | open — architecture settled; `Implementation`'s one-invocation pull-request loop depends on it |
 | typed durable answer delivery to a suspended run | #300 | shipped — delivery is non-executing; automatic scheduling is not shipped |
-| default-on secret rejection before journal persistence | #199 | open — guard and scanner built |
+| default-on secret rejection before journal persistence | #199, delivered by #573 and #575 | shipped |
 | certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
 
 `<Discovery>`, `<Planning>`, `<Implementation>`, and `<UserCheckpoint>` are

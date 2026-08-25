@@ -169,14 +169,19 @@ the component from its retained source, a mutable checkout beside the definition
 substitutes nothing, and an undeclared name resolves to nothing at all. Ordinary
 `xmd run` resolution is unchanged.
 
-What #301 still owes is the supervised composition: scheduling the loop and
-continuing it unattended. Reaching the stage names is not running the workflow.
+What #301 slice 2 owes is the composition itself: the authored loop that runs
+discovery, planning, authorization, evaluation, Git, the pull request, its
+evidence reads, review, deferred issues and acceptance as one workflow run. That
+is what this document now writes. Scheduling, watchers and unattended
+continuation are deliberately outside it — a resume stays an explicit act, and
+the later scheduling slice is #300's.
 
-The stages that run today therefore run under `xmd run`, in one document
-execution and one existing working directory, with the user inspecting each
-result and starting the next stage. That manual boundary lets the exercise test
-the interview, handoff, plan, review, decision, and revision contracts while the
-retained environment around them is completed.
+The composed root runs under `xmd workflow start`, which is the current
+execution path for it: one retained Workspace, the stage names resolved from the
+pinned definition commit, and a checkpoint that suspends the run durably rather
+than blocking it. Running the stages by hand under `xmd run`, one at a time with
+a person starting the next, is how the exercise was tested before the retained
+environment existed; it is history rather than the way this root is run.
 
 The automated form treats execution as a loop. An iteration stops on the first
 applicable signal in this priority order:
@@ -294,14 +299,18 @@ stable provider identity, number, URL, open state, head SHA and base SHA (#295,
 shipped). Existing reviews,
 comments and check results are separate reads rather than fields on a creation
 result that would otherwise claim to stay fresh against a remote that keeps
-changing. **That read is `<Fetch>`'s** (#456, shipped): a document reads over
-HTTP and retains what it read, so a network-denied reviewer can be handed a pull
-request's current state without the Agent ever reaching the network. The
-requirement it must satisfy is unchanged: the reviewer receives every existing
-review with its body, every comment, and every check result, iterated rather
-than stringified — a review that cannot see a failing check or an existing
-objection is not adversarial, it is uninformed. No stage writes those fetches
-yet, and admitting `<Fetch>` inside generated XMD remains #369's.
+changing. **Those reads are their own components** (#576, delivered by #580):
+`<PullRequest.Reviews>`, `<PullRequest.Comments>` and `<PullRequest.Checks>`,
+each addressed by the pull request's own `url` and binding its normalized
+retained collection. They are three independent durable effects, so a replay
+hands back what the run recorded and performs no second read, and a
+network-denied reviewer is handed the pull request's state without the Agent
+ever reaching the network. The requirement they satisfy is unchanged: the
+reviewer receives every existing review with its body, every comment, and every
+check result, iterated rather than stringified — a review that cannot see a
+failing check or an existing objection is not adversarial, it is uninformed.
+The implementation stage writes all three. They are not `<Fetch>`, they author
+no repository or number, and a generated fragment reaches none of them.
 
 The user's checkpoint carries the same evidence. An existing objection reaches
 the person approving the change in its own words, not only as the planner
@@ -569,7 +578,7 @@ touched and why deleting a run never claims to undo a push.
 Co-location does not make arbitrary filesystem content journal or training data.
 Journal events reach storage already filtered by the pre-persistence secret
 gate, and storage adds no second policy: a rejected gate leaves nothing behind.
-That gate is and that gate is **default-on** (#199, delivered by #573 and #575).
+That gate is **default-on** (#199, delivered by #573 and #575).
 Offline detection is installed before the first live event. An offending durable
 event is refused before persistence; a rendered chunk the scanner cannot clear is
 withheld whole, while an earlier cleared prefix stays observable. Withholding
@@ -907,13 +916,15 @@ The user triggers each stage manually. Required content is rendered directly int
 later prompts from restored values, and generated artifacts do not appear in a
 checkout unless the user explicitly exports them.
 
-The exercise runs under `xmd run`, in one document execution and one existing
-working directory. The document logic — instruction discovery, the planner
-interview, plan convergence, the bounded repair turns, and the user gate — is
-executable on shipped syntax today, and a workflow run can now give it both a
-checkout (#293) and its stage names, which the root declares as a component
-bundle resolved from the pinned commit (#493). What it cannot yet give is the
-supervision: scheduling the loop and continuing it unattended remain #301's.
+The composed root runs under `xmd workflow start`. The document logic —
+instruction discovery, the planner interview, plan convergence, the bounded
+repair turns, and the user gate — is executable on shipped syntax, and a workflow
+run gives it a retained Workspace, a checkout (#293) and its stage names, which
+the root declares as a component
+bundle resolved from the pinned commit (#493), and a checkpoint that suspends
+the run durably rather than blocking it (#577). What stays outside the
+composition is anything automatic: scheduling a resume and continuing a run
+unattended are excluded here, and the later scheduling slice is #300's.
 
 The exercise succeeds when:
 
