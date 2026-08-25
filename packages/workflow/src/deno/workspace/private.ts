@@ -39,6 +39,21 @@ export interface PrivateWorkspaceTransaction {
   capture(options?: CaptureWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
   publish(rootId: string): Operation<void>;
   restore(rootId: string, options?: RestoreWorkspaceRootOptions): Operation<StoredWorkspaceRoot>;
+  /**
+   * Read the Workspace as one retained root held it, and leave it as it was.
+   *
+   * Reading history rather than returning to it. A replayed effect sometimes
+   * has to name what it asked for at the position it asked from, and the
+   * Workspace has moved on since — so the root is materialized, `body` reads
+   * it, and everything that materialization wrote is discarded. The current
+   * root, the retained roots, the metadata and the journal are what they were,
+   * on every path out: nothing here publishes, and there is no ordering in
+   * which a caller observes the Workspace selected at the historical root.
+   *
+   * What `body` carries out of it is its own. An export writes host files
+   * outside this database, and those are the point.
+   */
+  readRetainedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T>;
 }
 
 interface PrivateWorkspaceApi {
@@ -159,6 +174,17 @@ export function usePrivateWorkspace(
           *restore(rootId, options = {}): Operation<StoredWorkspaceRoot> {
             authorize();
             return restoreWorkspaceRoot(connection, active, rootId, options);
+          },
+
+          *readRetainedRoot<T>(rootId: string, body: () => Operation<T>): Operation<T> {
+            authorize();
+            return yield* connection.savepoints.rollbackOnly(
+              active,
+              (function* (): Operation<T> {
+                restoreWorkspaceRoot(connection, active, rootId);
+                return yield* body();
+              })(),
+            );
           },
         };
 

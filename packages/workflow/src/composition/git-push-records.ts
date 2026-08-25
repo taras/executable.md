@@ -87,11 +87,25 @@ export interface GitPushNaturalKey {
   readonly destinationRef: string;
 }
 
-/** What the destination ref held before this attempt, as far as it was proven. */
-export interface GitPushPreState {
-  /** The commit the destination named, or `null` when it was proven absent. */
-  readonly remoteCommit: string | null;
-}
+/** The one relation a pre-state may attest between the predecessor and the source. */
+export const ANCESTOR = "ancestor";
+
+/**
+ * What the destination ref held before this attempt, as far as it was proven.
+ *
+ * Three closed shapes, and the third is what makes an ordinary fast-forward
+ * ordinary. A destination proven absent is `null`. A destination naming a
+ * commit is that commit — and when the provider proved inside its own
+ * authenticated object source that the commit is somewhere in the source's
+ * ancestry, the pre-state says so. That attestation is the whole of what
+ * authorizes the existing exact non-force push against a branch that already
+ * exists: the fact was established locally, once, before anything was
+ * published, and the record keeps it rather than the traversal that found it.
+ */
+export type GitPushPreState =
+  | { readonly remoteCommit: null }
+  | { readonly remoteCommit: string }
+  | { readonly remoteCommit: string; readonly relation: typeof ANCESTOR };
 
 /** What the destination ref holds now. */
 export interface GitPushObservations {
@@ -129,6 +143,8 @@ const INPUT_MEMBERS = ["repository", "remote", "branch", "destinationRef", "sour
 const NATURAL_KEY_MEMBERS = ["repository", "remote", "destinationRef"] as const;
 
 const PRE_STATE_MEMBERS = ["remoteCommit"] as const;
+
+const ANCESTOR_PRE_STATE_MEMBERS = ["remoteCommit", "relation"] as const;
 
 const OBSERVATION_MEMBERS = ["remoteCommit"] as const;
 
@@ -199,7 +215,12 @@ export function gitPushNaturalKeyJson(key: GitPushNaturalKey): Json {
 }
 
 export function gitPushPreStateJson(preState: GitPushPreState): Json {
-  return { remoteCommit: preState.remoteCommit };
+  // The two shapes that existed before an attested relation did are written
+  // exactly as they always were, so a record this version writes for an absent
+  // or an equal destination is byte-for-byte one an earlier version wrote.
+  return "relation" in preState
+    ? { remoteCommit: preState.remoteCommit, relation: preState.relation }
+    : { remoteCommit: preState.remoteCommit };
 }
 
 export function gitPushObservationsJson(observations: GitPushObservations): Json {
@@ -329,11 +350,26 @@ export function parseGitPushNaturalKey(value: unknown): GitPushNaturalKey | unde
   return Object.freeze({ repository, remote, destinationRef });
 }
 
-/** The pre-state this value describes, or `undefined` when it describes none. */
+/**
+ * The pre-state this value describes, or `undefined` when it describes none.
+ *
+ * The two variants are read separately so each stays closed. A relation is a
+ * claim about a commit, so it means nothing beside a destination proven absent;
+ * a word other than `ancestor` is a relation this version cannot account for;
+ * and either variant carrying a member it does not declare describes something
+ * else entirely.
+ */
 export function parseGitPushPreState(
   value: unknown,
   format: GitObjectFormat,
 ): GitPushPreState | undefined {
+  const attested = members(value, ANCESTOR_PRE_STATE_MEMBERS);
+  if (attested !== undefined) {
+    const remoteCommit = gitObjectId(attested.remoteCommit, format);
+    return remoteCommit === undefined || attested.relation !== ANCESTOR
+      ? undefined
+      : Object.freeze({ remoteCommit, relation: ANCESTOR });
+  }
   const record = members(value, PRE_STATE_MEMBERS);
   if (record === undefined) {
     return undefined;
@@ -429,10 +465,21 @@ export function parseGitPushResult(
  * effect-specific: that each of the three JSON members is a Push shape, that
  * the two readings agree, and that the decision is one the pre-state supports.
  *
- * The decision and the pre-state are one fact. `performed` means this run found
- * the destination absent and published to it; `adopted` means the destination
- * already named this exact commit. A record pairing either word with the other
- * word's pre-state describes a reconciliation the state machine cannot reach.
+ * The decision and the pre-state are one fact. `performed` means this run
+ * published, and it publishes for two reasons: the destination was proven
+ * absent, or it named a commit the provider attested is in this source's
+ * ancestry. `adopted` means the destination already named this exact commit,
+ * and nothing was performed. A record pairing a word with a pre-state that does
+ * not support it describes a reconciliation the state machine cannot reach.
+ *
+ * A commit is its own ancestor, and that is the one place where the arithmetic
+ * and this operation disagree. Observing the destination at exactly this commit
+ * is what adoption *is*, so an attested relation is never how equality was
+ * reached: a `performed` record whose predecessor is the commit it published
+ * describes a push over a destination that already held it, and an `adopted`
+ * record carrying a relation describes a destination that both was and was not
+ * already there. Neither is reachable, so a valid attested predecessor is a
+ * commit other than the source.
  */
 export function parseGitPushRecord(
   record: GitHostReconciliationRecord,
@@ -448,9 +495,11 @@ export function parseGitPushRecord(
   if (observations.remoteCommit !== result.observedRemoteCommit) {
     return undefined;
   }
+  const attested = "relation" in preState;
   const supported =
     record.decision === "performed"
-      ? preState.remoteCommit === null
-      : preState.remoteCommit === result.sourceCommit;
+      ? preState.remoteCommit === null ||
+        (attested && preState.remoteCommit !== result.sourceCommit)
+      : !attested && preState.remoteCommit === result.sourceCommit;
   return supported ? Object.freeze({ decision: record.decision, result }) : undefined;
 }

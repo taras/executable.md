@@ -15,6 +15,16 @@ export interface SavepointTransactionController {
 export interface SavepointManager {
   synchronous<T>(transaction: SavepointTransaction, body: () => T): T;
   operation<T>(transaction: SavepointTransaction, body: Operation<T>): Operation<T>;
+  /**
+   * Run `body` and discard everything it wrote, however it ends.
+   *
+   * For work whose whole product is outside this database — reading the
+   * Workspace as a retained root held it, by materializing that root and
+   * exporting from it. The materialization is a means, not a result, so there
+   * is no path on which it commits: success rolls back exactly as failure and
+   * cancellation do.
+   */
+  rollbackOnly<T>(transaction: SavepointTransaction, body: Operation<T>): Operation<T>;
 }
 
 export interface SavepointObservationEvent {
@@ -122,6 +132,18 @@ export function createSavepointManager(
         rollback(transaction, savepoint);
         throw error;
       }
+    },
+
+    *rollbackOnly<T>(transaction: SavepointTransaction, body: Operation<T>): Operation<T> {
+      return yield* scoped(function* () {
+        const savepoint = open(transaction);
+        yield* ensure(() => {
+          rollback(transaction, savepoint);
+        });
+        return yield* scoped(function* () {
+          return yield* body;
+        });
+      });
     },
 
     *operation<T>(transaction: SavepointTransaction, body: Operation<T>): Operation<T> {
