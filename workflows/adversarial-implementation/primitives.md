@@ -213,7 +213,9 @@ reserved names, so a repository component may override each one:
    cancelling execution stays an Effection lifecycle event unless the document
    models it as schema data. Where the asking happens is the host's decision,
    made through the Elicitation Api: `xmd run` composes WebForm as its current
-   provider, and changing the provider changes no Markdown. Only the validated
+   provider, and under `xmd workflow` the host suspends the run durably instead
+   (#577); changing where the asking happens changes no Markdown. Only the
+   validated
    answer is journaled, keyed by a fingerprint of the compiled schema and the
    rendered message, so a resumed execution restores it rather than asking twice
    and refuses an answer recorded against a different question.

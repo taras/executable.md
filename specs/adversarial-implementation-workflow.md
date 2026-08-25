@@ -192,19 +192,18 @@ would have been used without detecting or prioritizing them.
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
 the WebForm provider so that question opens a loopback browser form. Under
-`xmd workflow` that same question is still `<Elicit>`, and the same WebForm
-provider is installed — so an unanswered one opens a loopback form and the run
-blocks on it, staying `running`. It publishes no validated answer and no
-suspension request, never settles `suspended`, and never gives the executor lock
-back. An authored `<Answers>` region answers it without any of that. A durable
-suspension is a different mechanism, and its
-substrate is shipped: `suspendFor()` waits and gives the executor lock back
-(#367), the lock's ownership decides who may continue (#466), and a typed answer
-can be delivered to a waiting run (#300). None of that is reached from Markdown
-here — `suspendFor()` is an Api operation with no v1 element spelling it, and
-this workflow installs nothing that converts an `<Elicit>` into one. Delivery
-also executes nothing: it records the answer, and resuming stays an explicit act
-nobody schedules.
+`xmd workflow` that same question is still `<Elicit>`, and the host answers it
+durably (#577, shipped): it publishes one retained suspension request, settles
+the run `suspended`, and gives the executor lock back, so nothing has to stay
+alive while a person thinks. `xmd workflow answer` retains the typed answer and
+executes nothing, and `xmd workflow resume` continues from the retained request.
+An authored `<Answers>` region still answers without any of that.
+
+The registration performs no `elicit` durable record of its own, because a
+durable wait has to be the outermost durable thing at its position; the wait is
+retained by the suspension protocol instead, so there is one record of the
+answer rather than two. Both the answer and the resume remain explicit acts:
+nothing schedules a resume, and no watcher waits.
 
 ### Runtime intervention
 
@@ -670,11 +669,18 @@ and directs the caller to interrupt the foreground process, while an eligible
 retained state transitions to `cancelled` under the exact lock, and a
 `completed` or `failed` outcome stays authoritative.
 
-The wait is built too: `suspendFor()` suspends a run durably and gives its
-executor lock back (#367), and a typed answer can be delivered to it (#300).
-What is not built is anything that reaches or acts on it — no v1 Markdown
-element spells the operation, this workflow calls nothing that suspends,
-delivery executes nothing, and no scheduler resumes a run. Versioned history checkpoints, compatible forks,
+The wait is built, and this workflow reaches it. `suspendFor()` suspends a run
+durably and gives its executor lock back (#367), and the workflow host's own
+`<Elicit>` registration is what calls it: every checkpoint here publishes one
+retained suspension request, settles the run `suspended`, and releases the
+executor (#577, shipped). A typed answer is delivered to that request (#300) and
+executes nothing, and `xmd workflow resume` continues from it. What is still
+deliberately absent is anything automatic — no scheduler resumes a run and no
+watcher waits, so answering and resuming stay two explicit acts. The document
+spells none of it: there is still no v1 Markdown element for `suspendFor()`, and
+where the asking happens remains the host's decision.
+
+Versioned history checkpoints, compatible forks,
 `history --forkable`, forkability reasons, lineage, changed-definition replay
 admission and retained Workspace-root copying are shipped (#368, delivered by
 #498). A fork is an explicit new run continuing one run's retained history; it
@@ -1047,11 +1053,15 @@ The exercise must resolve enough of these to implement one vertical slice:
    before the durable JSON boundary, so a loop seeded with an empty object
    creates on its first iteration and updates on every later one through a
    single invocation. Omission is shipped (#537, delivered by #541).
-4. Which fetches does a review actually write? `<PullRequest>`'s result is
-   deliberately minimal, and `<Fetch>` (#456) is how a network-denied reviewer is
-   handed the rest — but no stage composes those reads yet, and a generated
-   fragment reaches `<Fetch>` only when a trusted host captured a non-empty exact
-   request ceiling, which this root's ordinary attachment does not.
+4. *Settled and built.* A review's evidence is read by three URL-addressed
+   components — `<PullRequest.Reviews>`, `<PullRequest.Comments>` and
+   `<PullRequest.Checks>` (#576, delivered by #580) — each taking the bound
+   pull request's own `url` and binding its normalized retained collection.
+   `<PullRequest>`'s own result stays deliberately minimal, and the reads are
+   three independent durable effects rather than fields on it, so a replay hands
+   back what the run recorded and performs no second read. They are not
+   authenticated `<Fetch>` calls, and a generated fragment reaches none of
+   them.
 5. Which host mechanism closes the validate-then-use race for each supported
    runtime, now that a run-owned Workspace resolves a document path without
    producing a host path at all (#227)?
