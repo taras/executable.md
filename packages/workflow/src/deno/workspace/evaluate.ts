@@ -17,7 +17,11 @@
  * component and before any document exists:
  *
  * - the retained Workspace roots and the run's authoritative current root come
- *   from the captured run storage, read at invocation;
+ *   from the captured run storage, read at invocation. They are as-of-admission
+ *   provenance rather than a frozen future ceiling: a continuation holds the
+ *   admission's roots by membership, so the run's own later publications and an
+ *   advanced retained current root change nothing the admission was granted
+ *   under;
  * - the read-only `<File>` observation comes from core's pinned constructor;
  * - `<Fetch>` is admitted only when the captured request ceiling is non-empty;
  * - the write table is core's paired `<File>`, workflow's own lexical `<Dir>`

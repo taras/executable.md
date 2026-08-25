@@ -1863,7 +1863,7 @@ run but are absent from the diagnostic trace.
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
 | `src/fetch-journal.ts` | `persistFetch()` — the `fetch` durable effect (§6.18, §10.1) |
-| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none (workflow-workspace-spec §8.4) |
+| `src/generated-xmd.ts` | `evaluateGeneratedXmd()`, `pinnedFetch()`, `pinnedFileRead()`, `pinnedFileWrite()`, `pinnedFileDelete()`, `pinnedComponent()`, `pinnedMutation()`, `GeneratedEffectClass`, `GeneratedComponentForm`, `GeneratedMutation`, `GeneratedObservationResult`, `GeneratedXmdError` — admitting Agent-generated source through the trusted-host seam under a caller-selected subset of the closed effect classes `read` and `write`, resolving each name and authored form to one exact pinned identity — the self-closing `<File>` read, the paired `<File>` write and the self-closing `<File.Delete>` among them — and answering with each admitted read's own value rather than the fragment's rendering, an admitted mutation contributing none. `evaluateGeneratedXmd()` is an `Operation`, so the admission and every durable effect of the mixed expansion are offered inline by the owning expansion's own durable sequence, with no `ephemeral()` bridge; a continuation holds the admission's root snapshot as a retained basis by membership and every non-root ceiling exactly (workflow-workspace-spec §§8.4, 9) |
 | `src/components/import-authority.ts` | `CanonicalImports`, `ImportAuthority` — the witness a closed execution issues for the definition it produced and verifies where it is invoked |
 | `src/invocation.ts` | `withInvocation()`, `Invocation`, `InvocationTeardownError` — the component invocation boundary (§4.4) |
 | `src/expansion.ts` | `Expansion`, `getExpansion()` — what an executable element knows about its own expansion (§5.6) |
@@ -9911,6 +9911,18 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | GXC10 | The form at the invocation | An admitted read still performs exactly its read and an admitted write still performs exactly its write, under a `Component.hasContent` handler outside the generated expansion that lies consistently *and* under one answering `[false, true]` / `[true, false]` — with the retained identity and form unmoved, the read's value collected, and the file bytes proving which effect ran. An admitted read beside each of them reports the chain's answer and consumes exactly one, so every case proves the handler installed and answering before it proves the element ignored it — an inert handler, and an element that consulted the chain and took the next answer, both fail. An invocation the evaluator did not receive is refused with no provider call, and a handler that observes and delegates leaves both forms running through their ordinary providers |
 | GXC9 | Continuation | A widened class selection, a widened admitted form, a replaced write identity and an added write identity each refuse the continuation and write nothing; the unchanged policy resumes and performs the write; and a read-only admission survives a changed write table it never selected |
 
+### Tier GX — Generated continuation in the owning expansion
+
+Defined in [Workflow workspaces](./workflow-workspace-spec.md) §§8.4 and 9.
+
+| # | Test | Verify |
+|---|------|--------|
+| GX15–GX16 | Retained decision | A partial replay restores the admission and performs no second request; a completed replay restores the root result and repeats no observation |
+| GX18a–GX18b | The offered sequence | Admission, the nested generated read or durable write, a later parent durable marker and the root import are one exactly ordered offered sequence; a partial continuation stating the original roots plus one new retained root, with that new root current, offers the same sequence, and the live Fetch/write/marker executors each ran once across both executions |
+| GX18c–GX18d | Controls | An empty and a rendered-only fragment preserve output across partial replay and invent no nested durable effect |
+| GX22, GX22b | Progression | The run's own root addition with the added root current, and standing on another root it already retained, each resume and reach the generated component |
+| GX22c–GX22d | Root loss | Losing a non-selected admission root and losing the admission's selected root each refuse with the fixed diagnostic before the component runs, the live component count unchanged |
+
 ### Tier WGAC — Generated `<File>` effects and the `<Evaluate>` boundary
 
 Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
@@ -9932,6 +9944,7 @@ Defined in [Workflow workspaces](./workflow-workspace-spec.md) §8.4.
 | WGAC15 | Preflight covers the deletion | A fragment placing an admitted `<File.Delete>` first and an executable code block second is refused for the block — the class proving the deletion was admitted, since a refusal names no name — and the file remains with no deletion effect performed or retained |
 | WGAC11 | What a selection binds | A write-only evaluation binds `observations: []`, and a mixed one binds exactly the read's entry while the write lands in the Workspace |
 | WGAC12 | Committed mutations | A completed replay of a write-enabled document journals nothing new, performs no second mutation, and leaves the retained content |
+| WGAC16 | Bundled continuation | `<Evaluate>` inside a committed bundled Markdown component, then a parent `<File>` write and the real `<Elicit>` outside it, for a generated read and a generated write alike: the real start suspends holding the exactly ordered `generated_xmd → nested workspace_file → parent workspace_file → suspension_request` subsequence; answer delivery and the completed resume leave the journal counts, that subsequence, the Workspace root-publication count and the authoritative current root unchanged; and the delivered value reaches the document after the wait. `API.Files` component calls are not evidence here — re-expansion legitimately enters that boundary before the durable effect restores |
 
 ### Tier WAL — The workflow Agent observation loop
 

@@ -35,7 +35,6 @@ import { until } from "effection";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { API } from "@executablemd/runtime";
 import { collect, execute, inlineSource, registerComponents } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { durableCall, InMemoryStream } from "@executablemd/durable-streams";
@@ -837,12 +836,7 @@ function* useStubAgent(calls: AgentCalls): Operation<void> {
  * cases depend on is installed by the code that installs it in production
  * rather than by this suite.
  */
-function productionHost(
-  root: string,
-  calls: AgentCalls,
-  events: string[] = [],
-  performed?: string[],
-): WorkflowHost {
+function productionHost(root: string, calls: AgentCalls, events: string[] = []): WorkflowHost {
   return {
     useRunHost(): Operation<WorkflowExecutionTransitions> {
       return useWorkflowRunHost({ root });
@@ -859,21 +853,6 @@ function productionHost(
         yield* ensure(function* () {
           events.push("released");
         });
-        if (performed !== undefined) {
-          // A pass-through observer around the ordinary Files boundary, so a
-          // case can count what a document execution actually performed there
-          // rather than inferring it from the rows a replay restored.
-          yield* API.Files.around({
-            *readTextFile([input], next) {
-              performed.push(`read:${input.path}`);
-              return yield* next(input);
-            },
-            *writeTextFile([input], next) {
-              performed.push(`write:${input.path}`);
-              return yield* next(input);
-            },
-          });
-        }
         return yield* withWorkflowWorkspace(database, operation, {
           agent: () => useStubAgent(calls),
         });
@@ -1049,6 +1028,24 @@ function journalled(path: string, type: string): number {
       }
     }
     return count;
+  } finally {
+    database.close();
+  }
+}
+
+/** The Workspace roots this run has published, and the one it stands on. */
+function workspaceRootState(path: string): { retained: number; current: string } {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const retained = Number(
+      database.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"],
+    );
+    const current = String(
+      database
+        .prepare("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
+        .get()?.["current_root_id"],
+    );
+    return { retained, current };
   } finally {
     database.close();
   }
@@ -1303,8 +1300,16 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
  * the real workflow `<Elicit>` follow outside it. The admission and every
  * durable effect the admitted fragment performs belong to the owning document
  * expansion's sequence, so a resume offers them in authored order and restores
- * each completed one without entering its provider again — which the existing
- * root-level checkpoint above does not discriminate.
+ * each completed one without another live execution or root publication —
+ * which the existing root-level checkpoint above does not discriminate.
+ *
+ * The once-only proof here is stability: the exact journal counts, the ordered
+ * durable subsequence, the Workspace root-publication count, and the
+ * authoritative current root are captured at suspension and must survive
+ * answer delivery and the completed resume unchanged. An `API.Files` call is
+ * deliberately not evidence — document re-expansion legitimately enters that
+ * boundary again before the durable `workspace_file` effect underneath
+ * restores, so a call count there sits above the live/restore decision.
  */
 describe("Tier WGAC — generated effects in a bundled component resume through a later wait", () => {
   /** One root declaring one bundled component, with the wait after both. */
@@ -1340,8 +1345,6 @@ decision: {decision.proceed}
 the retained note
 </File>
 `,
-      // What the fragment performs at the Files boundary, exactly once.
-      live: (call: string) => call.startsWith("read:") && call.endsWith("notes.md"),
       nested: [{ operation: "read", target: "notes.md" }],
       files: 3,
     },
@@ -1351,7 +1354,6 @@ the retained note
       component:
         `<Evaluate source={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
       setup: "",
-      live: (call: string) => call.startsWith("write:") && call.endsWith("proposed.md"),
       nested: [{ operation: "write", target: "proposed.md" }],
       files: 2,
     },
@@ -1367,12 +1369,11 @@ the retained note
       yield* useRepositoryGit(fixture.repository);
 
       const calls: AgentCalls = { prompts: [] };
-      const performed: string[] = [];
       const rendered: string[] = [];
       const started = yield* invoke(
         { ...REQUEST, action: "start" },
         yield* startFor(fixture),
-        productionHost(store, calls, [], performed),
+        productionHost(store, calls),
         pinnedBody(rendered),
       );
       expect(started.exitCode).toBe(2);
@@ -1383,8 +1384,9 @@ the retained note
       const path = workflowRunPath(store, runId);
 
       // The start settled suspended, with the nested effect and the later
-      // parent effect committed ahead of the wait — and the fragment reached
-      // the Files boundary exactly once.
+      // parent effect committed ahead of the wait. The journal counts and the
+      // Workspace root publications captured here are the once-only baseline
+      // everything after the suspension is held to.
       const suspended = retained(path);
       expect(suspended.status).toBe("suspended");
       expect(suspended.requests).toHaveLength(1);
@@ -1395,7 +1397,7 @@ the retained note
         [EVALUATION_EFFECT]: 1,
         [FILE_EFFECT]: bundled.files,
       });
-      expect(performed.filter(bundled.live)).toHaveLength(1);
+      const rootsAtSuspension = workspaceRootState(path);
 
       // The relevant ordered subsequence, exactly: the admission, the nested
       // generated effect in authored order, the later parent effect, then the
@@ -1424,19 +1426,20 @@ the retained note
       const suspensionId = suspended.requests[0] ?? "";
       const delivered = yield* manage(
         { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
-        productionHost(store, calls, [], performed),
+        productionHost(store, calls),
       );
       expect(delivered.exitCode).toBe(0);
       expect(retained(path)).toEqual(suspended);
-      expect(performed.filter(bundled.live)).toHaveLength(1);
+      expect(counts(path)).toEqual(atSuspension);
+      expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
 
-      // The resume completes, restores every committed effect, and performs
-      // the fragment's work no second time: one live call at the Files
-      // boundary across both document executions.
+      // The resume completes and restores every committed effect: the same
+      // journal counts, the same ordered durable subsequence, the same root
+      // publications, and the same authoritative current root.
       const resumed = yield* invoke(
         { ...REQUEST, action: "resume", target: runId },
         undefined,
-        productionHost(store, calls, [], performed),
+        productionHost(store, calls),
         pinnedBody(rendered),
       );
       expect(resumed.exitCode).toBe(0);
@@ -1444,7 +1447,7 @@ the retained note
       const completed = retained(path);
       expect(completed.status).toBe("completed");
       expect(counts(path)).toEqual(atSuspension);
-      expect(performed.filter(bundled.live)).toHaveLength(1);
+      expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
       expect(
         orderedEffects(path)
           .filter((effect) => relevant.has(effect.type))

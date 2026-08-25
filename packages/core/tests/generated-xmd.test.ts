@@ -76,6 +76,8 @@ const ROOT_SOURCE = "The host ran a generated fragment.\n";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
 const ROOTS = ["workspace://primary", "workspace://secondary"];
+/** A root the run retains after the admission — its own legitimate progress. */
+const ADVANCED = "workspace://advanced";
 
 /** The one host observation component the tests admit beside `<Fetch>`. */
 const PROBE: FunctionComponentDefinition = {
@@ -841,10 +843,16 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(executed).toEqual(["parent-marker"]);
     expect(offered(first.events)).toEqual(["generated_xmd", "fetch", "test_preparation", "import_component"]);
 
-    const again = yield* evaluate(candidate(), {
-      after: marker(executed),
-      stream: partial(first.events),
-    });
+    // The continuation runs after the run's own progress: one more retained
+    // root, and the run stands on it. The admission's basis is still retained,
+    // so the same sequence is offered and restores.
+    const again = yield* evaluate(
+      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
+      {
+        after: marker(executed),
+        stream: partial(first.events),
+      },
+    );
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
@@ -872,10 +880,15 @@ describe("Tier GX — nested generated effects belong to the owning expansion", 
     expect(first.values).toEqual([]);
     expect(offered(first.events)).toEqual(["generated_xmd", "generated_write", "test_preparation", "import_component"]);
 
-    const again = yield* evaluate(candidate(), {
-      after: marker(executed),
-      stream: partial(first.events),
-    });
+    // The continuation runs after the run's own progress — the very progress a
+    // committed generated write makes: one more retained root, now current.
+    const again = yield* evaluate(
+      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
+      {
+        after: marker(executed),
+        stream: partial(first.events),
+      },
+    );
 
     expect(again.failure).toBe(undefined);
     expect(again.output).toBe(first.output);
@@ -1007,6 +1020,24 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   };
 
   /**
+   * The probe under its admitted identity, counting live invocations — so a
+   * case proves whether a continuation reached the generated component rather
+   * than inferring it from rendered text alone.
+   */
+  function countedProbe(performed: string[]): GeneratedObservation {
+    return pinnedComponent("Probe", "test://probe", {
+      kind: "function",
+      name: "Probe",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        performed.push("probed");
+        return "probed";
+      },
+    });
+  }
+
+  /**
    * A history left by a run interrupted during preparation: the admission
    * committed, and nothing after it did.
    *
@@ -1104,26 +1135,36 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(admittedFragments(again.events)).toHaveLength(1);
   });
 
-  it("GX22: changed retained roots refuse before expansion", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+  it("GX22: the run's own root progression resumes and reaches the generated component", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(first.failure).toBe(undefined);
+    expect(performed).toHaveLength(1);
 
+    // One more retained root, and the run stands on it now. The admission's
+    // basis is still retained, so the continuation proceeds — and performs the
+    // observation its interrupted history never committed, once more.
     const again = yield* evaluate(
       {
         id: "turn-1",
         source: "<Probe />\n",
-        workspaceRoots: [...ROOTS, "workspace://added"],
-        selectedRoot: ROOTS[0] ?? "",
-        observations: [probe()],
+        workspaceRoots: [...ROOTS, ADVANCED],
+        selectedRoot: ADVANCED,
+        observations: [countedProbe(performed)],
       },
       { stream: duringPreparation(first.events) },
     );
 
-    expect(again.failure).toContain("admitted under");
-    expect(String(again.output ?? "")).not.toContain("probed");
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toContain("probed");
+    expect(performed).toHaveLength(2);
   });
 
-  it("GX22b: a changed selected root refuses before expansion", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+  it("GX22b: the run may stand on another root it already retained", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(first.failure).toBe(undefined);
+    expect(performed).toHaveLength(1);
 
     const again = yield* evaluate(
       {
@@ -1131,13 +1172,58 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         source: "<Probe />\n",
         workspaceRoots: ROOTS,
         selectedRoot: ROOTS[1] ?? "",
-        observations: [probe()],
+        observations: [countedProbe(performed)],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toContain("probed");
+    expect(performed).toHaveLength(2);
+  });
+
+  it("GX22c: a lost admission root refuses before the component runs", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(performed).toHaveLength(1);
+
+    // The admission retained both roots; this run kept only the selected one.
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: [ROOTS[0] ?? ""],
+        selectedRoot: ROOTS[0] ?? "",
+        observations: [countedProbe(performed)],
       },
       { stream: duringPreparation(first.events) },
     );
 
     expect(again.failure).toContain("admitted under");
     expect(String(again.output ?? "")).not.toContain("probed");
+    expect(performed).toHaveLength(1);
+  });
+
+  it("GX22d: losing the admission's selected root refuses before the component runs", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(performed).toHaveLength(1);
+
+    // The run progressed, but the root the admission addressed is gone.
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: [ROOTS[1] ?? "", ADVANCED],
+        selectedRoot: ROOTS[1] ?? "",
+        observations: [countedProbe(performed)],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toContain("admitted under");
+    expect(String(again.output ?? "")).not.toContain("probed");
+    expect(performed).toHaveLength(1);
   });
 
   it("GX23: a widened Fetch ceiling refuses before API.Fetch", function* () {
