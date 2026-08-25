@@ -861,8 +861,14 @@ function productionHost(root: string, calls: AgentCalls, events: string[] = []):
   };
 }
 
-/** A committed definition whose root document is `source`. */
-function useCheckpointFixture(source: string): Operation<Fixture> {
+/**
+ * A committed definition whose root document is `source`, beside any bundled
+ * Markdown components the root declares — every file from the same commit.
+ */
+function useCheckpointFixture(
+  source: string,
+  components: Record<string, string> = {},
+): Operation<Fixture> {
   return resource<Fixture>(function* (provide) {
     const repository = yield* until(mkdtemp(join(tmpdir(), "xmd-ckx-repo-")));
     yield* ensure(function* () {
@@ -873,10 +879,49 @@ function useCheckpointFixture(source: string): Operation<Fixture> {
     yield* git(repository, ["config", "user.name", "CKX"]);
     yield* writeTextFile(join(repository, "workflow.md"), source);
     yield* git(repository, ["add", "workflow.md"]);
+    for (const [name, content] of Object.entries(components)) {
+      yield* writeTextFile(join(repository, `${name}.md`), content);
+      yield* git(repository, ["add", `${name}.md`]);
+    }
     yield* git(repository, ["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "definition"]);
     const objectId = (yield* git(repository, ["rev-parse", "HEAD:workflow.md"])).trim();
     yield* provide({ repository, objectId, contents: source });
   });
+}
+
+/**
+ * The Git capability answered from the fixture repository itself.
+ *
+ * A bundled definition reads more than one object — the root and each declared
+ * component, each pinned by its own blob id — so the single-object `useGit`
+ * stub cannot answer for it. Every question shells to the fixture repository,
+ * which is what the production capability does from the run's own directory.
+ */
+function useRepositoryGit(repository: string): Operation<void> {
+  return Git.around(
+    {
+      // deno-lint-ignore require-yield
+      *repositoryRoot(): Operation<string> {
+        return repository;
+      },
+      *revParse([revision]): Operation<string> {
+        return (yield* git(repository, [
+          "rev-parse",
+          "--verify",
+          "--end-of-options",
+          revision,
+        ])).trim();
+      },
+      *readObject([commit, path]): Operation<string> {
+        return yield* git(repository, ["cat-file", "blob", `${commit}:${path}`]);
+      },
+      // deno-lint-ignore require-yield
+      *objectFormat(): Operation<"sha1" | "sha256"> {
+        return "sha1";
+      },
+    },
+    { at: "min" },
+  );
 }
 
 /** What `xmd workflow start` establishes, through the command's own module. */
@@ -986,6 +1031,46 @@ function journalled(path: string, type: string): number {
       }
     }
     return count;
+  } finally {
+    database.close();
+  }
+}
+
+/** The Workspace roots this run has published, and the one it stands on. */
+function workspaceRootState(path: string): { retained: number; current: string } {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const retained = Number(
+      database.prepare("SELECT COUNT(*) AS count FROM workspace_roots").get()?.["count"],
+    );
+    const current = String(
+      database
+        .prepare("SELECT current_root_id FROM workspace_state WHERE singleton_id = 1")
+        .get()?.["current_root_id"],
+    );
+    return { retained, current };
+  } finally {
+    database.close();
+  }
+}
+
+/** Every durable yield this run retained, in journal order, as type and name. */
+function orderedEffects(path: string): { type: string; name: string }[] {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const effects: { type: string; name: string }[] = [];
+    for (const row of database
+      .prepare("SELECT record FROM journal_events ORDER BY sequence")
+      .all()) {
+      const parsed = JSON.parse(String(row["record"]));
+      if (parsed?.type === "yield") {
+        effects.push({
+          type: String(parsed.description?.type),
+          name: String(parsed.description?.name),
+        });
+      }
+    }
+    return effects;
   } finally {
     database.close();
   }
@@ -1207,4 +1292,173 @@ describe("Tier CKX — a checkpoint a document asked for", () => {
     expect(duplicate.written.err.join(" ")).toContain("already has an answer waiting");
     expect(yield* storageDigest(path)).toEqual(afterAccepted);
   });
+});
+
+/**
+ * Tier WGAC — a generated effect inside a bundled component resumes through a
+ * later wait (specs/workflow-workspace-spec.md §§8.4, 9).
+ *
+ * The extracted equivalent of PR #181's AC4: `<Evaluate>` sits inside a
+ * committed bundled Markdown component, and a later parent durable effect and
+ * the real workflow `<Elicit>` follow outside it. The admission and every
+ * durable effect the admitted fragment performs belong to the owning document
+ * expansion's sequence, so a resume offers them in authored order and restores
+ * each completed one without another live execution or root publication —
+ * which the existing root-level checkpoint above does not discriminate.
+ *
+ * The once-only proof here is stability: the exact journal counts, the ordered
+ * durable subsequence, the Workspace root-publication count, and the
+ * authoritative current root are captured at suspension and must survive
+ * answer delivery and the completed resume unchanged. An `API.Files` call is
+ * deliberately not evidence — document re-expansion legitimately enters that
+ * boundary again before the durable `workspace_file` effect underneath
+ * restores, so a call count there sits above the live/restore decision.
+ */
+describe("Tier WGAC — generated effects in a bundled component resume through a later wait", () => {
+  /** One root declaring one bundled component, with the wait after both. */
+  function bundledRoot(setup: string, componentName: string): string {
+    return `---
+workflow:
+  components:
+    ${componentName}: ./${componentName}.md
+---
+${setup}
+<${componentName} />
+
+<File path="after.md">
+parent marker
+</File>
+
+<Elicit schema={${CHECKPOINT_SCHEMA}} as="decision">
+Proceed with the change?
+</Elicit>
+
+decision: {decision.proceed}
+`;
+  }
+
+  const CASES = [
+    {
+      what: "read",
+      componentName: "Observe",
+      component: `<Evaluate source={"<File path=\\"notes.md\\" />"} allow={["read"]} as="observed" />\n`,
+      setup: `
+<File path="notes.md">
+the retained note
+</File>
+`,
+      nested: [{ operation: "read", target: "notes.md" }],
+      files: 3,
+    },
+    {
+      what: "write",
+      componentName: "Propose",
+      component: `<Evaluate source={"<File path=\\"proposed.md\\">a generated proposal</File>"} allow={["write"]} as="observed" />\n`,
+      setup: "",
+      nested: [{ operation: "write", target: "proposed.md" }],
+      files: 2,
+    },
+  ] as const;
+
+  for (const bundled of CASES) {
+    it(`WGAC16: a generated ${bundled.what} inside a bundled component resumes through the later wait`, function* () {
+      const store = yield* useRunStore();
+      const fixture = yield* useCheckpointFixture(
+        bundledRoot(bundled.setup, bundled.componentName),
+        { [bundled.componentName]: bundled.component },
+      );
+      yield* useRepositoryGit(fixture.repository);
+
+      const calls: AgentCalls = { prompts: [] };
+      const rendered: string[] = [];
+      const started = yield* invoke(
+        { ...REQUEST, action: "start" },
+        yield* startFor(fixture),
+        productionHost(store, calls),
+        pinnedBody(rendered),
+      );
+      expect(started.exitCode).toBe(2);
+
+      const runId = String(started.written.err.find((line) => line.startsWith("workflow run: ")))
+        .slice("workflow run: ".length)
+        .trim();
+      const path = workflowRunPath(store, runId);
+
+      // The start settled suspended, with the nested effect and the later
+      // parent effect committed ahead of the wait. The journal counts and the
+      // Workspace root publications captured here are the once-only baseline
+      // everything after the suspension is held to.
+      const suspended = retained(path);
+      expect(suspended.status).toBe("suspended");
+      expect(suspended.requests).toHaveLength(1);
+      expect(rendered).toEqual([]);
+      const atSuspension = counts(path);
+      expect(atSuspension).toEqual({
+        [PROMPT_EFFECT]: 0,
+        [EVALUATION_EFFECT]: 1,
+        [FILE_EFFECT]: bundled.files,
+      });
+      const rootsAtSuspension = workspaceRootState(path);
+
+      // The relevant ordered subsequence, exactly: the admission, the nested
+      // generated effect in authored order, the later parent effect, then the
+      // suspension request. Component imports journal beside these and are not
+      // part of the ordering under test.
+      const relevant = new Set([PROMPT_EFFECT, EVALUATION_EFFECT, FILE_EFFECT, SUSPENSION_REQUEST]);
+      const effects = orderedEffects(path).filter((effect) => relevant.has(effect.type));
+      const admission = effects.findIndex((effect) => effect.type === EVALUATION_EFFECT);
+      expect(admission).toBeGreaterThanOrEqual(0);
+      const sequence = effects.slice(admission);
+      expect(sequence.map((effect) => effect.type)).toEqual([
+        EVALUATION_EFFECT,
+        FILE_EFFECT,
+        FILE_EFFECT,
+        SUSPENSION_REQUEST,
+      ]);
+      for (const [index, expected] of bundled.nested.entries()) {
+        expect(sequence[1 + index]?.name.startsWith(`${expected.operation}:`)).toBe(true);
+        expect(sequence[1 + index]?.name.endsWith(`:/${expected.target}`)).toBe(true);
+      }
+      const parent = sequence[1 + bundled.nested.length];
+      expect(parent?.name.startsWith("write:")).toBe(true);
+      expect(parent?.name.endsWith(":/after.md")).toBe(true);
+
+      // The delivery retains the answer and executes nothing.
+      const suspensionId = suspended.requests[0] ?? "";
+      const delivered = yield* manage(
+        { action: "answer", runId, suspensionId, value: { proceed: true }, secretDetection: true },
+        productionHost(store, calls),
+      );
+      expect(delivered.exitCode).toBe(0);
+      expect(retained(path)).toEqual(suspended);
+      expect(counts(path)).toEqual(atSuspension);
+      expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
+
+      // The resume completes and restores every committed effect: the same
+      // journal counts, the same ordered durable subsequence, the same root
+      // publications, and the same authoritative current root.
+      const resumed = yield* invoke(
+        { ...REQUEST, action: "resume", target: runId },
+        undefined,
+        productionHost(store, calls),
+        pinnedBody(rendered),
+      );
+      expect(resumed.exitCode).toBe(0);
+
+      const completed = retained(path);
+      expect(completed.status).toBe("completed");
+      expect(counts(path)).toEqual(atSuspension);
+      expect(workspaceRootState(path)).toEqual(rootsAtSuspension);
+      expect(
+        orderedEffects(path)
+          .filter((effect) => relevant.has(effect.type))
+          .slice(admission, admission + sequence.length),
+      ).toEqual(sequence);
+
+      // The delivered value reaches the document after the wait.
+      expect(rendered).toHaveLength(1);
+      expect(rendered[0]).toContain("decision: true");
+      expect(answers(path)[0]?.state).toBe("consumed");
+    });
+  }
 });

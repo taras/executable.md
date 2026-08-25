@@ -678,3 +678,61 @@ how long an application suite takes. What remains is the single 20-minute
 ceiling the historical `deno bundle` wedge (denoland/deno#36417) requires, which
 also bounds the wait for the consumers to reach their first cycle — a consumer
 that never gets there wedges the invocation the same silent way.
+
+## DEC-015: Generated continuation — root-basis membership, and an Operation evaluator
+
+**Status:** Decided
+
+**Date:** 2026-08-25
+
+### Context
+
+A retained `generated_xmd` admission holds the normalized policy it was granted
+under, and a continuation was compared against it whole and exactly — the
+Workspace roots and selected root included. But those two fields are values of
+the run's own mutable progress: every committed Workspace mutation retains
+another immutable root and advances the authoritative current root, and
+`<Evaluate>` restates its policy from live run storage at every invocation. So
+any resume through an admission followed by a Workspace commit — including the
+commit the admitted fragment's own write performs — restated a grown root set,
+failed the exact comparison, and refused with `CEILING`. A policy derived from
+mutable run state can never be restated identically by a partial continuation
+whose state has legitimately advanced.
+
+Separately, the evaluator crossed from the durable `Workflow` typing to
+Operations through `ephemeral()` bridges, `ephemeral(expand(...))` among them —
+an adapter DEC-034 reserves for intentionally non-durable Operations, wrapped
+here around an expansion that yields ordinary durable effects.
+
+### Decision
+
+An admission's `roots` and `selectedRoot` remain exact as-of-admission
+provenance in the retained record — no shape or migration change — and a
+continuation checks them as a **retained basis, by membership**: every
+admission root and the admission's selected root must still be retained, and
+the current selected root must be retained, while additional roots and an
+advanced current root pass. Loss of any admission root refuses before generated
+work, with the unchanged fixed diagnostic. Every non-root term — class
+selection, selected pinned identities and forms, request ceilings — still
+compares whole, exactly, and in canonical order. This supersedes DEC-001 and
+DEC-002 only where a generated mixed expansion can yield durable effects: the
+evaluator chain (`persistAdmission`, `evaluateGeneratedXmd`,
+`evaluateGeneratedFragment`, the host's `admit()`) is typed `Operation`, and no
+`ephemeral()` bridge encloses it, so the admission and every nested generated
+effect belong to the owning expansion's own durable sequence. `ephemeral()`
+remains the valid, explicit adapter for truly non-durable Operations.
+
+### Consequences
+
+Removing the bridge is DEC-034 conformance, **not** the continuation
+correction: the reproduced WGAC16 resume failed identically with and without
+it, and exact journal order does not distinguish the bridge, because a re-run
+expansion re-offers the retained sequence either way. The observed defect was
+the exact root comparison rejecting the run's own progress, and the membership
+basis is what fixes it. No durable-stream protocol, journal or record schema
+changes, and no child durable coroutine exists: replay evidence is GX18a–d and
+GX22/GX22b–d in `packages/core/tests/generated-xmd.test.ts` and WGAC16's
+journal- and root-publication-stability snapshots in
+`packages/cli/tests/workflow-suspension.test.ts`, where an `API.Files` call
+count is explicitly not once-only evidence — document re-expansion legitimately
+enters that boundary before the durable effect underneath restores.

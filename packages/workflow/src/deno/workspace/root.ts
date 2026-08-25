@@ -327,12 +327,12 @@ export function setCurrentWorkspaceRoot(
 /**
  * Every Workspace root this run retains, in one deterministic order.
  *
- * The set a ceiling is stated over — and the order is load-bearing rather than
- * cosmetic. A generated-XMD admission retains the roots it was granted under and
- * a continuation compares them *positionally*, so a query whose row order SQLite
- * is free to choose would let a resumed run refuse an admission nothing about it
- * had changed. `root_id` is the only stable ordering this table has, and it is
- * stable across processes because it is content.
+ * The set a generated-XMD admission states its as-of-admission basis over. A
+ * continuation asks for that basis by membership, so ordering no longer decides
+ * whether a resumed run holds its grant — it stays deterministic so the
+ * retained record reads the same however SQLite would have ordered the rows,
+ * and `root_id` is the only stable ordering this table has, stable across
+ * processes because it is content.
  *
  * `lifecycle.ts` derives forkability from the same table through its own read;
  * that one answers a set membership question on a read-only connection, and this

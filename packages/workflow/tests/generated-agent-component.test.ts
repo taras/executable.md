@@ -419,7 +419,10 @@ describe("Tier WGAC — the registered Evaluate component", () => {
       const retained = Array.isArray(second?.roots) ? second.roots : [];
       expect(retained.length).toBeGreaterThan(1);
       expect(retained).toContain(second?.selectedRoot);
-      // Deterministic order, because a continuation compares these positionally.
+      // Deterministic order, so the record reads the same however SQLite would
+      // have ordered the rows. A continuation asks for this basis by membership
+      // rather than positionally, so the order is record stability rather than
+      // the thing the comparison turns on.
       expect(retained).toEqual([...retained].sort());
     });
   });

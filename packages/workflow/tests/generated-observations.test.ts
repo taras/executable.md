@@ -26,7 +26,7 @@ import type {
   GeneratedObservationResult,
   GeneratedObservationValue,
 } from "@executablemd/core/host";
-import type { ExecutionInstallation } from "@executablemd/core/host";
+import type { DurablePreparation, ExecutionInstallation } from "@executablemd/core/host";
 import { evaluateGeneratedFragment } from "../src/generated-observations.ts";
 import type { GeneratedEvaluationPolicy } from "../src/generated-observations.ts";
 
@@ -73,6 +73,21 @@ interface Attempt {
 }
 
 /**
+ * Drive the wrapper from a `DurablePreparation`.
+ *
+ * The preparation is a harness choice, not the production path: production
+ * reaches the wrapper through the workflow host's declared `<Evaluate>`
+ * component inside the owning document expansion. The wrapper is an
+ * `Operation` whose durable effects identify themselves against the durable
+ * root they run in, so a preparation drives it unchanged — the `Workflow`
+ * annotation narrows only the static yield type, which is what the cast
+ * widens past.
+ */
+function driven(work: () => Operation<void>): ExecutionInstallation {
+  return { prepare: work as DurablePreparation };
+}
+
+/**
  * Run one fragment under one policy, from the position a trusted host records
  * durable work from.
  */
@@ -80,11 +95,9 @@ function evaluate(source: string, policy: GeneratedEvaluationPolicy): Operation<
   return scoped(function* () {
     const stream = new InMemoryStream();
     const captured: { result?: GeneratedObservationResult } = {};
-    const installation: ExecutionInstallation = {
-      *prepare() {
-        captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy);
-      },
-    };
+    const installation = driven(function* () {
+      captured.result = yield* evaluateGeneratedFragment("turn-1", source, policy);
+    });
     const execution = yield* executeInstalled(
       { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream, componentDirs: [] },
       [installation],

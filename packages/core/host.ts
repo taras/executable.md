@@ -25,8 +25,11 @@
  * execute, and what was admitted is recorded as one ordinary durable event
  * before the first generated effect. The host states a `read` table and a
  * `write` table and the caller selects between them, so admitting an
- * observation is not admitting a mutation. It is reached from a preparation,
- * because what it performs belongs in the run's journal.
+ * observation is not admitting a mutation. It is an `Operation`: the
+ * production workflow reaches it through its host-declared `<Evaluate>`
+ * component inside the owning authored expansion — not through a
+ * `DurablePreparation` — so the admission and every durable effect the
+ * admitted fragment performs belong to that expansion's own durable sequence.
  *
  * Both stop at the first refusal, and a refusal stops only what has not
  * happened yet: durable effects an earlier preparation completed stay

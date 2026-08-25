@@ -70,13 +70,17 @@
  * Durable replay matches an effect by its type and name; what a description
  * carries is stored, never compared. So the retained admission carries the
  * normalized policy in its **result** as well as in the event input, and a
- * continuation compares that retained policy to the one this run states — whole
- * and exactly — before a single generated component is invoked or a single
- * effect is performed. A changed class selection, changed roots, a changed
- * pinned identity behind the same name, a changed admitted form, and a widened
- * request ceiling are each refused there. Only the tables the selection reached
- * take part, so a write table a read-only admission never drew on may move
- * without invalidating it.
+ * continuation checks that retained policy against the one this run states
+ * before a single generated component is invoked or a single effect is
+ * performed. The Workspace roots are as-of-admission provenance and are asked
+ * for by membership: the run's own progress legitimately retains further
+ * roots and advances the authoritative current root, while a run that no
+ * longer retains an admission root — or its selected root — is refused. Every
+ * other term compares whole and exactly: a changed class selection, a changed
+ * pinned identity behind the same name, a changed admitted form, and a
+ * widened request ceiling are each refused there. Only the tables the
+ * selection reached take part, so a write table a read-only admission never
+ * drew on may move without invalidating it.
  *
  * That is also why the walk lives inside the admission's live executor. A
  * continuation restores what was admitted without consulting the current source
@@ -94,8 +98,8 @@
  * without asking anyone anything a second time.
  */
 
-import { createDurableOperation, ephemeral } from "@executablemd/durable-streams";
-import type { Json as DurableJson, Workflow } from "@executablemd/durable-streams";
+import { createDurableOperation } from "@executablemd/durable-streams";
+import type { Json as DurableJson } from "@executablemd/durable-streams";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 
@@ -1048,23 +1052,37 @@ function readNamed(value: readonly Json[]): RetainedInvocation[] | undefined {
 }
 
 /**
- * Whether a resumed run states exactly the ceilings the retained admission was
- * granted under.
+ * Whether a resumed run still holds the grant the retained admission was made
+ * under.
  *
- * Whole and exact, in order: a root added, a root reordered, one identity
- * behind a name replaced, or one request added to the allowed set each make
- * this false. Widening is the case that matters most — a ceiling that still
- * contains the original request is precisely the one that comparing the
- * *fragment* against the *current* policy would wave through.
+ * Two kinds of term, compared differently on purpose.
+ *
+ * The Workspace roots are as-of-admission provenance over a set the run's own
+ * progress legitimately grows: every committed mutation retains another
+ * immutable root and advances the authoritative current root. So the retained
+ * basis is asked for by membership — every admission root and the admission's
+ * selected root must still be retained, and the root the run now stands on
+ * must be a retained one — while additional roots and an advanced current
+ * root change nothing this admission was granted under. A run that lost an
+ * admission root no longer holds the history the grant was made over, and is
+ * refused before any generated work.
+ *
+ * Every other term is a host-stated ceiling and compares whole and exactly,
+ * in order: a widened class selection, one identity behind a name replaced, a
+ * form added, or one request added to the allowed set each make this false.
+ * Widening is the case that matters most — a ceiling that still contains the
+ * original request is precisely the one that comparing the *fragment* against
+ * the *current* policy would wave through.
  */
-function samePolicy(retained: Policy, current: Policy): boolean {
-  if (retained.selectedRoot !== current.selectedRoot) {
+function policyHolds(retained: Policy, current: Policy): boolean {
+  const held = new Set(current.roots);
+  if (!retained.roots.every((root) => held.has(root))) {
+    return false;
+  }
+  if (!held.has(retained.selectedRoot) || !held.has(current.selectedRoot)) {
     return false;
   }
   if (!sameStrings(retained.allow, current.allow)) {
-    return false;
-  }
-  if (!sameStrings(retained.roots, current.roots)) {
     return false;
   }
   if (retained.allowed.length !== current.allowed.length) {
@@ -1248,7 +1266,7 @@ function* persistAdmission(
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
-): Workflow<Json> {
+): Operation<Json> {
   const stored = yield createDurableOperation<DurableJson>(
     { type: GENERATED_XMD, name: `generated:${id}`, input: policyRecord(policy) },
     () => admitSource(source, table, ceilings, policy),
@@ -1348,18 +1366,21 @@ function expand(
 /**
  * Admit one generated fragment and perform what it asks for.
  *
- * A `Workflow`, because what it records belongs in the run's journal: a trusted
- * host reaches it from a `DurablePreparation`, and a partial continuation
- * restores the admission and every observation that already committed rather
- * than performing them again.
+ * An `Operation`, so its durable records belong to the caller's own durable
+ * sequence: the production workflow reaches it through the host-declared
+ * `<Evaluate>` component inside the owning document expansion, and the
+ * admission together with every durable effect the admitted fragment performs
+ * is offered inline there, in authored order. A partial continuation offers
+ * the same sequence and restores the admission and every observation that
+ * already committed rather than performing them again.
  */
 export function* evaluateGeneratedXmd(
   request: GeneratedXmdRequest,
-): Workflow<GeneratedObservationResult> {
+): Operation<GeneratedObservationResult> {
   const allow = selection(request.allow);
   const entries = selectedEntries(request, allow);
   const table = admitted(entries);
-  const ceilings = yield* ephemeral(normalizedCeilings(entries));
+  const ceilings = yield* normalizedCeilings(entries);
   const policy = currentPolicy(request, allow, entries, ceilings);
 
   const stored = yield* persistAdmission(request.id, request.source, table, ceilings, policy);
@@ -1371,14 +1392,17 @@ export function* evaluateGeneratedXmd(
     throw new GeneratedXmdError(CONSTRUCT[decided.construct]);
   }
   // Before a single component is invoked or a single request is performed: a
-  // retained admission is a grant under the ceilings it was granted with, and a
-  // run that states different ones is asking for a different grant.
-  if (!samePolicy(decided.policy, policy)) {
+  // retained admission is a grant whose non-root ceilings must be stated
+  // exactly again, and whose Workspace basis must still be retained. The run's
+  // own progress may have retained further roots and advanced the current one;
+  // a run that lost an admission root, or moved any exact term, is asking for
+  // a different grant.
+  if (!policyHolds(decided.policy, policy)) {
     throw new GeneratedXmdError(CEILING);
   }
 
   // The retained source is what expands, so a continuation runs the fragment
   // this run admitted rather than whatever a later caller happens to hold.
-  const restored = yield* ephemeral(preflight(decided.source, table, ceilings));
-  return yield* ephemeral(expand(request.id, restored.segments, restored.named));
+  const restored = yield* preflight(decided.source, table, ceilings);
+  return yield* expand(request.id, restored.segments, restored.named);
 }

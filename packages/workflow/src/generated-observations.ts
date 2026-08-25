@@ -11,9 +11,13 @@
  * Four of them are workflow concepts:
  *
  * - the retained Workspace roots a run has, and which one admitted effects
- *   address. A generated fragment cannot add a root, and a run cannot select one
- *   it never retained — so the selection is checked here, before the fragment is
- *   read at all;
+ *   address. The list is the run's current immutable retained set and the
+ *   selected root is the authoritative live root, a member of that set; a
+ *   generated fragment cannot supply, add, or select either — so the selection
+ *   is checked here, before the fragment is read at all. On a continuation the
+ *   admission's root basis is held by membership: the run's own progress may
+ *   have retained further roots and advanced the current one, while every
+ *   non-root term is held exactly;
  * - the exact HTTP reads a fragment may perform. An empty ceiling admits no
  *   `<Fetch>` whatsoever: the pinned identity simply is not on the allowlist,
  *   which is a different thing from admitting it and refusing every request;
@@ -36,7 +40,7 @@ import type {
   GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
-import type { Workflow } from "@executablemd/durable-streams";
+import type { Operation } from "effection";
 
 /** A generated fragment this run will not admit under its own ceilings. */
 export class GeneratedEvaluationPolicyError extends Error {
@@ -86,7 +90,7 @@ export function* evaluateGeneratedFragment(
   id: string,
   source: string,
   policy: GeneratedEvaluationPolicy,
-): Workflow<GeneratedObservationResult> {
+): Operation<GeneratedObservationResult> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
     throw new GeneratedEvaluationPolicyError(

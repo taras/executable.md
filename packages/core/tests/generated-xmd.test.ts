@@ -30,7 +30,11 @@ import type { Operation } from "effection";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { API, useHostFiles } from "@executablemd/runtime";
 import type { FetchInit, RuntimeFetchResponse } from "@executablemd/runtime";
-import { InMemoryStream, serializeDurableEvent } from "@executablemd/durable-streams";
+import {
+  createDurableOperation,
+  InMemoryStream,
+  serializeDurableEvent,
+} from "@executablemd/durable-streams";
 import type { DurableEvent, DurableStream } from "@executablemd/durable-streams";
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -55,6 +59,7 @@ import {
 } from "../host.ts";
 import { executeInstalled } from "../host.ts";
 import type {
+  DurablePreparation,
   ExecutionInstallation,
   GeneratedComponentForm,
   GeneratedEffectClass,
@@ -71,6 +76,8 @@ const ROOT_SOURCE = "The host ran a generated fragment.\n";
 const URL_ONE = "https://api.example.test/one";
 const URL_TWO = "https://api.example.test/two";
 const ROOTS = ["workspace://primary", "workspace://secondary"];
+/** A root the run retains after the admission — its own legitimate progress. */
+const ADVANCED = "workspace://advanced";
 
 /** The one host observation component the tests admit beside `<Fetch>`. */
 const PROBE: FunctionComponentDefinition = {
@@ -174,12 +181,26 @@ interface Attempt {
 }
 
 /**
+ * Drive the evaluator from a `DurablePreparation`.
+ *
+ * The preparation is a harness choice, not the production path: production
+ * reaches the evaluator through the workflow host's declared `<Evaluate>`
+ * component inside the owning document expansion. The evaluator is an
+ * `Operation` whose durable effects identify themselves against the durable
+ * root they run in, so a preparation drives it unchanged — the `Workflow`
+ * annotation narrows only the static yield type, which is what the cast
+ * widens past.
+ */
+function driven(work: () => Operation<void>): ExecutionInstallation {
+  return { prepare: work as DurablePreparation };
+}
+
+/**
  * Evaluate one fragment from the trusted-host seam.
  *
- * The evaluator is reached from a `DurablePreparation`, which is the position a
- * host records durable work from: it runs inside the durable root, after the
- * journal has been admitted and before any document policy or the root import.
- * No Agent provider is installed anywhere — the source is synthetic.
+ * The evaluator runs inside the durable root, after the journal has been
+ * admitted and before any document policy or the root import. No Agent
+ * provider is installed anywhere — the source is synthetic.
  */
 function evaluate(
   candidate: GeneratedXmdRequest,
@@ -187,16 +208,19 @@ function evaluate(
     stream?: InMemoryStream;
     componentDirs?: readonly string[];
     installations?: readonly ExecutionInstallation[];
+    /** A later parent durable effect, offered by the same owning preparation. */
+    after?: () => Operation<void>;
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
     const stream = options.stream ?? new InMemoryStream();
     const captured: { result?: GeneratedObservationResult } = {};
-    const installation: ExecutionInstallation = {
-      *prepare() {
-        captured.result = yield* evaluateGeneratedXmd(candidate);
-      },
-    };
+    const installation = driven(function* () {
+      captured.result = yield* evaluateGeneratedXmd(candidate);
+      if (options.after) {
+        yield* options.after();
+      }
+    });
     const execution = yield* executeInstalled(
       {
         ...retainedSource(ROOT_PATH, ROOT_SOURCE),
@@ -709,11 +733,9 @@ describe("Tier GX — what the run keeps", () => {
 
     yield* scoped(function* () {
       const running = yield* spawn(function* () {
-        const installation: ExecutionInstallation = {
-          *prepare() {
-            yield* evaluateGeneratedXmd(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]));
-          },
-        };
+        const installation = driven(function* () {
+          yield* evaluateGeneratedXmd(request(SOURCE, [pinnedFetch([ADMITTED_REQUEST])]));
+        });
         yield* collect(
           yield* executeInstalled(
             { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, componentDirs: [] },
@@ -737,6 +759,222 @@ describe("Tier GX — what the run keeps", () => {
     expect(transport.performed).toHaveLength(2);
     expect(admissions(continued.events)).toHaveLength(1);
     expect(observations(continued.events)).toHaveLength(1);
+  });
+});
+
+/**
+ * Tier GX — nested generated effects belong to the owning expansion
+ * (specs/workflow-workspace-spec.md §8.4).
+ *
+ * The admission, every durable effect the admitted fragment performs, and any
+ * later durable effect of the owning operation are one offered sequence, in
+ * authored order. A partial replay offers the same sequence: completed
+ * generated effects restore from their retained records without entering
+ * their providers, and the run continues to the later effect rather than
+ * diverging at the first retained nested record.
+ */
+describe("Tier GX — nested generated effects belong to the owning expansion", () => {
+  beforeAll(() => useTempFileCompiler());
+
+  /** The journal without the root's close, which is what makes the next run replay. */
+  function partial(events: DurableEvent[]): InMemoryStream {
+    return new InMemoryStream(
+      events.filter((event) => !(event.type === "close" && event.coroutineId === "root")),
+    );
+  }
+
+  /** Every effect one run offered, in journal order, by its durable type. */
+  function offered(events: DurableEvent[]): string[] {
+    return events.flatMap((event) => (event.type === "yield" ? [event.description.type] : []));
+  }
+
+  /** One later parent durable effect, counting how often its executor ran live. */
+  function marker(executed: string[]): () => Operation<void> {
+    return function* () {
+      yield createDurableOperation<Json>(
+        { type: "test_preparation", name: "parent-marker" },
+        // deno-lint-ignore require-yield
+        function* (): Operation<Json> {
+          executed.push("parent-marker");
+          return "marked";
+        },
+      );
+    };
+  }
+
+  /**
+   * A paired mutation whose effect is durable, so a continuation must restore
+   * it rather than perform it again. The value stays out of the result: a
+   * mutation's own durable record is the account of it.
+   */
+  function durableWrite(executed: string[]): GeneratedMutation {
+    return pinnedMutation(
+      "Write",
+      "test://durable-write",
+      {
+        kind: "function",
+        name: "Write",
+        props: { type: "object", properties: {}, additionalProperties: false },
+        *fn(): Operation<Json> {
+          const body = yield* content();
+          yield createDurableOperation<Json>(
+            { type: "generated_write", name: "write" },
+            // deno-lint-ignore require-yield
+            function* (): Operation<Json> {
+              executed.push(`write:${body}`);
+              return null;
+            },
+          );
+          return "";
+        },
+      },
+      "paired",
+    );
+  }
+
+  it("GX18a: a generated read and a later parent marker replay as one offered sequence", function* () {
+    const transport = yield* useTransport(() => ({ status: 200, body: "body" }));
+    const executed: string[] = [];
+    const candidate = () =>
+      request(`<Fetch url="${URL_ONE}" />\n`, [pinnedFetch([ADMITTED_REQUEST])]);
+
+    const first = yield* evaluate(candidate(), { after: marker(executed) });
+    expect(first.failure).toBe(undefined);
+    expect(transport.performed).toHaveLength(1);
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "fetch",
+      "test_preparation",
+      "import_component",
+    ]);
+
+    // The continuation runs after the run's own progress: one more retained
+    // root, and the run stands on it. The admission's basis is still retained,
+    // so the same sequence is offered and restores.
+    const again = yield* evaluate(
+      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
+      {
+        after: marker(executed),
+        stream: partial(first.events),
+      },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
+    // One live call each, across both executions: the completed read and the
+    // completed marker restore from their retained records.
+    expect(transport.performed).toHaveLength(1);
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "fetch",
+      "test_preparation",
+      "import_component",
+    ]);
+    expect(admissions(again.events)).toEqual(admissions(first.events));
+  });
+
+  it("GX18b: a generated durable write and a later parent marker replay as one offered sequence", function* () {
+    const executed: string[] = [];
+    const candidate = () =>
+      selecting(`<Write>proposed</Write>\n`, [pinnedFileRead()], {
+        allow: ["write"],
+        mutations: [durableWrite(executed)],
+      });
+
+    const first = yield* evaluate(candidate(), { after: marker(executed) });
+    expect(first.failure).toBe(undefined);
+    // The mutation performed, then the marker — and the mutation contributed
+    // no observation and no receipt to the value the host reads back.
+    expect(executed).toEqual(["write:proposed", "parent-marker"]);
+    expect(first.values).toEqual([]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "generated_write",
+      "test_preparation",
+      "import_component",
+    ]);
+
+    // The continuation runs after the run's own progress — the very progress a
+    // committed generated write makes: one more retained root, now current.
+    const again = yield* evaluate(
+      { ...candidate(), workspaceRoots: [...ROOTS, ADVANCED], selectedRoot: ADVANCED },
+      {
+        after: marker(executed),
+        stream: partial(first.events),
+      },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
+    expect(executed).toEqual(["write:proposed", "parent-marker"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "generated_write",
+      "test_preparation",
+      "import_component",
+    ]);
+    expect(admissions(again.events)).toEqual(admissions(first.events));
+  });
+
+  it("GX18c: an empty fragment keeps its output and invents no nested effect on replay", function* () {
+    const executed: string[] = [];
+    const candidate = () => request("", [pinnedFetch([ADMITTED_REQUEST])]);
+
+    const first = yield* evaluate(candidate(), { after: marker(executed) });
+    expect(first.failure).toBe(undefined);
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
+
+    const again = yield* evaluate(candidate(), {
+      after: marker(executed),
+      stream: partial(first.events),
+    });
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
+    expect(again.values).toEqual(first.values);
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
+  });
+
+  it("GX18d: a rendered-only fragment keeps its output and invents no nested effect on replay", function* () {
+    const executed: string[] = [];
+    const candidate = () => request("The fragment renders and performs nothing.\n", [probe()]);
+
+    const first = yield* evaluate(candidate(), { after: marker(executed) });
+    expect(first.failure).toBe(undefined);
+    expect(first.output).toContain("The fragment renders and performs nothing.");
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(first.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
+
+    const again = yield* evaluate(candidate(), {
+      after: marker(executed),
+      stream: partial(first.events),
+    });
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toBe(first.output);
+    expect(again.values).toEqual(first.values);
+    expect(executed).toEqual(["parent-marker"]);
+    expect(offered(again.events)).toEqual([
+      "generated_xmd",
+      "test_preparation",
+      "import_component",
+    ]);
   });
 });
 
@@ -819,6 +1057,24 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
   };
 
   /**
+   * The probe under its admitted identity, counting live invocations — so a
+   * case proves whether a continuation reached the generated component rather
+   * than inferring it from rendered text alone.
+   */
+  function countedProbe(performed: string[]): GeneratedObservation {
+    return pinnedComponent("Probe", "test://probe", {
+      kind: "function",
+      name: "Probe",
+      props: { type: "object", properties: {}, additionalProperties: false },
+      // deno-lint-ignore require-yield
+      *fn(): Operation<Json> {
+        performed.push("probed");
+        return "probed";
+      },
+    });
+  }
+
+  /**
    * A history left by a run interrupted during preparation: the admission
    * committed, and nothing after it did.
    *
@@ -865,11 +1121,9 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     };
     yield* scoped(function* () {
       const running = yield* spawn(function* () {
-        const installation: ExecutionInstallation = {
-          *prepare() {
-            yield* evaluateGeneratedXmd(candidate);
-          },
-        };
+        const installation = driven(function* () {
+          yield* evaluateGeneratedXmd(candidate);
+        });
         yield* collect(
           yield* executeInstalled(
             { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, componentDirs: [] },
@@ -918,26 +1172,36 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
     expect(admittedFragments(again.events)).toHaveLength(1);
   });
 
-  it("GX22: changed retained roots refuse before expansion", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+  it("GX22: the run's own root progression resumes and reaches the generated component", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(first.failure).toBe(undefined);
+    expect(performed).toHaveLength(1);
 
+    // One more retained root, and the run stands on it now. The admission's
+    // basis is still retained, so the continuation proceeds — and performs the
+    // observation its interrupted history never committed, once more.
     const again = yield* evaluate(
       {
         id: "turn-1",
         source: "<Probe />\n",
-        workspaceRoots: [...ROOTS, "workspace://added"],
-        selectedRoot: ROOTS[0] ?? "",
-        observations: [probe()],
+        workspaceRoots: [...ROOTS, ADVANCED],
+        selectedRoot: ADVANCED,
+        observations: [countedProbe(performed)],
       },
       { stream: duringPreparation(first.events) },
     );
 
-    expect(again.failure).toContain("admitted under");
-    expect(String(again.output ?? "")).not.toContain("probed");
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toContain("probed");
+    expect(performed).toHaveLength(2);
   });
 
-  it("GX22b: a changed selected root refuses before expansion", function* () {
-    const first = yield* evaluate(request("<Probe />\n", [probe()]));
+  it("GX22b: the run may stand on another root it already retained", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(first.failure).toBe(undefined);
+    expect(performed).toHaveLength(1);
 
     const again = yield* evaluate(
       {
@@ -945,13 +1209,58 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         source: "<Probe />\n",
         workspaceRoots: ROOTS,
         selectedRoot: ROOTS[1] ?? "",
-        observations: [probe()],
+        observations: [countedProbe(performed)],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toBe(undefined);
+    expect(again.output).toContain("probed");
+    expect(performed).toHaveLength(2);
+  });
+
+  it("GX22c: a lost admission root refuses before the component runs", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(performed).toHaveLength(1);
+
+    // The admission retained both roots; this run kept only the selected one.
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: [ROOTS[0] ?? ""],
+        selectedRoot: ROOTS[0] ?? "",
+        observations: [countedProbe(performed)],
       },
       { stream: duringPreparation(first.events) },
     );
 
     expect(again.failure).toContain("admitted under");
     expect(String(again.output ?? "")).not.toContain("probed");
+    expect(performed).toHaveLength(1);
+  });
+
+  it("GX22d: losing the admission's selected root refuses before the component runs", function* () {
+    const performed: string[] = [];
+    const first = yield* evaluate(request("<Probe />\n", [countedProbe(performed)]));
+    expect(performed).toHaveLength(1);
+
+    // The run progressed, but the root the admission addressed is gone.
+    const again = yield* evaluate(
+      {
+        id: "turn-1",
+        source: "<Probe />\n",
+        workspaceRoots: [ROOTS[1] ?? "", ADVANCED],
+        selectedRoot: ROOTS[1] ?? "",
+        observations: [countedProbe(performed)],
+      },
+      { stream: duringPreparation(first.events) },
+    );
+
+    expect(again.failure).toContain("admitted under");
+    expect(String(again.output ?? "")).not.toContain("probed");
+    expect(performed).toHaveLength(1);
   });
 
   it("GX23: a widened Fetch ceiling refuses before API.Fetch", function* () {

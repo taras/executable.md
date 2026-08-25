@@ -1629,9 +1629,14 @@ the normalized request policy it ran under; a refusal carries the construct
 class and nothing else. The whole event crosses the journal's secret filter like
 any other, and it commits before the first generated effect. The effects
 themselves are retained by their ordinary records — `fetch` for `<Fetch>`,
-`workspace_file` for `<File>` (§10.1) — so a partial continuation restores the
-admission and everything already committed rather than performing it again, and
-a completed replay restores the run's result without asking the Agent, a server
+`workspace_file` for `<File>` (§10.1) — and the admission and every nested
+generated effect are offered inline by the owning document expansion, in
+authored order and ahead of the expansion's later effects, so one durable
+sequence reads admission, each nested effect, the later parent effects, and
+whatever wait follows. A partial continuation is offered that same sequence: it
+restores the admission and everything already committed rather than performing
+it again — no second live execution and no second root publication — and a
+completed replay restores the run's result without asking the Agent, a server
 or a provider anything.
 
 An interruption before an observation's own record commits retains no partial
@@ -1640,18 +1645,29 @@ retained admission.
 
 #### A continuation is held to the ceilings it was admitted under
 
-A retained admission is a grant, and it resumes only under the ceilings it was
-granted with. Durable replay matches an effect by its type and name, and what a
-description carries is stored rather than compared, so the normalized policy is
-retained in the admission's own result. Before one generated component is
-invoked or one request is performed, a continuation compares the retained policy
-to the one the run now states — whole and exactly. A changed class selection,
-changed retained roots, a changed selected root, a changed pinned identity
-behind an unchanged name, a changed admitted form, and a widened or otherwise
-altered request ceiling are each refused, with a fixed diagnostic that names
-none of what it compared. Only the tables the selection reached take part, so a
-run that changed a write table a read-only admission never drew on has changed
-nothing that admission was granted under.
+A retained admission is a grant, and a continuation is held to it. Durable
+replay matches an effect by its type and name, and what a description carries
+is stored rather than compared, so the normalized policy is retained in the
+admission's own result. Before one generated component is invoked or one
+request is performed, a continuation checks the retained policy against the one
+the run now states — and holds two kinds of term differently, on purpose.
+
+The admission's Workspace roots and selected root are an as-of-admission
+retained basis, not a frozen future state: every committed mutation retains
+another immutable root and advances the authoritative current root, and that is
+the run's own recorded progress rather than a moved ceiling. So the basis is
+checked by membership. Every admission root and the admission's selected root
+must still be retained, and the root the run now stands on must be a retained
+one; additional retained roots and an advanced retained current root pass. Loss
+of any admission root — the selected one included — refuses before generated
+work, with the same fixed diagnostic that names none of what it compared.
+
+Every non-root term compares whole and exactly, in canonical order. A changed
+class selection, a changed pinned identity behind an unchanged name, a changed
+admitted form, and a widened or otherwise altered request ceiling are each
+refused. Only the tables the selection reached take part, so a run that changed
+a write table a read-only admission never drew on has changed nothing that
+admission was granted under.
 
 The fragment is decided inside that durable effect rather than before it. So a
 continuation restores what was admitted without parsing the current candidate at
@@ -1804,8 +1820,10 @@ Being reachable from a trusted document is all the registration decides. It
 carries none of the authority. The component closes over the exact run storage
 and the immutable host options the declaration supplied, takes its durable
 identity from its own invocation through the claimant, reads the retained roots
-and the run's authoritative current root from that storage at invocation, and
-takes the read-only `File` identity from core. No prop, binding, Context,
+and the run's authoritative current root from that storage at invocation — an
+as-of-admission provenance a continuation holds by membership, so the run's own
+later publications and an advanced retained current root invalidate nothing —
+and takes the read-only `File` identity from core. No prop, binding, Context,
 contextual API answer, component registration, generated name or middleware
 return value supplies or widens any of them.
 
@@ -1960,6 +1978,7 @@ durable observations and mutations restore.
 | File read | restore historical content |
 | File write/delete | restore completion without mutating again; a deletion whose effect was never published is performed once by the continuation, against the retained frontier |
 | Glob | restore historical path set |
+| generated XMD | restore the retained admission — every admission root and its selected root still retained, every non-root ceiling exact — then offer each nested generated effect inline in authored order: a completed read or mutation restores without another live execution or root publication, an uncommitted one is performed once by the continuation, and the sequence continues to later parent effects and any durable wait |
 | Prompt/Sample | restore response |
 | suspension request | restore its filtered request; with no input, settle the new execution `suspended` and release the executor lock again |
 | suspension answer | restore the delivered value without reaching the live controller and without consuming retained delivery state again |
