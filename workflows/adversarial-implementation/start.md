@@ -300,11 +300,12 @@ passes the gate, so neither starts implementation or any later durable effect.
 Those two are reported differently, because they are different requests. A
 decline is finished: the user said no. Exhaustion is not — it is the workflow
 asking the user what to do after five rounds failed to converge (#290, settled).
-Under a composed workflow that request is where the run should suspend durably
-for user direction. The substrate is shipped — `suspendFor()` waits and gives
-the executor lock back (#367), and a typed answer can be delivered (#300) — but
-it is an Api operation this document does not call, so here the report asks
-instead. Neither exhaustion nor an unchanged verdict is ever read as approval,
+They end differently too, and neither of them is a suspension. A checkpoint that
+needs a person suspends the run durably (#577, shipped, below). Exhaustion has
+already asked its final checkpoint and been told to continue; what it reached
+was the loop's bound. It authorizes nothing, starts no later durable effect, and
+reports awaiting direction as the end of that run rather than waiting for an
+answer. Neither exhaustion nor an unchanged verdict is ever read as approval,
 and nothing resumes the run on its own.
 
 A checkpoint that found no material choice still produces an explicit
@@ -338,10 +339,13 @@ the Workspace attachment, and the Agent processes need not stay alive (#367).
 is available: completed durable effects restore from the journal, ephemeral
 attachments rebuild, and partial replay continues at the retained frontier.
 
-The checkpoints above do not call it. `suspendFor()` is an Api operation with no
-v1 Markdown element, and a suspension is a different mechanism from `<Elicit>`,
-which asks inside the execution already running — so nothing here converts one
-into the other.
+The checkpoints above reach it through the host rather than by naming it.
+`suspendFor()` is an Api operation with no v1 Markdown element, and under
+ordinary `xmd run` a suspension would indeed be a different mechanism from
+`<Elicit>`, which asks inside the execution already running. Under
+`xmd workflow` the host's own `<Elicit>` registration is what joins them
+(#577, shipped), which is described below — so these checkpoints suspend
+without this document spelling a second construct.
 
 That is what the earlier drafts of this document were reaching for with a
 `<Stage>` boundary. The construct was rejected — the root document is the
@@ -357,7 +361,7 @@ cancellation and deletion are shipped (#466). So is the wait: `suspendFor()`
 suspends a run durably and gives its executor lock back (#367), and a typed
 answer can be delivered to it (#300, non-executing).
 
-The join is made, and the document says none of it. Every checkpoint here is an
+The join is made, and this document relies on it. Every checkpoint here is an
 ordinary `<Elicit>`; under `xmd workflow` the host publishes one retained
 suspension request, settles the run `suspended`, and gives the executor lock
 back (#577, shipped). `xmd workflow answer` retains the typed answer and
@@ -501,10 +505,12 @@ stays outside the generated class is every effect that reaches past the
 Workspace: local Git, the Git host, issues, processes, execution, credentials
 and external writes. A fragment naming one refuses whole.
 
-What can be exercised today is discovery through plan convergence and the user
-gates around them, running in one document execution and one existing working
-directory, with commits, pushes, pull requests, and issues performed as explicit
-user-run steps between manual stages. Proving that shipped subset is #290.
+The document logic alone — discovery through plan convergence and the user gates
+around them — is what #290 proves, in one document execution and one existing
+working directory. That is a proof about this document's own logic, not the
+limit of what runs: under `xmd workflow` the composed root performs its own
+commits, pushes, pull requests and issues as authored effects, and #301's
+composition suite drives exactly that.
 
 The command and the foundation underneath it are built.
 `xmd workflow start [--id] [--props-*] <definition>` and

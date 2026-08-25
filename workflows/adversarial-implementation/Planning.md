@@ -307,16 +307,22 @@ later durable effect, and cannot be reported as convergence or success.
 What the caller does with it is ask the user. An exhausted planning loop returns
 to its caller for direction rather than terminating on its own account: five
 rounds of evidence did not converge, and only the user decides what happens
-next. Under a composed workflow that request is meant to become a durable
-suspension — the run recording why it stopped and the material the user needs,
-giving its executor lock back, and resuming only from explicit user direction.
+next.
 
-The substrate exists: `suspendFor()` suspends and releases the lock (#367), and
-a typed answer can be delivered to the waiting run (#300). It is an Api
-operation with no v1 Markdown element, and this stage calls nothing that
-suspends, so today the request is reported rather than waited on. Either way
-neither exhaustion nor silence nor an unchanged verdict is read as approval, and
-the boundary this document owns holds.
+**Exhaustion is not a suspension, and this is the distinction to keep.** Every
+`planCheckpoint` above is an ordinary `<Elicit>`, and under `xmd workflow` the
+host's own registration suspends the run there durably (#577, shipped): one
+retained request, the run settled `suspended`, the executor lock given back, and
+continuation only through `xmd workflow answer` and an explicit
+`xmd workflow resume`. Exhaustion happens *after* the final checkpoint has
+already been answered — the user kept approving and the verdict never passed —
+so there is no pending question and nothing waits. It authorizes nothing,
+starts no later durable effect, and reports awaiting direction as the end of
+that run. Nothing here creates a second wait to ask about it, and neither
+exhaustion nor silence nor an unchanged verdict is read as approval.
+
+Scheduling and unattended continuation stay outside this composition; a resume
+is an explicit act, and the scheduling slice is #300's.
 
 Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
 is one durable operation, each `<Elicit>` answer is journaled against its
