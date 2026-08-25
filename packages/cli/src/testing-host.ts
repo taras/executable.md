@@ -9,9 +9,10 @@
  * of `xmd run` that nothing ships.
  *
  * So a child gets what `xmd run` gets, after the command line has been read:
- * the same components (`installDocumentComponents`), the same native service
- * adapter this entrypoint installs, the same root loader and target resolver,
- * and the same `executeInstalled()` call. What it does not get is process
+ * the same components (`installDocumentComponents`), the same browser-form
+ * elicitation provider, the same native service adapter this entrypoint
+ * installs, the same root loader and target resolver, and the same
+ * `executeInstalled()` call. What it does not get is process
  * presentation — no journal file, no `--verbose` echo, no terminal formatting,
  * no stdout of its own. Its rendered output goes back to the document that ran
  * it, which is the only reader it has.
@@ -25,6 +26,7 @@ import { InMemoryStream } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { forEach } from "@effectionx/stream-helpers";
 import { useHostFiles } from "@executablemd/runtime";
+import { installWebElicitation } from "@executablemd/web";
 import type { Operation } from "effection";
 import { fileSource, inlineSource } from "@executablemd/core";
 import type { RootDocumentSource } from "@executablemd/core";
@@ -94,6 +96,12 @@ function* runProfileChild(
   const stream = new InMemoryStream();
 
   yield* installDocumentComponents({ testing: false }, false);
+  // A child gets what `xmd run` gets, and the browser form is part of that.
+  // Installed here rather than inherited: this scope is isolated from the
+  // command that started it, so the run profile's provider reaches a child only
+  // if the run profile composes it — and a child of `xmd test`, whose command
+  // composes none, still gets one because *this* is the run profile.
+  yield* installWebElicitation();
   // Document filesystem access resolves in the caller's own filesystem, as it
   // does for `xmd run`. The entrypoint installs its provider process-wide, but
   // the child runs in an isolated scope, so the child's assembly must restate

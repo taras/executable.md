@@ -22,10 +22,16 @@
  * this suite. Only the agent is a stand-in, in the slot the real agent profile
  * fills, because what is under test is that a turn is retained once rather than
  * what an agent says.
+ *
+ * One case below is a process after all, and says why: which provider answers
+ * `<Elicit>` is decided by the assembly the entrypoint builds around the
+ * document, and no in-process caller — this suite's included — builds that
+ * assembly. It is the only observation here that a value cannot stand in for.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { runCli } from "@executablemd/test-support/launch";
 import { call, ensure, Err, Ok, resource, scoped } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, rm, writeTextFile } from "@effectionx/fs";
@@ -1461,4 +1467,121 @@ the retained note
       expect(answers(path)[0]?.state).toBe("consumed");
     });
   }
+});
+
+/**
+ * The one question a workflow asks, and the smallest document that asks it.
+ *
+ * No effect precedes the wait: what is under test is which provider answers
+ * `<Elicit>`, and an effect ahead of it would only add ways for the case to
+ * fail before reaching the boundary it exists to cross.
+ */
+const ELICITATION = `<Elicit schema={${CHECKPOINT_SCHEMA}} as="decision">
+Proceed with the change?
+</Elicit>
+
+decision: {decision.proceed}
+`;
+
+/** A HOME of this case's own, so nothing reaches the developer's configuration. */
+function useIsolatedHome(): Operation<string> {
+  return resource<string>(function* (provide) {
+    const home = yield* until(mkdtemp(join(tmpdir(), "xmd-wfs-home-")));
+    yield* ensure(function* () {
+      yield* rm(home, { recursive: true, force: true });
+    });
+    yield* provide(home);
+  });
+}
+
+/**
+ * How long one `xmd workflow` invocation may take before it is abandoned.
+ *
+ * Bounded rather than left to the default, because the failure this case
+ * guards against is a *wait*: with a Web provider assembled underneath the
+ * workflow's own, the start opens a loopback form and blocks for a reader who
+ * is not coming. `runCli` reports what each channel received before the
+ * deadline, so an abandoned run still names the form it opened.
+ */
+const INVOCATION_LIMIT = 40_000;
+
+/** What one `xmd workflow` line published, or nothing when it published none. */
+function published(stderr: string, label: string): string | undefined {
+  const prefix = `workflow ${label}: `;
+  const line = stderr.split("\n").find((entry) => entry.startsWith(prefix));
+  return line?.slice(prefix.length).trim();
+}
+
+describe("a workflow elicitation through the shipped CLI assembly", () => {
+  it("suspends, is answered and resumes without ever opening a browser form", function* () {
+    // Launched as a process, because the subject is the assembly the entrypoint
+    // builds around `runScopedDocument`. Calling `runWorkflow()` or
+    // `executeInstalled()` from here would install the components this suite
+    // chose and never reach the boundary under test.
+    const runs = yield* useRunStore();
+    const home = yield* useIsolatedHome();
+    const fixture = yield* useCheckpointFixture(ELICITATION);
+
+    const xmd = (args: string[]) =>
+      runCli(args, {
+        cwd: fixture.repository,
+        env: { HOME: home, XMD_WORKFLOW_RUNS: runs },
+        timeout: INVOCATION_LIMIT,
+      });
+
+    const started = yield* xmd(["workflow", "start", "workflow.md"]).join();
+
+    // Suspension is its own process outcome, and the pair a caller needs in
+    // order to answer the run reaches standard error beside it.
+    expect(started.code).toBe(2);
+    expect(published(started.stderr, "status")).toBe("suspended");
+    const runId = published(started.stderr, "run");
+    expect(runId).toBeDefined();
+    const suspensionId = published(started.stderr, "suspension");
+    expect(suspensionId).toBeDefined();
+
+    // Nobody was asked anything: no loopback form was announced and no browser
+    // launch was attempted, on either channel.
+    const captured = `${started.stdout}\n${started.stderr}`;
+    expect(captured).not.toContain("http://127.0.0.1:");
+    expect(captured).not.toContain("could not open a browser automatically");
+
+    const path = workflowRunPath(runs, String(runId));
+    const suspended = retained(path);
+    expect(suspended.status).toBe("suspended");
+    expect(suspended.requests).toHaveLength(1);
+    expect(suspended.rootCloses).toBe(0);
+    // The wait the caller was told to answer is the wait the run retained.
+    expect(suspensionId).toBe(suspended.requests[0]);
+
+    // The delivery retains a value and moves nothing else.
+    const delivered = yield* xmd([
+      "workflow",
+      "answer",
+      String(runId),
+      String(suspensionId),
+      '{"proceed":true}',
+    ]).join();
+    expect(delivered.code).toBe(0);
+    expect(delivered.stdout.trim()).toBe(`workflow answer: ${runId} (${suspensionId})`);
+    expect(retained(path)).toEqual(suspended);
+    expect(answers(path)).toEqual([
+      {
+        suspensionId: String(suspensionId),
+        state: "pending",
+        answer: JSON.stringify({ proceed: true }),
+      },
+    ]);
+
+    // An ordinary resume spends the answer once and reaches the authored value.
+    const resumed = yield* xmd(["workflow", "resume", String(runId)]).join();
+    expect(resumed.code).toBe(0);
+    expect(published(resumed.stderr, "status")).toBe("completed");
+    expect(resumed.stdout).toContain("decision: true");
+
+    const completed = retained(path);
+    expect(completed.status).toBe("completed");
+    expect(completed.requests).toEqual(suspended.requests);
+    expect(answers(path)[0]?.state).toBe("consumed");
+  });
 });
