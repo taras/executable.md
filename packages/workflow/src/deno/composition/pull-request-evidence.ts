@@ -205,7 +205,7 @@ function readReview(subject: Subject, payload: unknown): ReviewEvidence | undefi
   // The review says which pull request it belongs to, and it has to be this
   // one: the endpoint, the owner, the repository, the collection and the
   // number, compared whole.
-  if (!belongsTo(member(payload, "pull_request_url"), subject.pulls)) {
+  if (!belongsTo(member(payload, "pull_request_url"), subject, "pulls")) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -232,7 +232,7 @@ function readReview(subject: Subject, payload: unknown): ReviewEvidence | undefi
 }
 
 function readConversationComment(subject: Subject, payload: unknown): CommentEvidence | undefined {
-  if (!belongsTo(member(payload, "issue_url"), subject.issues)) {
+  if (!belongsTo(member(payload, "issue_url"), subject, "issues")) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -258,7 +258,7 @@ function readConversationComment(subject: Subject, payload: unknown): CommentEvi
 }
 
 function readReviewComment(subject: Subject, payload: unknown): CommentEvidence | undefined {
-  if (!belongsTo(member(payload, "pull_request_url"), subject.pulls)) {
+  if (!belongsTo(member(payload, "pull_request_url"), subject, "pulls")) {
     return undefined;
   }
   const id = identifier(member(payload, "id"));
@@ -380,21 +380,54 @@ function readCommitStatus(headSha: string, payload: unknown): CheckEvidence | un
  * well-formed payload about the wrong repository is still well formed.
  */
 interface Subject {
-  readonly pulls: string;
-  readonly issues: string;
+  readonly endpoint: string;
+  readonly owner: string;
+  readonly repository: string;
+  readonly number: number;
 }
 
 function subjectFor(access: GitHubAccess, name: GitHubRepositoryName, number: number): Subject {
-  const repository = `${access.endpoint}/repos/${name.owner}/${name.repository}`;
   return {
-    pulls: `${repository}/pulls/${number}`,
-    issues: `${repository}/issues/${number}`,
+    endpoint: access.endpoint,
+    owner: name.owner,
+    repository: name.repository,
+    number,
   };
 }
 
-/** Whether a subject URL is the exact one this read is about. */
-function belongsTo(value: unknown, expected: string): boolean {
-  return nonEmpty(value) === expected;
+/**
+ * Whether a subject URL names this read's pull request in the named collection.
+ *
+ * Compared part by part rather than as one string, because the parts do not
+ * share an identity. An owner and a repository are the same name in any
+ * casing — GitHub accepts `OCTO/PROJECT` and answers about `octo/project` —
+ * so a byte comparison would refuse the host's own canonical answer to a
+ * request the operator authorized. The endpoint, the collection and the number
+ * carry no such equivalence and are exactly what was asked for. It is the same
+ * identity the head check applies to `full_name`.
+ */
+function belongsTo(value: unknown, subject: Subject, collection: "pulls" | "issues"): boolean {
+  const url = nonEmpty(value);
+  const prefix = `${subject.endpoint}/repos/`;
+  if (url === undefined || !url.startsWith(prefix)) {
+    return false;
+  }
+  const parts = url.slice(prefix.length).split("/");
+  if (parts.length !== 4) {
+    return false;
+  }
+  const [owner, repository, named, number] = parts;
+  return (
+    same(owner, subject.owner) &&
+    same(repository, subject.repository) &&
+    named === collection &&
+    number === String(subject.number)
+  );
+}
+
+/** Two spellings of one GitHub name. */
+function same(observed: string, asked: string): boolean {
+  return observed.toLowerCase() === asked.toLowerCase();
 }
 
 /** The head this numbered pull request is at, checked against the request. */
@@ -427,8 +460,7 @@ function* observeHead(
     return invalid();
   }
   const full = nonEmpty(member(member(member(payload, "base"), "repo"), "full_name"));
-  const asked = `${name.owner}/${name.repository}`.toLowerCase();
-  if (full === undefined || full.toLowerCase() !== asked) {
+  if (full === undefined || !same(full, `${name.owner}/${name.repository}`)) {
     return invalid();
   }
   const headSha = nonEmpty(member(member(payload, "head"), "sha"));

@@ -143,7 +143,12 @@ const STATUS = `/repos/octo/project/commits/${HEAD}/status`;
 const SUBJECT = `${ENDPOINT}/repos/octo/project/pulls/7`;
 const ISSUE_SUBJECT = `${ENDPOINT}/repos/octo/project/issues/7`;
 
-function review(id: number, state: string, body: string): unknown {
+function review(
+  id: number,
+  state: string,
+  body: string,
+  overrides: Record<string, unknown> = {},
+): unknown {
   return {
     id,
     user: { login: "reviewer" },
@@ -153,6 +158,7 @@ function review(id: number, state: string, body: string): unknown {
     commit_id: HEAD,
     html_url: `https://github.test/pr/7#r${id}`,
     pull_request_url: SUBJECT,
+    ...overrides,
   };
 }
 
@@ -166,8 +172,12 @@ function pullRequestPayload(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
-function read(server: Server, kind: "reviews" | "comments" | "checks"): Operation<EvidenceReading> {
-  return readPullRequestEvidence(server.access, NAME, 7, kind);
+function read(
+  server: Server,
+  kind: "reviews" | "comments" | "checks",
+  name: GitHubRepositoryName = NAME,
+): Operation<EvidenceReading> {
+  return readPullRequestEvidence(server.access, name, 7, kind);
 }
 
 /**
@@ -422,13 +432,9 @@ describe("Tier PRR — pull-request evidence", () => {
     const foreign = server({
       [REVIEWS]: {
         body: JSON.stringify([
-          {
-            ...(review(1, "CHANGES_REQUESTED", "this is about another project") as Record<
-              string,
-              unknown
-            >),
+          review(1, "CHANGES_REQUESTED", "this is about another project", {
             pull_request_url: `${ENDPOINT}/repos/someone/else/pulls/7`,
-          },
+          }),
         ]),
       },
     });
@@ -466,6 +472,20 @@ describe("Tier PRR — pull-request evidence", () => {
       },
     });
     expect((yield* read(wrongRepository, "checks")).state).toBe("protocol-invalid");
+
+    // The border of that rejection. GitHub accepts a repository path in any
+    // casing and answers with the canonical spelling, so the canonical answer
+    // to a request that named `OCTO/PROJECT` is this read's own subject — the
+    // same name, not a foreign one — and refusing it would refuse an
+    // authorized URL the host had already answered.
+    const cased = server({
+      "/repos/OCTO/PROJECT/pulls/7/reviews": {
+        body: JSON.stringify([review(3, "APPROVED", "ship it")]),
+      },
+    });
+    const canonical = yield* read(cased, "reviews", { owner: "OCTO", repository: "PROJECT" });
+    expect(canonical.state).toBe("read");
+    expect(items(canonical)).toHaveLength(1);
 
     // A check run naming a head other than the one this read is about.
     const wrongHead = server({
