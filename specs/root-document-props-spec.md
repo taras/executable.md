@@ -388,8 +388,14 @@ interpolation and eval bindings, and invalid props prevent body effects.
 
 CLI acceptance tests prove the individual and aggregate sources, precedence,
 boolean and array forms, invalid-source failure, document-specific help without
-execution, the document-first ordering rule, and unchanged behavior for a
-document without props. They also prove that a projected root keeps the whole
-document's declared properties, its property help, and its requirements, and
-that every documented argument position answers with the property section and
-the full target section together, resolving no value.
+execution, and the document-first ordering rule. They also prove a projected
+root's property help, and that every documented argument position answers with
+the property section and the full target section together, resolving no value.
+
+The document rows — a missing required property failing before any document
+effect, a document without props running unaffected, and a projected root
+keeping the whole document's declared properties and its requirements — are
+owned by the checked-in Markdown suite at
+`packages/cli/tests/document-suites/props/Props.test.md`, whose children run
+through the production run host; the tier launcher runs it once per runtime
+corpus.
