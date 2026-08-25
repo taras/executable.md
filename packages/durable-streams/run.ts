@@ -169,6 +169,7 @@ export function* durableRun<T extends WorkflowValue>(
         unconsumed.coroutineId,
         unconsumed.cursor,
         unconsumed.totalYields,
+        unconsumed.entry,
       );
     }
 
@@ -198,7 +199,7 @@ export function* durableRun<T extends WorkflowValue>(
         unconsumed.coroutineId,
         unconsumed.cursor,
         unconsumed.totalYields,
-        { cause: primary },
+        { cause: primary, unconsumed: unconsumed.entry },
       );
     }
 

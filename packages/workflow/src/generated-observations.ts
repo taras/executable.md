@@ -40,6 +40,7 @@ import type {
   GeneratedObservationResult,
   GeneratedRequest,
 } from "@executablemd/core/host";
+import type { SourcePosition } from "@executablemd/core";
 import type { Operation } from "effection";
 
 /** A generated fragment this run will not admit under its own ceilings. */
@@ -90,6 +91,7 @@ export function* evaluateGeneratedFragment(
   id: string,
   source: string,
   policy: GeneratedEvaluationPolicy,
+  position?: Readonly<SourcePosition>,
 ): Operation<GeneratedObservationResult> {
   const retained = new Set(policy.workspaceRoots);
   if (retained.size !== policy.workspaceRoots.length) {
@@ -110,5 +112,6 @@ export function* evaluateGeneratedFragment(
     observations: reads(policy),
     ...(policy.writes === undefined ? {} : { mutations: [...policy.writes] }),
     ...(policy.allow === undefined ? {} : { allow: [...policy.allow] }),
+    ...(position === undefined ? {} : { position }),
   });
 }

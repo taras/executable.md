@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { open } from "node:fs/promises";
 import { scoped, spawn, suspend, until, withResolvers } from "effection";
 import type { Operation } from "effection";
-import { registerComponents } from "@executablemd/core";
+import { registerComponents, SOURCE_POSITION_FIELD } from "@executablemd/core";
 import type { ComponentRegistration } from "@executablemd/core";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitOperationProtocolError, RepositoryStaleStateError } from "../src/composition/errors.ts";
@@ -53,6 +53,7 @@ import {
   gitHostEvents,
   gitHostOutcomes,
   headCommit,
+  inlinePosition,
   physicalGitApiCopy,
   raised,
   retainedRepositories,
@@ -215,7 +216,18 @@ describe("workflow Git.Push durability", () => {
       // The control repository is built on first use, so a replay that reaches
       // no provider builds none either.
       expect(subcommands(counting.counters)).not.toContain("init");
-      expect(yield* gitHostEvents(database)).toHaveLength(1);
+      const effects = yield* gitHostEvents(database);
+      expect(effects).toHaveLength(1);
+      // The retained effect names the authored `<Git.Push>` element itself —
+      // diagnostic data beside the identity, which the replay above proved is
+      // still matched by type and name alone.
+      const [effect] = effects;
+      if (effect?.type !== "yield") {
+        throw new Error("the run journaled no Git-host effect");
+      }
+      expect(effect.description[SOURCE_POSITION_FIELD]).toEqual(
+        inlinePosition(source(remote.locator), "<Git.Push />"),
+      );
       expect(publishedRoots(path)).toBe(published);
       expect(yield* survivingRoots(counting.counters)).toEqual([]);
     });

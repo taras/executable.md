@@ -117,11 +117,18 @@ import type { FetchRequest } from "./fetch-request.ts";
 import { isJsonObject, parseJson } from "./json.ts";
 import { renderSegments } from "./render.ts";
 import { scanSegments } from "./scanner.ts";
+import { sourceDescription } from "./source-position.ts";
 import { RESERVED_STRUCTURAL } from "./structural.ts";
 import { installFormSelections, invocationForm } from "./invocation-identity.ts";
 import type { FormSelections } from "./invocation-identity.ts";
 import type { ComponentInvocation } from "./invocation-identity.ts";
-import type { FunctionComponentDefinition, Json, JsonObject, Segment } from "./types.ts";
+import type {
+  FunctionComponentDefinition,
+  Json,
+  JsonObject,
+  Segment,
+  SourcePosition,
+} from "./types.ts";
 
 /** A generated fragment this evaluator will not run, or an import it refuses. */
 export class GeneratedXmdError extends Error {
@@ -501,6 +508,12 @@ export interface GeneratedXmdRequest {
    * alone, which is what a host stating no class at all is asking for.
    */
   readonly allow?: readonly GeneratedEffectClass[];
+  /**
+   * Where the authored element asking for this admission was written.
+   * Diagnostic journal data beside the admission's identity and policy — it
+   * takes no part in the durable name, the policy comparison, or admission.
+   */
+  readonly position?: Readonly<SourcePosition>;
 }
 
 /**
@@ -1266,9 +1279,15 @@ function* persistAdmission(
   table: ReadonlyMap<string, Entry[]>,
   ceilings: ReadonlyMap<string, FetchRequest[]>,
   policy: Policy,
+  position: Readonly<SourcePosition> | undefined,
 ): Operation<Json> {
   const stored = yield createDurableOperation<DurableJson>(
-    { type: GENERATED_XMD, name: `generated:${id}`, input: policyRecord(policy) },
+    {
+      type: GENERATED_XMD,
+      name: `generated:${id}`,
+      input: policyRecord(policy),
+      ...sourceDescription(position),
+    },
     () => admitSource(source, table, ceilings, policy),
   );
   return parseJson(stored);
@@ -1383,7 +1402,14 @@ export function* evaluateGeneratedXmd(
   const ceilings = yield* normalizedCeilings(entries);
   const policy = currentPolicy(request, allow, entries, ceilings);
 
-  const stored = yield* persistAdmission(request.id, request.source, table, ceilings, policy);
+  const stored = yield* persistAdmission(
+    request.id,
+    request.source,
+    table,
+    ceilings,
+    policy,
+    request.position,
+  );
   const decided = readAdmission(stored);
   if (decided === undefined) {
     throw new GeneratedXmdError(UNREADABLE);
