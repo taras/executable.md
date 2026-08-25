@@ -93,7 +93,9 @@ function* runProfileChild(
   const diagnostic = request.journal === "diagnostic";
   const stream = new InMemoryStream();
 
-  yield* installDocumentComponents({ testing: false }, false);
+  // A child gets what `xmd run` gets, and the browser form is part of that:
+  // this profile *is* the run profile, so it states the run profile's answer.
+  yield* installDocumentComponents({ testing: false, webElicitation: true }, false);
   // Document filesystem access resolves in the caller's own filesystem, as it
   // does for `xmd run`. The entrypoint installs its provider process-wide, but
   // the child runs in an isolated scope, so the child's assembly must restate
