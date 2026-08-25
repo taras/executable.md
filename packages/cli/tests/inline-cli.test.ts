@@ -4,9 +4,9 @@
  * Shells out with captured stdio, so exit status and both streams are observed
  * the way a caller sees them. What is measured here is what no core test can
  * reach: that the document's own text survives argv untouched — a document may
- * be `42`, or `--props`, or `-h`. Where relative paths point and what is left
- * on disk afterwards are document behavior, proven by the checked-in Markdown
- * suite in document-suites/inline.
+ * be `42`, or `--props`, or `-h` — and that inline execution adds no top-level
+ * filesystem entry of any kind. Where relative paths point is document
+ * behavior, proven by the checked-in Markdown suite in document-suites/inline.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
@@ -15,7 +15,7 @@ import { runCli } from "@executablemd/test-support/launch";
 import { ensure, until } from "effection";
 import type { Operation } from "effection";
 import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,6 +52,10 @@ function* useWorkspace(files: Record<string, string>): Operation<string> {
     yield* writeTextFile(join(root, name), content);
   }
   return root;
+}
+
+function* entries(root: string): Operation<Set<string>> {
+  return new Set(yield* until(readdir(root)));
 }
 
 describe(
@@ -138,7 +142,7 @@ describe(
       expect(bullet.stdout).toContain("- item");
     });
 
-    // IE11, IE15, IE16, IE18 and IE23 live in
+    // IE11, IE15, IE16 and IE23 live in
     // packages/cli/tests/document-suites/inline/Inline.test.md: the claims are
     // document behavior, so their evidence is the checked-in Markdown suite
     // the tier launcher runs.
@@ -201,6 +205,20 @@ describe(
         cwd: root,
       }).expect();
       expect(explicit.stdout).toContain("Hello from a component");
+    });
+
+    it("IE18: running an inline document leaves the directory as it was", function* () {
+      // The distinct fault this retained row catches: inline execution must
+      // not add any top-level filesystem entry — a file, a directory, or a
+      // symlink. readdir() observes every entry kind; the Markdown suite's
+      // <Glob> observes only regular files, so this row stays a focused
+      // subprocess test pending #581's deterministic in-process CLI surface.
+      const root = yield* useWorkspace({ "Greeting.md": "Hello from a component\n" });
+      const before = yield* entries(root);
+
+      yield* runCli(["-e", "<Greeting />\n", "--raw"], { cwd: root }).expect();
+
+      expect(yield* entries(root)).toEqual(before);
     });
 
     it("IE19: --journal records the supplied identity and text", function* () {

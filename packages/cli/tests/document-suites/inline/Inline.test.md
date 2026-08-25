@@ -10,21 +10,6 @@ run host — an inline `source` follows the same `run -e` path, reporting the
 `<eval>` identity and writing no file. File references are relative to the
 repository root, the contextual invocation directory every corpus runs from.
 
-IE18 stands first: its before/after directory snapshot brackets only its own
-child, and it can exclude residue from the other tests' inline children only by
-running before every one of them.
-
-<Test name="IE18: running an inline document leaves the invocation directory as it was">
-<Glob include={["*"]} as="before" />
-<Execution host="run" source={"# Hello\n\ninline body\n"} as="child">
-<CollectOutput as="output" />
-
-<AssertEquals actual={child.result.ok} expected={true} />
-</Execution>
-<Glob include={["*"]} as="after" />
-<AssertEquals actual={after} expected={before} />
-</Test>
-
 <Test name="IE11: an empty document runs and produces nothing">
 <Execution host="run" source="" as="child">
 <CollectOutput as="output" />
@@ -37,8 +22,6 @@ running before every one of them.
 
 <Test name="IE15: a positioned diagnostic names a file-backed root by its path">
 <Execution host="run" target="packages/cli/tests/document-suites/inline/stray-else.md" as="child">
-<CollectOutput as="output" />
-
 <AssertEquals actual={child.kind} expected="settled" />
 <AssertEquals actual={child.result.ok} expected={false} />
 <AssertStringIncludes actual={child.result.error.message} expected="(packages/cli/tests/document-suites/inline/stray-else.md:1:1)" />
@@ -47,8 +30,6 @@ running before every one of them.
 
 <Test name="IE15: a positioned diagnostic names an inline root as eval">
 <Execution host="run" source={"<Else>orphan</Else>\n"} as="child">
-<CollectOutput as="output" />
-
 <AssertEquals actual={child.kind} expected="settled" />
 <AssertEquals actual={child.result.ok} expected={false} />
 <AssertStringIncludes actual={child.result.error.message} expected="(<eval>:1:1)" />
