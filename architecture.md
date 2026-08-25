@@ -906,10 +906,36 @@ transaction that does not commit publishes nothing. Replay after that
 transaction commits restores the recorded answer event without reaching the live
 controller and without consuming or publishing again.
 
-Scheduling — automatic resume, watchers, unattended iteration and remote host
-selection — is #300's and is not part of this behavior. Nothing here waits on
-it: a suspended run continues through `xmd workflow answer` followed by an
-explicit `xmd workflow resume`.
+### Explicit host scheduling
+
+Scheduling decides when to invoke resume. A trusted host that has independently
+observed a successful delivery calls it with one public run ID, and that call
+invokes the same ordinary resume operation the foreground command invokes and
+answers with that operation's ordinary outcome. The request carries no answer,
+suspension ID, definition, root props, document path, Agent identity,
+transcript, executor token, database handle or provider-private state, so a
+delivery receipt is trigger evidence for the host rather than authority the
+document execution ever sees. Delivery stays ignorant of it: nothing schedules
+on delivery's behalf, and a refused delivery schedules nothing.
+
+Scheduled and manual resume compete for the one non-blocking executor lock. The
+acquirer advances the run and the other caller receives the ordinary
+already-running outcome, so duplicate scheduling creates no second executor and
+a schedule arriving after the winner settled performs the ordinary completed
+replay. Only the resumed `suspendFor()` claims the retained answer, inside the
+transaction that publishes the answer event and consumes the delivery together,
+so one answer is spent once however many hosts asked for it.
+
+A scheduled resume belongs to the scope that asked for it. Ending that scope
+before the claim transaction commits rolls the claim back and settles the run
+`interrupted` with the answer still pending, and a later scheduled or manual
+resume claims it; ending it after the commit leaves that answer event and
+consumed delivery in place, and replay restores the value without another live
+claim. There is no scheduling ledger, queue, retry loop, heartbeat, generation,
+watcher, polling source, new run status or combined deliver-and-resume
+operation, and no scheduling request survives host exit — the retained answer is
+the recovery point. Configured source watching, unattended iteration
+arbitration and public remote-host selection stay outside this boundary.
 
 This contract folds issue #322's suspension effect into #367. Issue #322 no
 longer supplies a separate implementation prerequisite; its typed correlated
@@ -3135,7 +3161,7 @@ Status is measured against main.
 | document-aware `xmd run … --help` | describes what one document declares and every target it addresses, each as a full document reference with the description its section states, by inspection alone | built on the #463 stack |
 | targeted `xmd run` | reads a file argument as a document reference and executes the one exact target its selector resolved to, replacing the selector before execution rereads the file | built on the #412 stack |
 | targeted workflow definition | the V1 workflow definition optionally carries the exact canonical document target, which takes part in definition identity and in compatible reuse | built on the #412 stack; the workflow CLI does not supply one yet |
-| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop and its scheduling remain unbuilt (#300), and generated XMD admits no bundled Markdown component (#369) |
+| workflow component bundle | a workflow root declares a closed set of authored Markdown components; the V1 workflow definition optionally carries them as one array sorted by component name, each entry holding the name, its canonical repository-relative path inside the pinned commit and that blob's object ID, and an absent member identifies a run closed over no components — so a definition retained before the member existed reads unchanged. `start` and `resume` read every component from the definition's own pinned commit; the array takes part in definition identity and is compared as part of the same V1 descriptor in compatible reuse; and canonical core resolves those names and holds both live import and retained history to that exact bundle | built on the #301 stack; the full adversarial implementation loop remains unbuilt, and explicit host scheduling of its ordinary resume is built by #300, and generated XMD admits no bundled Markdown component (#369) |
 | `workflowInstallation()` / `getWorkflowRun()` | associates one document execution with a workflow run, through an `ExecutionInstallation` the trusted host passes to `executeInstalled()` | built on the #366 stack |
 | `retainedWorkflowInstallation()` | associates one document execution with a run storage already created, requiring exact journal agreement | built on the #366 stack |
 | `Git.revParse()` | verifies and resolves one Git revision expression contextually | built on main |
@@ -3180,7 +3206,8 @@ Status is measured against main.
 | `xmd workflow answer <run-id> <suspension-id> <json>` | retains one schema-validated value for one retained wait, taking no executor lock and changing no run state | built by #300 |
 | `suspension_answer` durable effect | ends a wait from retained delivery state, publishing the answer and consuming that state in one transaction | built by #300 |
 | `<PullRequest.Reviews>` · `<PullRequest.Comments>` · `<PullRequest.Checks>` | read the reviews, comments and checks a Git host already holds for one numbered pull request, completely or not at all | built by #576 |
-| workflow scheduling (watchers, unattended iteration, remote host selection) | — | #300 |
+| explicit host scheduling | a trusted host that has independently observed a successful delivery invokes the ordinary resume operation with one public run ID and receives its ordinary outcome; scheduled and manual callers compete for the one non-blocking executor lock, only the resumed `suspendFor()` claims the retained answer, and the scheduled operation stays inside the scope that asked for it | built by #300 |
+| workflow scheduling (watchers, unattended iteration, remote host selection) | — | outside #300, which built the explicit host call above |
 | `<Result as>` | binds `{ok: true, value}` or `{ok: false, error}`; a failure becomes a bound value, not a raise | defined, unbuilt |
 | error middleware (JS api) | retry · suspend · decline | defined, unbuilt |
 

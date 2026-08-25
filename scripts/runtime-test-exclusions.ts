@@ -402,6 +402,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/301",
   },
   {
+    path: "packages/cli/tests/workflow-scheduling.test.ts",
+    reason:
+      "schedules the ordinary resume of a real run store through `runWorkflow()`, racing entry points on the advisory executor lock the Deno adapter takes and reading the node:sqlite database they settle; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
+    issue: "https://github.com/taras/executable.md/issues/300",
+  },
+  {
     path: "packages/cli/tests/workflow-suspension.test.ts",
     reason:
       "suspends and resumes a real run store through `runWorkflow()`, reading the node:sqlite database it settles; the workflow commands only exist on the Deno entrypoints, and workflow-host.test.ts asserts their refusal on every runtime",
