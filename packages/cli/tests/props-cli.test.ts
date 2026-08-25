@@ -334,13 +334,9 @@ describe(
       expect(typed.stderr).toContain("--props");
     });
 
-    it("PC9: a missing required property fails before any document effect", function* () {
-      const { code, stdout } = yield* useFixture({ "doc.md": MARKER }, function* (fixture) {
-        return yield* runCli(["run", "doc.md", "--raw"], { cwd: fixture.dir }).join();
-      });
-      expect(code).toBe(1);
-      expect(stdout).not.toContain("SIDE_EFFECT_MARKER");
-    });
+    // PC9 lives in packages/cli/tests/props/props.test.md: the claim is
+    // document behavior, so its evidence is the checked-in Markdown suite the
+    // tier launcher runs.
 
     it("PC10: additionalProperties governs aggregate objects at every level", function* () {
       const nested = yield* useFixture({ "nested.md": NESTED }, function* (fixture) {
