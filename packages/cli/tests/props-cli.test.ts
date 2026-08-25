@@ -334,9 +334,9 @@ describe(
       expect(typed.stderr).toContain("--props");
     });
 
-    // PC9 lives in packages/cli/tests/props/props.test.md: the claim is
-    // document behavior, so its evidence is the checked-in Markdown suite the
-    // tier launcher runs.
+    // PC9 lives in packages/cli/tests/document-suites/props/Props.test.md:
+    // the claim is document behavior, so its evidence is the checked-in
+    // Markdown suite the tier launcher runs.
 
     it("PC10: additionalProperties governs aggregate objects at every level", function* () {
       const nested = yield* useFixture({ "nested.md": NESTED }, function* (fixture) {
@@ -472,12 +472,9 @@ describe(
       expect(stderr).toContain("exclusive to xmd run");
     });
 
-    it("PC17: a document without props is unaffected", function* () {
-      const { stdout } = yield* useFixture({ "plain.md": PLAIN }, function* (fixture) {
-        return yield* runCli(["run", "plain.md", "--raw"], { cwd: fixture.dir }).expect();
-      });
-      expect(stdout).toContain("PLAIN_MARKER");
-    });
+    // PC17 lives in packages/cli/tests/document-suites/props/Props.test.md:
+    // the claim is document behavior, so its evidence is the checked-in
+    // Markdown suite the tier launcher runs.
 
     it("PC19: a referenced scalar gets bindings, decoding, and a rendered value form", function* () {
       const help = yield* useFixture({ "ref.md": REFERENCED }, function* (fixture) {
@@ -527,17 +524,9 @@ describe(
       expect(stdout).toContain("Hello, Ada!");
     });
 
-    it("PC21: a projected root keeps the properties the whole document declares", function* () {
-      const { stdout } = yield* useFixture({ "sectioned.md": SECTIONED }, function* (fixture) {
-        return yield* runCli(["run", "sectioned.md#Greeting", "--raw", "--props-name", "Ada"], {
-          cwd: fixture.dir,
-        }).expect();
-      });
-      expect(stdout).toContain("Hello, Ada!");
-      // Frontmatter belongs to the document, so its props reach the projection
-      // while the sibling section stays out of the run.
-      expect(stdout).not.toContain("FAREWELL_MARKER");
-    });
+    // PC21 lives in packages/cli/tests/document-suites/props/Props.test.md:
+    // the claim is document behavior, so its evidence is the checked-in
+    // Markdown suite the tier launcher runs.
 
     it("PC22: property help describes a targeted document by its reference", function* () {
       const { stdout } = yield* useFixture({ "sectioned.md": SECTIONED }, function* (fixture) {
@@ -550,17 +539,8 @@ describe(
       expect(stdout).toContain("Environment: XMD_PROPS_NAME");
     });
 
-    it("PC23: a required property is still required in a projected root", function* () {
-      const { code, stderr } = yield* useFixture(
-        { "sectioned.md": SECTIONED },
-        function* (fixture) {
-          return yield* runCli(["run", "sectioned.md#Greeting", "--raw"], {
-            cwd: fixture.dir,
-          }).join();
-        },
-      );
-      expect(code).toBe(1);
-      expect(stderr).toContain("name");
-    });
+    // PC23 lives in packages/cli/tests/document-suites/props/Props.test.md:
+    // the claim is document behavior, so its evidence is the checked-in
+    // Markdown suite the tier launcher runs.
   },
 );
