@@ -19,7 +19,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
-import { workflowRunPath } from "@executablemd/workflow/deno";
+import { useWorkflowLifecycle, workflowRunPath } from "@executablemd/workflow/deno";
+import { WorkflowLifecycle } from "@executablemd/workflow";
 
 interface Fixture {
   /** The repository the definition lives in. */
@@ -897,4 +898,165 @@ function digest(output: string, label: string): string | undefined {
     .find((line) => line.startsWith(label))
     ?.slice(label.length)
     .trim();
+}
+
+/**
+ * Tier WFX — the refusals the export command owns.
+ *
+ * Each is a condition a caller can actually arrive in, arranged with real
+ * things: a real executor holding the run's lock, a repository that is no
+ * longer there, and a repository that hands back an object the definition does
+ * not name. The command is the subject, so each runs as a process and is
+ * observed by its exit status, its diagnostics and what it left on disk.
+ *
+ * The provider's own refusals are the workflow package's suites. What is added
+ * here is that the command turns each one into a failure a caller can see, and
+ * that none of them puts anything at the destination — including the temporary
+ * directory an export builds beside it.
+ */
+describe("Tier WFX — what xmd workflow export refuses", () => {
+  it("WFX4: refuses a run an executor is holding, and writes nothing", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=release-1",
+        "flows/release.md",
+      ]).join();
+      expect(started.code).toBe(0);
+
+      const target = join(fixture.repository, "busy.xmd");
+      const refused = yield* scoped(function* () {
+        // The acquisition `xmd workflow start` makes before it advances a run,
+        // taken here and held across the command below. The lock is the
+        // operating system's, so the exporting process meets the real one.
+        yield* useWorkflowLifecycle({ root: fixture.runs });
+        const acquired = yield* WorkflowLifecycle.operations.acquireExecutor("release-1");
+        if (!acquired.ok) {
+          throw acquired.error;
+        }
+        expect(acquired.value.kind).toBe("acquired");
+        return yield* xmd(fixture, [
+          "workflow",
+          "export",
+          "release-1",
+          `--output=${target}`,
+        ]).join();
+      });
+
+      expect(refused.code).toBe(1);
+      // The dedicated refusal, not a generic failure: a caller is told the run
+      // is busy and that nothing was written.
+      expect(refused.stderr).toContain("is being executed right now");
+      expect(refused.stderr).toContain("Nothing was written");
+      yield* expectNothingPublished(fixture, target);
+    });
+  });
+
+  it("WFX5: refuses when the run's own source cannot be read back", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=release-1",
+        "flows/release.md",
+      ]).join();
+      expect(started.code).toBe(0);
+
+      // The repository the run retains stops being one. Nothing about the run
+      // changes: what is gone is the only place its definition's bytes were.
+      yield* rm(join(fixture.repository, ".git"), { recursive: true, force: true });
+
+      const target = join(fixture.repository, "unreadable.xmd");
+      const refused = yield* xmd(fixture, [
+        "workflow",
+        "export",
+        "release-1",
+        `--output=${target}`,
+      ]).join();
+
+      expect(refused.code).toBe(1);
+      // Named, because "exited 1" is what a run this command never found would
+      // also say: what refused is the reading of this run's own definition.
+      expect(refused.stderr).toContain("this run's retained definition could not be loaded");
+      yield* expectNothingPublished(fixture, target);
+    });
+  });
+
+  it("WFX6: refuses source the repository hands back that is not this run's", function* () {
+    yield* useFixture(BUNDLE_FILES, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=bundle-1",
+        "flows/bundle.md",
+      ]).join();
+      expect(started.code).toBe(0);
+      const pinned = yield* revision(fixture, "HEAD");
+
+      // A second commit that says something else at the component's path, put
+      // in front of the pinned one. The definition still names the commit it
+      // named; the repository now answers for it with another object, which is
+      // exactly the case a host's own reading cannot notice.
+      yield* writeTextFile(join(fixture.repository, "flows/Stage.md"), "replaced.\n");
+      yield* commitAgain(fixture, "replacement");
+      const replacement = yield* revision(fixture, "HEAD");
+      yield* git(fixture.repository, ["replace", pinned, replacement]);
+
+      const target = join(fixture.repository, "mismatched.xmd");
+      const refused = yield* xmd(fixture, [
+        "workflow",
+        "export",
+        "bundle-1",
+        `--output=${target}`,
+      ]).join();
+
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain("no longer the object this run's definition names");
+      yield* expectNothingPublished(fixture, target);
+    });
+  });
+});
+
+/** A root closed over one component, so a definition has an object to disagree about. */
+const BUNDLE_FILES: Record<string, string> = {
+  "flows/bundle.md": [
+    "---",
+    "workflow:",
+    "  components:",
+    "    Stage: ./Stage.md",
+    "---",
+    "",
+    "# Bundle",
+    "",
+    "<Stage />",
+    "",
+  ].join("\n"),
+  "flows/Stage.md": "staged.\n",
+};
+
+/** What one revision resolves to in the fixture's repository right now. */
+function* revision(fixture: Fixture, name: string): Operation<string> {
+  const result = yield* exec("git", {
+    arguments: ["rev-parse", "--verify", name],
+    cwd: fixture.repository,
+  }).expect();
+  if (result.code !== 0) {
+    throw new Error(`git rev-parse ${name} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/**
+ * That a refusal left the destination alone, and no staging beside it.
+ *
+ * Both, because an export builds in a temporary directory next to the file a
+ * caller asked for: a refusal that removed the target and left that directory
+ * would still have put something where nobody wants one.
+ */
+function* expectNothingPublished(fixture: Fixture, target: string): Operation<void> {
+  expect(yield* exists(target)).toBe(false);
+  expect(
+    (yield* readdir(fixture.repository)).filter((name) => name.startsWith(".xmd-export-")),
+  ).toEqual([]);
 }

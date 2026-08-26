@@ -11,17 +11,24 @@
  * staging state too, so filesystem state on its own says nothing about whether
  * publication was ever attempted: a suite that only looked at the directory
  * would pass against a build where export never got that far.
+ *
+ * The cancellation is a cancellation. The export runs in a task of its own, its
+ * publication step suspends and never returns, and the test halts the task —
+ * so what unwinds is Effection tearing a live scope down, reaching the staging
+ * resource's own backstop. A thrown error would take `publish`'s catch instead
+ * and prove something else entirely, which is why that case asserts nothing was
+ * written to either channel.
  */
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensureDir, exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { ensure, type Operation, scoped, until } from "effection";
+import { ensure, type Operation, scoped, spawn, suspend, until, withResolvers } from "effection";
 import { randomUUID } from "node:crypto";
 import { link } from "node:fs/promises";
 import process from "node:process";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { runCli } from "@executablemd/test-support/launch";
@@ -226,30 +233,60 @@ describe("Tier WXP — what an export leaves behind", () => {
     });
   });
 
-  it("WXP4: a cancellation after staging leaves neither target nor staging", function* () {
+  it("WXP4: halting a live export publishes nothing and leaves nothing", function* () {
     yield* useExportedRun(function* (fixture) {
       const target = join(fixture.repository, "cancelled.xmd");
-      const staged: string[] = [];
-
+      // Publication is reached and then never returns. Nothing resolves this
+      // suspend, so the only thing that can end the export is the halt below —
+      // which is what makes this a cancellation rather than a thrown error
+      // wearing the word.
+      const publishing = withResolvers<string>();
       const recorder = recording({
-        *link(_staging: string, _output: string): Operation<void> {
-          // Staging exists by now: record what is on disk, then end the export
-          // the way a cancellation ends it — without publishing.
-          staged.push(...(yield* leftovers(fixture)));
-          throw new Error("cancelled before publication completed");
+        *link(staging: string, _output: string): Operation<void> {
+          // The staging directory, taken while it is still there. After the
+          // halt there is nothing left to learn its name from, so a case that
+          // looked for it afterwards could not tell a removed directory from
+          // one that was never created.
+          publishing.resolve(dirname(staging));
+          yield* suspend();
         },
       });
-      const outcome = yield* withHost(fixture, function* () {
-        return yield* exportArtifact("release-1", target, recorder.filesystem);
+
+      // Both channels, because the two ways this could pass for the wrong
+      // reason are a success line and a refusal. A halt produces neither: it
+      // does not run `publish`'s catch, and it never reaches the report.
+      const said: string[] = [];
+      const log = console.log;
+      const error = console.error;
+      yield* ensure(() => {
+        console.log = log;
+        console.error = error;
+      });
+      console.log = (...parts: unknown[]) => said.push(parts.map(String).join(" "));
+      console.error = (...parts: unknown[]) => said.push(parts.map(String).join(" "));
+
+      const exporting = yield* spawn(function* () {
+        return yield* withHost(fixture, function* () {
+          return yield* exportArtifact("release-1", target, recorder.filesystem);
+        });
       });
 
-      // Staging was really there when the export was interrupted, and the
-      // scope that owned it removed it on the way out.
+      const staging = yield* publishing.operation;
+      // The export really is live and really is past staging: publication was
+      // reached, and the directory it built is on disk at this moment.
       expect(recorder.log).toEqual(["link"]);
-      expect(staged.length).toBe(1);
-      expect(outcome.exitCode).toBe(1);
+      expect(yield* exists(staging)).toBe(true);
+      expect(yield* leftovers(fixture)).toEqual([basename(staging)]);
+
+      yield* exporting.halt();
+
+      // Nothing further ran, nothing was published, and the scope that owned
+      // the staging directory took it with it.
+      expect(recorder.log).toEqual(["link"]);
       expect(yield* exists(target)).toBe(false);
+      expect(yield* exists(staging)).toBe(false);
       expect(yield* leftovers(fixture)).toEqual([]);
+      expect(said).toEqual([]);
     });
   });
 });

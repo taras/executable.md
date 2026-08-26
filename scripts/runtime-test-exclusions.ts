@@ -348,6 +348,18 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
     issue: "https://github.com/taras/executable.md/issues/366",
   },
   {
+    path: "packages/cli/tests/workflow-export-publication.test.ts",
+    reason:
+      "starts the run it exports through `xmd workflow start`, which only the Deno entrypoints carry, and drives an export that takes the run's executor lock through `Deno.openSync`; under Node and Bun the command refuses and the lock cannot be taken",
+    issue: DERIVED_SCOPE,
+  },
+  {
+    path: "packages/workflow/tests/workflow-export.test.ts",
+    reason:
+      "every case takes the run's executor lock, which packages/workflow/src/deno/advisory-lock.ts reaches through the `Deno` global; no other runtime has one, so the acquisition refuses before an export begins",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/cli/tests/workflow-retention.test.ts",
     reason:
       "reads what `xmd workflow start` retained from its node:sqlite run store, which only the Deno entrypoints open; the portable half of the same contract is packages/cli/tests/process-retention.test.ts",
@@ -517,18 +529,6 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  * coverage Node is currently giving.
  */
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
-  {
-    path: "packages/cli/tests/workflow-export-publication.test.ts",
-    reason:
-      "installs the Deno workflow provider in-process to drive the export command's publication and cleanup steps; the provider opens `node:sqlite`, which Bun resolves as no such built-in module. Node runs it, and does so unflagged",
-    issue: DERIVED_SCOPE,
-  },
-  {
-    path: "packages/workflow/tests/workflow-export.test.ts",
-    reason:
-      "exports a real run through the Deno provider into an XMD artifact, which opens `node:sqlite`; Bun resolves no such built-in module, so the file cannot load there at all. Node runs it, and does so unflagged",
-    issue: DERIVED_SCOPE,
-  },
   {
     path: "packages/workflow/tests/xmd-artifact.test.ts",
     reason:
