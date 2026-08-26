@@ -25,7 +25,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { exists } from "@effectionx/fs";
 import { Err, Ok, type Operation, type Result, scoped } from "effection";
 import {
-  canonicalFingerprint,
   createSecretScanner,
   type Json,
   prepareElicitation,
@@ -35,7 +34,11 @@ import {
 } from "@executablemd/core";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent } from "@executablemd/durable-streams";
-import { parseSuspensionRequest, type WorkflowSuspensionRequest } from "../suspension/api.ts";
+import {
+  parseSuspensionRequest,
+  suspensionRequestFingerprint,
+  type WorkflowSuspensionRequest,
+} from "../suspension/api.ts";
 import { SUSPENSION_ANSWER } from "../suspension/answer.ts";
 import {
   type WorkflowAnswerDelivery,
@@ -239,15 +242,8 @@ function retainedWait(
     record,
     requestEventId: entry.eventId,
     request,
-    fingerprint: requestFingerprint(request),
+    fingerprint: suspensionRequestFingerprint(request),
   };
-}
-
-function requestFingerprint(request: WorkflowSuspensionRequest): string {
-  return canonicalFingerprint({
-    request: request.request,
-    responseSchema: request.responseSchema,
-  });
 }
 
 /**

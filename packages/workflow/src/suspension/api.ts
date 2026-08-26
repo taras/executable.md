@@ -44,7 +44,7 @@
 
 import { type Api, createApi } from "@effectionx/context-api";
 import type { Operation } from "effection";
-import type { Json, JsonObject } from "@executablemd/core";
+import { canonicalFingerprint, type Json, type JsonObject } from "@executablemd/core";
 import { WorkflowStorageError } from "../storage/errors.ts";
 
 /** What one durable wait is for, and what may end it. */
@@ -132,6 +132,26 @@ export function parseSuspensionRequest(value: unknown): WorkflowSuspensionReques
     );
   }
   return Object.freeze({ request: retainable, responseSchema: schema });
+}
+
+/**
+ * The stable name of one wait's request and the shape that may end it.
+ *
+ * What a retained answer is correlated by. Delivery computes it from the
+ * request it read out of the journal and stores it beside the value; a resume
+ * recomputes it from the request the execution actually reached and compares —
+ * a run whose retained request at that position is not the one the value was
+ * judged against is a run that answer was never for.
+ *
+ * One function rather than one per caller. Everything that judges an answer has
+ * to agree about this exactly, and a second spelling of it would be a second
+ * answer to the same question.
+ */
+export function suspensionRequestFingerprint(request: WorkflowSuspensionRequest): string {
+  return canonicalFingerprint({
+    request: request.request,
+    responseSchema: request.responseSchema,
+  });
 }
 
 /**

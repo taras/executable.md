@@ -464,11 +464,13 @@ when cancellation succeeds even though the durable run status is `cancelled`.
 
 ### 3.8 The lifecycle is host-neutral
 
-`start`, `resume`, `status`, `list`, `history`, `cancel`, `fork` and `delete`
-form a provider-neutral control surface. The initial CLI exposes no remote-host
-selector. The contract nevertheless contains no public SQLite access, local
-process path or other assumption that prevents a later host from owning the
-same run lifecycle remotely.
+`start`, `resume`, `status`, `list`, `history`, `cancel`, `fork`, `export` and
+`delete` form a provider-neutral control surface. The initial CLI exposes no
+remote-host selector. The contract nevertheless contains no public SQLite
+access, local process path or other assumption that prevents a later host from
+owning the same run lifecycle remotely. `export` produces the immutable portable
+evidence contract in `specs/xmd-artifact-spec.md`; it does not expose the live
+run database.
 
 ### 3.9 What is shipped
 
@@ -481,9 +483,13 @@ the two control actions:
 xmd workflow start [--id=<run-id>] [--props-*=…] <definition>
 xmd workflow resume <run-id>
 xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
+xmd workflow fork --artifact=<path.xmd> --at=<event-id> [--id=<run-id>] [<definition>] [--props-*=…]
+xmd workflow export <run-id> --output=<path.xmd>
 xmd workflow status <run-id> [--json]
+xmd workflow status --artifact=<path.xmd> [--json]
 xmd workflow list [--status=<status>] [--json]
 xmd workflow history <run-id> [--forkable] [--json]
+xmd workflow history --artifact=<path.xmd> [--forkable] [--json]
 xmd workflow cancel <run-id>
 xmd workflow delete <run-id>
 ```
@@ -557,7 +563,9 @@ Runs live beneath `~/.xmd/runs` unless `XMD_WORKFLOW_RUNS` names another
 absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
-Status, list and history are built (§4), and so are cancel and delete.
+Status, list and history for retained runs are built (§4), and so are cancel and
+delete. Artifact export, artifact inspection and an artifact-backed fork are
+specified in `specs/xmd-artifact-spec.md` and are unbuilt.
 Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
@@ -595,13 +603,20 @@ xmd workflow list --status=completed --json
 timestamps, document executions, current journal frontier, current Workspace
 version, and — for a forked run — the source run, checkpoint and Workspace root
 it was admitted from. `list` reports visible runs newest-update first and
-optionally filters by status. `status` and `history` require exactly one run ID;
-`list` accepts none. A filter names exactly one of the six statuses.
+optionally filters by status. `status` and `history` require exactly one source:
+either one run ID or one explicit `--artifact` path. `list` accepts neither. A
+filter names exactly one of the six statuses.
 
 Both commands use immutable lifecycle snapshots. They do not obtain an executor
 lock, replay, attach a Workspace, materialize a root, import a document,
 contact an Agent, process or external provider, reconcile an effect, or append.
 Human output is the default; `--json` returns the same data structurally.
+
+An artifact source first passes the complete read-only recognition and manifest
+validation in `specs/xmd-artifact-spec.md`. It then projects the same lifecycle
+snapshot and history shapes, with the artifact identity and artifact frontier
+added. Artifact inspection never makes the file a discovered retained run and
+never creates a SQLite sidecar.
 
 `list` discovers the run-storage root directly; no registry can disagree with
 it. Each run contributes one database candidate. Exact advisory-lock sidecars —
@@ -2663,10 +2678,13 @@ xmd workflow fork release-42 \
 ```
 
 The source run and `--at` select an inherited journal prefix and Workspace root.
-The document supplies the new immutable definition. Generated `--props-*`
-arguments follow the positionals, as they do for `start`: they are declared by
-the document rather than by the command, so option parsing stops at the first
-one and a positional written after it would not be read.
+The document supplies the new immutable definition. An immutable XMD artifact
+may supply the source run instead, under `specs/xmd-artifact-spec.md`; in that
+form the document is optional and omission selects the artifact's authenticated
+workflow definition source closure. Generated `--props-*` arguments follow the
+positionals, as they do for `start`: they are declared by the document rather
+than by the command, so option parsing stops at the first one and a positional
+written after it would not be read.
 
 The new run inherits the source's retained normalized props by default. Explicit
 generated `--props-*` arguments add or override values, property by property,
@@ -2706,6 +2724,12 @@ The fork owns retention of what it inherited. The Workspace roots the prefix
 names and the selected checkpoint root are copied into the fork's own storage,
 so deleting the source after admission leaves the fork's history readable and
 its roots loadable.
+
+When the source is an XMD artifact, lineage additionally retains the XMD
+artifact identity. The new run copies every retained record and byte it needs;
+it never attaches the artifact as writable storage or depends on its path after
+admission. An embedded candidate definition is copied into the new run's
+retained definition state for the same reason.
 
 ### 11.2 What compatibility means
 
@@ -2840,6 +2864,9 @@ and ages. Documents cannot delete workflow runs.
 Deletion does not undo pushes, pull requests or other remote effects. Forks and
 retained runs keep the Workspace roots they reference; garbage collection may
 remove an unreferenced historical root only after those references disappear.
+An exported XMD artifact owns its copied retention independently: deleting its
+source run does not change or remove the file, and deleting the file is an
+ordinary host filesystem operation rather than workflow lifecycle control.
 
 The journal security policy filters arguments, results, errors and generated
 XMD before insertion. Retention makes filtered history available for deliberate
@@ -3119,6 +3146,7 @@ fetch operation requires its own language and durability contract.
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
 | workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
 | history fork | built (§11); Deno provider only |
+| XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |
