@@ -37,7 +37,7 @@ import {
   suspensionRequestFingerprint,
   type WorkflowSuspensionRequest,
 } from "../../suspension/api.ts";
-import { SUSPENSION_REQUEST } from "../../suspension/suspend.ts";
+import { SUSPENSION_REQUEST, suspensionId } from "../../suspension/suspend.ts";
 import { readEventSource } from "../../lifecycle/history.ts";
 import type { InheritedEventProvenance } from "../../lifecycle/history.ts";
 import {
@@ -1416,6 +1416,8 @@ interface DurableYield {
   readonly index: number;
   readonly description: EffectDescription;
   readonly result: Result;
+  /** Whether the retained run wrote this row, rather than inheriting it. */
+  readonly own: boolean;
 }
 
 /** One published answer, and where in its coroutine it was published. */
@@ -1459,9 +1461,26 @@ function* verifySuspensions(
 
   for (const entry of yields) {
     byPosition.set(positionKey(entry.coroutineId, entry.index), entry);
-    if (entry.description.type === SUSPENSION_REQUEST) {
-      requests.set(entry.eventId, entry);
+    if (entry.description.type !== SUSPENSION_REQUEST) {
+      continue;
     }
+    const named = entry.description["name"];
+    if (typeof named !== "string" || named !== entry.description["suspensionId"]) {
+      reject("a retained suspension request does not name one wait");
+    }
+    // Every request the retained run authored, whether or not an answer row or
+    // a publication ever reaches it. A wait's identity is derived from the run
+    // and the exact durable position, and nothing else — a caller supplies
+    // neither — so a request standing at a position that derives some other
+    // identity is a wait no execution of this run could have reached.
+    //
+    // Only its own. An inherited request was derived in the run it came from,
+    // at that run's position, and re-deriving it here would refuse every fork
+    // for having a history.
+    if (entry.own && suspensionId(contents.run.runId, entry) !== named) {
+      reject("a retained suspension request names a wait its own position does not derive");
+    }
+    requests.set(entry.eventId, entry);
   }
 
   for (const entry of yields) {
@@ -1596,6 +1615,7 @@ function durableYields(contents: XmdArtifactContents, path: string): readonly Du
         index,
         description: event.description,
         result: event.result,
+        own: row.inherited === undefined,
       }),
     );
   }

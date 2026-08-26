@@ -64,6 +64,8 @@ export function wait(
   const parsed = parseSuspensionRequest({ request, responseSchema });
   return {
     id,
+    /** What the wait asked for, so a test can re-cut it under another identity. */
+    payload: parsed,
     request: {
       type: "yield",
       coroutineId,

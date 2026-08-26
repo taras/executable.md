@@ -189,6 +189,48 @@ function valuelessConsumedAnswer(): DetachedXmdArtifact {
   };
 }
 
+/**
+ * The answered wait, re-cut under an identity this run's positions do not
+ * derive, consistently across its request, its publication and its row.
+ */
+function forgedOwnWait(id: string): DetachedXmdArtifact {
+  const contents = richArtifact();
+  const forged = wait(
+    id,
+    SUSPENSIONS.consumed.payload.request,
+    SUSPENSIONS.consumed.payload.responseSchema,
+  );
+  return {
+    ...withRecords(contents, {
+      "event-5": forged.request,
+      "event-6": forged.publication({ approved: true }),
+    }),
+    answers: contents.answers.map((row) =>
+      row.suspensionId === SUSPENSIONS.consumed.id ? { ...row, suspensionId: forged.id } : row,
+    ),
+  };
+}
+
+/**
+ * The wait this run is stopped at, forged, and its retained row dropped.
+ *
+ * Leaving the row would make this a row naming a request for another wait,
+ * which a different check already answers. Removing it is what leaves the
+ * request standing alone, reached by nothing.
+ */
+function forgedUnansweredWait(id: string): DetachedXmdArtifact {
+  const contents = richArtifact();
+  const forged = wait(
+    id,
+    SUSPENSIONS.pending.payload.request,
+    SUSPENSIONS.pending.payload.responseSchema,
+  );
+  return {
+    ...withRecords(contents, { "event-7": forged.request }),
+    answers: contents.answers.filter((row) => row.suspensionId !== SUSPENSIONS.pending.id),
+  };
+}
+
 /** One member of a parsed record, as the object it has to be. */
 function parsedObject(value: unknown): JsonObject {
   return parseJsonObject(value, "$", (reason) => new Error(`the member ${reason}`));
@@ -941,6 +983,15 @@ describe("XMD artifact container version 1", () => {
           },
         }),
       ],
+      // A wait whose identity is forged consistently: the request it was
+      // published as, the answer published behind it, and the row that points
+      // at both all agree. Nothing compares them to each other any more; what
+      // refuses it is that no position in this run derives that identity.
+      ["forged-answered.xmd", forgedOwnWait("f".repeat(32))],
+      // The same forgery on the wait this run is stopped at, with its retained
+      // row removed — so no answer row and no publication reaches the request,
+      // and only holding the request itself to its position can catch it.
+      ["forged-unanswered.xmd", forgedUnansweredWait("e".repeat(32))],
       // A consumed answer of `null`, published as a success that carries no
       // value at all. Normalizing the absent member to null would read these
       // two different histories as one.
