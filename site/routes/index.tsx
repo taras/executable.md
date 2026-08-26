@@ -359,6 +359,21 @@ const HANDOFF_MD: Tok[][] = [
   ],
 ];
 
+const DRAFT_MD: Tok[][] = [
+  [key("<TempDir>")],
+  ["  ", key("<File"), " path", dim("="), str('"notes/draft.md"'), key(">")],
+  ["  Draft"],
+  ["  ", key("</File>")],
+  [],
+  ["  ```sh ", mod("exec")],
+  ["  cat notes/draft.md"],
+  ["  ```"],
+  [],
+  ["  ", key("<Glob"), " include", dim("="), mod('{["**/*.md"]}')],
+  ["        as", dim("="), str('"drafts"'), " ", key("/>")],
+  [key("</TempDir>")],
+];
+
 /* ------------------------------------------------------------------ *
  * Page pieces
  * ------------------------------------------------------------------ */
@@ -861,6 +876,56 @@ export default define.page(function Home({ url }) {
             <CodeBlock>
               <Source lines={HANDOFF_MD} />
             </CodeBlock>
+          </div>
+        </section>
+
+        {/* The nesting is the model */}
+        <section id="model" class="section" style="gap:1.5rem;">
+          <div class="section-head">
+            <h2>The nesting is the model.</h2>
+            <p>
+              A component establishes context for everything nested inside it.
+            </p>
+          </div>
+
+          <div class="grid" style={PAIR}>
+            <CodeBlock filename="draft.md">
+              <Source lines={DRAFT_MD} />
+            </CodeBlock>
+
+            <div style="display:flex;flex-direction:column;gap:1rem;min-width:0;">
+              <ul class="marks">
+                <li>
+                  <Term>{"<TempDir>"}</Term>{" "}
+                  gives its contents an isolated working directory.
+                </li>
+                <li>
+                  <Term>{"<File>"}</Term>{" "}
+                  writes text at a path relative to that directory, creating the
+                  parents the path names.
+                </li>
+                <li>
+                  The <Term>exec</Term>{" "}
+                  block runs in the same directory, so the shell finds the file
+                  {" "}
+                  <Term>File</Term> wrote.
+                </li>
+                <li>
+                  <Term>{"<Glob>"}</Term> searches that directory too, and{" "}
+                  <Term>as</Term> binds the paths it found.
+                </li>
+              </ul>
+              <p style={CLAIM}>
+                Read the nesting as context. Each component establishes
+                something for the components inside it.
+              </p>
+              <p style={P_MD}>
+                Move the <Term>File</Term> outside the <Term>TempDir</Term>{" "}
+                and it writes somewhere else. And when the enclosing block ends,
+                the runtime removes what that block owns — the directory goes
+                with it. Nesting is context, scope, and lifecycle.
+              </p>
+            </div>
           </div>
         </section>
 
