@@ -313,6 +313,7 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
+export { gitBlobIdentity } from "./src/artifact/source.ts";
 export type { WorkflowExportRequest, WorkflowExportResult } from "./src/lifecycle/export.ts";
 export type {
   DetachedXmdArtifact,

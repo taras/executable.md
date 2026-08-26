@@ -185,10 +185,11 @@ export const WORKFLOW_ACTIONS = [
   "history",
   "cancel",
   "delete",
+  "export",
 ];
 
 /** The actions that read, answer or control a run rather than executing one. */
-const MANAGEMENT_ACTIONS = ["answer", "status", "list", "history", "cancel", "delete"];
+const MANAGEMENT_ACTIONS = ["answer", "status", "list", "history", "cancel", "delete", "export"];
 
 /** The options that belong to executing a run. */
 const EXECUTION_OPTIONS = [
@@ -213,6 +214,7 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
   list: ["--json", "--status"],
   cancel: [],
   delete: [],
+  export: ["--output"],
 });
 
 export const workflowConfig = object({
@@ -269,6 +271,13 @@ export const workflowConfig = object({
     description: "list only runs retaining this status",
     ...field(z.string().optional()),
   },
+  output: {
+    description:
+      "the .xmd file to write the artifact to (export only); the artifact contains this " +
+      "run's complete retained Workspace, which may include source, generated files and " +
+      "secrets — treat it as confidential",
+    ...field(z.string().optional()),
+  },
 });
 
 /** What one execution invocation asks for, after the grammar has been read. */
@@ -310,6 +319,7 @@ export type WorkflowManagementRequest =
       readonly json: boolean;
     }
   | { readonly action: "cancel" | "delete"; readonly runId: string }
+  | { readonly action: "export"; readonly runId: string; readonly output: string }
   | {
       readonly action: "answer";
       readonly runId: string;
@@ -550,6 +560,7 @@ function manageRequest(
     forkable: boolean;
     status?: string;
     secretDetection: boolean;
+    output?: string;
   },
 ): Result<WorkflowCommand> {
   if (config.id !== undefined) {
@@ -607,6 +618,9 @@ function manageRequest(
   if (action === "cancel" || action === "delete") {
     return Ok({ kind: "manage", request: { action, runId } });
   }
+  if (action === "export") {
+    return exportRequest(runId, config);
+  }
   if (action === "status") {
     return Ok({ kind: "manage", request: { action, runId, json: config.json } });
   }
@@ -619,6 +633,46 @@ function manageRequest(
   // Reached only if `WORKFLOW_ACTIONS` names an action this function does not,
   // which is a disagreement inside the grammar rather than a caller's mistake.
   return Err(new Error(`xmd workflow ${action} has no request to make`));
+}
+
+/**
+ * One export, once its destination has been read.
+ *
+ * The destination is checked here rather than by the provider, because these
+ * are facts about the invocation: a missing `--output`, a name that does not
+ * say what the file is, and an attempt to stream evidence down a pipe are all
+ * mistakes a caller can fix by typing something else. Whether the *run* can be
+ * exported is a different question, asked after this one passes.
+ */
+function exportRequest(runId: string, config: { output?: string }): Result<WorkflowCommand> {
+  const output = config.output;
+  if (output === undefined || output === "") {
+    return Err(
+      new Error(
+        "xmd workflow export writes one file and needs to be told where — " +
+          "`xmd workflow export <run-id> --output=<path.xmd>`.",
+      ),
+    );
+  }
+  // An artifact is a container that is opened by seeking around it, so it
+  // cannot arrive on a stream. Saying so beats writing a broken file.
+  if (output === "-") {
+    return Err(
+      new Error(
+        "xmd workflow export writes a file rather than standard output. " +
+          "Give --output a path ending in .xmd.",
+      ),
+    );
+  }
+  if (!output.endsWith(".xmd")) {
+    return Err(
+      new Error(
+        `xmd workflow export writes an XMD artifact, so --output names a .xmd file. ` +
+          `${JSON.stringify(output)} does not.`,
+      ),
+    );
+  }
+  return Ok({ kind: "manage", request: { action: "export", runId, output } });
 }
 
 /**

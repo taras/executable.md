@@ -30,9 +30,15 @@
  * completed run and a failed run both report successfully.
  */
 
-import { scoped } from "effection";
+import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
+import { exists, rm } from "@effectionx/fs";
+import { mkdtempSync } from "node:fs";
+import { rename } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { gitBlobIdentity, WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
+import type { XmdArtifactDefinitionClosure } from "@executablemd/workflow";
+import { loadRetainedDefinition } from "./workflow-definition.ts";
 import type {
   WorkflowHistoryEntry,
   WorkflowLifecycleSnapshot,
@@ -99,6 +105,9 @@ export function runWorkflowManagement(
         }
         write(request.json ? json(entries.value) : renderHistory(entries.value, request.forkable));
         return { exitCode: 0 };
+      }
+      case "export": {
+        return yield* exportArtifact(request.runId, request.output);
       }
       case "cancel": {
         const cancelled = yield* WorkflowLifecycle.operations.cancel(request.runId);
@@ -330,4 +339,102 @@ function table(rows: readonly (readonly string[])[]): string {
         .trimEnd(),
     )
     .join("\n");
+}
+
+/**
+ * Seal one run at `output`, and put nothing there unless it worked.
+ *
+ * Three steps that each refuse on their own terms. The run's own snapshot says
+ * what definition it retains and where that definition could be fetched from;
+ * the repository turns that back into the exact Markdown and proves it against
+ * the identities the definition holds; and the provider chooses a frontier
+ * under the executor lock and writes the container.
+ *
+ * The artifact is built beside its destination and moved onto it. A rename
+ * within one directory is atomic, so an onlooker sees the finished file or no
+ * file — never a half-written one wearing the name a user asked for. Building
+ * somewhere else and copying would give up exactly that.
+ */
+function* exportArtifact(runId: string, output: string): Operation<WorkflowOutcome> {
+  if (yield* exists(output)) {
+    return refuse(
+      new Error(
+        `xmd workflow export will not replace ${output}. Remove it, or name a path that does ` +
+          "not exist yet.",
+      ),
+    );
+  }
+
+  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
+  if (!snapshot.ok) {
+    return refuse(snapshot.error);
+  }
+  const definition = snapshot.value.record.definition;
+  const sources = yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
+  if (!sources.ok) {
+    return refuse(sources.error);
+  }
+
+  const closure: XmdArtifactDefinitionClosure = {
+    root: {
+      objectFormat: definition.objectFormat,
+      pinnedCommit: definition.objectId,
+      rootDocumentPath: definition.rootDocumentPath,
+      ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
+      // Derived from the bytes the repository just handed back, and compared
+      // with them again by the container. A definition pins a commit and a
+      // path, never the document's own identity.
+      blobId: gitBlobIdentity(sources.value.source, definition.objectFormat),
+      content: sources.value.source,
+    },
+    components: sources.value.components.map((component) => ({
+      name: component.name,
+      path: component.path,
+      blobId: component.sourceHash,
+      content: component.content,
+    })),
+  };
+
+  return yield* scoped(function* (): Operation<WorkflowOutcome> {
+    const staging = yield* useExportStaging(output);
+    const sealed = yield* WorkflowLifecycle.operations.export({
+      runId,
+      stagingPath: staging,
+      closure,
+    });
+    if (!sealed.ok) {
+      return refuse(sealed.error);
+    }
+    yield* until(rename(staging, output));
+
+    write(
+      [
+        `workflow artifact: ${output}`,
+        `workflow run: ${sealed.value.frontier.sourceRunId}`,
+        `workflow frontier: ${sealed.value.frontier.finalEventId ?? "(no committed event)"}`,
+        `workflow root: ${sealed.value.frontier.currentWorkspaceRootId}`,
+        // Two digests, and the labels say which question each answers.
+        `workflow artifact identity: ${sealed.value.identity}`,
+        `workflow artifact sha256: ${sealed.value.fileSha256}`,
+      ].join("\n"),
+    );
+    return { exitCode: 0 };
+  });
+}
+
+/**
+ * A directory beside the destination, removed with this scope.
+ *
+ * Beside it because a rename is atomic only within one filesystem, and the only
+ * directory guaranteed to share one with the target is the target's own. What
+ * is left behind on failure is a temporary directory nobody was told about,
+ * rather than a file at the path a user will go looking at.
+ */
+function useExportStaging(output: string): Operation<string> {
+  return resource(function* (provide) {
+    // oxlint-disable-next-line local/no-sync-filesystem
+    const directory = mkdtempSync(join(dirname(resolve(output)), ".xmd-export-"));
+    yield* ensure(() => rm(directory, { recursive: true, force: true }));
+    yield* provide(join(directory, "artifact.xmd"));
+  });
 }
