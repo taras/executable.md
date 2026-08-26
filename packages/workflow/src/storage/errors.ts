@@ -269,6 +269,28 @@ export class WorkflowDefinitionError extends WorkflowStorageError {
 }
 
 /**
+ * A live workflow executor holds the run an export was asked to seal.
+ *
+ * Refused rather than queued, and refused without creating anything. An export
+ * chooses one committed frontier while nothing can append underneath it, so a
+ * run somebody is executing right now has no frontier to choose — waiting for
+ * one would turn "this run is busy" into a hang.
+ */
+export class WorkflowExportBusyError extends WorkflowStorageError {
+  override name = "WorkflowExportBusyError";
+
+  readonly runId: string;
+
+  constructor(runId: string) {
+    super(
+      `The workflow run ${JSON.stringify(runId)} is being executed right now, so there is no ` +
+        "settled frontier to export. Nothing was written. Export it once the run stops.",
+    );
+    this.runId = runId;
+  }
+}
+
+/**
  * The base of every expected XMD artifact outcome.
  *
  * An artifact is discovered from the path a caller supplied and from nothing

@@ -313,6 +313,15 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
+export type { WorkflowExportRequest, WorkflowExportResult } from "./src/lifecycle/export.ts";
+export type {
+  DetachedXmdArtifact,
+  VerifiedXmdArtifact,
+  XmdArtifactDefinitionClosure,
+  XmdArtifactDefinitionComponent,
+  XmdArtifactDefinitionRoot,
+  XmdArtifactFrontier,
+} from "./src/artifact/types.ts";
 export { readEventSource } from "./src/lifecycle/history.ts";
 export type { InheritedEventProvenance, WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
 export { classifyForkability } from "./src/lifecycle/forkability.ts";

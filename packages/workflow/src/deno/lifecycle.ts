@@ -71,6 +71,7 @@ import {
   WorkflowRequestError,
   WorkflowRunIdMismatchError,
   WorkflowRunLocationMismatchError,
+  WorkflowExportBusyError,
   WorkflowRunNotFoundError,
   WorkflowStorageError,
 } from "../storage/errors.ts";
@@ -92,6 +93,10 @@ import {
 import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
+import type { DetachedXmdArtifact } from "../artifact/types.ts";
+import { writeXmdArtifact } from "./artifact/mod.ts";
+import { readExportFrontier } from "./artifact-frontier.ts";
+import type { WorkflowExportRequest, WorkflowExportResult } from "../lifecycle/export.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
 import { translateSqliteError, verifySchema, WorkflowReadonlyRollbackError } from "./schema.ts";
 import { holdRecoveryCoordination } from "./recovery-coordination.ts";
@@ -196,6 +201,9 @@ export function* installWorkflowLifecycle(
       },
       *history([runId]) {
         return yield* runHistory(root, runId, observe);
+      },
+      *export([request]) {
+        return yield* exportRun(root, executors, request, observe);
       },
     },
     { at: "min" },
@@ -545,6 +553,58 @@ function* acquire(
     return Ok({ kind: "already-running" });
   }
   return Ok({ kind: "acquired", lock: hold.lock });
+}
+
+/**
+ * Seal one committed frontier, and leave the run exactly as it was found.
+ *
+ * The lock is held for the read and for nothing else. What it buys is that the
+ * frontier is one consistent committed view rather than a moving one — once the
+ * rows are values in memory, no execution can invalidate them, so the container
+ * is written with the lock already released and a long export does not keep a
+ * run unrunnable.
+ *
+ * The read itself is the ordinary inspection path, which is what gives a
+ * crashed source the existing recovery-copy discipline for free: a private copy
+ * is recovered and read, and the retained database is left untouched.
+ */
+function* exportRun(
+  root: string,
+  executors: ExecutorLockRegistry,
+  request: WorkflowExportRequest,
+  observe: RecoveryObserver,
+): Operation<Result<WorkflowExportResult>> {
+  const checked = checkRunId(request.runId);
+  if (!checked.ok) {
+    return checked;
+  }
+
+  const detached = yield* scoped(function* (): Operation<Result<DetachedXmdArtifact>> {
+    const hold = yield* executors.acquire(root, checked.value);
+    if (hold === undefined) {
+      return Err(new WorkflowExportBusyError(checked.value));
+    }
+    return yield* atRun(
+      root,
+      checked.value,
+      (database, record, path) => readExportFrontier(database, record, path, request.closure),
+      observe,
+    );
+  });
+  if (!detached.ok) {
+    return detached;
+  }
+
+  const written = yield* writeXmdArtifact(request.stagingPath, detached.value);
+  if (!written.ok) {
+    return written;
+  }
+  return Ok({
+    stagingPath: request.stagingPath,
+    frontier: written.value.artifact.frontier,
+    identity: written.value.identity,
+    fileSha256: written.value.fileSha256,
+  });
 }
 
 function* inspectRun(
