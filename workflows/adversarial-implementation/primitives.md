@@ -309,11 +309,13 @@ Everything else the workflow writes resolves: `<If>`, `<Else>`, `<Loop>`,
 `InstructionFiles`, `Discovery`, `UserCheckpoint`, `Planning` and
 `Implementation` as the repository components beside this file.
 
-## What the workflow still needs
+## What this workflow is built on
 
-The missing capability is not one component. It is the retained-Workspace
-implementation umbrella, [#218](https://github.com/taras/executable.md/issues/218),
-whose dependency order this workflow consumes in the same sequence.
+What it needed was never one component. It was the retained-Workspace
+implementation umbrella,
+[#218](https://github.com/taras/executable.md/issues/218), whose dependency
+order this workflow consumes in the same sequence — and the tables below record
+what each of those issues delivered rather than what it owes.
 
 **1. Retention and one filesystem vertical slice.**
 
@@ -354,12 +356,13 @@ the component from its retained source rather than from a mutable checkout. A
 same-named file beside the definition answers nothing, an undeclared name
 resolves to nothing at all, and ordinary `xmd run` resolution is unchanged.
 
-What #301 slice 2 owes is the composition itself: the authored loop that runs
-discovery, planning, authorization, evaluation, Git, the pull request, its
-evidence reads, review, deferred issues and acceptance as one workflow run. That
-is what this document now writes. Scheduling, watchers and unattended
-continuation are deliberately outside it — a resume stays an explicit act, and
-the later scheduling slice is #300's.
+The composition itself is what #301 built and this document writes: the
+authored loop that runs discovery, planning, authorization, evaluation, Git, the
+pull request, its evidence reads, review, deferred issues and acceptance as one
+workflow run. #300 built the explicit host scheduling of its ordinary resume
+beside it. Watchers and unattended continuation are excluded from both: a
+continuation is asked for, by a person or by a trusted host, and both reach the
+same executor.
 
 **2. Repository and deterministic Git composition.**
 
@@ -367,7 +370,7 @@ the later scheduling slice is #300's.
 | --- | --- | --- |
 | `<Repository>`, self-closing `<Worktree>`, and the lexical `<Dir>` boundary that consumes a bound checkout path | #293 | shipped — registered by the workflow host |
 | `<Git.Switch>`, `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
-| shared Git-host effect reconciliation | #297 | shipped — one request-only surface; the components over it are not |
+| shared Git-host effect reconciliation | #297 | shipped — one request-only surface, with `<Git.Push>` and `<PullRequest>` over it; `<Issue>` has its own `IssueApi` boundary |
 | explicit `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
 | `<PullRequest>` over an explicitly pushed head | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
 | provenance-linked deferred `<Issue>`, in an `<IssueTracker>` | #296, delivered by #516 | shipped — registered by the workflow host; `IssueApi`, not a Git effect |
@@ -433,7 +436,7 @@ alike.
 | generated Workspace mutation admission, by effect class and authored form | #369, delivered by #572 | shipped — paired `<File>`, lexical `<Dir>` |
 | generated single-file deletion | delivered by #574 | shipped — core's self-closing `<File.Delete>`, under the `write` class |
 | engine-owned authored-form dispatch on the invocation it issued | #569 | shipped |
-| transactional Worker Shell | #363 | open; containment and transaction POCs complete |
+| transactional Worker Shell | #363 | **excluded from this delivery** — containment and transaction POCs are complete and it stays #363's; no stage here writes it, and nothing here waits on it |
 
 The ceiling is the host's, not the document's, which is why no `<Sandbox>`
 appears anywhere in this workflow. An implementor that cannot write returns XMD
@@ -482,27 +485,61 @@ whole. This workflow performs those itself, as authored effects after
 | --- | --- | --- |
 | namespaced document props | #305 | shipped |
 | synchronize this living target with settled contracts | #292 | this change |
-| prove the shipped planning-document logic | #290 | this change — the proof lands here; #290 closes on delivery |
+| prove the shipped planning-document logic | #290 | implemented on PR #181; closes with its merge |
 | a root's declared component bundle, resolved from its pinned commit | #301 slice, delivered by #493 | shipped |
-| compose the supervised workflow — the authored loop from discovery to acceptance under one run | #301 slice 2 | this change |
-| schedule a resume, or continue a run unattended | #300 slice 2 | open — deliberately outside #301 slice 2 |
-| omit an expression prop that evaluates to `undefined`, before validation and before the durable JSON boundary | #301 | open — architecture settled; `Implementation`'s one-invocation pull-request loop depends on it |
-| typed durable answer delivery to a suspended run | #300 | shipped — delivery is non-executing; automatic scheduling is not shipped |
+| compose the supervised workflow — the authored loop from discovery to acceptance under one run | #301 | implemented on PR #181; closes with its merge |
+| schedule the ordinary resume explicitly, as a trusted host | #300 | shipped — the host decides *when*, and nothing else |
+| continue a run unattended — watchers, delivery-to-resume wiring, arbitration, a second executor | — | excluded; no issue owns one, and nothing here waits on one |
+| omit an expression prop that evaluates to `undefined`, before validation and before the durable JSON boundary | delivered by #537 and #541 | shipped |
+| typed durable answer delivery to a suspended run | #300 | shipped — delivery is non-executing, and a trusted host may schedule the ordinary resume explicitly; no watcher, no delivery-to-resume wiring, no second executor |
 | default-on secret rejection before journal persistence | #199, delivered by #573 and #575 | shipped |
-| certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | open |
+| certify interruption, replay, authority, reconciliation, and cross-runtime behavior | #299 | PASS at head `e85479c33ce4c91d821e0eaf195150db374ae4a6` over base `6717e867c9467114e6b060620d5b18c87beb2c48`; closed |
 
 `<Discovery>`, `<Planning>`, `<Implementation>`, and `<UserCheckpoint>` are
 authored Markdown components, not runtime primitives. `<UserCheckpoint>` combines
 an agent prompt, conditional control flow, and `<Elicit>` to determine whether a
 material choice requires the user and to obtain the user's answer when it does.
-It is the one of the four that declares `returns`: a gate has to bind a validated
-boolean, not prose a caller would have to interpret.
+`<Planning>`, `<Implementation>` and `<UserCheckpoint>` declare `returns`: each
+renders nothing, requires `as`, and binds a validated JSON value, because a
+caller gates on a decision rather than on prose it would have to interpret.
+`<Discovery>` is the text component of the four — it declares no `returns`, so
+its `<Output>` region is its return value and `as` binds that rendered text,
+which is all a prompt downstream needs.
 
 Two authoring features sit deliberately outside this path.
 [#412](https://github.com/taras/executable.md/issues/412) document targets and
 [#416](https://github.com/taras/executable.md/issues/416) `<Call>` are useful, and
 nothing here requires them; pulling either in is a separate decision.
 
-Where a primitive is still missing, the manual exercise replaces it with an
-explicit user-run step and records the replacement as evidence for prioritizing
-implementation.
+No primitive this workflow writes is missing. The manual exercise that used to
+replace one with a user-run step is history: every name resolves, and the run
+performs the whole composition itself.
+
+## What this workflow does not claim
+
+These are exclusions, not roadmap promises. Nothing here waits on them, and no
+stage degrades because one is absent.
+
+| Nonclaim | Why it is one |
+| --- | --- |
+| transactional Worker Shell | #363's, and outside this delivery |
+| portable adapter-level absence of every native tool | this host asks an adapter for none and refuses every request that arrives anyway; the portable proof is #496's, non-blocking |
+| human actor attestation | nothing here identifies *who* answered a checkpoint beyond the answer this run retained |
+| a remote-host selector | where a run executes is the caller's, and no document element chooses a host |
+| configured watchers and unattended iteration | a continuation is asked for; #300 built only the decision of *when* an ordinary resume runs |
+| speculative lab or play surfaces | this workflow ships one composition, and nothing here is a sandbox for another |
+
+## What this workflow delivers
+
+The supervised composition, the retained Workspace and its Repository and
+Worktree checkouts, the generated observations and mutation, the local Git and
+Git-host effects, the pull-request evidence reads, the deferred issues, the
+retained Agent sessions, the durable checkpoints and the explicit scheduling of
+their ordinary resume are all built in the revision containing this document.
+PR #181 delivers them; #299 certified them from outside the process that runs
+them, on the Deno source entrypoint and the compiled binary alike, at head
+`e85479c33ce4c91d821e0eaf195150db374ae4a6` over base
+`6717e867c9467114e6b060620d5b18c87beb2c48`. #290, #300 and #301 are implemented
+on that pull request and close with its merge; #292 is the synchronization this
+document is part of. #227, #327, #363 and #496 stay independent and
+non-blocking.

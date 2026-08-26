@@ -215,7 +215,9 @@ settles the run `suspended`, and gives the executor lock back — so the process
 the Workspace attachment and the Agent processes need not stay alive while a
 person thinks. `xmd workflow answer` retains the typed answer and executes
 nothing; `xmd workflow resume` continues from the retained request. Both remain
-explicit acts: nothing schedules a resume, and no watcher waits.
+explicit acts: delivery executes nothing, and a continuation is asked for — by
+a person, or by a trusted host deciding when through #300's explicit scheduler,
+which reaches the same ordinary resume. No watcher waits.
 
 The workflow registration deliberately performs no `elicit` durable record of
 its own. A durable wait has to be the outermost durable thing at its position,

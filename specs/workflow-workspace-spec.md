@@ -604,7 +604,10 @@ Status, list and history for retained runs are built (§4), and so are cancel an
 delete, and export. Artifact export is built; artifact inspection and an
 artifact-backed fork are specified in `specs/xmd-artifact-spec.md` and remain
 unbuilt.
-Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
+Repository, Worktree and Dir are built (§6), and so are the Git operations of
+§7: `Git.Switch`, `Git.Add` and `Git.Commit` publish local mutations under the
+retained checkout, `Git.Push` publishes a branch and retains its evidence, and
+`PullRequest` reconciles against the same Git-host boundary.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
 is now an advisory lock the operating system releases when a host dies, rather
@@ -3174,7 +3177,7 @@ fetch operation requires its own language and durability contract.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; process capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; a command a workflow document runs executes under the run and its result is retained in the run's own history, so a continuation reads back what it printed rather than running it again |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition | built by #293, Deno provider only |
 | transactional Git components (`Git.Switch`, `Git.Add`, `Git.Commit`) | built by #294, Deno provider only |

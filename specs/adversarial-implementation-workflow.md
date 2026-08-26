@@ -1,14 +1,17 @@
 # Adversarial Implementation Workflow
 
-- **Status:** Living end-goal target
+- **Status:** Implemented by the revision containing this document; PR #181
+  delivers it, and #299 certified it
 - **Audience:** Maintainers and contributors
 
 This document describes a workflow for developing software with a user, a
-planner agent, and an implementor agent. It is the target the runtime is being
-built toward, and it is kept current as capabilities land: a settled contract is
-described in the present tense, and a capability that does not exist yet says
-so with the issue that would supply it. Sections marked as not implemented
-define what must be built, not what the runtime does today.
+planner agent, and an implementor agent. It describes the revision it sits in:
+the supervised loop, the Repository and Worktree composition, the generated
+observations and mutation, the Git and Git-host effects, the retained Agent
+sessions, and the durable checkpoints are all built here and certified end to
+end from outside the process that runs them. What is *not* built says so with
+the issue that owns it, and an exclusion says that it is one rather than
+promising it later.
 
 The executable sketch is organized around a compact
 [entry document](../workflows/adversarial-implementation/start.md), with stage and
@@ -108,9 +111,10 @@ one retained suspension request, settles the run `suspended`, and gives the
 executor lock back, so neither the process nor the Agent sessions stay alive
 while a person thinks. `xmd workflow answer` retains a typed answer and executes
 nothing; `xmd workflow resume` continues from the retained request, and only the
-exact validated answer may continue it. Both remain explicit acts — nothing
-schedules a resume and no watcher waits, and scheduling and unattended
-continuation stay outside this composition with #300.
+exact validated answer may continue it. Both remain explicit acts — delivery
+executes nothing, and a continuation is asked for, by a person or by a trusted
+host that decides when (#300). No watcher waits, and unattended continuation
+stays outside this composition.
 
 The same document under ordinary `xmd run` is unchanged: `<Elicit>` asks inside
 the execution that is already running, which is a different thing from
@@ -177,12 +181,13 @@ the component from its retained source, a mutable checkout beside the definition
 substitutes nothing, and an undeclared name resolves to nothing at all. Ordinary
 `xmd run` resolution is unchanged.
 
-What #301 slice 2 owes is the composition itself: the authored loop that runs
-discovery, planning, authorization, evaluation, Git, the pull request, its
-evidence reads, review, deferred issues and acceptance as one workflow run. That
-is what this document now writes. Scheduling, watchers and unattended
-continuation are deliberately outside it — a resume stays an explicit act, and
-the later scheduling slice is #300's.
+The composition itself is what #301 built and this document writes: the
+authored loop that runs discovery, planning, authorization, evaluation, Git, the
+pull request, its evidence reads, review, deferred issues and acceptance as one
+workflow run. #300 built explicit host scheduling of the ordinary resume beside
+it. Watchers, unattended continuation and any wiring from delivery to resume
+stay outside both: a continuation is an explicit act, whether a person or a
+trusted host asks for it.
 
 The composed root runs under `xmd workflow start`, which is the current
 execution path for it: one retained Workspace, the stage names resolved from the
@@ -198,9 +203,10 @@ applicable signal in this priority order:
 2. A durable signal the run is waiting on arrives.
 3. The user provides direct input.
 
-Stop arbitration is not implemented (#300), and premature watcher semantics are
-deliberately excluded from it. The manual exercise records where each signal
-would have been used without detecting or prioritizing them.
+Arbitration *between* those signals is not implemented, and premature watcher
+semantics are excluded rather than deferred: nothing detects or prioritizes them
+on the run's behalf. What #300 built is narrower and is built here — a trusted
+host may decide *when* the ordinary resume runs, and nothing else.
 
 Signal 3 has a shipped in-run form. `<Elicit>` asks a person a schema-validated
 question during execution and binds the validated answer, and `xmd run` composes
@@ -216,18 +222,17 @@ The registration performs no `elicit` durable record of its own, because a
 durable wait has to be the outermost durable thing at its position; the wait is
 retained by the suspension protocol instead, so there is one record of the
 answer rather than two. Both the answer and the resume remain explicit acts:
-nothing schedules a resume, and no watcher waits.
+delivery executes nothing, and a continuation happens because a person or a
+trusted host asked for one. No watcher waits.
 
-### Runtime intervention
+### Runtime intervention is a nonclaim
 
-The Effection inspector provides future meta-control over a running loop. It may
-interrupt execution so that a user can inspect or manipulate program state
-during a major runtime intervention.
-
-Inspector control is distinct from ordinary workflow input. The workflow still
-needs an in-band mechanism for routine user decisions; the inspector is an
-out-of-band operational tool rather than the decision protocol. Neither
-mechanism is required by the manual exercise.
+Out-of-band meta-control over a running loop — an inspector that interrupts an
+execution so somebody can look at or change program state — is not part of this
+workflow and is not planned here. The in-band decision protocol is the one this
+document specifies: a checkpoint suspends the run durably and a typed answer
+continues it. Nothing here degrades because no inspector exists, and no stage
+waits on one.
 
 ## Entering the workflow
 
@@ -692,10 +697,14 @@ durably and gives its executor lock back (#367), and the workflow host's own
 retained suspension request, settles the run `suspended`, and releases the
 executor (#577, shipped). A typed answer is delivered to that request (#300) and
 executes nothing, and `xmd workflow resume` continues from it. What is still
-deliberately absent is anything automatic — no scheduler resumes a run and no
-watcher waits, so answering and resuming stay two explicit acts. The document
-spells none of it: there is still no v1 Markdown element for `suspendFor()`, and
-where the asking happens remains the host's decision.
+absent is anything unattended. Continuation is the ordinary resume operation,
+and two callers reach it: a person running `xmd workflow resume`, and a trusted
+host that has observed the delivery and decides the run should continue now
+(#300's explicit scheduler). They take the same executor lock and run the same
+path, so there is no second executor — and no watcher waits, nothing wires a
+delivery to a resume, and nothing arbitrates unattended. The document spells
+none of it: there is still no v1 Markdown element for `suspendFor()`, and where
+the asking happens remains the host's decision.
 
 Versioned history checkpoints, compatible forks,
 `history --forkable`, forkability reasons, lineage, changed-definition replay
@@ -704,11 +713,12 @@ admission and retained Workspace-root copying are shipped (#368, delivered by
 is not an Agent provider continuing a session, and nothing schedules or resumes
 either.
 
-**Still missing: who answered.** The journal records the validated decision, the
-question fingerprint, and the document execution it belongs to. It does not
-record the actor identity behind an elicitation response, so a decision is
-attributable to a run and an expansion but not to a person. No open issue owns
-that yet.
+**A nonclaim: who answered.** The journal records the validated decision, the
+question fingerprint, and the document execution it belongs to. It records no
+actor identity behind an elicitation response, so a decision is attributable to
+a run and an expansion rather than to a person. That is deliberate rather than
+pending: this workflow does not attest actors, and nothing in it degrades
+because it does not.
 
 Replay is what makes a resumed stage possible: a document execution that failed
 is still a complete record, and replaying it restores the output and the failure
@@ -727,11 +737,19 @@ because its contents still enter model context.
 
 ### Agent authority and generated XMD
 
-Under `xmd workflow` an Agent is mandatorily read-only. Enforcement has two
-layers: the provider permission bridge allows only read and search operations,
-and the provider runs in its native read-only sandbox. There is no third layer
+Under `xmd workflow` an Agent is given no authority to act at all. Its process
+starts in an empty directory this host owns — created empty, removed with the
+attachment, and never written into or read back out of — with no Workspace or
+host path, no additional directory and no MCP server. The session asks for an
+empty native tool set and runs deny-all, and a native permission request that
+arrives anyway is denied and fails the turn that asked. There is no layer
 presenting Workspace paths as read-only filesystem views, because no Workspace
-path is registered with an Agent in the first place. `<ApproveAll>`, repository
+path is registered with an Agent in the first place.
+
+That is the profile this revision ships, and it is not a claim that every ACP
+adapter has no tools of its own: this host asks for none and refuses every
+request that arrives regardless. The portable adapter-level proof is #496's, and
+it is non-blocking. `<ApproveAll>`, repository
 `.codex` or `.claude` configuration, and prompt content cannot exceed that host
 ceiling, and a provider that cannot enforce it fails before Prompt execution
 (#302).
@@ -902,24 +920,21 @@ decides which remain part of the initiative. It asks the user to verify that
 decision when uncertain. Creating an issue is therefore a scope-preservation
 operation, not silent abandonment.
 
-## The lab and `xmd play`
+## What a lab or `xmd play` would be, and why neither is claimed
 
-The lab initially remains conceptual. At each stage, the user and agents inspect
-the workflow, identify friction, and decide what to change about the process.
-The workflow does not modify itself.
+A collaboration surface where agents propose visible executions or document
+changes, and a "lab" in which the workflow is reshaped while it runs, are
+speculative surfaces. Neither is built, neither is promised here, and no issue
+owns one: this document specifies one composition, and the workflow does not
+modify itself. The asset, decision, review, cleanup and recovery behavior such a
+surface would need is what this workflow already delivers; what it would be
+built into is somebody's later decision rather than an obligation this document
+carries.
 
-The automated implementation loop establishes the asset, decision, review,
-cleanup, and recovery behavior needed by a later `xmd play` mode. Play turns the
-document into a living collaboration surface where agents propose visible
-executions or document changes, the runtime validates and enforces approved
-effects, and the user remains the final authority for material changes.
+## What one run does, end to end
 
-Play follows a working implementation loop. It helps the user step back from
-managing implementation mechanics and focus on the design of the workflow.
-
-## First exercise
-
-The first exercise uses this workflow to design its own initial automation.
+A run of this workflow designs and delivers a change with a user, a planner and
+an implementor.
 The composed root runs its stages itself, in one workflow run; a person is
 reached where a checkpoint says a decision is theirs, which is a suspension
 rather than a hand-started stage. Required content is rendered directly into
@@ -933,10 +948,12 @@ run gives it a retained Workspace, a checkout (#293) and its stage names, which
 the root declares as a component
 bundle resolved from the pinned commit (#493), and a checkpoint that suspends
 the run durably rather than blocking it (#577). What stays outside the
-composition is anything automatic: scheduling a resume and continuing a run
-unattended are excluded here, and the later scheduling slice is #300's.
+composition is unattended continuation: #300 built the one scheduling decision a
+trusted host may take — *when* the ordinary resume runs — and watchers,
+delivery-to-resume wiring, arbitration and a second executor are excluded.
 
-The exercise succeeds when:
+#299 certified the following end to end, from outside the process that runs it,
+on the Deno source entrypoint and the compiled binary alike:
 
 1. Each invoked stage declares its props, publishes explicit results, and
    returns.
@@ -958,12 +975,10 @@ The exercise succeeds when:
 9. The planner reviews the resulting pull request, and implementation and
    review repeat when the verdict fails.
 10. The user decides whether to accept the completed change.
-11. The participants record every hidden-state dependency or optional file
-    export encountered during the exercise.
+11. Nothing a later step needs lives only in an Agent transcript, a host path, a
+    provider handle or a Git sidecar ref.
 12. The run's filtered journal, Workspace roots, and effect results remain
     readable through the retained run rather than through any repository ref.
-13. Those observations determine the smallest useful runtime implementation
-    rather than a speculative complete orchestration system.
 
 ## Technical questions
 
@@ -1050,31 +1065,34 @@ shipped behavior. They are recorded because the answers constrain what remains.
     reset or merged, and cleanup is explicit — it never silently discards
     retained work (#293, shipped).
 
-### Open
+### Settled composition boundaries
 
-The exercise must resolve enough of these to implement one vertical slice:
+Four of these were questions while this workflow was being built. They are
+answered by what it does, and they are recorded because the answers are the
+boundaries the composition runs inside.
 
-1. *Settled and built.* The bounded request/result loop is authored Markdown
+1. The bounded request/result loop is authored Markdown
    around `<Evaluate source>` (#302, #369, delivered by #549 and #550): one
    `<Prompt>` per Agent turn, a closed observation/proposal envelope, and the
    detached read value rendered into the next prompt. The Agent still receives no
    checkout, materialization, working directory or registered directory.
-2. *Settled and built.* The component a document writes is `<Evaluate>`, with a
-   closed schema of required `source` and optional `allow`. A mutating fragment's
-   admission is by effect class and authored form (#369, delivered by #572 and
-   #574): the standard profile's write table is core's paired `<File>`, this
-   package's lexical `<Dir>` and core's self-closing `<File.Delete>`. What
-   remains open is not admission but its class — generated Git, Git-host, issue,
-   process, execution, credential and external-write effects stay outside it.
-3. What state makes external effects safe to repeat or resume after
-   interruption (#297)? A revision iteration reaching the *same* pull request is
-   settled: the effect is an upsert over one explicit identity (#295, #500,
+2. The component a document writes is `<Evaluate>`, with a closed schema of
+   required `source` and optional `allow`. A mutating fragment's admission is by
+   effect class and authored form (#369, delivered by #572 and #574): the
+   standard profile's write table is core's paired `<File>`, this package's
+   lexical `<Dir>` and core's self-closing `<File.Delete>`. The class is settled
+   too: generated Git, Git-host, issue, process, execution, credential and
+   external-write effects stay outside admission, and a fragment naming one
+   performs nothing at all.
+3. What makes an external effect safe to repeat or resume after interruption is
+   the shared Git-host reconciliation (#297), and a revision iteration reaching
+   the *same* pull request is settled with it: the effect is an upsert over one explicit identity (#295, #500,
    #504), and #301's architecture amendment settles the composition — an
    expression prop evaluating to `undefined` is omitted before validation and
    before the durable JSON boundary, so a loop seeded with an empty object
    creates on its first iteration and updates on every later one through a
    single invocation. Omission is shipped (#537, delivered by #541).
-4. *Settled and built.* A review's evidence is read by three URL-addressed
+4. A review's evidence is read by three URL-addressed
    components — `<PullRequest.Reviews>`, `<PullRequest.Comments>` and
    `<PullRequest.Checks>` (#576, delivered by #580) — each taking the bound
    pull request's own `url` and binding its normalized retained collection.
@@ -1083,14 +1101,30 @@ The exercise must resolve enough of these to implement one vertical slice:
    back what the run recorded and performs no second read. They are not
    authenticated `<Fetch>` calls, and a generated fragment reaches none of
    them.
-5. Which host mechanism closes the validate-then-use race for each supported
-   runtime, now that a run-owned Workspace resolves a document path without
-   producing a host path at all (#227)?
-6. Which durable signals may schedule a resumption, and how is one arbitrated
-   against an iteration's own completion and direct user input (#300)?
-7. What records who answered an elicitation? The journal retains the validated
-   decision and its question fingerprint but no actor identity, so a decision is
-   attributable to a run and an expansion but not to a person. No issue owns it.
+### Settled by exclusion
 
-The first implementation need not answer every question. It establishes one
-observable, testable path and leaves explicit follow-up issues for the rest.
+These are not open questions. They are things this workflow does not do, each
+with its owner or its reason, and none of them blocks anything here.
+
+- **Arbitration between durable signals.** #300 built explicit scheduling of the
+  ordinary resume and nothing else: a trusted host decides when, a person may
+  decide instead, and both reach one executor. No watcher observes a signal on
+  the run's behalf and nothing arbitrates one against an iteration's completion.
+- **Who answered an elicitation.** The journal retains the validated decision and
+  its question fingerprint and no actor identity. Actor attestation is a
+  nonclaim rather than pending work.
+- **Transactional Worker Shell.** #363's, and outside this delivery.
+- **Portable adapter-level absence of every native tool.** This host asks an
+  adapter for none and refuses every request that arrives regardless; #496 owns
+  the portable proof and is non-blocking.
+- **The host filesystem's validate-then-use guarantee.** #227 owns it, for
+  ordinary `xmd run` against a host directory. It does not block this workflow: a
+  retained Workflow Workspace resolves an authored path inside its own
+  provider-owned namespace and produces no host path to race over.
+- **The outer `<PrintErrors>`/`<Output>` correction.** #327 owns it, and this
+  workflow writes no `<PrintErrors>` region, so nothing here depends on the
+  correction either way.
+
+What this document describes is delivered by the revision containing it, and
+#299 certified it. Follow-up issues are named where they exist rather than
+implied.

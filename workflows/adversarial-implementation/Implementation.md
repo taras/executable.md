@@ -778,12 +778,14 @@ settled).
 `<Elicit>`, and under `xmd workflow` the host's own registration suspends the
 run there durably (#577, shipped) — one retained request, the run settled
 `suspended`, the executor lock released, and continuation only through
-`xmd workflow answer` and an explicit `xmd workflow resume`. Exhaustion happens
+`xmd workflow answer` and an ordinary resume a person or a trusted host asks
+for. Exhaustion happens
 after the fifth of those checkpoints has already been answered, so nothing is
 pending and nothing waits: the stage returns the pair, the caller's gate refuses
 it, and the root reports awaiting direction as the end of that run. No second
-wait is created to ask about it, and no scheduler or watcher continues it —
-scheduling and unattended resume stay outside this composition with #300.
+wait is created to ask about it, and nothing continues it on its own: there is
+no watcher, and the explicit scheduler #300 built decides only *when* an
+ordinary resume runs, never whether an unanswered run should continue.
 
 ## Approval precedes durable effects
 
@@ -841,7 +843,7 @@ revision turn, or acceptance.
 | `<Git.Push>` | delivered by #495 | shipped — registered by the workflow host |
 | `<PullRequest>` | #295, delivered by #500 and #504 | shipped — registered by the workflow host |
 | `<Git.Add>`, staged-only `<Git.Commit>` | #294 | shipped |
-| shared Git-host reconciliation behind push, pull request and issue | #297 | shipped — the surface, and the components over it |
+| shared Git-host reconciliation behind push and pull request | #297 | shipped — the surface, and the two components over it; `<Issue>` reconciles through its own provider-neutral `IssueApi` instead |
 | `<PullRequest.Reviews>`, `<PullRequest.Comments>`, `<PullRequest.Checks>` | #576, delivered by #580 | shipped — URL-addressed reads of the bound pull request, written by this stage |
 | a durable checkpoint that suspends the run and releases the executor | #577 | shipped — the workflow host's own `<Elicit>` registration |
 

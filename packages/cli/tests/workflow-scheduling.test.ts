@@ -1014,40 +1014,41 @@ const REVIEWED_CONSUMER_ROOTS = [
  * name the base at all.
  *
  * The provenance below is unchanged: this slice was reviewed on PR #181 head
- * `525efaa7` over `170a021d`, and it still is. Two of these blobs have moved
- * since, and only through a repair reviewed in its own right — #299's R3
- * corrected the observation instruction the Implementation stage renders, and
- * extended AC2 to send it, so the workflow document and the composition suite
- * each hold one approved change. Pinning what they hold now is what keeps this
- * case a statement about *this* slice changing them rather than a statement
- * about nobody changing them.
+ * `525efaa7` over `170a021d`, and it still is. What has moved since are blobs,
+ * and only through work reviewed in its own right — #299's R3 corrected the
+ * observation instruction the Implementation stage renders and extended AC2 to
+ * send it, and #292's final synchronization then made the workflow documents
+ * describe the delivered revision and added `SYNC1` beside AC0–AC7, each under
+ * independent Planner review. Pinning what those files hold now is what keeps
+ * this case a statement about *this* slice changing them rather than a
+ * statement about nobody changing them.
  */
 const REVIEWED_CONSUMER: readonly (readonly [string, string])[] = [
   [
     "scripts/tests/adversarial-composition-workflow.test.ts",
-    "bb942b506d67431b1621c99ea3e08242a62f77cf",
+    "adf7e58e609c116e2f93fb97e3592bc70756f24b",
   ],
   ["workflows/adversarial-implementation/Discovery.md", "eea1c650fe5a9d417595b9b457b73dc51485f05a"],
   [
     "workflows/adversarial-implementation/Implementation.md",
-    "c38076574eae1b55304eade578480f8efbdf3f4b",
+    "65333321a163f125d6021f807ac14108e049deac",
   ],
   [
     "workflows/adversarial-implementation/InstructionFiles.md",
     "7ce93d7c1b7f79c560c9a861f27e7597697724d9",
   ],
-  ["workflows/adversarial-implementation/Planning.md", "cc3b3f473da35c94a8fba541afc20536a8fe3d19"],
+  ["workflows/adversarial-implementation/Planning.md", "943cb9701e3f4a464f13606547ca319e770aecf3"],
   [
     "workflows/adversarial-implementation/UserCheckpoint.md",
-    "54f1e97bbee1890fe77ec7b3e19277031cc101d3",
+    "576e352ac232426c157a33be964402d600a545bc",
   ],
-  ["workflows/adversarial-implementation/artifacts.md", "dd8462a76d604f14cd9eeeb618faa8f6bfa24664"],
+  ["workflows/adversarial-implementation/artifacts.md", "98899d95b70286851c08b5ccb10e26fd7b20e17e"],
   [
     "workflows/adversarial-implementation/primitives.md",
-    "17a89b9c5474a8ebb41964a016213ecfcc032b96",
+    "9e66ca0df27608a3c2a6f2887db5b7cb4ed1e34a",
   ],
-  ["workflows/adversarial-implementation/runtime.md", "f13cb034b1321860916a48e5c80d205b3f7bcb6a"],
-  ["workflows/adversarial-implementation/start.md", "0e248182f89a3b4fe3a1d1e316e239c4195ce3f0"],
+  ["workflows/adversarial-implementation/runtime.md", "128fb2c1337b5d78890ebc05dcfe79f7416d7f3c"],
+  ["workflows/adversarial-implementation/start.md", "b898f95188e5e1940e0e483a9ce74e69c49a53f2"],
   [
     "workflows/adversarial-implementation/tests/agents/checkpoint-material-choice.md",
     "c126bdfe64c227c381317bf12338e235c52e78b5",

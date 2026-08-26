@@ -3,12 +3,13 @@
 The command selects the environment; the document describes the procedure.
 `xmd run` uses the caller's current environment and promises no restoration.
 `xmd workflow start` creates a workflow run with one retained root Workspace
-(#366, shipped). That Workspace supplies the run's filesystem today: an
-authored path resolves inside the run's own transactional store rather than
-against a host directory, and `temporaryDirectory` is refused because a run has
-no host directory to hand out. The repository, worktree, process, and
-working-directory capabilities the stages want are composition it does not have
-yet (#293, #302).
+(#366, shipped). That Workspace supplies the run's filesystem: an authored path
+resolves inside the run's own transactional store rather than against a host
+directory, and `temporaryDirectory` is refused because a run has no host
+directory to hand out. The repository, worktree and working-directory
+composition the stages want is built on it (#293), a command the document runs
+executes under the run with its result retained, and the Agent ceiling those
+stages work under is #302's.
 
 The same declarative components work in both. Durability comes from the host,
 not from a second spelling of `<File>` or `<Git.Commit>`.
@@ -24,9 +25,10 @@ xmd workflow start \
 ```
 
 <Repository name="project" url={props.repository} base={props.base}>
-  <Worktree name="implementation" branch={props.branch} as="worktree">
+  <Worktree name="implementation" branch={props.branch} as="worktree" />
+  <Dir path={worktree}>
     <Content />
-  </Worktree>
+  </Dir>
 </Repository>
 
 Root props supply the locator and the base. A repository name is stable
@@ -55,22 +57,31 @@ effectionx #244 owns the stronger guarantee and nothing here claims it.
 - `<Repository>` authorizes the locator, resolves the base once, pins that
   commit, and creates the named primary checkout. Resolution happens once;
   replay does not re-query a moving branch (#293).
-- `<Worktree>` adds a named linked checkout on its own branch inside that
-  Repository. Its identity is Repository identity plus name, independent of any
-  attachment-specific absolute path.
-- Both install contextual cwd while rendering their children and bind their
-  Workspace-relative path through `as`.
-- `<Dir>` changes cwd and nothing else.
+- `<Worktree>` is self-closing. It creates the named linked checkout on its own
+  branch inside that Repository — or restores the retained one — and binds its
+  Workspace-relative path through `as`. It renders no children and establishes
+  no working directory. Its identity is Repository identity plus name,
+  independent of any attachment-specific absolute path.
+- `<Dir>` consumes that binding and owns cwd: it establishes the bound path as
+  the working directory for the children it renders, and restores the enclosing
+  one when it closes.
+- `<Repository>` renders its children under the Repository context those two
+  need, and binds its own path the same way.
 
 A worktree isolates Git state from the user's checkout. It is composition and
 isolation, not a security boundary.
 
 ## The Agent ceiling is the host's, not the document's
 
-Workflow Agents are mandatorily read-only, enforced in two places: the provider
-permission bridge allows only read and search operations, and the provider runs
-in its native read-only sandbox. No third place presents Workspace paths as
-read-only filesystem views, because none is registered with an Agent at all.
+A workflow Agent is given no authority to act. Its process starts in an empty
+directory this host owns, created empty and removed with the attachment; it
+receives no Workspace or host path and no additional directory, is configured
+with no MCP servers, asks for an empty native tool set, and runs deny-all, so a
+native permission request is denied and fails the turn that asked. No place
+presents Workspace paths as read-only filesystem views, because none is
+registered with an Agent at all. That is the profile this revision ships; it
+does not claim portable adapter-level absence of every native tool, which is
+#496's non-blocking hardening.
 `<ApproveAll>`, repository `.codex` or `.claude` configuration, and prompt
 content cannot raise that ceiling, and a provider that cannot enforce it fails
 before Prompt execution (#302).
@@ -178,15 +189,17 @@ publishes one retained suspension request, settles the run `suspended`, and
 releases the executor. A typed answer is delivered to that request (#300) and
 executes nothing; `xmd workflow resume` continues from it. `suspendFor()` is
 still an Api operation with no v1 element spelling it — the document writes an
-ordinary `<Elicit>` — and nothing automatic remains: no scheduler resumes a run,
-so answering and resuming are two explicit acts.
+ordinary `<Elicit>` — and nothing unattended remains. A continuation is the
+ordinary resume operation, reached by a person or by a trusted host that decides
+when (#300's explicit scheduler); both take the same executor lock, so answering
+and continuing stay two explicit acts and there is no second executor.
 
 Explicit history forks are shipped (#368, delivered by #498) — compatible forks,
 `history --forkable`, forkability reasons, lineage, changed-definition replay
 admission and retained Workspace-root copying. That is a new run continuing one
 run's retained history under a definition the caller names, and it is a
 different thing from an Agent provider continuing a session: no provider-level
-Agent-session fork exists, and nothing here schedules or resumes either one.
+Agent-session fork exists, and a fork is asked for rather than scheduled.
 
 ## Cleanup follows the invocation
 
@@ -222,10 +235,11 @@ answers it without any of that.
 The workflow registration performs no `elicit` durable record of its own: a
 durable wait has to be the outermost durable thing at its position, so the
 suspension protocol retains the wait and there is one record of the answer
-rather than two. What is still deliberately absent is anything automatic —
-arbitration between signals is not implemented, nothing schedules a resumption,
-and premature watcher semantics are excluded. Answering and resuming are two
-explicit acts.
+rather than two. What is deliberately absent is anything unattended
+— arbitration between signals is not implemented and premature watcher
+semantics are excluded. Answering and continuing are two explicit acts: the
+delivery records an answer, and a person or a trusted host asks the ordinary
+resume to run.
 
 `<Loop>` already records part of this: it journals every iteration it enters and
 one terminal record whose outcome is `break`, `exhausted`, or `error`, and it

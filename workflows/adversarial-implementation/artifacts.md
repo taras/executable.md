@@ -190,18 +190,22 @@ any other run that would persist one. `Process.join()` may settle before the
 output pumps finish, so a tail written as they settle may never reach that
 boundary; effectionx #244 owns the stronger guarantee and none is claimed here.
 
-**Still missing: who answered.** The journal records the validated decision, the
-question fingerprint, and the document execution it belongs to. It does not
-record the actor identity behind an elicitation response, so a decision is
-attributable to a run and an expansion but not to a person. No open issue owns
-that yet.
+**A nonclaim: who answered.** The journal records the validated decision, the
+question fingerprint, and the document execution it belongs to. It records no
+actor identity behind an elicitation response, so a decision is attributable to
+a run and an expansion rather than to a person. That is deliberate rather than
+pending: this workflow does not attest actors, and nothing in it degrades
+because it does not.
 
 ## Replay restores; it does not re-perform
 
 Replay rehydrates the Effection tree. A completed durable effect restores its
 recorded result without executing again; ephemeral operations run again only to
 rebuild live structure — attach the Workspace, enter lexical working-directory
-scopes, attach providers, re-register Agent directories.
+scopes, attach providers, and reattach the Agent session arrangement the strict
+profile uses: an empty provider-owned directory and the retained mapping that
+names the conversation. No directory is registered with an Agent, because none
+ever is.
 
 The Workspace stores the current frontier; the journal stores the execution that
 reached it. Replay never asks current state to prove a past effect: a file
