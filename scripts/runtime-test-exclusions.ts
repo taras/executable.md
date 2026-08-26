@@ -491,6 +491,12 @@ const DENO_ONLY_TOOLING: RuntimeExclusion[] = [
       "opens a real node:sqlite run store through @executablemd/workflow/deno to drive runWorkflow() directly; Bun has no node:sqlite at all and Node 22 keeps it behind --experimental-sqlite",
     issue: "https://github.com/taras/executable.md/issues/366",
   },
+  {
+    path: "scripts/tests/adversarial-composition-workflow.test.ts",
+    reason:
+      "AC0-AC7 exercise the Deno workflow host itself: they create real retained workflow runs over its `node:sqlite` run store and take its advisory executor lock. Bun has no `node:sqlite` built-in, so the file fails on import there; Node has no Deno file-lock runtime, so every case that creates a run refuses. `SYNC1` sits in the same file and is static, and would run anywhere — but an exclusion is file-level, and the file's subject is the Deno host, so Deno owns the complete Tier AC suite",
+    issue: "https://github.com/taras/executable.md/issues/301",
+  },
 ];
 
 /**
