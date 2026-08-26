@@ -274,6 +274,7 @@ const PARSE_MD: Tok[][] = [
   ],
   ["  ", dim("}")],
   [mod("}}"), " as", dim("="), str('"schema"'), " ", key("/>")],
+  [],
   [
     key("<Parse"),
     " schema",
@@ -647,9 +648,8 @@ export default define.page(function Home({ url }) {
 
             <div class="grid" style={PAIR}>
               <div style={SPLIT}>
-                <h3 style={H3}>An agent role can be a Markdown component</h3>
+                <h3 style={H3}>Give each role a purpose</h3>
                 <p style={P_SM}>
-                  Selecting a heading expands that agent's file in place.
                   Architect, Implementor, and Reviewer are semantic roles, not
                   fixed models. Choose the model or provider when you invoke the
                   workflow.
