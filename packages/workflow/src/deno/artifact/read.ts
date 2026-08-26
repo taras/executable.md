@@ -65,7 +65,7 @@ import {
   type XmdArtifactDefinitionClosure,
   type XmdArtifactEncoding,
   type XmdArtifactJournalRow,
-} from "./types.ts";
+} from "../../artifact/types.ts";
 
 const SELECT_HEADER_VERSION = "SELECT artifact_version FROM xmd_artifact_header WHERE id = 1";
 const SELECT_HEADER =

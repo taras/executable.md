@@ -96,7 +96,7 @@ import type {
   XmdArtifactForkLineage,
   XmdArtifactFrontier,
   XmdArtifactJournalRow,
-} from "./types.ts";
+} from "../../artifact/types.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });

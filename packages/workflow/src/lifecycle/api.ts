@@ -38,6 +38,7 @@ import type {
   DocumentExecutionRecord,
   WorkflowRunRecord,
 } from "../storage/record.ts";
+import type { WorkflowExportRequest, WorkflowExportResult } from "./export.ts";
 import type { WorkflowHistoryEntry } from "./history.ts";
 
 /**
@@ -119,6 +120,17 @@ export interface WorkflowLifecycleApi {
   cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
   /** Remove one run's retained storage. */
   delete(runId: string): Operation<Result<WorkflowDeletion>>;
+  /**
+   * Seal one committed frontier as a portable artifact, leaving the run as it
+   * was found.
+   *
+   * Takes the source's executor lock while it chooses the frontier, so no
+   * execution can append or settle underneath it, and releases that lock having
+   * changed nothing. The artifact is built at the staging path the request
+   * names; publishing it where a user asked for it belongs to whoever knows
+   * that destination.
+   */
+  export(request: WorkflowExportRequest): Operation<Result<WorkflowExportResult>>;
 }
 
 /**
@@ -147,6 +159,11 @@ export const WorkflowLifecycle: Api<WorkflowLifecycleApi> = createApi<WorkflowLi
     // deno-lint-ignore require-yield
     *acquireExecutor(_runId: string): Operation<Result<ExecutorAcquisition>> {
       throw new WorkflowLifecycleProviderError("acquireExecutor");
+    },
+
+    // deno-lint-ignore require-yield
+    *export(_request: WorkflowExportRequest): Operation<Result<WorkflowExportResult>> {
+      throw new WorkflowLifecycleProviderError("export");
     },
 
     // deno-lint-ignore require-yield

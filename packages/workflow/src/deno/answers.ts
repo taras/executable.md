@@ -23,6 +23,7 @@ import { canonicalJson } from "../storage/record.ts";
 import { reading } from "./reading.ts";
 
 const SELECT_ANSWER = "SELECT * FROM workflow_suspension_answers WHERE suspension_id = ?";
+const SELECT_ANSWERS = "SELECT * FROM workflow_suspension_answers ORDER BY suspension_id";
 const INSERT_ANSWER = `INSERT INTO workflow_suspension_answers
   (suspension_id, request_event_id, request_fingerprint, answer, state, created_at)
   VALUES (?, ?, ?, ?, 'pending', ?)`;
@@ -60,6 +61,17 @@ export function readRetainedAnswer(
 ): RetainedAnswer | undefined {
   const row = reading(database, SELECT_ANSWER).get(suspensionId);
   return row === undefined ? undefined : parseRetainedAnswer(row);
+}
+
+/**
+ * Every answer this run retains, in one deterministic order.
+ *
+ * What an export seals. Ordered by the wait each one answers rather than by
+ * insertion, so the same retained state reads the same however SQLite would
+ * have returned the rows.
+ */
+export function readAllRetainedAnswers(database: DatabaseSync): RetainedAnswer[] {
+  return reading(database, SELECT_ANSWERS).all().map(parseRetainedAnswer);
 }
 
 /**

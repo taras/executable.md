@@ -25,17 +25,17 @@
  */
 
 import type { Json } from "@executablemd/durable-streams";
-import type { InheritedEventProvenance } from "../../lifecycle/history.ts";
-import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
-import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
-import type { RetainedAnswer } from "../answers.ts";
+import type { InheritedEventProvenance } from "../lifecycle/history.ts";
+import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
+import type { AgentSessionRecord } from "../deno/workspace/agent-sessions.ts";
+import type { RetainedAnswer } from "../deno/answers.ts";
 import type {
   RetainedBlob,
   RetainedManifest,
   RetainedRepository,
   RetainedWorktree,
-} from "../fork-source.ts";
-import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
+} from "../deno/fork-source.ts";
+import type { StoredWorkspaceRoot } from "../deno/workspace/manifest.ts";
 
 /**
  * The exact committed boundary this artifact records.

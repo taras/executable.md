@@ -22,4 +22,4 @@ export type {
   XmdArtifactFrontier,
   XmdArtifactJournalRow,
   XmdArtifactWriteResult,
-} from "./types.ts";
+} from "../../artifact/types.ts";

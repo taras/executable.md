@@ -32,7 +32,7 @@ import type {
   XmdArtifactContentEntry,
   XmdArtifactManifestEntryV1,
   XmdArtifactManifestV1,
-} from "./types.ts";
+} from "../../artifact/types.ts";
 
 /** The artifact manifest version this build produces and reads. */
 export const XMD_ARTIFACT_MANIFEST_VERSION = 1;

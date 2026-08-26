@@ -63,7 +63,11 @@ import {
   XMD_ARTIFACT_FORMAT_VERSION,
   XMD_ARTIFACT_CONTAINER_VERSION,
 } from "./schema.ts";
-import type { DetachedXmdArtifact, VerifiedXmdArtifact, XmdArtifactWriteResult } from "./types.ts";
+import type {
+  DetachedXmdArtifact,
+  VerifiedXmdArtifact,
+  XmdArtifactWriteResult,
+} from "../../artifact/types.ts";
 
 const INSERT_CONTENT = `INSERT INTO xmd_artifact_content
   (kind, identity, encoding, length, sha256, content) VALUES (?, ?, ?, ?, ?, ?)`;
