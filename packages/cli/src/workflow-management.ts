@@ -33,8 +33,8 @@
 import { ensure, Err, Ok, resource, scoped, until } from "effection";
 import type { Operation, Result } from "effection";
 import { exists, rm } from "@effectionx/fs";
-import { mkdtempSync } from "node:fs";
-import { link } from "node:fs/promises";
+import { linkSync, mkdtempSync, rmSync } from "node:fs";
+import { rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
@@ -346,25 +346,42 @@ function table(rows: readonly (readonly string[])[]): string {
  * and not a new dependency: publication and cleanup are filesystem races that
  * do not reproduce by waiting, and the only honest way to see what an export
  * leaves behind when one of them fails is to make it fail on purpose.
+ *
+ * Two of them are synchronous, and the interface says so. Publication is the
+ * commit point, and a commit nobody recorded is worse than one that never
+ * happened.
  */
 export interface ExportFilesystem {
-  /** Create `output` as a second name for `staging`, or fail if it is taken. */
-  link(staging: string, output: string): Operation<void>;
+  /** Move the finished artifact out of staging, onto the entry it publishes from. */
+  reserve(staging: string, hidden: string): Operation<void>;
   /** Remove a directory and everything under it. */
   remove(directory: string): Operation<void>;
-  /** Remove one file, used to take back a target this export just published. */
-  unlink(target: string): Operation<void>;
+  /** Create `output` as a second name for `hidden`, or fail if it is taken. */
+  link(hidden: string, output: string): void;
+  /** Remove the private entry the artifact was published from. */
+  unlink(hidden: string): void;
 }
 
 const REAL_FILESYSTEM: ExportFilesystem = {
-  *link(staging: string, output: string): Operation<void> {
-    yield* until(link(staging, output));
+  *reserve(staging: string, hidden: string): Operation<void> {
+    yield* until(rename(staging, hidden));
   },
   *remove(directory: string): Operation<void> {
     yield* rm(directory, { recursive: true, force: true });
   },
-  *unlink(target: string): Operation<void> {
-    yield* rm(target, { force: true });
+  link(hidden: string, output: string): void {
+    // Synchronous because this is the commit point. An operation can be halted
+    // between the kernel creating the entry and the caller learning that it
+    // did, and an export that published without recording it would tear down
+    // believing it had not — the one state this contract has no answer for.
+    // oxlint-disable-next-line local/no-sync-filesystem
+    linkSync(hidden, output);
+  },
+  unlink(hidden: string): void {
+    // Synchronous for the same reason: nothing may suspend between the commit
+    // and the outcome this command reports, and this runs after the commit.
+    // oxlint-disable-next-line local/no-sync-filesystem
+    rmSync(hidden, { force: true });
   },
 };
 
@@ -375,15 +392,27 @@ const REAL_FILESYSTEM: ExportFilesystem = {
  * definition source through the reader this host installed into it, and writes
  * the container. Nothing about the source travels from here.
  *
- * Publication is a link, not a rename. A rename replaces whatever is at the
- * destination, so an existence check before it is a promise about a moment that
- * has already passed by the time the move happens. Linking fails if the name is
- * taken, atomically, so a file that appeared while the artifact was being built
- * survives untouched and this refuses instead.
+ * ## Publication is the commit point
  *
- * An export that cannot clean up after itself has not finished, so it takes the
- * target back rather than leaving a published artifact beside state nobody
- * owns. Success is printed last, after there is nothing left to remove.
+ * Everything private happens first. The finished artifact is moved out of its
+ * staging directory onto one hidden entry beside the destination, and the
+ * directory is removed — so by the time the destination is touched there is
+ * nothing left whose cleanup could fail. A failure or a cancellation up to that
+ * moment leaves no file where the caller asked for one.
+ *
+ * Then the destination is linked. A link is the no-clobber move: it creates the
+ * name or fails because something took it, in one step nothing can happen in
+ * the middle of, and what appears there is the complete artifact rather than a
+ * file being written. **That link is irreversible.** Once it succeeds the export
+ * has happened, and nothing below unlinks the caller's file — not a failed
+ * cleanup, not a cancellation, not an error on the way to printing the report.
+ *
+ * What is left afterwards is one private entry nobody was told about. Removing
+ * it is best effort: it is the artifact's own inode under a second name, so
+ * failing to remove it costs a hidden file and changes nothing about the file
+ * the caller asked for. That failure is a warning beside a success, because
+ * calling it a failed export would mean reporting that nothing was published
+ * while a complete artifact sits at the path.
  */
 export function* exportArtifact(
   runId: string,
@@ -411,30 +440,21 @@ export function* exportArtifact(
       return refuse(sealed.error);
     }
 
-    const published = yield* publish(filesystem, staging.path, output);
+    // Everything private, finished, before the destination is touched.
+    const detached = yield* staging.detach();
+    if (!detached.ok) {
+      return refuse(detached.error);
+    }
+
+    const published = publish(filesystem, staging.hidden, output);
     if (!published.ok) {
       return refuse(published.error);
     }
+    // Recorded with nothing suspended in between, so no cancellation can arrive
+    // between the artifact becoming visible and this export knowing it did.
+    staging.commit();
 
-    const cleaned = yield* staging.discard();
-    if (!cleaned.ok) {
-      // The artifact exists at the target and this export is not finished, so
-      // the target goes back. Leaving it would report failure beside a file
-      // that looks exactly like a success.
-      try {
-        yield* filesystem.unlink(output);
-      } catch (error) {
-        return refuse(
-          new Error(
-            `xmd workflow export could not clean up, and could not take back ${output} either. ` +
-              "Remove it, and the temporary directory beside it, by hand.",
-            { cause: error },
-          ),
-        );
-      }
-      return refuse(cleaned.error);
-    }
-
+    const removed = discard(filesystem, staging.hidden);
     write(
       [
         `workflow artifact: ${output}`,
@@ -446,6 +466,11 @@ export function* exportArtifact(
         `workflow artifact sha256: ${sealed.value.fileSha256}`,
       ].join("\n"),
     );
+    if (!removed.ok) {
+      // Beside the success, never instead of it. The artifact is published and
+      // complete; what is left over is a hidden file the caller now knows about.
+      console.error(removed.error.message);
+    }
     return { exitCode: 0 };
   });
 }
@@ -457,13 +482,9 @@ export function* exportArtifact(
  * `EEXIST` if the name already exists, in one step nothing can happen in the
  * middle of.
  */
-function* publish(
-  filesystem: ExportFilesystem,
-  staging: string,
-  output: string,
-): Operation<Result<void>> {
+function publish(filesystem: ExportFilesystem, hidden: string, output: string): Result<void> {
   try {
-    yield* filesystem.link(staging, output);
+    filesystem.link(hidden, output);
     return Ok();
   } catch (error) {
     const taken = error instanceof Error && "code" in error && error.code === "EEXIST";
@@ -479,13 +500,34 @@ function* publish(
   }
 }
 
+/** Remove the entry the artifact was published from, or say what was left. */
+function discard(filesystem: ExportFilesystem, hidden: string): Result<void> {
+  try {
+    filesystem.unlink(hidden);
+    return Ok();
+  } catch (error) {
+    return Err(
+      new Error(
+        `xmd workflow export published the artifact and could not remove the temporary file ` +
+          `${hidden} it published from. The artifact is complete. Remove that file when you no ` +
+          "longer need it.",
+        { cause: error },
+      ),
+    );
+  }
+}
+
 /**
- * A directory beside the destination, removed with this scope.
+ * A directory beside the destination, and the private name published from.
  *
  * Beside it because a rename is atomic only within one filesystem, and the only
  * directory guaranteed to share one with the target is the target's own. What
  * is left behind on failure is a temporary directory nobody was told about,
  * rather than a file at the path a user will go looking at.
+ *
+ * The hidden name is the directory's own, with the artifact's suffix. It is
+ * unique because the directory's name was, and it sits in the destination's
+ * directory so the move onto it is a rename within one filesystem.
  */
 function useExportStaging(output: string, filesystem: ExportFilesystem): Operation<ExportStaging> {
   return resource(function* (provide) {
@@ -493,41 +535,66 @@ function useExportStaging(output: string, filesystem: ExportFilesystem): Operati
     // can suspend, so nothing is left by a cancellation between the two.
     // oxlint-disable-next-line local/no-sync-filesystem
     const directory = mkdtempSync(join(dirname(resolve(output)), ".xmd-export-"));
-    let discarded = false;
-    // The backstop. A failure, a refusal or a cancellation all reach this, and
-    // an explicit discard that already succeeded makes it a no-op.
+    const hidden = `${directory}.xmd`;
+    let committed = false;
+    // The backstop, for everything before the commit. A failure, a refusal or a
+    // cancellation all reach this and take both private names with them.
     yield* ensure(function* () {
-      if (!discarded) {
+      if (!committed) {
         // Cancellation reaches this too, which is what leaves nothing behind
-        // when an export is interrupted between creating the directory and
-        // finishing with it.
+        // when an export is interrupted before it published.
         yield* rm(directory, { recursive: true, force: true });
+        yield* rm(hidden, { force: true });
       }
     });
     yield* provide({
       path: join(directory, "artifact.xmd"),
-      *discard(): Operation<Result<void>> {
+      hidden,
+      *detach(): Operation<Result<void>> {
         try {
-          yield* filesystem.remove(directory);
-          discarded = true;
-          return Ok();
+          yield* filesystem.reserve(join(directory, "artifact.xmd"), hidden);
         } catch (error) {
           return Err(
             new Error(
-              `the artifact was published at ${output}, and the temporary directory ` +
-                `${directory} could not be removed. Remove it when you no longer need it.`,
+              "xmd workflow export could not move the finished artifact out of the temporary " +
+                `directory ${directory}. Nothing was published.`,
               { cause: error },
             ),
           );
         }
+        try {
+          yield* filesystem.remove(directory);
+        } catch (error) {
+          return Err(
+            new Error(
+              `xmd workflow export could not remove the temporary directory ${directory}, so it ` +
+                "stopped before publishing anything.",
+              { cause: error },
+            ),
+          );
+        }
+        return Ok();
+      },
+      commit(): void {
+        committed = true;
       },
     });
   });
 }
 
-/** A place to build the artifact, and the removal that finishes the export. */
+/** A place to build the artifact, the name it publishes from, and the commit. */
 interface ExportStaging {
   readonly path: string;
-  /** Remove the staging directory, reporting a failure rather than hiding it. */
-  discard(): Operation<Result<void>>;
+  /** The private entry the finished artifact is published from. */
+  readonly hidden: string;
+  /** Move the artifact onto `hidden` and remove the directory, before publishing. */
+  detach(): Operation<Result<void>>;
+  /**
+   * Record that the artifact is published.
+   *
+   * Synchronous and argumentless: it runs immediately after the link, with
+   * nothing suspended in between, and after it this scope's teardown removes
+   * nothing.
+   */
+  commit(): void;
 }
