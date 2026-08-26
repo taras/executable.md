@@ -426,9 +426,11 @@ const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
 ];
 
 /** A terminal slab whose lines each open with a prompt. */
-function Terminal({ lines }: { lines: string[][] }) {
+function Terminal(
+  { lines, noWrap }: { lines: string[][]; noWrap?: boolean },
+) {
   return (
-    <CodeBlock command>
+    <CodeBlock command noWrap={noWrap}>
       {lines.map((parts, i) => (
         <Fragment key={i}>
           {i > 0 ? "\n" : null}
@@ -941,7 +943,7 @@ export default define.page(function Home({ url }) {
                   {runtime.body}
                 </p>
                 <div style="margin-top:auto;">
-                  <Terminal lines={runtime.lines} />
+                  <Terminal lines={runtime.lines} noWrap />
                 </div>
               </div>
             ))}
