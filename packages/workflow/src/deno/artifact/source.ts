@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import type { Operation, Result } from "effection";
 import type { Json } from "@executablemd/durable-streams";
-import type { WorkflowDefinition } from "../storage/definition.ts";
+import type { WorkflowDefinition } from "../../storage/definition.ts";
 import type { XmdArtifactDefinitionClosure } from "./types.ts";
 
 const encoder = new TextEncoder();

@@ -31,7 +31,28 @@
  * artifact at the path it was given, or produces nothing and says why.
  */
 
-import type { XmdArtifactFrontier } from "../artifact/types.ts";
+/**
+ * The exact committed boundary one export chose.
+ *
+ * Declared here rather than beside the container's other record shapes, and the
+ * container imports it. Which run, which final committed event and which
+ * Workspace root is what the *lifecycle* decided under the executor lock; the
+ * artifact records that decision. Every member is a string, so this stays where
+ * the provider-neutral surface can name it — the retained shapes an artifact
+ * also carries are DOFS and SQLite records that belong to the adapter holding
+ * them.
+ *
+ * The final committed event is absent for a run whose journal is empty, which
+ * is a run that was created and never appended to. The current Workspace root
+ * is the run's own current-root pointer at that boundary and is recorded once,
+ * here: writing it a second time beside the roots would make one fact into two
+ * records that a tampered file could set against each other.
+ */
+export interface XmdArtifactFrontier {
+  readonly sourceRunId: string;
+  readonly finalEventId?: string;
+  readonly currentWorkspaceRootId: string;
+}
 
 /** What one export is asked to seal, and where to build it. */
 export interface WorkflowExportRequest {

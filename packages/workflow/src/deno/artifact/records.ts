@@ -86,7 +86,7 @@ import {
 } from "../workspace/manifest.ts";
 import { decodeDofsManifest } from "../workspace/root.ts";
 import type { DofsManifest } from "../workspace/root.ts";
-import { gitBlobIdentity } from "../../artifact/source.ts";
+import { gitBlobIdentity } from "./source.ts";
 import { canonicalJsonBytes, canonicalJsonText, entryKey } from "./manifest.ts";
 import type {
   XmdArtifactContentEntry,
@@ -97,7 +97,7 @@ import type {
   XmdArtifactForkLineage,
   XmdArtifactFrontier,
   XmdArtifactJournalRow,
-} from "../../artifact/types.ts";
+} from "./types.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });

@@ -23,13 +23,13 @@ import type {
   VerifiedXmdArtifact,
   XmdArtifactDefinitionClosure,
   XmdArtifactDefinitionComponent,
-} from "../src/artifact/types.ts";
+} from "../src/deno/artifact/types.ts";
 import { Err, Ok, scoped } from "effection";
 import type { Result } from "effection";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { WorkflowLifecycle } from "../mod.ts";
 import type { WorkflowDefinition, WorkflowRunDatabase } from "../mod.ts";
-import type { WorkflowDefinitionSourceReader } from "../src/artifact/source.ts";
+import type { WorkflowDefinitionSourceReader } from "../src/deno/artifact/source.ts";
 import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
 import type { WorkflowExecutionTransitions } from "../deno.ts";
 import { installWorkflowRunStorage } from "../src/deno/provider.ts";

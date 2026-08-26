@@ -16,8 +16,8 @@
  */
 
 import { Ok, type Operation, type Result } from "effection";
-import { gitBlobIdentity } from "@executablemd/workflow";
-import type { XmdArtifactDefinitionClosure } from "@executablemd/workflow";
+import { gitBlobIdentity } from "@executablemd/workflow/deno";
+import type { XmdArtifactDefinitionClosure } from "@executablemd/workflow/deno";
 import type { WorkflowDefinition } from "@executablemd/workflow";
 import type { Json } from "@executablemd/durable-streams";
 import { loadRetainedDefinition } from "./workflow-definition.ts";

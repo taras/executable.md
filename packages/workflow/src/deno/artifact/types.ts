@@ -25,32 +25,21 @@
  */
 
 import type { Json } from "@executablemd/durable-streams";
-import type { InheritedEventProvenance } from "../lifecycle/history.ts";
-import type { DocumentExecutionRecord, WorkflowRunRecord } from "../storage/record.ts";
-import type { AgentSessionRecord } from "../deno/workspace/agent-sessions.ts";
-import type { RetainedAnswer } from "../deno/answers.ts";
+import type { InheritedEventProvenance } from "../../lifecycle/history.ts";
+import type { DocumentExecutionRecord, WorkflowRunRecord } from "../../storage/record.ts";
+import type { XmdArtifactFrontier } from "../../lifecycle/export.ts";
+import type { AgentSessionRecord } from "../workspace/agent-sessions.ts";
+import type { RetainedAnswer } from "../answers.ts";
 import type {
   RetainedBlob,
   RetainedManifest,
   RetainedRepository,
   RetainedWorktree,
-} from "../deno/fork-source.ts";
-import type { StoredWorkspaceRoot } from "../deno/workspace/manifest.ts";
+} from "../fork-source.ts";
+import type { StoredWorkspaceRoot } from "../workspace/manifest.ts";
 
-/**
- * The exact committed boundary this artifact records.
- *
- * The final committed event is absent for a run whose journal is empty, which
- * is a run that was created and never appended to. The current Workspace root
- * is the run's own current-root pointer at that boundary and is recorded once,
- * here: writing it a second time beside the roots would make one fact into two
- * records that a tampered file could set against each other.
- */
-export interface XmdArtifactFrontier {
-  readonly sourceRunId: string;
-  readonly finalEventId?: string;
-  readonly currentWorkspaceRootId: string;
-}
+/** The boundary the lifecycle chose, as the shape every record here is about. */
+export type { XmdArtifactFrontier };
 
 /** The lineage of the fork the source run itself was, when it was one. */
 export interface XmdArtifactForkLineage {

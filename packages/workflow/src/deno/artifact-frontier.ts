@@ -35,7 +35,7 @@ import type {
   DetachedXmdArtifact,
   XmdArtifactDefinitionClosure,
   XmdArtifactJournalRow,
-} from "../artifact/types.ts";
+} from "./artifact/types.ts";
 import type { InheritedEventProvenance } from "../lifecycle/history.ts";
 import { WorkflowRequestError } from "../storage/errors.ts";
 import type { WorkflowRunRecord } from "../storage/record.ts";

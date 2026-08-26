@@ -93,8 +93,8 @@ import {
 import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
-import type { DetachedXmdArtifact } from "../artifact/types.ts";
-import type { WorkflowDefinitionSourceReader } from "../artifact/source.ts";
+import type { DetachedXmdArtifact } from "./artifact/types.ts";
+import type { WorkflowDefinitionSourceReader } from "./artifact/source.ts";
 import type { WorkflowDefinition } from "../storage/definition.ts";
 import type { Json } from "@executablemd/durable-streams";
 import { writeXmdArtifact } from "./artifact/mod.ts";
