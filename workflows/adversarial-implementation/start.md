@@ -21,7 +21,8 @@ workflow:
 
 # Adversarial Implementation Workflow
 
-- **Status:** Living end-goal target
+- **Status:** Implemented by the revision containing it; PR #181 delivers it,
+  and #299 certified it end to end from outside the process that runs it
 - **Command:** `xmd workflow start` (#366, shipped)
 
 This entry document is the complete workflow map. The linked files define the
@@ -33,7 +34,8 @@ The root document *is* the workflow. There is no `<Workflow>` wrapper and no
 workflow continues across several document executions without subdividing the
 document ([#298](https://github.com/taras/executable.md/issues/298), closed as
 superseded). What the command supplies — one retained Workspace per workflow
-run, restored durable effects, and a read-only Agent ceiling — is described by
+run, restored durable effects, and an Agent that is given no authority to act —
+is described by
 the [workflow Workspace specification](../../specs/workflow-workspace-spec.md).
 "What runs today" below says exactly which parts exist.
 
@@ -366,7 +368,9 @@ ordinary `<Elicit>`; under `xmd workflow` the host publishes one retained
 suspension request, settles the run `suspended`, and gives the executor lock
 back (#577, shipped). `xmd workflow answer` retains the typed answer and
 executes nothing (#300), and `xmd workflow resume` continues from the retained
-request. Both stay explicit acts: no scheduler resumes a run, and no watcher
+request. Both stay explicit acts: delivery executes nothing, and a
+continuation is asked for — by a person, or by a trusted host that decides when
+through #300's explicit scheduler, both reaching the same executor. No watcher
 waits. An authored `<Answers>` region still answers without a person. Gating is
 expressed by nesting, which
 prevents the remaining stages from running but does not stop the document
@@ -550,12 +554,14 @@ resolution is unchanged — there the five resolve as ordinary repository
 components on its search path, and `<Repository>`, `<Worktree>` and `<Dir>` do
 *not* resolve, because plain `xmd run` composes no workflow.
 
-What #301 slice 2 owes is the composition itself: the authored loop that runs
-discovery, planning, authorization, evaluation, Git, the pull request, its
-evidence reads, review, deferred issues and acceptance as one workflow run. That
-is what this document now writes. Scheduling, watchers and unattended
-continuation are deliberately outside it — a resume stays an explicit act, and
-the later scheduling slice is #300's.
+The composition itself is what #301 built and this document writes: the
+authored loop that runs discovery, planning, authorization, evaluation, Git,
+the pull request, its evidence reads, review, deferred issues and acceptance as
+one workflow run. #300 built the explicit host scheduling of its ordinary resume
+beside it: delivery still executes nothing, and a continuation — asked for by a
+person or by a trusted host deciding when — takes the same executor lock and
+runs the same path. Watchers, delivery-to-resume wiring, unattended arbitration
+and a second executor are excluded.
 
 ## Rendered data flow
 

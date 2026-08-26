@@ -679,7 +679,10 @@ Status, list and history for retained runs are built (§4), and so are cancel an
 delete, and export. Artifact export and artifact status/history are built; the
 artifact-backed fork is specified in `specs/xmd-artifact-spec.md` and remains
 unbuilt.
-Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
+Repository, Worktree and Dir are built (§6), and so are the Git operations of
+§7: `Git.Switch`, `Git.Add` and `Git.Commit` publish local mutations under the
+retained checkout, `Git.Push` publishes a branch and retains its evidence, and
+`PullRequest` reconciles against the same Git-host boundary.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
 is now an advisory lock the operating system releases when a host dies, rather
@@ -3532,7 +3535,7 @@ fetch operation requires its own language and durability contract.
 | workflow-run and expansion identity | built by #289 / PR #341 |
 | retained run record and filtered journal | built by #291 |
 | caller-owned storage transaction | built by #291; Workspace mutations join it in #365 |
-| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; process capabilities unbuilt (#218) |
+| provider-backed retained Workspace | document filesystem built by #366 and repository composition by #293; document deletion (§10.1) built by #567 for both providers; mandatory directory ensure is specified by #643 for both providers; a command a workflow document runs executes under the run and its result is retained in the run's own history, so a continuation reads back what it printed rather than running it again |
 | `xmd workflow start` / `resume` | built by #366, Deno entrypoints only; both acquire #367's executor lock |
 | `<Repository>`, `<Worktree>` and `<Dir>` composition under a workflow run | Repository and Worktree built by #293, Deno provider only; `<Dir>`'s mandatory `API.Files.ensureDirectory` is specified by #643 as one transactional `workspace_file` mutation followed by lexical cwd installation |
 | the same thirteen declarations under every runtime | built by #643: one shadowable array declared by the bundled Git Plugin and consumed wherever its profile is assembled — `xmd syntax`, `xmd plan`, an ordinary document execution and a workflow action that executes a document |

@@ -321,8 +321,9 @@ starts no later durable effect, and reports awaiting direction as the end of
 that run. Nothing here creates a second wait to ask about it, and neither
 exhaustion nor silence nor an unchanged verdict is read as approval.
 
-Scheduling and unattended continuation stay outside this composition; a resume
-is an explicit act, and the scheduling slice is #300's.
+Unattended continuation stays outside this composition. A continuation is an
+explicit act, and #300 built the one thing a trusted host may decide about it:
+*when* the ordinary resume runs.
 
 Every `plan`, `verdict`, and `planCheckpoint` is already durable: each `<Prompt>`
 is one durable operation, each `<Elicit>` answer is journaled against its

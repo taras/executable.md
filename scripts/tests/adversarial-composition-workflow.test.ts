@@ -84,13 +84,10 @@ import type {
   RepositoryHost,
 } from "../../packages/workflow/src/deno/composition/host.ts";
 
-const WORKFLOW = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "workflows",
-  "adversarial-implementation",
-);
+/** The checkout this suite reads its subject out of. */
+const REPOSITORY_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+const WORKFLOW = join(REPOSITORY_ROOT, "workflows", "adversarial-implementation");
 
 const ROOT_PATH = "workflows/adversarial-implementation/start.md";
 
@@ -2317,5 +2314,180 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       expect(taken.trace.calls.map((turn) => classify(turn.content))).not.toContain("revision");
     }
     expect(otherForge.calls.filter((made) => made === "git:push")).toHaveLength(1);
+  });
+});
+
+/**
+ * The claims each owned document must make, and the ones it must not.
+ *
+ * `SYNC1` is a source-truth case, not a behavioural one: what it holds is that
+ * the documents describe the revision containing them. It is deliberately
+ * small. Every entry is a statement whose return would make a settled contract
+ * false — a loop called unbuilt that is built, an Agent ceiling described as a
+ * read/search bridge, a scheduler said not to exist — rather than a snapshot of
+ * how a paragraph happens to be worded, which would make every edit a failure.
+ *
+ * Semantic review is still the Planner's. This catches the exact regressions
+ * #292 repaired, and claims nothing about the prose around them.
+ */
+interface OwnedDocument {
+  readonly path: string;
+  /** Statements this revision makes, which a stale document would not. */
+  readonly requires: readonly string[];
+  /** Statements only this document could make again, beyond the shared list. */
+  readonly refuses?: readonly string[];
+}
+
+const OWNED_DOCUMENTS: readonly OwnedDocument[] = [
+  {
+    path: "architecture.md",
+    requires: [
+      "which is also where the complete adversarial implementation loop is built",
+      "Status is measured against the revision containing this document",
+      "Mutation-proposal admission is built",
+      "workflow-bundled Markdown component admission",
+    ],
+  },
+  {
+    path: "specs/adversarial-implementation-workflow.md",
+    requires: [
+      "PR #181 delivers it, and #299 certified it",
+      "asks for an empty native tool set and runs deny-all",
+      "The portable adapter-level proof is #496's",
+      "a trusted host that has observed the delivery and decides the run should continue now",
+      "Runtime intervention is a nonclaim",
+      "#299 certified the following end to end",
+      "Settled by exclusion",
+      "A nonclaim: who answered",
+      "Settled composition boundaries",
+      "stay outside admission, and a fragment naming one performs nothing at all",
+      "#227 owns it, for ordinary `xmd run` against a host directory",
+      "#327 owns it, and this workflow writes no `<PrintErrors>` region",
+    ],
+  },
+  {
+    path: "specs/workflow-workspace-spec.md",
+    requires: ["and so are the Git operations of §7"],
+  },
+  {
+    path: "workflows/adversarial-implementation/start.md",
+    requires: [
+      "#299 certified it end to end",
+      "takes the same executor lock and runs the same path",
+    ],
+  },
+  {
+    path: "workflows/adversarial-implementation/runtime.md",
+    requires: [
+      '<Worktree name="implementation" branch={props.branch} as="worktree" />',
+      "<Dir path={worktree}>",
+      "asks for an empty native tool set, and runs deny-all",
+      "It renders no children and establishes no working directory",
+      "`<Dir>` consumes that binding and owns cwd",
+    ],
+  },
+  {
+    path: "workflows/adversarial-implementation/primitives.md",
+    requires: [
+      "What this workflow does not claim",
+      "excluded from this delivery",
+      "#299 certified them from outside the process that runs them",
+      "`<Issue>` has its own `IssueApi` boundary",
+      "implemented on PR #181; closes with its merge",
+      "delivered by #537 and #541",
+      "PASS at head `e85479c33ce4c91d821e0eaf195150db374ae4a6`",
+      "`<Discovery>` is the text component of the four",
+    ],
+  },
+  {
+    path: "workflows/adversarial-implementation/UserCheckpoint.md",
+    requires: ["delivery executes nothing, and a continuation is asked for"],
+  },
+  {
+    path: "workflows/adversarial-implementation/Implementation.md",
+    requires: [
+      "shared Git-host reconciliation behind push and pull request",
+      "`<Issue>` reconciles through its own provider-neutral `IssueApi`",
+    ],
+    refuses: ["reconciliation behind push, pull request and issue"],
+  },
+  {
+    path: "workflows/adversarial-implementation/Planning.md",
+    requires: ["#300 built the one thing a trusted host may decide about it"],
+  },
+  {
+    path: "workflows/adversarial-implementation/artifacts.md",
+    requires: [
+      "A nonclaim: who answered",
+      "reattach the Agent session arrangement the strict profile uses",
+    ],
+  },
+];
+
+/**
+ * Claims no owned document may make again, whichever one made it.
+ *
+ * Each of these was true of an earlier revision and is false of this one, so a
+ * document that says it again is describing something that is not here.
+ */
+const OBSOLETE = [
+  "Living end-goal target",
+  "What #301 slice 2 owes",
+  "the full adversarial implementation loop remains unbuilt",
+  "Git operations of §7 are not",
+  "process capabilities unbuilt (#218)",
+  "no scheduler resumes a run",
+  "nothing schedules a resume",
+  "automatic scheduling is not shipped",
+  "allows only read and search operations",
+  "provider runs in its native read-only sandbox",
+  "the scheduling slice is #300's",
+  "Status is measured against main",
+  "re-register Agent directories",
+  "Still missing: who answered",
+  "Mutation-proposal admission and workflow-bundled Markdown component admission remain unbuilt",
+  "capabilities the stages want are composition it does not have yet",
+  "The exercise succeeds when",
+  "The first implementation need not answer every question",
+  "### Open",
+  "The exercise must resolve enough of these to implement one vertical slice",
+  "What remains open is not admission but its class",
+] as const;
+
+/**
+ * One document's text, with its wrapping removed.
+ *
+ * A claim is a sentence, and a sentence in Markdown is wrapped wherever the
+ * column ran out. Matching the flattened text is what keeps this case about
+ * what a document says rather than about where its lines break.
+ */
+function* flattened(path: string): Operation<string> {
+  return (yield* readTextFile(join(REPOSITORY_ROOT, path))).replace(/\s+/g, " ");
+}
+
+/** The same, for a claim written with the same wrapping freedom. */
+function claim(written: string): string {
+  return written.replace(/\s+/g, " ");
+}
+
+describe("Tier AC — the living workflow against the delivered composition", () => {
+  it("SYNC1: the living workflow describes the delivered composition", function* () {
+    for (const document of OWNED_DOCUMENTS) {
+      const source = yield* flattened(document.path);
+
+      // What this revision does, said where a reader meets it.
+      for (const required of document.requires) {
+        expect([document.path, source.includes(claim(required))]).toEqual([document.path, true]);
+      }
+
+      // And what it no longer does, wherever that was written.
+      for (const refused of [...OBSOLETE, ...(document.refuses ?? [])]) {
+        expect([document.path, refused, source.includes(claim(refused))]).toEqual([
+          document.path,
+          refused,
+          false,
+        ]);
+      }
+    }
   });
 });
