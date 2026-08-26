@@ -39,6 +39,7 @@ import type {
   WorkflowRunRecord,
 } from "../storage/record.ts";
 import type { WorkflowExportRequest, WorkflowExportResult } from "./export.ts";
+import type { WorkflowArtifactHistory, WorkflowArtifactSnapshot } from "./artifact.ts";
 import type { WorkflowHistoryEntry } from "./history.ts";
 
 /**
@@ -116,6 +117,16 @@ export interface WorkflowLifecycleApi {
   list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
   /** Every retained event of one run, in append order. */
   history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
+  /**
+   * One sealed artifact's lifecycle snapshot, read from the file at `path`.
+   *
+   * A sibling of `inspect()` rather than a mode of it: the artifact is
+   * completely verified before any of it is answered with, and nothing about
+   * this operation reaches a run store, a lock or a Workspace.
+   */
+  inspectArtifact(path: string): Operation<Result<WorkflowArtifactSnapshot>>;
+  /** Every event one sealed artifact retains, in append order. */
+  historyArtifact(path: string): Operation<Result<WorkflowArtifactHistory>>;
   /** Make one run terminal, following its retained status. */
   cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
   /** Remove one run's retained storage. */
@@ -179,6 +190,16 @@ export const WorkflowLifecycle: Api<WorkflowLifecycleApi> = createApi<WorkflowLi
     // deno-lint-ignore require-yield
     *history(_runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>> {
       throw new WorkflowLifecycleProviderError("history");
+    },
+
+    // deno-lint-ignore require-yield
+    *inspectArtifact(_path: string): Operation<Result<WorkflowArtifactSnapshot>> {
+      throw new WorkflowLifecycleProviderError("inspectArtifact");
+    },
+
+    // deno-lint-ignore require-yield
+    *historyArtifact(_path: string): Operation<Result<WorkflowArtifactHistory>> {
+      throw new WorkflowLifecycleProviderError("historyArtifact");
     },
 
     // deno-lint-ignore require-yield

@@ -16,9 +16,9 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, exists, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -527,6 +527,368 @@ describe("Tier WFI — xmd workflow status, list and history", () => {
       const listed = yield* xmd(fixture, ["workflow", "list"]).join();
       expect(listed.code).toBe(0);
       expect(listed.stdout).toContain("no workflow runs");
+    });
+  });
+});
+
+/**
+ * Tier WFI — inspecting a sealed artifact instead of a retained run.
+ *
+ * The artifact under test is produced by the real `workflow export` command, so
+ * what these cases inspect is one the lifecycle selected out of a run that
+ * really executed — not a snapshot handed to the private writer. Story 2's XE7
+ * already proves every retained family reaches the file, and Story 1's C1–C9
+ * already proves recognition is total; neither is rebuilt here.
+ *
+ * What is new is that an artifact answers the *same* questions a run answers.
+ * So the discriminating comparison is field-for-field against the retained
+ * answers captured from the same run before it was exported, rather than a
+ * shape check on the artifact's own output.
+ */
+
+/** The artifact heading, by the line that labels each fact. */
+function heading(output: string, label: string): string | undefined {
+  return output
+    .split("\n")
+    .find((line) => line.startsWith(`${label}: `))
+    ?.slice(label.length + 2);
+}
+
+/** Every name in a directory, so "nothing was written beside it" is checkable. */
+function* entries(directory: string): Operation<string[]> {
+  return (yield* readdir(directory)).sort();
+}
+
+/** One run, its retained answers, and the artifact exported from it. */
+interface Exported {
+  readonly artifact: string;
+  readonly status: unknown;
+  readonly history: unknown;
+}
+
+function* exported(fixture: Fixture, runId: string, name: string): Operation<Exported> {
+  yield* xmd(fixture, ["workflow", "start", `--id=${runId}`, "flows/release.md"]).expect();
+  // Captured before the export, so what the artifact is compared against is the
+  // live run's own answer rather than anything derived from the file.
+  const status = yield* xmd(fixture, ["workflow", "status", runId, "--json"]).expect();
+  const history = yield* xmd(fixture, ["workflow", "history", runId, "--json"]).expect();
+  const artifact = join(fixture.repository, name);
+  yield* xmd(fixture, ["workflow", "export", runId, `--output=${artifact}`]).expect();
+  return {
+    artifact,
+    status: JSON.parse(status.stdout),
+    history: JSON.parse(history.stdout),
+  };
+}
+
+describe("Tier WFI — xmd workflow status and history over a sealed artifact", () => {
+  it("I1: an artifact answers the retained questions, and says which artifact it is", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const run = yield* exported(fixture, "release-1", "evidence.xmd");
+
+      const status = yield* xmd(fixture, [
+        "workflow",
+        "status",
+        `--artifact=${run.artifact}`,
+        "--json",
+      ]).expect();
+      const projected = JSON.parse(status.stdout);
+
+      // The whole snapshot, not a chosen field. `artifact` is what inspection
+      // adds; `retrieval` is what an artifact deliberately does not carry,
+      // because where a definition can be fetched from now is authority
+      // belonging to the machine that exported rather than a fact about the run.
+      const { artifact: identity, ...lifecycle } = projected;
+      const { retrieval: _retained, ...expected } = run.status as Record<string, unknown>;
+      expect(lifecycle).toEqual(expected);
+      expect(identity.identity).toMatch(/^[0-9a-f]{64}$/);
+      expect(identity.frontier.sourceRunId).toBe("release-1");
+      expect(identity.frontier.currentWorkspaceRootId).toBe(
+        (run.status as { currentWorkspaceRootId: string }).currentWorkspaceRootId,
+      );
+
+      const history = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${run.artifact}`,
+        "--json",
+      ]).expect();
+      const envelope = JSON.parse(history.stdout);
+      // The envelope carries the same identity, and its entries are the run's
+      // own history — same events, same ids, same roots, same forkability.
+      expect(envelope.artifact).toEqual(identity);
+      expect(envelope.entries).toEqual(run.history);
+
+      // JSON history always carries forkability, so the flag that adds two
+      // human columns changes nothing structural.
+      const forkable = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${run.artifact}`,
+        "--forkable",
+        "--json",
+      ]).expect();
+      expect(JSON.parse(forkable.stdout)).toEqual(envelope);
+
+      // Human output names the file, the artifact and the boundary, above the
+      // same rendering a retained run gets.
+      const human = yield* xmd(fixture, [
+        "workflow",
+        "status",
+        `--artifact=${run.artifact}`,
+      ]).expect();
+      expect(heading(human.stdout, "artifact")).toBe(run.artifact);
+      expect(heading(human.stdout, "artifact identity")).toBe(identity.identity);
+      expect(heading(human.stdout, "artifact frontier")).toContain("run release-1");
+      expect(human.stdout).toContain("status: completed");
+
+      const humanHistory = yield* xmd(fixture, [
+        "workflow",
+        "history",
+        `--artifact=${run.artifact}`,
+        "--forkable",
+      ]).expect();
+      expect(heading(humanHistory.stdout, "artifact identity")).toBe(identity.identity);
+      expect(humanHistory.stdout).toContain("FORKABLE");
+    });
+  });
+
+  it("I1b: the frontier names the last event's own root, not the current pointer", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      yield* xmd(fixture, ["workflow", "start", "--id=release-1", "flows/release.md"]).expect();
+
+      // The two facts coincide in every ordinary run: an effect publishes a
+      // root and then appends its result against it, so the last event's root
+      // is the current pointer. They are still two retained facts, and a
+      // projection that read one as the other would be right by accident. So
+      // the run is edited from outside XMD to make them differ — the only way
+      // to tell the two projections apart at all.
+      const path = workflowRunPath(fixture.runs, "release-1");
+      const database = new DatabaseSync(path);
+      let earlier: string | undefined;
+      try {
+        const current = database
+          .prepare("SELECT current_root_id AS id FROM workspace_state WHERE singleton_id = 1")
+          .get();
+        const other = database
+          .prepare("SELECT root_id AS id FROM workspace_roots WHERE root_id <> ? LIMIT 1")
+          .get(String(current?.["id"]));
+        earlier = other === undefined ? undefined : String(other["id"]);
+        if (earlier !== undefined) {
+          database
+            .prepare(
+              `UPDATE journal_events SET workspace_root_id = ?
+                 WHERE sequence = (SELECT max(sequence) FROM journal_events)`,
+            )
+            .run(earlier);
+        }
+      } finally {
+        database.close();
+      }
+      // A fixture that could not arrange the divergence would prove nothing.
+      expect(earlier).toBeDefined();
+
+      const retained = JSON.parse(
+        (yield* xmd(fixture, ["workflow", "status", "release-1", "--json"]).expect()).stdout,
+      );
+      expect(retained.journalFrontier.workspaceRootId).toBe(earlier);
+      expect(retained.currentWorkspaceRootId).not.toBe(earlier);
+
+      const artifact = join(fixture.repository, "diverged.xmd");
+      yield* xmd(fixture, ["workflow", "export", "release-1", `--output=${artifact}`]).expect();
+      const projected = JSON.parse(
+        (yield* xmd(fixture, ["workflow", "status", `--artifact=${artifact}`, "--json"]).expect())
+          .stdout,
+      );
+
+      expect(projected.journalFrontier).toEqual(retained.journalFrontier);
+      expect(projected.currentWorkspaceRootId).toBe(retained.currentWorkspaceRootId);
+      // The artifact's own frontier still names the current pointer, which is
+      // the other of the two facts.
+      expect(projected.artifact.frontier.currentWorkspaceRootId).toBe(
+        retained.currentWorkspaceRootId,
+      );
+    });
+  });
+
+  it("I2: where the file is, is presentation — never part of the answer", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const run = yield* exported(fixture, "release-1", "evidence.xmd");
+      const elsewhere = join(fixture.repository, "copies");
+      yield* ensureDir(elsewhere);
+      const second = join(elsewhere, "same.xmd");
+      yield* until(copyFile(run.artifact, second));
+
+      const answers: string[] = [];
+      for (const path of [run.artifact, second]) {
+        for (const action of ["status", "history"]) {
+          answers.push(
+            (yield* xmd(fixture, ["workflow", action, `--artifact=${path}`, "--json"]).expect())
+              .stdout,
+          );
+        }
+      }
+      // Same artifact, two names: the structural answers are equal, byte for
+      // byte. A path anywhere inside them would make these two answers.
+      expect(answers[0]).toBe(answers[2]);
+      expect(answers[1]).toBe(answers[3]);
+
+      // And the human heading names the path this caller actually supplied.
+      const here = yield* xmd(fixture, [
+        "workflow",
+        "status",
+        `--artifact=${run.artifact}`,
+      ]).expect();
+      const there = yield* xmd(fixture, ["workflow", "status", `--artifact=${second}`]).expect();
+      expect(heading(here.stdout, "artifact")).toBe(run.artifact);
+      expect(heading(there.stdout, "artifact")).toBe(second);
+      expect(heading(here.stdout, "artifact identity")).toBe(
+        heading(there.stdout, "artifact identity"),
+      );
+    });
+  });
+
+  it("I3: inspecting an artifact reaches no run, and writes nothing", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const run = yield* exported(fixture, "release-1", "evidence.xmd");
+
+      // Somewhere with no repository, no definition and an empty run store:
+      // nothing this command could fall back on is reachable from here.
+      const away = join(fixture.repository, "..", "away");
+      const emptyRuns = join(fixture.repository, "..", "empty-runs");
+      yield* ensureDir(away);
+      yield* ensureDir(emptyRuns);
+      const detached = (args: string[]) =>
+        runCli(args, {
+          cwd: away,
+          env: { HOME: fixture.home, XMD_WORKFLOW_RUNS: emptyRuns },
+        });
+
+      const before = yield* fingerprint(run.artifact);
+      const beside = yield* entries(fixture.repository);
+
+      const status = yield* detached([
+        "workflow",
+        "status",
+        `--artifact=${run.artifact}`,
+        "--json",
+      ]).expect();
+      const history = yield* detached([
+        "workflow",
+        "history",
+        `--artifact=${run.artifact}`,
+        "--json",
+      ]).expect();
+
+      // The same answers, with no run store to answer from.
+      const { artifact: _identity, ...lifecycle } = JSON.parse(status.stdout);
+      const { retrieval: _retained, ...expected } = run.status as Record<string, unknown>;
+      expect(lifecycle).toEqual(expected);
+      expect(JSON.parse(history.stdout).entries).toEqual(run.history);
+
+      // The run store it was pointed at really is empty, so nothing there
+      // could have answered.
+      expect(yield* entries(emptyRuns)).toEqual([]);
+      // The file is untouched and nothing was written beside it — no journal,
+      // no lock, no recovery copy, no sidecar of any kind.
+      expect(yield* fingerprint(run.artifact)).toBe(before);
+      expect(yield* entries(fixture.repository)).toEqual(beside);
+    });
+  });
+
+  it("I4: a file that is not an artifact is refused before anything is presented", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const run = yield* exported(fixture, "release-1", "evidence.xmd");
+      const damaged = join(fixture.repository, "damaged.xmd");
+      yield* until(copyFile(run.artifact, damaged));
+      // Enough to fail recognition. Which gate catches it is C1–C9's subject;
+      // what matters here is that the command presents nothing when one does.
+      yield* writeTextFile(damaged, "not an artifact at all");
+
+      const before = yield* fingerprint(damaged);
+      const beside = yield* entries(fixture.repository);
+
+      for (const action of ["status", "history"]) {
+        const refused = yield* xmd(fixture, [
+          "workflow",
+          action,
+          `--artifact=${damaged}`,
+          "--json",
+        ]).join();
+        expect(refused.code).toBe(1);
+        // Nothing partial: no heading, no snapshot, no opening brace.
+        expect(refused.stdout).toBe("");
+        expect(refused.stderr).toContain(damaged);
+      }
+
+      // The refused file is left exactly as it was, and nothing appeared beside it.
+      expect(yield* fingerprint(damaged)).toBe(before);
+      expect(yield* entries(fixture.repository)).toEqual(beside);
+      // The good copy still reads, so the refusal was about that file.
+      yield* xmd(fixture, ["workflow", "status", `--artifact=${run.artifact}`]).expect();
+    });
+  });
+
+  it("I5: exactly one source, and list stays a registry of runs", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const run = yield* exported(fixture, "release-1", "evidence.xmd");
+
+      for (const action of ["status", "history"]) {
+        // Neither source named.
+        const missing = yield* xmd(fixture, ["workflow", action]).join();
+        expect(missing.code).toBe(1);
+        expect(missing.stderr).toContain("run id");
+        expect(missing.stderr).toContain("--artifact");
+
+        // Both named: two subjects, and no preference between them.
+        const both = yield* xmd(fixture, [
+          "workflow",
+          action,
+          "release-1",
+          `--artifact=${run.artifact}`,
+        ]).join();
+        expect(both.code).toBe(1);
+        expect(both.stderr).toContain("not both");
+        expect(both.stdout).toBe("");
+
+        // Two artifacts are two files, and the parser keeping the last one
+        // would answer about one of them with no sign of which.
+        const twice = yield* xmd(fixture, [
+          "workflow",
+          action,
+          `--artifact=${run.artifact}`,
+          `--artifact=${run.artifact}`,
+        ]).join();
+        expect(twice.code).toBe(1);
+        expect(twice.stderr).toContain("--artifact");
+      }
+
+      // `list` reports this host's runs. An artifact beside the invocation is
+      // a file, and discovery never widens to it.
+      const listed = yield* xmd(fixture, ["workflow", "list", "--json"]).expect();
+      const runs = JSON.parse(listed.stdout);
+      expect(runs.map((entry: { record: { runId: string } }) => entry.record.runId)).toEqual([
+        "release-1",
+      ]);
+      expect(listed.stdout).not.toContain("evidence.xmd");
+
+      const listArtifact = yield* xmd(fixture, [
+        "workflow",
+        "list",
+        `--artifact=${run.artifact}`,
+      ]).join();
+      expect(listArtifact.code).toBe(1);
+      expect(listArtifact.stderr).toContain("--artifact");
+
+      // And it belongs to inspection alone: another action refuses it the same way.
+      const cancel = yield* xmd(fixture, [
+        "workflow",
+        "cancel",
+        "release-1",
+        `--artifact=${run.artifact}`,
+      ]).join();
+      expect(cancel.code).toBe(1);
+      expect(cancel.stderr).toContain("--artifact");
     });
   });
 });
