@@ -518,6 +518,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  */
 const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
   {
+    path: "packages/cli/tests/workflow-export-publication.test.ts",
+    reason:
+      "installs the Deno workflow provider in-process to drive the export command's publication and cleanup steps; the provider opens `node:sqlite`, which Bun resolves as no such built-in module. Node runs it, and does so unflagged",
+    issue: DERIVED_SCOPE,
+  },
+  {
     path: "packages/workflow/tests/workflow-export.test.ts",
     reason:
       "exports a real run through the Deno provider into an XMD artifact, which opens `node:sqlite`; Bun resolves no such built-in module, so the file cannot load there at all. Node runs it, and does so unflagged",
