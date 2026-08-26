@@ -56,22 +56,20 @@ const RELEASE_MD: Tok[][] = [
   ["versioned."],
   [],
   [key("<Let"), " value", dim("="), mod("{{")],
+  ["  ", mod("type: "), str('"object"'), mod(",")],
+  ["  ", mod("required: ["), str('"bump"'), mod("],")],
+  ["  ", mod("properties: {")],
+  ["    ", mod("bump: { enum: [")],
   [
-    "  ",
-    mod("type: "),
-    str('"object"'),
-    mod(', required: ["bump"],'),
-  ],
-  ["  ", mod("properties: { bump: { enum: [")],
-  [
-    "    ",
+    "      ",
     str('"patch"'),
     mod(", "),
     str('"minor"'),
     mod(", "),
     str('"major"'),
-    mod(" ] } }"),
   ],
+  ["    ", mod("] }")],
+  ["  ", mod("}")],
   [mod("}}"), " as", dim("="), str('"schema"'), " ", key("/>")],
   [],
   [
@@ -238,8 +236,18 @@ const LOOP_MD: Tok[][] = [
   ["              ", mod("throwOnError"), key(">")],
   ["        Correct your previous response"],
   ["        without changing its meaning."],
-  ["        Return only corrected JSON matching"],
-  ["        the supplied result contract."],
+  [],
+  ["        Return only corrected JSON matching:"],
+  [],
+  [
+    "        ",
+    key("<Json"),
+    " value",
+    dim("="),
+    mod("{proposalSchema}"),
+    " ",
+    key("/>"),
+  ],
   ["      ", key("</Prompt>")],
   ["    ", key("</Else>")],
   ["  ", key("</If>")],
@@ -273,12 +281,12 @@ const PARSE_MD: Tok[][] = [
     str('"release"'),
     key(">"),
   ],
-  [
-    "  ",
-    key("<Prompt>"),
-    "Which version bump is required?",
-    key("</Prompt>"),
-  ],
+  ["  ", key("<Prompt>")],
+  ["    Which version bump is required?"],
+  ["    Return JSON matching:"],
+  [],
+  ["    ", key("<Json"), " value", dim("="), mod("{schema}"), " ", key("/>")],
+  ["  ", key("</Prompt>")],
   [key("</Parse>")],
 ];
 
@@ -394,7 +402,7 @@ const RUNTIMES: { name: string; body: string; lines: string[][] }[] = [
     name: "Deno",
     body: "Run the CLI directly from JSR.",
     lines: [[
-      " deno run -A \\\n    jsr:@executablemd/cli \\\n    run README.md",
+      " deno run -A \\\n  jsr:@executablemd/cli \\\n  run README.md",
     ]],
   },
   {
@@ -717,8 +725,9 @@ export default define.page(function Home({ url }) {
                 decides whether the answer is valid, because that rule is
                 already known. <Term>If</Term> branches on the result,{" "}
                 <Term>Break</Term>{" "}
-                ends the loop on success, and the retry prompt asks only for a
-                correction. <Term>{"max={2}"}</Term>{" "}
+                ends the loop on success, and the retry prompt shows the same
+                schema and asks only for a correction. <Term>{"max={2}"}</Term>
+                {" "}
                 is in the document, so the runtime knows when to stop trying.
               </p>
             </div>
@@ -730,10 +739,7 @@ export default define.page(function Home({ url }) {
           <div class="grid" style={`${PAIR}padding-top:0.5rem;`}>
             <div style={STACK}>
               <CodeBlock>
-                <Source lines={PARSE_MD} />
-              </CodeBlock>
-              <CodeBlock>
-                <Source lines={ELICIT_MD} />
+                <Source lines={[...PARSE_MD, [], ...ELICIT_MD]} />
               </CodeBlock>
             </div>
             <div style={STACK}>
