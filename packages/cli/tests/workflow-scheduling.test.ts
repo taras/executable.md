@@ -1006,22 +1006,31 @@ const REVIEWED_CONSUMER_ROOTS = [
 ];
 
 /**
- * The reviewed consumer, as PR #181 head `525efaa7` holds it.
+ * The reviewed consumer, as this slice depends on it.
  *
  * Blob object ids rather than a diff: this slice must not change the workflow
  * documents or the composition suite it depends on, and content identity says
  * so from any checkout — including CI's, which is one commit deep and cannot
  * name the base at all.
+ *
+ * The provenance below is unchanged: this slice was reviewed on PR #181 head
+ * `525efaa7` over `170a021d`, and it still is. Two of these blobs have moved
+ * since, and only through a repair reviewed in its own right — #299's R3
+ * corrected the observation instruction the Implementation stage renders, and
+ * extended AC2 to send it, so the workflow document and the composition suite
+ * each hold one approved change. Pinning what they hold now is what keeps this
+ * case a statement about *this* slice changing them rather than a statement
+ * about nobody changing them.
  */
 const REVIEWED_CONSUMER: readonly (readonly [string, string])[] = [
   [
     "scripts/tests/adversarial-composition-workflow.test.ts",
-    "606c950d43646b5ad69079520ab12807b4b23735",
+    "bb942b506d67431b1621c99ea3e08242a62f77cf",
   ],
   ["workflows/adversarial-implementation/Discovery.md", "eea1c650fe5a9d417595b9b457b73dc51485f05a"],
   [
     "workflows/adversarial-implementation/Implementation.md",
-    "c2b71b833d7e732886f3b1f3795819183faaab05",
+    "c38076574eae1b55304eade578480f8efbdf3f4b",
   ],
   [
     "workflows/adversarial-implementation/InstructionFiles.md",

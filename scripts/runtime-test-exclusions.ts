@@ -614,6 +614,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "asks the compiled `dist/xmd` to load a Plugin module that is not embedded in it — a binary with no checkout, no node_modules and no module graph to add to, which only `deno compile` produces and no test shard builds; it belongs beside the other compiled-binary evidence the `smoke` job builds for through README.md#Build",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/adversarial-workflow-certification.test.ts",
+    reason:
+      "CF1 runs the same supervised workflow through both supported entrypoints, and one of them is the compiled `dist/xmd` no test shard builds; the rest of the suite launches the Deno source entrypoint as a subprocess, which no Node or Bun run starts either. #299's own commands own this suite: they run `deno task build` and then name this file outright, which is the only place a built binary and the certification that needs one are guaranteed to meet. It is excluded from discovery so no shard runs it without that binary — not delegated to `smoke`",
+    issue: "https://github.com/taras/executable.md/issues/299",
+  },
 ];
 
 /**
