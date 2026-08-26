@@ -507,8 +507,26 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
  * excludes one file, for a reason that is not portability at all — the shards
  * run source, and that suite's subject is the compiled binary.
  */
+/**
+ * Tests Bun cannot load, where Node can.
+ *
+ * Kept apart from `DENO_ONLY_TOOLING` because the two lists state different
+ * facts. That one says a subject belongs to Deno; this one says a runtime is
+ * missing a built-in module the subject imports. Node gained `node:sqlite`
+ * unflagged and Bun has not, so folding these into the shared list would drop
+ * coverage Node is currently giving.
+ */
+const BUN_MISSING_NODE_SQLITE: RuntimeExclusion[] = [
+  {
+    path: "packages/workflow/tests/xmd-artifact.test.ts",
+    reason:
+      "the subject is the Deno provider's XMD artifact container, which opens `node:sqlite`; Bun resolves no such built-in module, so the file cannot load there at all. Node runs it, and does so unflagged",
+    issue: DERIVED_SCOPE,
+  },
+];
+
 export const exclusions: Record<Runtime, RuntimeExclusion[]> = {
   deno: COMPILED_BINARY,
   node: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
-  bun: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY],
+  bun: [...DENO_ONLY_TOOLING, ...COMPILED_BINARY, ...BUN_MISSING_NODE_SQLITE],
 };
