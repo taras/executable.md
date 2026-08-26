@@ -20,7 +20,6 @@ import type { GitHostCall } from "../src/git-host/api.ts";
 import { GitHostProtocolError } from "../src/git-host/errors.ts";
 import { GIT_HOST_EFFECT } from "../src/git-host/effect.ts";
 import { PULL_REQUEST } from "../src/composition/pull-request-records.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
 import type {
   GitHubAccess,
   GitHubHttpRequest,
@@ -352,7 +351,7 @@ describe("workflow PullRequest durability", () => {
       // no failure was published for it either.
       const outcomes = yield* gitHostOutcomes(database);
       expect(outcomes).toHaveLength(1);
-      expect(parseGitHostReconciliationRecord(outcomes[0]?.record)?.request.kind).toBe("git-push");
+      expect(outcomes[0]?.record?.request.kind).toBe("git-push");
       expect(run.store.pullRequests).toHaveLength(0);
     });
   });
@@ -434,7 +433,7 @@ describe("workflow PullRequest durability", () => {
 
       expect(mutations(resumed.store)).toEqual([]);
       const outcomes = yield* gitHostOutcomes(database);
-      const record = parseGitHostReconciliationRecord(outcomes[1]?.record);
+      const record = outcomes[1]?.record;
       expect(record?.decision).toBe("adopted");
       expect(record?.preState).toEqual(record?.observations);
     });
@@ -494,7 +493,7 @@ describe("workflow PullRequest durability", () => {
 
       // What the middleware returned was ignored: the record is the provider's.
       const outcomes = yield* gitHostOutcomes(database);
-      expect(parseGitHostReconciliationRecord(outcomes[1]?.record)?.decision).toBe("performed");
+      expect(outcomes[1]?.record?.decision).toBe("performed");
       expect(run.store.pullRequests).toHaveLength(1);
     });
   });

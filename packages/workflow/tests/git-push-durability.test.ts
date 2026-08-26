@@ -21,7 +21,6 @@ import type { ComponentRegistration } from "@executablemd/core";
 import { useTempDirectory } from "@executablemd/test-support/temp";
 import { GitOperationProtocolError, RepositoryStaleStateError } from "../src/composition/errors.ts";
 import { GitHostProtocolError } from "../src/git-host/errors.ts";
-import { parseGitHostReconciliationRecord } from "../src/git-host/records.ts";
 import {
   ANCESTOR,
   GIT_PUSH,
@@ -259,7 +258,7 @@ describe("workflow Git.Push durability", () => {
 
       const retained = yield* gitHostOutcomes(database);
       expect(retained).toHaveLength(1);
-      const advance = parseGitHostReconciliationRecord(retained[0]?.record);
+      const advance = retained[0]?.record;
       expect(advance?.decision).toBe("performed");
       expect(advance?.preState).toEqual({
         remoteCommit: head.parents[0],
@@ -309,10 +308,7 @@ describe("workflow Git.Push durability", () => {
       const retained = yield* gitHostOutcomes(database);
       expect(retained).toHaveLength(2);
       const sources = retained.map((outcome) =>
-        Reflect.get(
-          Object(parseGitHostReconciliationRecord(outcome.record)?.result),
-          "sourceCommit",
-        ),
+        Reflect.get(Object(outcome.record?.result), "sourceCommit"),
       );
       expect(sources).toEqual([first, head.commit]);
       // The branch really did advance before anything was removed.
@@ -365,8 +361,8 @@ describe("workflow Git.Push durability", () => {
 
       const retained = yield* gitHostOutcomes(database);
       expect(retained).toHaveLength(2);
-      const created = parseGitHostReconciliationRecord(retained[0]?.record);
-      const adopted = parseGitHostReconciliationRecord(retained[1]?.record);
+      const created = retained[0]?.record;
+      const adopted = retained[1]?.record;
       expect(created?.decision).toBe("performed");
       expect(created?.preState).toEqual({ remoteCommit: null });
       expect(adopted?.decision).toBe("adopted");

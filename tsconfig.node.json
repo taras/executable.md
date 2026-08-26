@@ -49,6 +49,9 @@
       "@executablemd/test-support/expect": [
         "./packages/test-support/expect.ts"
       ],
+      "@executablemd/test-support/journal": [
+        "./packages/test-support/journal.ts"
+      ],
       "@executablemd/test-support/launch": [
         "./packages/test-support/launch.ts"
       ],
