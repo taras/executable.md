@@ -527,19 +527,49 @@ type ExecutorAcquisition =
   | { readonly kind: "acquired"; readonly lock: ExecutorLock }
   | { readonly kind: "already-running" };
 
-interface WorkflowLifecycleSnapshot {
+interface WorkflowForkLineage {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly checkpointWorkspaceRootId: string;
+}
+
+interface WorkflowInspectionSnapshot {
   readonly record: WorkflowRunRecord;
-  readonly retrieval?: DefinitionRetrieval;
   readonly executions: readonly DocumentExecutionRecord[];
   readonly journalFrontier?: {
     readonly eventId: string;
     readonly workspaceRootId: string;
   };
   readonly currentWorkspaceRootId: string;
+  readonly lineage?: WorkflowForkLineage;
+}
+
+interface WorkflowLifecycleSnapshot extends WorkflowInspectionSnapshot {
+  readonly retrieval?: DefinitionRetrieval;
 }
 
 interface WorkflowDeletion {
   readonly removed: readonly ("run-storage" | "provider-sessions")[];
+}
+
+interface XmdArtifactFrontier {
+  readonly sourceRunId: string;
+  readonly finalEventId?: string;
+  readonly currentWorkspaceRootId: string;
+}
+
+interface WorkflowArtifactIdentity {
+  readonly identity: string;
+  readonly frontier: XmdArtifactFrontier;
+}
+
+interface WorkflowArtifactSnapshot extends WorkflowInspectionSnapshot {
+  readonly artifact: WorkflowArtifactIdentity;
+}
+
+interface WorkflowArtifactHistory {
+  readonly artifact: WorkflowArtifactIdentity;
+  readonly entries: readonly WorkflowHistoryEntry[];
 }
 
 interface WorkflowLifecycleApi {
@@ -547,10 +577,27 @@ interface WorkflowLifecycleApi {
   inspect(runId: string): Operation<Result<WorkflowLifecycleSnapshot>>;
   list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
   history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
+  inspectArtifact(path: string): Operation<Result<WorkflowArtifactSnapshot>>;
+  historyArtifact(path: string): Operation<Result<WorkflowArtifactHistory>>;
   cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
   delete(runId: string): Operation<Result<WorkflowDeletion>>;
+  export(request: WorkflowExportRequest): Operation<Result<WorkflowExportResult>>;
 }
 ```
+
+The two artifact operations are siblings of the retained-run pair rather than a
+widening of it. A run ID names live lifecycle authority in this host's storage;
+a path names immutable evidence somebody is holding, and no run has to exist for
+it to answer.
+
+`WorkflowInspectionSnapshot` is what a run says about itself, and both forms are
+it. The retained snapshot alone adds `retrieval`, because where a definition
+could be fetched from now is a fact about the machine holding the run rather
+than about the run; the artifact snapshot alone adds which artifact answered and
+the boundary it was sealed at. Neither extends the other. That is what makes an
+artifact's exclusion of retrieval a property of the type rather than a habit of
+one projection: there is no such member to set. The path is never part of a
+result either, so two copies of one artifact answer identically.
 
 The executor lock's public fields describe it and never validate it. Lifecycle
 transitions accept the exact object separately from their data
@@ -658,6 +705,22 @@ run metadata, ordered history and current root identity rather than a writable
 only that surface. They never invoke canonical execution, read through replay,
 attach a Workspace, materialize a root, import a document, contact an Agent,
 process or external provider, or append.
+
+Two sources answer the same questions. `inspect(runId)` and `history(runId)`
+address this host's retained storage; `inspectArtifact(path)` and
+`historyArtifact(path)` address one sealed `.xmd` file. They are siblings rather
+than one operation over a union: a run id names live lifecycle authority —
+something a caller may still advance, cancel or delete — while a path names
+immutable evidence that left the machine which produced it, and collapsing the
+two would make that difference a detail of a parameter. The artifact operations
+verify the whole container before answering with any of it, reach no run store,
+lock, Workspace, definition reader or external provider, and project the same
+snapshot and history values plus the artifact's identity and committed frontier.
+The path never enters the answer, so two copies of one artifact answer
+identically. History is shared: both sources run the same projection over
+ordered rows — authored source, cumulative forkability, inherited provenance —
+because two mappings are how history quietly starts meaning different things
+depending on where it was read.
 
 The Deno provider first reads each retained database through its ordinary
 read-only connection. A host crash may leave a hot rollback journal: that is a
@@ -3209,7 +3272,7 @@ Status is measured against main.
 | `<PullRequest>` | upserts one pull request of the selected checkout's current named branch, reconciled through the shared Git-host state machine: a required `title`, an optional positive-integer `number`, an optional `base` defaulting to the Repository's retained initial branch, an optional `draft`, and the rendered content as the body; it renders nothing and returns stable evidence through `as` — the filtered Repository identity, the provider's own stable pull-request identity, number, URL, open state, and the head and base SHAs of the snapshot it finished at. Without a number it creates one pull request for the head/base pair or adopts the compatible one an interrupted attempt left; with a number it brings that exact pull request's title, body, draft state and base to what the request says, records a no-op when they already match, and refuses a number belonging to another repository, opened from another head, or no longer open. It never pushes, never rewrites a head, and never reopens, merges or comments. The run must already hold its own successful `Git.Push` result for that exact Repository identity, head branch, destination ref and commit — proven by a scan of the whole successful history that requires each relevant record's natural key, inputs and result to describe one publication; a branch is published repeatedly, so the whole history is read in order and the run's last publication of that branch decides — an earlier one behind it is history rather than disagreement, while a last one naming another commit is the branch having moved on; that is conflicting, no relevant record at all is missing, and a relevant record that cannot be read whole is unreadable, each failing locally before the Git host is observed; the first adapter works over `github.com` on REST plus the two GraphQL draft transitions, selected from the private retained locator, credentialed from `GH_TOKEN`, then `GITHUB_TOKEN`, then the machine's own `gh` login, issuing each required mutation at most once per attempt and deciding the outcome by one observation, with the locator, endpoint, credential and payload confined to the per-invocation provider closure | built on the #295 stack, Deno provider only |
 | `<Issue>` | asks one of two questions, decided by its own shape, through a boundary of its own rather than the Git host's. Self-closing with `url` reads that issue and binds `{ url, title, description, tags, assignee }`; paired with `title` upserts and binds exactly `{ url }`, its rendered content being the description. There is no `description` prop. Props are exactly `url`, `title`, optional `tags`, optional `assignee` and — on a read only — optional `provider`; no repository/token/label/milestone/project/comment/close or approval prop. Both forms render nothing. The form is decided before the tracker is read, before any provider is asked and before an `issue_effect` record exists, and that is where a mixed `url`+`title`, a read carrying content or `tags`/`assignee`, an upsert with no content, an upsert naming a `provider`, and an element that is neither are all refused. A read needs no tracker — its URL is the identity; an upsert requires the nearest lexical `<IssueTracker>` and takes its discriminator only from there. The tracker carries a credential-free `url` and an optional `provider`; the URL is canonicalized — a credential, a query and a fragment are refused rather than stripped — and a nested tracker replaces the whole value for its descendants, never merging members, with the enclosing one restored on leaving. It is composition data, not authority: the provider holds an adapter-private ceiling beside its credentials, admitted before it connects, so a target outside it sends nothing. One stable contextual operation, `executablemd.workflow.issue`, with `read(url, options)` and `upsert(issue, options)`; a provider is ordinary middleware around it, matching its own URLs without a discriminator and only its own name with one, independently per member, with no host-side resolution. Once middleware matches it owns the answer — it never delegates afterwards, and nothing catches its refusal to try somebody else — and a request everyone delegated reaches `NoIssueProvider` unchanged. `issue_effect` records an operation discriminator with the normalized request and result; both forms replay without reaching `IssueApi` and therefore without network access; only an upsert derives an idempotency key, from the operation, the canonical target and the run's own effect identity. Retention excludes credentials, endpoints, payloads, provider identities, origin markers and host paths. Observing, adopting, creating once and recovering an interrupted creation are the provider's, because they are knowledge about what a service can prove; title is never identity, and tags are a code-point-sorted set. The Deno workflow host installs configured GitHub middleware and installs none otherwise, so absence of configuration is fail-closed | built on the #296 stack; GitHub middleware, Deno host |
 | workflow lifecycle inspection and control | reads status/list/history without advancing a run, recovering a private copy when a crashed source needs rollback; enforces the executor lock, refuses live cancellation, cancels non-live runs under that lock and deletes retained state | direct read-only inspection and control built on the #367 stack; coordinated recovered inspection built on the #513 stack, Deno provider only |
-| XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity | specified by `specs/xmd-artifact-spec.md`; the version-1 sealed container, its total read-only verifier and `xmd workflow export` are built, Deno provider only — the inspection commands and the artifact-source fork remain unbuilt |
+| XMD artifact export, inspection and fork source | seals one run's committed retained state, Workspace roots and workflow definition source closure into one immutable `.xmd` evidence file; opens that file read-only for status/history and admits continuation only by creating a new history fork whose lineage names the artifact identity | specified by `specs/xmd-artifact-spec.md`; the version-1 sealed container, its total read-only verifier, `xmd workflow export` and artifact `status`/`history` are built, Deno provider only — the artifact-source fork remains unbuilt. Inspection is two sibling lifecycle operations, `inspectArtifact()` and `historyArtifact()`, taking a path rather than a run id: a run id names live lifecycle authority and a path names immutable evidence, so neither is a mode of the other. They reach no run store, lock, Workspace, definition reader or external provider, and the artifact path never enters the structural answer |
 | historical authored source | retains an authored durable operation's normalized `SourcePosition` beside its identity, and history parses it or refuses the entry | built on the #367 stack |
 | history fork | creates a new run from one compatible checkpoint and retained Workspace root, under a new immutable definition and normalized props | built on the #368 stack, Deno provider only |
 | workflow Agent session | a workflow document's `<Agent>` runs under a profile the host attaches only for a live or partial run: an empty host-owned working directory instead of any Workspace, checkout or caller path, no MCP servers, an empty requested native tool set, and `deny-all` with a permission path that denies every native request and fails the turn that asked without reaching the public permission chain. Within a run a session is identified by the Agent/Session expansion identity the engine derived — the authored name is descriptive, so two sibling `<Session name="review">` elements are two sessions — routed inside a placement bound to its element and good for one use, so a kept placement cannot be substituted for the next. The conversation is retained as a row in the run's own database with the provider, resolved agent command and policy fingerprint beside it as compatibility attributes. The order is provider creation, the provider's canonical tagged assertion, the mapping commit, then the first Prompt; occupancy of a provider key is not an assertion, the pre-commit window reconciles only from exactly one, and a missing, conflicting, replaced or ambiguous assertion is one explicit refusal that starts no replacement. Deleting a run removes the row with the run and the provider-session directory beside it, and reports the categories. The profile selects ACP-only capability explicitly — no native-launch advertisement and no client-native attachment advertisement — rather than inheriting the provider package's ordinary-run sets by omission, and it supplies no machine session coordinator, construction-route store or executable observer: a workflow session belongs to a run, and the machine-wide account describes a different thing entirely | built on the #302 stack, with the explicit ACP-only selection from #561; the portable proof that an adapter honours an empty tool set is tracked by #496 and does not widen the ceiling |

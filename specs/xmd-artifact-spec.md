@@ -83,6 +83,40 @@ Artifact status and history expose the same semantic fields as their retained-ru
 forms, plus the artifact identity and artifact frontier. Human presentation may
 name the artifact path. JSON never makes that host path part of identity.
 
+Artifact status JSON is the retained-run snapshot with one added member:
+
+```jsonc
+{
+  "record": { /* the run's own record */ },
+  "executions": [],
+  "journalFrontier": { "eventId": "…", "workspaceRootId": "…" },
+  "currentWorkspaceRootId": "…",
+  "artifact": { "identity": "…", "frontier": { "sourceRunId": "…", "currentWorkspaceRootId": "…" } }
+}
+```
+
+`retrieval` is absent, and absent as a fact: an artifact excludes where its
+definition could be fetched from now, because that is authority belonging to the
+machine that exported rather than something true about the run. The shared
+inspection result declares the members both forms have, the retained-run result
+alone declares `retrieval`, and the artifact result declares the artifact
+metadata — so an artifact snapshot has no such member to carry, rather than a
+member one projection happens to leave unset.
+
+Artifact history JSON is an envelope rather than the retained-run array, because
+the identity and the frontier have nowhere else to go — repeating them on every
+row would make one fact into many:
+
+```jsonc
+{
+  "artifact": { "identity": "…", "frontier": { /* … */ } },
+  "entries": [ /* exactly the retained-run history rows */ ]
+}
+```
+
+Retained-run history JSON remains the bare array. Both forms always carry
+forkability, so `--forkable` adds two human columns and changes no JSON value.
+
 Inspection opens the container read-only, executes no document, materializes no
 Workspace, reads no definition from Git, contacts no Agent or external provider,
 and writes no journal or lifecycle state. It gives the same answer when the file
@@ -503,7 +537,7 @@ Architecture review freezes these invariants before implementation:
 | --- | --- |
 | XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
 | `xmd workflow export` | specified; built, Deno provider only. Source retrieval is host-installed rather than caller-supplied |
-| artifact status/history and manifest verification | specified; unbuilt |
+| artifact status/history and manifest verification | specified; built, Deno provider only. `inspectArtifact()` and `historyArtifact()` are sibling lifecycle operations, and history answers with an envelope |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |
 | SQLite artifact container version 1 | specified as the initial encoding; the sealed container, its canonical manifest and its total read-only verifier are built. The physical schema is private and no raw table, SQL or connection is public API |
 | CI upload, digest attestation and retention policy | host integration; not an XMD execution contract |

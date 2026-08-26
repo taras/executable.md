@@ -19,7 +19,8 @@ import type { DurableEvent } from "@executablemd/durable-streams";
 import { SOURCE_POSITION_FIELD } from "@executablemd/core";
 import type { SourcePosition } from "@executablemd/core";
 import { WorkflowRecordMalformedError } from "../storage/errors.ts";
-import type { Forkability } from "./forkability.ts";
+import { classifyForkability, type Forkability } from "./forkability.ts";
+import type { ForkabilityCandidate } from "./forkability.ts";
 import { describe, parseMembers, requireMemberNames } from "../storage/members.ts";
 
 /** One public history row. */
@@ -95,4 +96,72 @@ function fail(reason: string, path: string): Error {
     `journal_events.record ${SOURCE_POSITION_FIELD}`,
     `${reason} at ${path}`,
   );
+}
+
+/**
+ * What a caller knows about the rows it is projecting.
+ *
+ * Two sources produce these rows — a live run's database and a sealed artifact
+ * — and they answer both questions from different places. Passing them in keeps
+ * the projection itself ignorant of which one it is serving, which is the point:
+ * a second mapping written beside this one is how history quietly starts meaning
+ * something different depending on where it was read.
+ */
+export interface HistoryProjectionContext {
+  /** Every Workspace root the source still holds. */
+  readonly retainedRoots: ReadonlySet<string>;
+  /** Where each inherited row came from. Rows a run wrote itself are absent. */
+  readonly inherited: ReadonlyMap<string, InheritedEventProvenance>;
+}
+
+/**
+ * The answer for an event the classification did not reach.
+ *
+ * It never happens — one forkability is produced per event — and reporting a
+ * forkable checkpoint if it ever did would offer a fork a prefix nothing
+ * examined.
+ */
+const UNCLASSIFIED: Forkability = Object.freeze({
+  forkable: false,
+  blockers: Object.freeze([Object.freeze({ code: "unsupported-effect" as const, eventId: "" })]),
+});
+
+/**
+ * Ordered retained rows, as the public history they project to.
+ *
+ * Everything history adds to a retained row happens here: the authored source
+ * is parsed out of the event, forkability is classified cumulatively over the
+ * whole ordered prefix, inherited provenance is attached where there is any,
+ * and each entry is frozen.
+ */
+export function projectHistory(
+  candidates: readonly ForkabilityCandidate[],
+  context: HistoryProjectionContext,
+): readonly WorkflowHistoryEntry[] {
+  const forkability = classifyForkability(candidates, { retainedRoots: context.retainedRoots });
+  return Object.freeze(
+    candidates.map((candidate, index) =>
+      Object.freeze({
+        eventId: candidate.eventId,
+        event: candidate.event,
+        workspaceRootId: candidate.workspaceRootId,
+        ...sourceOf(candidate.event),
+        forkability: forkability[index] ?? UNCLASSIFIED,
+        ...provenanceOf(context.inherited, candidate.eventId),
+      }),
+    ),
+  );
+}
+
+function sourceOf(event: DurableEvent): Partial<WorkflowHistoryEntry> {
+  const source = readEventSource(event);
+  return source === undefined ? {} : { source };
+}
+
+function provenanceOf(
+  inherited: ReadonlyMap<string, InheritedEventProvenance>,
+  eventId: string,
+): Partial<WorkflowHistoryEntry> {
+  const provenance = inherited.get(eventId);
+  return provenance === undefined ? {} : { inherited: provenance };
 }

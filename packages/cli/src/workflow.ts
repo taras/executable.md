@@ -16,8 +16,10 @@
  * xmd workflow fork <source-run-id> --at=<event-id> [--id=<run-id>] <definition> [--props-*=…]
  * xmd workflow answer [--no-secret-detection] <run-id> <suspension-id> <json>
  * xmd workflow status <run-id> [--json]
+ * xmd workflow status --artifact=<path.xmd> [--json]
  * xmd workflow list [--status=<status>] [--json]
  * xmd workflow history <run-id> [--forkable] [--json]
+ * xmd workflow history --artifact=<path.xmd> [--forkable] [--json]
  * xmd workflow cancel <run-id>
  * xmd workflow delete <run-id>
  * ```
@@ -209,8 +211,8 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
   // event crosses. It runs no document, so nothing else about executing one
   // applies to it.
   answer: ["--secret-detection", "--no-secret-detection"],
-  status: ["--json"],
-  history: ["--json", "--forkable"],
+  status: ["--json", "--artifact"],
+  history: ["--json", "--forkable", "--artifact"],
   list: ["--json", "--status"],
   cancel: [],
   delete: [],
@@ -271,6 +273,11 @@ export const workflowConfig = object({
     description: "list only runs retaining this status",
     ...field(z.string().optional()),
   },
+  artifact: {
+    description:
+      "inspect this sealed .xmd artifact instead of a retained run (status and history only)",
+    ...field(z.string().optional()),
+  },
   output: {
     description:
       "the .xmd file to write the artifact to (export only); the artifact contains this " +
@@ -304,11 +311,24 @@ export interface WorkflowRequest {
  * make every option applicable to every action, which is exactly what the
  * grammar refuses.
  */
+/**
+ * What an inspection was pointed at.
+ *
+ * A discriminated value rather than two optional members, because exactly one
+ * of them is ever right: a run id addresses live lifecycle authority in this
+ * host's run store, and a path addresses immutable evidence somebody is
+ * holding. Two optional fields would let both, or neither, be written down and
+ * leave every reader to re-derive the rule.
+ */
+export type WorkflowInspectionSource =
+  | { readonly kind: "run"; readonly runId: string }
+  | { readonly kind: "artifact"; readonly path: string };
+
 export type WorkflowManagementRequest =
-  | { readonly action: "status"; readonly runId: string; readonly json: boolean }
+  | { readonly action: "status"; readonly source: WorkflowInspectionSource; readonly json: boolean }
   | {
       readonly action: "history";
-      readonly runId: string;
+      readonly source: WorkflowInspectionSource;
       readonly json: boolean;
       /** Whether human output carries the forkability columns. JSON always does. */
       readonly forkable: boolean;
@@ -561,6 +581,7 @@ function manageRequest(
     status?: string;
     secretDetection: boolean;
     output?: string;
+    artifact?: string;
   },
 ): Result<WorkflowCommand> {
   if (config.id !== undefined) {
@@ -599,6 +620,20 @@ function manageRequest(
     return Ok({ kind: "manage", request: { action: "list", status: filter, json: config.json } });
   }
 
+  if (action === "status" || action === "history") {
+    const source = inspectionSource(action, config);
+    if (!source.ok) {
+      return source;
+    }
+    if (action === "status") {
+      return Ok({ kind: "manage", request: { action, source: source.value, json: config.json } });
+    }
+    return Ok({
+      kind: "manage",
+      request: { action, source: source.value, json: config.json, forkable: config.forkable },
+    });
+  }
+
   const runId = config.target;
   if (runId === undefined || runId === "") {
     return Err(
@@ -621,18 +656,47 @@ function manageRequest(
   if (action === "export") {
     return exportRequest(runId, config);
   }
-  if (action === "status") {
-    return Ok({ kind: "manage", request: { action, runId, json: config.json } });
-  }
-  if (action === "history") {
-    return Ok({
-      kind: "manage",
-      request: { action, runId, json: config.json, forkable: config.forkable },
-    });
-  }
   // Reached only if `WORKFLOW_ACTIONS` names an action this function does not,
   // which is a disagreement inside the grammar rather than a caller's mistake.
   return Err(new Error(`xmd workflow ${action} has no request to make`));
+}
+
+/**
+ * The one thing this inspection is about.
+ *
+ * Exactly one source, decided here rather than downstream, because the two
+ * mistakes a caller can make have different answers: naming neither is a
+ * request with no subject, and naming both is a request with two. Neither is
+ * repaired by preferring one, and a default would answer a question the caller
+ * did not ask.
+ */
+function inspectionSource(
+  action: string,
+  config: { target?: string; artifact?: string },
+): Result<WorkflowInspectionSource> {
+  const runId = config.target === "" ? undefined : config.target;
+  const path = config.artifact === "" ? undefined : config.artifact;
+  if (runId !== undefined && path !== undefined) {
+    return Err(
+      new Error(
+        `xmd workflow ${action} inspects one thing — the run ${JSON.stringify(runId)} or the ` +
+          `artifact ${JSON.stringify(path)}, not both. Drop whichever one you did not mean.`,
+      ),
+    );
+  }
+  if (runId !== undefined) {
+    return Ok({ kind: "run", runId });
+  }
+  if (path !== undefined) {
+    return Ok({ kind: "artifact", path });
+  }
+  return Err(
+    new Error(
+      `xmd workflow ${action} needs something to inspect — a run id ` +
+        `(\`xmd workflow ${action} <run-id>\`) for a retained run, or ` +
+        `\`xmd workflow ${action} --artifact=<path.xmd>\` for a sealed artifact.`,
+    ),
+  );
 }
 
 /**
@@ -742,7 +806,9 @@ function answerRequest(
  *
  * A second `--status` is refused rather than resolved. The parser keeps the
  * last value, so accepting two would silently filter by one of the two statuses
- * the caller named.
+ * the caller named. A second `--artifact` is refused for the same reason, and
+ * the reason is sharper there: the two would be two different files, and the
+ * answer would be evidence about one of them with no sign of which.
  */
 function optionRefusal(action: string, args: readonly string[]): string | undefined {
   const applicable = OPTIONS_BY_ACTION[action];
@@ -754,6 +820,7 @@ function optionRefusal(action: string, args: readonly string[]): string | undefi
     return undefined;
   }
   let filters = 0;
+  let sources = 0;
   for (const arg of args.slice(start + 1)) {
     if (arg === "--") {
       return undefined;
@@ -767,6 +834,15 @@ function optionRefusal(action: string, args: readonly string[]): string | undefi
       filters += 1;
       if (filters > 1) {
         return "xmd workflow list accepts one --status filter, and two name two different lists";
+      }
+    }
+    if (name === "--artifact") {
+      sources += 1;
+      if (sources > 1) {
+        return (
+          `xmd workflow ${action} inspects one artifact, and two --artifact options name two ` +
+          "different files"
+        );
       }
     }
     if (applicable.includes(name)) {

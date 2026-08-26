@@ -32,7 +32,9 @@ import {
   WorkflowDatabaseFormatError,
   WorkflowInspectionRecoveryError,
   WorkflowLifecycle,
+  type WorkflowArtifactSnapshot,
   type WorkflowHistoryEntry,
+  type WorkflowInspectionSnapshot,
   type WorkflowLifecycleSnapshot,
   WorkflowRecordMalformedError,
   WorkflowRunIdMismatchError,
@@ -58,6 +60,42 @@ import {
   useStorageRoot,
   withRunHost,
 } from "./support/storage.ts";
+
+/**
+ * Compile-time only: `retrieval` is not a key of an artifact snapshot.
+ *
+ * The exclusion is a contract, not a habit of one projection. An artifact
+ * carries no record of where its definition could be fetched from now, because
+ * that is authority belonging to the machine that exported rather than
+ * something true about the run — so the type has to make writing one
+ * impossible, not merely unusual.
+ *
+ * `Assert<false>` is the only instantiation that type-checks, so this stops
+ * compiling the moment `WorkflowArtifactSnapshot` gains the member again —
+ * including by going back to extending the retained-run snapshot, which is how
+ * it acquired it the first time.
+ */
+type Assert<T extends false> = T;
+type ArtifactHasNoRetrieval = Assert<
+  "retrieval" extends keyof WorkflowArtifactSnapshot ? true : false
+>;
+/** Named so the type above is used rather than merely written. */
+const ARTIFACT_HAS_NO_RETRIEVAL: ArtifactHasNoRetrieval = false;
+
+/**
+ * And the shared base is what both snapshots are: neither may drift into
+ * carrying less than a reading of a run.
+ */
+type SharedIsRetrievalFree = Assert<
+  "retrieval" extends keyof WorkflowInspectionSnapshot ? true : false
+>;
+const SHARED_IS_RETRIEVAL_FREE: SharedIsRetrievalFree = false;
+
+/** A retained snapshot is the one that still has it. */
+type RetainedKeepsRetrieval = Assert<
+  "retrieval" extends keyof WorkflowLifecycleSnapshot ? false : true
+>;
+const RETAINED_KEEPS_RETRIEVAL: RetainedKeepsRetrieval = false;
 
 const { history, inspect, list } = WorkflowLifecycle.operations;
 

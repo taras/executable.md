@@ -7,6 +7,7 @@
  *   xmd workflow start <document.md> [options]
  *   xmd workflow resume <run-id>
  *   xmd workflow status|history <run-id> [--json]
+ *   xmd workflow status|history --artifact=<path.xmd> [--json]
  *   xmd workflow list [--status=<status>] [--json]
  *
  * A document reference is a path, optionally followed by `#` and one target

@@ -60,9 +60,8 @@ import { forkRunRecordEvent } from "../fork.ts";
 import { readForkSource, type ForkSourceSnapshot } from "./fork-source.ts";
 import { removeProviderSessions } from "./provider-sessions.ts";
 import { readForkLineage, type ForkHeadEvents } from "./fork-write.ts";
-import { classifyForkability, type Forkability } from "../lifecycle/forkability.ts";
 import {
-  readEventSource,
+  projectHistory,
   type InheritedEventProvenance,
   type WorkflowHistoryEntry,
 } from "../lifecycle/history.ts";
@@ -98,6 +97,7 @@ import type { WorkflowDefinitionSourceReader } from "./artifact/source.ts";
 import type { WorkflowDefinition } from "../storage/definition.ts";
 import type { Json } from "@executablemd/durable-streams";
 import { writeXmdArtifact } from "./artifact/mod.ts";
+import { historyArtifact, inspectArtifact } from "./artifact-inspection.ts";
 import {
   matchesRetainedDefinition,
   readExportFrontier,
@@ -218,6 +218,16 @@ export function* installWorkflowLifecycle(
       *history([runId]) {
         return yield* runHistory(root, runId, observe);
       },
+      *inspectArtifact([path]) {
+        // The path the caller supplied and nothing of this provider's own: an
+        // artifact is evidence somebody is holding, not a run in this root.
+        return yield* inspectArtifact(path);
+      },
+
+      *historyArtifact([path]) {
+        return yield* historyArtifact(path);
+      },
+
       *export([request]) {
         return yield* exportRun(root, executors, options.definitionSource, request, observe);
       },
@@ -679,48 +689,17 @@ function* runHistory(
   return yield* atRun(
     root,
     runId,
-    (database) => {
-      const entries = readJournalEntries(database);
-      // Classified against the roots this database still holds, read in the same
-      // snapshot as the events. A root that was never retained and a root deleted
-      // since are the same fact to a fork: it cannot be given that Workspace.
-      const forkability = classifyForkability(entries, { retainedRoots: retainedRoots(database) });
-      const inherited = readEventProvenance(database);
-      return Object.freeze(
-        entries.map((entry, index) =>
-          Object.freeze({
-            eventId: entry.eventId,
-            event: entry.event,
-            workspaceRootId: entry.workspaceRootId,
-            ...sourceOf(entry.event),
-            forkability: forkability[index] ?? UNCLASSIFIED,
-            ...provenanceOf(inherited, entry.eventId),
-          }),
-        ),
-      );
-    },
+    (database) =>
+      // Classified against the roots this database still holds, read in the
+      // same snapshot as the events. A root that was never retained and a root
+      // deleted since are the same fact to a fork: it cannot be given that
+      // Workspace.
+      projectHistory(readJournalEntries(database), {
+        retainedRoots: retainedRoots(database),
+        inherited: readEventProvenance(database),
+      }),
     observe,
   );
-}
-
-/**
- * The answer for an event the classification did not reach.
- *
- * It never happens — one forkability is produced per event — and reporting a
- * forkable checkpoint if it ever did would offer a fork a prefix nothing
- * examined.
- */
-const UNCLASSIFIED: Forkability = Object.freeze({
-  forkable: false,
-  blockers: Object.freeze([Object.freeze({ code: "unsupported-effect" as const, eventId: "" })]),
-});
-
-function provenanceOf(
-  inherited: ReadonlyMap<string, InheritedEventProvenance>,
-  eventId: string,
-): Partial<WorkflowHistoryEntry> {
-  const provenance = inherited.get(eventId);
-  return provenance === undefined ? {} : { inherited: provenance };
 }
 
 /**
@@ -763,11 +742,6 @@ export function retainedRoots(database: DatabaseSync): ReadonlySet<string> {
     }
   }
   return roots;
-}
-
-function sourceOf(event: WorkflowHistoryEntry["event"]): Partial<WorkflowHistoryEntry> {
-  const source = readEventSource(event);
-  return source === undefined ? {} : { source };
 }
 
 /**

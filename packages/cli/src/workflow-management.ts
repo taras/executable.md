@@ -1,6 +1,12 @@
 /**
- * `xmd workflow status`, `list`, `history`, `cancel`, `delete` and `answer` —
- * everything a run's caller does without running it.
+ * `xmd workflow status`, `list`, `history`, `cancel`, `delete`, `answer` and
+ * `export` — everything a run's caller does without running it.
+ *
+ * `status` and `history` each take one of two sources. A run id addresses this
+ * host's retained storage; `--artifact=<path.xmd>` addresses a sealed file,
+ * which is completely verified before any of it is presented. The two answer
+ * with the same lifecycle and history values, and the artifact forms add which
+ * artifact answered and the boundary it was sealed at.
  *
  * The readings answer from immutable lifecycle snapshots. Nothing there opens a
  * writable database, acquires the executor lock, replays, attaches a Workspace,
@@ -38,7 +44,10 @@ import { rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
+  DefinitionRetrieval,
+  WorkflowArtifactIdentity,
   WorkflowHistoryEntry,
+  WorkflowInspectionSnapshot,
   WorkflowLifecycleSnapshot,
   WorkflowRunRecord,
 } from "@executablemd/workflow";
@@ -77,11 +86,31 @@ export function runWorkflowManagement(
 
     switch (request.action) {
       case "status": {
-        const snapshot = yield* WorkflowLifecycle.operations.inspect(request.runId);
+        if (request.source.kind === "artifact") {
+          const { path } = request.source;
+          const snapshot = yield* WorkflowLifecycle.operations.inspectArtifact(path);
+          if (!snapshot.ok) {
+            return refuse(snapshot.error);
+          }
+          // The path is in the human heading and nowhere in the JSON: two
+          // copies of one artifact are one answer, and a value that named where
+          // it was read from would make them two.
+          write(
+            request.json
+              ? json(snapshot.value)
+              : `${renderArtifact(path, snapshot.value.artifact)}\n${renderStatus(snapshot.value)}`,
+          );
+          return { exitCode: 0 };
+        }
+        const snapshot = yield* WorkflowLifecycle.operations.inspect(request.source.runId);
         if (!snapshot.ok) {
           return refuse(snapshot.error);
         }
-        write(request.json ? json(snapshot.value) : renderStatus(snapshot.value));
+        write(
+          request.json
+            ? json(snapshot.value)
+            : renderStatus(snapshot.value, snapshot.value.retrieval),
+        );
         return { exitCode: 0 };
       }
       case "list": {
@@ -97,7 +126,23 @@ export function runWorkflowManagement(
         return { exitCode: 0 };
       }
       case "history": {
-        const entries = yield* WorkflowLifecycle.operations.history(request.runId);
+        if (request.source.kind === "artifact") {
+          const { path } = request.source;
+          const history = yield* WorkflowLifecycle.operations.historyArtifact(path);
+          if (!history.ok) {
+            return refuse(history.error);
+          }
+          write(
+            request.json
+              ? json(history.value)
+              : `${renderArtifact(path, history.value.artifact)}\n${renderHistory(
+                  history.value.entries,
+                  request.forkable,
+                )}`,
+          );
+          return { exitCode: 0 };
+        }
+        const entries = yield* WorkflowLifecycle.operations.history(request.source.runId);
         if (!entries.ok) {
           return refuse(entries.error);
         }
@@ -146,7 +191,37 @@ function json(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function renderStatus(snapshot: WorkflowLifecycleSnapshot): string {
+/**
+ * Which file answered, which artifact it holds, and the boundary it was sealed
+ * at — above the same rendering a retained run gets.
+ *
+ * The path is here and only here. It is where this caller found the evidence,
+ * which is a fact about the invocation rather than about the artifact, so it
+ * never reaches the structural answer.
+ */
+function renderArtifact(path: string, artifact: WorkflowArtifactIdentity): string {
+  const { frontier } = artifact;
+  return [
+    `artifact: ${path}`,
+    `artifact identity: ${artifact.identity}`,
+    `artifact frontier: run ${frontier.sourceRunId}, event ${
+      frontier.finalEventId ?? "none"
+    }, Workspace ${frontier.currentWorkspaceRootId}`,
+  ].join("\n");
+}
+
+/**
+ * The lines every snapshot has, and the retrieval line only a retained run does.
+ *
+ * `retrieval` arrives as its own argument rather than off the snapshot, because
+ * it is not a member of the shared inspection shape: a retained run has one and
+ * an artifact has none, and reading it from the value would make this renderer
+ * expect a member half its callers cannot supply.
+ */
+function renderStatus(
+  snapshot: WorkflowInspectionSnapshot,
+  retrieval?: DefinitionRetrieval,
+): string {
   const { record } = snapshot;
   const lines = [
     `run: ${record.runId}`,
@@ -160,10 +235,8 @@ function renderStatus(snapshot: WorkflowLifecycleSnapshot): string {
   if (record.stopReason !== undefined) {
     lines.push(`stop reason: ${describeReason(record)}`);
   }
-  if (snapshot.retrieval !== undefined) {
-    lines.push(
-      `retrieval: revision ${snapshot.retrieval.revision} at ${snapshot.retrieval.updatedAt}`,
-    );
+  if (retrieval !== undefined) {
+    lines.push(`retrieval: revision ${retrieval.revision} at ${retrieval.updatedAt}`);
   }
   if (snapshot.lineage !== undefined) {
     lines.push(
@@ -302,7 +375,7 @@ function describeResult(event: DurableEvent): string {
   }
 }
 
-function describeDefinition(snapshot: WorkflowLifecycleSnapshot): string {
+function describeDefinition(snapshot: WorkflowInspectionSnapshot): string {
   const { definition } = snapshot.record;
   const target = definition.targetPath === undefined ? "" : `#${definition.targetPath}`;
   return `${definition.objectId} ${definition.rootDocumentPath}${target}`;
