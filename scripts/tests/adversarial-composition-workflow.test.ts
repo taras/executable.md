@@ -13,6 +13,8 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
+import { effectSequence, readRetainedValues } from "@executablemd/test-support/journal";
+import type { RetainedOutcome } from "@executablemd/test-support/journal";
 import { call, race, scoped } from "effection";
 import type { Operation } from "effection";
 import { readTextFile } from "@effectionx/fs";
@@ -69,8 +71,8 @@ import { countingHost } from "../../packages/workflow/tests/support/composition.
 import { gitHubStore, respond } from "../../packages/workflow/tests/support/github.ts";
 import type { GitHubStore } from "../../packages/workflow/tests/support/github.ts";
 import { gitHubSource } from "../../packages/workflow/src/deno/composition/github.ts";
+import { GIT_HOST_EFFECT } from "../../packages/workflow/src/git-host/effect.ts";
 import { parseGitHostReconciliationRecord } from "../../packages/workflow/src/git-host/records.ts";
-import type { GitHostReconciliationRecord } from "../../packages/workflow/src/git-host/records.ts";
 import type {
   GitHubAccess,
   GitHubHttpRequest,
@@ -840,35 +842,24 @@ const EVIDENCE_TWO: Evidence = {
 };
 
 /**
- * The effects a scenario reasons about, in journal order.
+ * What each selected effect retained, once every one of them settled `ok`.
  *
- * `import_component` and the loop bookkeeping are dropped: a bundled document
- * imports a component at every expansion, so a sequence including them says
- * more about how many times `<If>` ran than about what the composition did.
+ * `readRetainedValues()` answers with an outcome per effect, because an effect
+ * that refused retains a reason rather than a record. Every claim below is
+ * about effects that settled, so this says so once and in one place: an effect
+ * that did not fails here, naming the position that did not settle, rather
+ * than reaching an assertion as `undefined`. It knows no effect type and reads
+ * no journal — the shared projection does both.
  */
-const NOISE = ["import_component", "loop", "loop_iteration", "workflow_run"];
-
-function effects(kinds: readonly string[]): string[] {
-  return kinds.filter((kind) => !NOISE.includes(kind));
-}
-
-/**
- * The record each Git-host effect retained, in order.
- *
- * The reconciliation record *is* the result value — not a `record` member on
- * it — which is how `gitHostOutcomes()` in the owning suite reads it.
- */
-function hostRecords(events: readonly DurableEvent[]): GitHostReconciliationRecord[] {
-  return events
-    .filter((event) => event.type === "yield" && event.description.type === "git_host_effect")
-    .map((event) => {
-      const result = Object(Reflect.get(event, "result"));
-      const parsed = parseGitHostReconciliationRecord(Reflect.get(result, "value"));
-      if (parsed === undefined) {
-        throw new Error(`a Git-host effect retained something that is not a record`);
-      }
-      return parsed;
-    });
+function settledRecords<T>(outcomes: readonly RetainedOutcome<T>[]): T[] {
+  return outcomes.map((outcome) => {
+    if (outcome.status !== "ok") {
+      throw new Error(
+        `the effect at ${outcome.position} ${outcome.effect} settled ${outcome.status}`,
+      );
+    }
+    return outcome.record;
+  });
 }
 
 /** Every generated-XMD record that admitted the fragment it was given. */
@@ -1563,45 +1554,45 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     // The complete ordered effect sequence. Each iteration admits its
     // proposal, writes it, stages it and commits it before any remote effect,
     // and each pull request follows the push of its own iteration.
-    expect(effects(attempt.kinds)).toEqual([
-      "workspace_repository",
-      "workspace_worktree",
-      "workspace_file",
-      "workspace_file",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "generated_xmd",
-      "workspace_file",
-      "workspace_git_add",
-      "workspace_git_commit",
-      "git_host_effect",
-      "git_host_effect",
-      "pull_request_read",
-      "pull_request_read",
-      "pull_request_read",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
-      "generated_xmd",
-      "workspace_file",
-      "workspace_git_add",
-      "workspace_git_commit",
-      "git_host_effect",
-      "git_host_effect",
-      "pull_request_read",
-      "pull_request_read",
-      "pull_request_read",
+    expect(effectSequence(attempt.events)).toEqual([
+      "0 workspace_repository",
+      "1 workspace_worktree",
+      "2 workspace_file",
+      "3 workspace_file",
+      "4 agent_prompt",
+      "5 agent_prompt",
+      "6 agent_prompt",
+      "7 agent_prompt",
+      "8 agent_prompt",
+      "9 agent_prompt",
+      "10 agent_prompt",
+      "11 generated_xmd",
+      "12 workspace_file",
+      "13 workspace_git_add",
+      "14 workspace_git_commit",
+      "15 git_host_effect",
+      "16 git_host_effect",
+      "17 pull_request_read",
+      "18 pull_request_read",
+      "19 pull_request_read",
+      "20 agent_prompt",
+      "21 agent_prompt",
+      "22 agent_prompt",
+      "23 agent_prompt",
+      "24 generated_xmd",
+      "25 workspace_file",
+      "26 workspace_git_add",
+      "27 workspace_git_commit",
+      "28 git_host_effect",
+      "29 git_host_effect",
+      "30 pull_request_read",
+      "31 pull_request_read",
+      "32 pull_request_read",
       // The second verdict, its review checkpoint, and the acceptance
       // checkpoint `start.md` reaches once the loop breaks.
-      "agent_prompt",
-      "agent_prompt",
-      "agent_prompt",
+      "33 agent_prompt",
+      "34 agent_prompt",
+      "35 agent_prompt",
     ]);
 
     // Two commits, and they are different: the second proposal was admitted
@@ -1613,7 +1604,9 @@ describe("Tier AC — the adversarial workflow, composed", () => {
 
     // Four Git-host effects, all successful, alternating publish and publish
     // the pull request that describes it.
-    const records = hostRecords(attempt.events);
+    const records = settledRecords(
+      readRetainedValues(attempt.events, GIT_HOST_EFFECT, parseGitHostReconciliationRecord),
+    );
     expect(records.map((record) => record.request.kind)).toEqual([
       "git-push",
       "pull-request",
@@ -1773,21 +1766,24 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     // Everything the start execution retained, in authored order: the
     // generated admission, the write its admitted fragment performed, the
     // effects written after it, and the wait — one sequence, no reordering.
-    const retained = effects(started.kinds);
-    expect(retained.slice(retained.indexOf("generated_xmd"))).toEqual([
-      "generated_xmd",
-      "workspace_file",
-      "workspace_git_add",
-      "workspace_git_commit",
-      "git_host_effect",
-      "git_host_effect",
-      "pull_request_read",
-      "pull_request_read",
-      "pull_request_read",
-      "agent_prompt",
-      "agent_prompt",
-      "suspension_request",
-    ]);
+    const retained = effectSequence(started.events);
+    const admission = retained.findIndex((entry) => entry.endsWith(" generated_xmd"));
+    expect(retained.slice(admission)).toEqual(
+      [
+        "generated_xmd",
+        "workspace_file",
+        "workspace_git_add",
+        "workspace_git_commit",
+        "git_host_effect",
+        "git_host_effect",
+        "pull_request_read",
+        "pull_request_read",
+        "pull_request_read",
+        "agent_prompt",
+        "agent_prompt",
+        "suspension_request",
+      ].map((effect, position) => `${admission + position} ${effect}`),
+    );
 
     const resumed = yield* attemptRun(root, "resume", forged, script);
     expect(resumed.failure).toBeUndefined();
@@ -1801,10 +1797,10 @@ describe("Tier AC — the adversarial workflow, composed", () => {
     // The retained sequence was continued, not rewritten: everything the start
     // execution wrote is still there in the same order, and the continuation
     // only appended — the answer it spent, and the one turn left to take.
-    expect(effects(resumed.kinds).slice(0, retained.length)).toEqual(retained);
-    expect(effects(resumed.kinds).slice(retained.length)).toEqual([
-      "suspension_answer",
-      "agent_prompt",
+    expect(effectSequence(resumed.events).slice(0, retained.length)).toEqual(retained);
+    expect(effectSequence(resumed.events).slice(retained.length)).toEqual([
+      `${retained.length} suspension_answer`,
+      `${retained.length + 1} agent_prompt`,
     ]);
 
     // Nothing completed ran twice. The admitted fragment's write and the
@@ -2040,7 +2036,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       const runId = "declined-acceptance";
       const started = yield* attemptRun(root, "start", forged, script, runId);
       const suspensionId = waited(started);
-      const retained = effects(started.kinds);
+      const retained = effectSequence(started.events);
       const before = forged.calls.length;
       const rationale = "RATIONALE-DECLINED-ACCEPTANCE";
       yield* answer(
@@ -2055,8 +2051,10 @@ describe("Tier AC — the adversarial workflow, composed", () => {
 
       // The continuation spent the answer and did nothing else: no turn, no
       // durable effect, no forge call after it.
-      expect(effects(resumed.kinds).slice(0, retained.length)).toEqual(retained);
-      expect(effects(resumed.kinds).slice(retained.length)).toEqual(["suspension_answer"]);
+      expect(effectSequence(resumed.events).slice(0, retained.length)).toEqual(retained);
+      expect(effectSequence(resumed.events).slice(retained.length)).toEqual([
+        `${retained.length} suspension_answer`,
+      ]);
       expect(resumed.trace.calls).toEqual([]);
       expect(forged.calls.slice(before)).toEqual([]);
       expect(forged.store.issues).toHaveLength(0);
@@ -2201,7 +2199,9 @@ describe("Tier AC — the adversarial workflow, composed", () => {
 
       // Five publications of one branch: the first creates it, the next four
       // advance it, and the remote ends at the fifth commit.
-      const records = hostRecords(attempt.events);
+      const records = settledRecords(
+        readRetainedValues(attempt.events, GIT_HOST_EFFECT, parseGitHostReconciliationRecord),
+      );
       const pushes = records.filter((record) => record.request.kind === "git-push");
       expect(pushes).toHaveLength(5);
       expect(pushes.map((record) => record.decision)).toEqual(Array(5).fill("performed"));
