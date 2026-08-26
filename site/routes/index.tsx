@@ -12,6 +12,7 @@ import {
   P_MEASURED,
   P_SM,
   PageFooter,
+  STRONG,
   Term,
 } from "../components/Prose.tsx";
 import {
@@ -209,53 +210,6 @@ const SCOPES_MD: Tok[][] = [
     " issue",
     dim("="),
     mod("{props.issue}"),
-    " ",
-    key("/>"),
-  ],
-  ["  ", key("</Worktree>")],
-  [key("</Repository>")],
-];
-
-const WRAPPERS_MD: Tok[][] = [
-  [key("<Repository"), " ", dim("…"), key(">")],
-  [
-    "  ",
-    key("<Worktree"),
-    " name",
-    dim("="),
-    str('"issue-142"'),
-    " branch",
-    dim("="),
-    str('"fix/142"'),
-    key(">"),
-  ],
-  [
-    "    ",
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    str('"#142"'),
-    " ",
-    key("/>"),
-  ],
-  ["  ", key("</Worktree>")],
-  [
-    "  ",
-    key("<Worktree"),
-    " name",
-    dim("="),
-    str('"issue-158"'),
-    " branch",
-    dim("="),
-    str('"fix/158"'),
-    key(">"),
-  ],
-  [
-    "    ",
-    key("<Implementor"),
-    " issue",
-    dim("="),
-    str('"#158"'),
     " ",
     key("/>"),
   ],
@@ -500,13 +454,10 @@ export default define.page(function Home({ url }) {
             </h1>
 
             <p style="margin:0;max-width:50ch;font-size:clamp(1.05rem,2.2vw,1.2rem);line-height:1.5;color:var(--body);">
-              Workflows described in prose have to be interpreted before
-              anything happens. Humans skim, often skipping important steps.
-              Agents may simply decide that the entire workflow is not relevant.
-              {" "}
-              <Term>xmd</Term>{" "}
-              removes the interpretation step by making each document a program
-              that only relies on judgment where needed.
+              A workflow written in prose has to be interpreted before anything
+              happens. <Term>xmd</Term>{" "}
+              runs the document instead: the Markdown stays readable, and the
+              operations it describes execute as a program.
             </p>
 
             <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem 1.25rem;">
@@ -524,8 +475,13 @@ export default define.page(function Home({ url }) {
               <div class="panel-head">What you read is what runs</div>
               <div class="panel-body">
                 <p style={CLAIM}>
-                  There is no workflow hidden behind the document. The document
-                  is the workflow.
+                  The document is the workflow. There is nothing behind it.
+                </p>
+                <p style={P_SM}>
+                  The prose stays prose in any Markdown viewer. The fenced block
+                  marked <Term>exec</Term> runs, and <Term>{"<Parse>"}</Term>
+                  {" "}
+                  turns the model's answer into a value the next step uses.
                 </p>
                 <CodeBlock filename="release.md">
                   <Source lines={RELEASE_MD} />
@@ -541,15 +497,10 @@ export default define.page(function Home({ url }) {
             <h2>The README as a CLI.</h2>
           </div>
           <p style={P_MD}>
-            What you already know how to do belongs in the document; judgment
-            belongs where the document asks for it. <Term>xmd</Term>{" "}
-            moves known work out of probabilistic interpretation and into
-            executable software: tests, file loading, sequencing, retries, and
-            cleanup run as code, while planning, review, interpretation, and
-            design decisions stay with people or agents. Once known work is
-            executable, documentation does not need a parallel implementation to
-            stay in sync — a README can explain the work to a person and expose
-            the same work as runnable entry points for a CLI or an agent.
+            A README already has useful executable structure: headings name the
+            things you want to do. <Term>xmd</Term>{" "}
+            turns them into CLI entrypoints. Add frontmatter to expose
+            arguments. The explanation and the command stay in the same file.
           </p>
 
           <div
@@ -567,9 +518,9 @@ export default define.page(function Home({ url }) {
                 </div>
                 <span class="eyebrow">Help for the README</span>
                 <p style={P_SM}>
-                  <Term>xmd README.md --help</Term>{" "}
-                  works like help on any other CLI, showing the README's
-                  arguments and runnable entrypoints.
+                  Help works as it does on any other CLI, and what it lists
+                  comes from the document: the entrypoints it can run and the
+                  inputs they accept.
                 </p>
               </div>
 
@@ -584,8 +535,9 @@ export default define.page(function Home({ url }) {
                 <span class="eyebrow">Props → CLI arguments</span>
                 <p style={P_SM}>
                   <Term>package</Term> becomes{" "}
-                  <Term>--props-package</Term>, with its type and validation
-                  coming directly from the README.
+                  <Term>--props-package</Term>. The flag, its type, and its
+                  pattern all come from the frontmatter, so an invalid value
+                  fails before anything runs.
                 </p>
               </div>
 
@@ -607,12 +559,6 @@ export default define.page(function Home({ url }) {
               </div>
             </div>
           </div>
-
-          <p style={P_MD}>
-            One document serves both audiences: prose explains what is
-            happening, while headings and explicit inputs reveal only the
-            operation needed at the point it is needed.
-          </p>
         </section>
 
         {/* Principles */}
@@ -621,12 +567,9 @@ export default define.page(function Home({ url }) {
             <h2>When you know how, make it a program.</h2>
           </div>
           <p style={P_MD}>
-            <Term>xmd</Term>{" "}
-            is not trying to make agents more autonomous. It is trying to
-            minimize how much work needs to remain agentic. When you know what
-            you want but don't know how to get there, use an agent. When you
-            know how to get there, make it a program and leave the agent only
-            the judgment that remains.
+            When you know what you want but don't know how to get there, use an
+            agent. When you know how to get there, make it a program. Don't keep
+            paying an agent to work out something you already know how to do.
           </p>
 
           <div class="panel">
@@ -673,6 +616,11 @@ export default define.page(function Home({ url }) {
           <div class="section-head">
             <h2>Stop hoping the agent reads the instructions.</h2>
           </div>
+          <p style={P_MD}>
+            A file like <Term>AGENTS.md</Term>{" "}
+            is advisory. The agent may read it, skim it, or decide it isn't
+            relevant to the task.
+          </p>
 
           <div style="display:flex;flex-direction:column;gap:2rem;">
             <div class="grid" style={PAIR}>
@@ -680,19 +628,20 @@ export default define.page(function Home({ url }) {
               <div style={SPLIT}>
                 <h3 style={H3}>Run AGENTS.md.</h3>
                 <p style={P_SM}>
-                  Run the agent from{" "}
-                  <Term>AGENTS.md</Term>. Do not leave the file as context the
-                  agent may or may not discover.
+                  Run the agent from the file instead of leaving it as context
+                  the agent may or may not read.
                 </p>
               </div>
             </div>
 
             <div class="grid" style={PAIR}>
               <div style={SPLIT}>
-                <h3 style={H3}>Each agent is a Markdown component</h3>
+                <h3 style={H3}>An agent role can be a Markdown component</h3>
                 <p style={P_SM}>
-                  An agent is a Markdown file with agent instructions, and
-                  selecting a heading expands that file's component in place.
+                  Selecting a heading expands that agent's file in place.
+                  Architect, Implementor, and Reviewer are semantic roles, not
+                  fixed models. Choose the model or provider when you invoke the
+                  workflow.
                 </p>
               </div>
               <CodeBlock filename="AGENTS.md">
@@ -700,27 +649,22 @@ export default define.page(function Home({ url }) {
               </CodeBlock>
             </div>
 
-            <p style={P_MD}>
-              Architect, Implementor, and Reviewer are semantic roles, not fixed
-              models. Choose the model or provider when you invoke the workflow.
-            </p>
-
             <div class="grid" style={PAIR}>
               <CodeBlock filename=".agents/implementor.md">
                 <Source lines={IMPLEMENTOR_MD} />
               </CodeBlock>
               <div style={SPLIT}>
-                <h3 style={H3}>You control what context the agent gets.</h3>
-                <p style={P_MD}>
-                  The previous section made the role explicit; this section
-                  makes its prompt explicit. The coding agent will start with
-                  the context explicitly declared by its Markdown.{" "}
+                <h3 style={H3}>
+                  If you know what context the agent needs, load it explicitly.
+                </h3>
+                <p style={P_SM}>
                   <Term>xmd</Term>{" "}
                   reads the issue and the files first, then expands{" "}
                   <Term>{"<Session.Launch>"}</Term>{" "}
-                  with them already in hand, instead of the agent guessing what
-                  to search for or which tools to call. The agent starts with
-                  the intended files already loaded.
+                  with them already in hand, so the agent starts with them
+                  loaded rather than searching for them. Context construction
+                  becomes part of the program instead of something the agent has
+                  to rediscover.
                 </p>
               </div>
             </div>
@@ -733,9 +677,10 @@ export default define.page(function Home({ url }) {
             <h2>The runtime handles the effects.</h2>
           </div>
           <p style={P_MD}>
-            Once the prompt is explicit, the runtime can manage the effects
-            safely. You declare the repository, worktree, issue, and prompt
-            inputs; it handles ordering, cancellation, and cleanup.
+            You declare the repository, worktree, and inputs; the runtime
+            handles ordering, cancellation, and cleanup. The workflow owns the
+            structure — which repository, which branch, which issue. The agent
+            owns the judgment inside it.
           </p>
 
           <div style="display:flex;flex-direction:column;gap:2rem;">
@@ -744,51 +689,11 @@ export default define.page(function Home({ url }) {
                 <Source lines={SCOPES_MD} />
               </CodeBlock>
               <div style={SPLIT}>
-                <h3 style={H3}>Scopes pass context down.</h3>
+                <h3 style={H3}>The workflow sets up the work.</h3>
                 <p style={P_SM}>
-                  <Term>Repository</Term> sets the project.{" "}
-                  <Term>Worktree</Term> sets where the work happens. The nested
-                  {" "}
-                  <Term>Implementor</Term> runs there automatically. Its{" "}
-                  <Term>Session.Launch</Term>{" "}
-                  names the issue and files that become the prompt. Nothing is
-                  discovered from ambient state.
-                </p>
-              </div>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <div style={SPLIT}>
-                <h3 style={H3}>Wrappers add context.</h3>
-                <p style={P_SM}>
-                  Wrappers add context for everything inside them. The same{" "}
-                  <Term>Implementor</Term>{" "}
-                  can run against different repositories, worktrees, or issues
-                  without changing its Markdown.
-                </p>
-                <Chain steps={["Repository", "Worktree", "Implementor"]} />
-              </div>
-              <CodeBlock>
-                <Source lines={WRAPPERS_MD} />
-              </CodeBlock>
-            </div>
-
-            <div class="grid" style={PAIR}>
-              <div class="panel">
-                <div class="panel-head">Structured concurrency</div>
-                <div class="panel-body">
-                  <p style={P_SM}>
-                    Children run with their parent. When the parent ends, the
-                    runtime cancels them and clears the values bound inside it.
-                  </p>
-                </div>
-              </div>
-              <div style={SPLIT}>
-                <h3 style={H3}>Scopes clean up.</h3>
-                <p style={P_SM}>
-                  Open a worktree inside a repository and it closes with it. The
-                  same is true for scope-bound values. Cleanup happens at the
-                  boundary, so context does not leak into the next run.
+                  The repository, the branch, and the issue are known, so the
+                  document names them. <Term>Implementor</Term>{" "}
+                  is left with the judgment.
                 </p>
               </div>
             </div>
@@ -801,25 +706,20 @@ export default define.page(function Home({ url }) {
             <h2>The runtime composes intent.</h2>
           </div>
           <p style={P_MD}>
-            When judgment needs another try, a schema, or a handoff, the
-            document says how.
+            Known control flow stays in the program.
           </p>
 
           <div class="grid" style={`${PAIR}padding-top:0.5rem;`}>
             <div style={STACK}>
               <h3 style={H3}>Retries have a limit.</h3>
               <p style={P_MD}>
-                A loop gives retries a limit. Break when the result is good;
-                otherwise prompt again.
-              </p>
-              <p style={P_MD}>
-                <Term>SafeParse</Term> checks the result. <Term>If</Term>{" "}
-                decides whether it is good enough. <Term>Break</Term>{" "}
-                stops the loop.
-              </p>
-              <p style={P_MD}>
-                <Term>max</Term>{" "}
-                is part of the document, so the runtime knows when to stop.
+                <Term>SafeParse</Term>{" "}
+                decides whether the answer is valid, because that rule is
+                already known. <Term>If</Term> branches on the result,{" "}
+                <Term>Break</Term>{" "}
+                ends the loop on success, and the retry prompt asks only for a
+                correction. <Term>{"max={2}"}</Term>{" "}
+                is in the document, so the runtime knows when to stop trying.
               </p>
             </div>
             <CodeBlock>
@@ -839,14 +739,26 @@ export default define.page(function Home({ url }) {
             <div style={STACK}>
               <h3 style={H3}>Schemas make answers usable.</h3>
               <p style={P_MD}>
-                Agents often return prose. When the next step needs a value,
-                give it a schema. The runtime checks the answer and passes
-                structured data on.
+                Agents return text, and the next step needs a value. The same
+                schema does two jobs.
               </p>
               <p style={P_MD}>
-                When a person needs to decide, <Term>Elicit</Term>{" "}
-                opens the browser form and validates the answer before the
-                workflow continues.
+                <strong style={STRONG}>
+                  Tell the agent what shape to return.
+                </strong>{" "}
+                <Term>Json</Term> puts the schema directly in the prompt.
+              </p>
+              <p style={P_MD}>
+                <strong style={STRONG}>Validate what comes back.</strong>{" "}
+                <Term>Parse</Term>{" "}
+                checks the response against that same schema before binding it
+                as a value the workflow can use.
+              </p>
+              <p style={P_MD}>
+                <strong style={STRONG}>Ask a person instead.</strong>{" "}
+                <Term>Elicit</Term>{" "}
+                uses a schema for human input too, and validates the answer
+                before the run continues.
               </p>
             </div>
           </div>
@@ -855,19 +767,10 @@ export default define.page(function Home({ url }) {
             <div style={STACK}>
               <h3 style={H3}>Agents pass values.</h3>
               <p style={P_MD}>
-                One agent can leave a value in memory for the next. Name it,
-                then pass it as a prop. No hidden conversation and no file
-                needed.
-              </p>
-              <p style={P_MD}>
                 <Term>Architect</Term>'s result is captured as{" "}
-                <Term>approvedPlan</Term>. <Term>Implementor</Term>{" "}
+                <Term>approvedPlan</Term>; <Term>Implementor</Term>{" "}
                 receives it as{" "}
-                <Term>plan</Term>. The handoff is explicit and deterministic.
-              </p>
-              <p style={P_MD}>
-                Roles stay the same even when the model changes. Pick the model
-                and provider when you run the workflow.
+                <Term>plan</Term>. No hidden conversation and no file needed.
               </p>
               <p style={P_MD}>
                 Memory lives only in this run and its nested scopes.
@@ -884,7 +787,8 @@ export default define.page(function Home({ url }) {
           <div class="section-head">
             <h2>The nesting is the model.</h2>
             <p>
-              A component establishes context for everything nested inside it.
+              Components can establish context for everything nested inside
+              them.
             </p>
           </div>
 
@@ -921,8 +825,8 @@ export default define.page(function Home({ url }) {
               </p>
               <p style={P_MD}>
                 Move the <Term>File</Term> outside the <Term>TempDir</Term>{" "}
-                and it writes somewhere else. And when the enclosing block ends,
-                the runtime removes what that block owns — the directory goes
+                and it writes somewhere else. And when the enclosing scope ends,
+                the runtime removes what that scope owns — the directory goes
                 with it. Nesting is context, scope, and lifecycle.
               </p>
             </div>
@@ -932,18 +836,13 @@ export default define.page(function Home({ url }) {
         {/* Durability */}
         <section id="durability" class="section" style="gap:1.5rem;">
           <div style="width:100%;max-width:720px;display:flex;flex-direction:column;gap:1.5rem;">
-            <p style={P_MD}>
-              A retry must not repeat an external side effect. Once a workflow
-              can act outside the process, it needs a record of what already
-              happened.
-            </p>
             <div class="section-head" style="width:100%;">
               <h2>The run can outlive the process.</h2>
             </div>
             <p style={P_MD}>
-              Once the runtime manages the effects, the workflow can survive the
-              process that started it. A process can stop while work remains, so
-              the run needs a record of what happened.
+              A retry must not repeat an external side effect, and a process can
+              stop while work remains. So the run keeps a record of what already
+              happened.
             </p>
 
             <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -952,10 +851,9 @@ export default define.page(function Home({ url }) {
                   lines={[[" xmd run review.md --journal journal.jsonl"]]}
                 />
                 <p style={P_MEASURED}>
-                  Add <Term>--journal</Term>{" "}
-                  when you want a diagnostic JSONL trace. It shows what ran and
-                  where it stopped. It is for this run, not retained workflow
-                  history.
+                  <Term>--journal</Term>{" "}
+                  writes a JSONL trace of what ran and where it stopped. It is
+                  for this run, not retained workflow history.
                 </p>
               </Step>
 
@@ -965,9 +863,7 @@ export default define.page(function Home({ url }) {
                 <Terminal lines={[[" xmd workflow start review.md"]]} />
                 <p style={P_MEASURED}>
                   Workflow mode is experimental. It keeps its own journal and
-                  effect records. That history is separate from{" "}
-                  <Term>--journal</Term>, and replay can reuse completed
-                  effects.
+                  effect records, separate from <Term>--journal</Term>.
                 </p>
               </Step>
 
@@ -990,9 +886,9 @@ export default define.page(function Home({ url }) {
                   />
                 </div>
                 <p style={P_MEASURED}>
-                  Resume reads the workflow history. It recognizes completed
-                  work, reuses it, and stops at the first unresolved boundary
-                  instead of repeating an external effect.
+                  Resume reuses the effects the history records as completed and
+                  stops at the first unresolved boundary, instead of repeating
+                  an external effect.
                 </p>
               </Step>
 
@@ -1001,16 +897,11 @@ export default define.page(function Home({ url }) {
               <Step n="04" title="Repair a failed run.">
                 <p style={P_MEASURED}>
                   If CI fails after some effects finish, those completions stay
-                  recorded. Fix the cause and resume. Only the unresolved part
+                  recorded. Fix the cause and resume; only the unresolved part
                   needs attention.
                 </p>
               </Step>
             </div>
-
-            <p style={P_MD}>
-              The run is still useful after the process stops. Its journal and
-              effects make it inspectable, replayable, and repairable.
-            </p>
           </div>
         </section>
 

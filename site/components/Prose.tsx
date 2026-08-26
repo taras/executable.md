@@ -19,6 +19,9 @@ export const P_MEASURED = `${P_SM}max-width:74ch;`;
 export const CLAIM =
   "margin:0;font-size:1.0625rem;line-height:1.45;color:var(--ink);font-weight:800;letter-spacing:-0.01em;";
 
+/** An inline bold lead-in inside a prose paragraph. */
+export const STRONG = "font-weight:800;color:var(--ink);";
+
 export const CHAIN_ITEM =
   `${MONO}font-size:0.8125rem;font-weight:700;color:var(--ink);`;
 
