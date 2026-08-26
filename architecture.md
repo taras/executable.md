@@ -527,6 +527,12 @@ type ExecutorAcquisition =
   | { readonly kind: "acquired"; readonly lock: ExecutorLock }
   | { readonly kind: "already-running" };
 
+interface WorkflowForkLineage {
+  readonly sourceRunId: string;
+  readonly checkpointEventId: string;
+  readonly checkpointWorkspaceRootId: string;
+}
+
 interface WorkflowLifecycleSnapshot {
   readonly record: WorkflowRunRecord;
   readonly retrieval?: DefinitionRetrieval;
@@ -536,10 +542,31 @@ interface WorkflowLifecycleSnapshot {
     readonly workspaceRootId: string;
   };
   readonly currentWorkspaceRootId: string;
+  readonly lineage?: WorkflowForkLineage;
 }
 
 interface WorkflowDeletion {
   readonly removed: readonly ("run-storage" | "provider-sessions")[];
+}
+
+interface XmdArtifactFrontier {
+  readonly sourceRunId: string;
+  readonly finalEventId?: string;
+  readonly currentWorkspaceRootId: string;
+}
+
+interface WorkflowArtifactIdentity {
+  readonly identity: string;
+  readonly frontier: XmdArtifactFrontier;
+}
+
+interface WorkflowArtifactSnapshot extends WorkflowLifecycleSnapshot {
+  readonly artifact: WorkflowArtifactIdentity;
+}
+
+interface WorkflowArtifactHistory {
+  readonly artifact: WorkflowArtifactIdentity;
+  readonly entries: readonly WorkflowHistoryEntry[];
 }
 
 interface WorkflowLifecycleApi {
@@ -547,10 +574,23 @@ interface WorkflowLifecycleApi {
   inspect(runId: string): Operation<Result<WorkflowLifecycleSnapshot>>;
   list(): Operation<Result<readonly WorkflowLifecycleSnapshot[]>>;
   history(runId: string): Operation<Result<readonly WorkflowHistoryEntry[]>>;
+  inspectArtifact(path: string): Operation<Result<WorkflowArtifactSnapshot>>;
+  historyArtifact(path: string): Operation<Result<WorkflowArtifactHistory>>;
   cancel(runId: string): Operation<Result<WorkflowRunRecord>>;
   delete(runId: string): Operation<Result<WorkflowDeletion>>;
+  export(request: WorkflowExportRequest): Operation<Result<WorkflowExportResult>>;
 }
 ```
+
+The two artifact operations are siblings of the retained-run pair rather than a
+widening of it. A run ID names live lifecycle authority in this host's storage;
+a path names immutable evidence somebody is holding, and no run has to exist for
+it to answer. Their results are the same lifecycle and history values plus which
+artifact answered and the boundary it was sealed at, so `WorkflowArtifactSnapshot`
+extends the retained snapshot rather than restating it. An artifact carries no
+`retrieval`: where a definition could be fetched from now is authority belonging
+to the machine that exported. The path is never part of a result, so two copies
+of one artifact answer identically.
 
 The executor lock's public fields describe it and never validate it. Lifecycle
 transitions accept the exact object separately from their data

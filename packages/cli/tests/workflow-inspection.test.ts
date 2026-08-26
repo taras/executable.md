@@ -18,7 +18,7 @@ import { ensure, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, exists, readdir, readTextFile, rm, stat, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
-import { copyFile, readFile } from "node:fs/promises";
+import { chmod, copyFile, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -554,6 +554,16 @@ function heading(output: string, label: string): string | undefined {
     ?.slice(label.length + 2);
 }
 
+/** Whether this host really refuses to create that path. */
+function* refuses(path: string): Operation<boolean> {
+  try {
+    yield* writeTextFile(path, "probe");
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /** Every name in a directory, so "nothing was written beside it" is checkable. */
 function* entries(directory: string): Operation<string[]> {
   return (yield* readdir(directory)).sort();
@@ -719,6 +729,25 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       const second = join(elsewhere, "same.xmd");
       yield* until(copyFile(run.artifact, second));
 
+      // The copy is inspected where nothing may be created beside it. That is
+      // the discriminating arrangement: a reader that opened the container for
+      // writing, or left a journal, a WAL or a lock next to it, could not
+      // finish here at all — and a directory that merely happened to stay
+      // clean would not have proved it could not have been written to.
+      //
+      // Restored through this scope's teardown rather than at the end of the
+      // body, so a failing assertion still leaves the fixture removable. It
+      // runs before `useFixture`'s own removal, which is registered outside it.
+      yield* until(chmod(elsewhere, 0o555));
+      yield* ensure(() => until(chmod(elsewhere, 0o755)));
+
+      // A directory that still accepted writes would make everything below a
+      // coincidence, so the refusal is proven rather than assumed.
+      expect(yield* refuses(join(elsewhere, "probe"))).toBe(true);
+
+      const before = yield* fingerprint(second);
+      const beside = yield* entries(elsewhere);
+
       const answers: string[] = [];
       for (const path of [run.artifact, second]) {
         for (const action of ["status", "history"]) {
@@ -745,6 +774,12 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       expect(heading(here.stdout, "artifact identity")).toBe(
         heading(there.stdout, "artifact identity"),
       );
+
+      // The read-only copy is byte-identical and still the only thing in its
+      // directory: no sidecar, no journal, no lock.
+      expect(yield* fingerprint(second)).toBe(before);
+      expect(yield* entries(elsewhere)).toEqual(beside);
+      expect(beside).toEqual(["same.xmd"]);
     });
   });
 
