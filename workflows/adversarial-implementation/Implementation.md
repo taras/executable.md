@@ -210,10 +210,10 @@ That is the whole shape of the stage: **agents inspect; XMD mutates.**
           Executable.md that reads exactly what you want to see:
 
           ```json
-          {"kind": "observation", "source": "<File path=\"README.md\" as=\"readme\" />"}
+          {"kind": "observation", "source": "<File path=\"README.md\" />"}
           ```
 
-          An observation may use only self-closing `<File path=... as=... />`
+          An observation may use only self-closing `<File path=... />`
           reads. It may not write, delete, run a command, reach the network, or
           name any other component; a request containing one is refused whole
           and the exchange stops.

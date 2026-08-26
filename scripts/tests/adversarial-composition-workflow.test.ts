@@ -92,6 +92,15 @@ const WORKFLOW = join(
 
 const ROOT_PATH = "workflows/adversarial-implementation/start.md";
 
+/**
+ * The line only a real read of `README.md` can put into a later prompt.
+ *
+ * Nothing else renders it: not an instruction file, not a scripted reply, not
+ * a proposal. A prompt that carries it carries it because this run performed
+ * the read the implementor asked for.
+ */
+const README_LINE = "Deployment note: the health route is not documented yet.";
+
 /** The five authored stages, read from the files that ship. */
 const STAGES = ["Discovery", "Implementation", "InstructionFiles", "Planning", "UserCheckpoint"];
 
@@ -212,8 +221,39 @@ interface Script {
   readonly implementationVerdicts: readonly Record<string, unknown>[];
   /** One proposal per implementation iteration, in order. */
   readonly proposals: readonly Record<string, unknown>[];
-  /** Observation envelopes returned before the proposal envelope. */
-  readonly observations: readonly string[];
+  /**
+   * How many observation turns this run answers before its proposal envelope.
+   *
+   * A count rather than a list of sources, because the source is not this
+   * suite's to write: each observation turn answers with the example envelope
+   * the authored prompt itself rendered, taken back out of that prompt. An
+   * instruction the host cannot admit therefore fails here, in the composition
+   * that ships it, rather than passing on a spelling a suite chose for it.
+   */
+  readonly observations: number;
+}
+
+/**
+ * The observation envelope this prompt told the agent to return.
+ *
+ * Read out of the prompt rather than written here. What the authored stage
+ * renders is an example an agent is meant to copy, so copying it is the only
+ * way a suite finds out whether the host admits what the document asks for: a
+ * source this suite spelled itself would prove that `<Evaluate>` admits the
+ * suite's spelling, and nothing about the instruction shipped beside it.
+ *
+ * The proposal example is written in the same closed shape, so the envelope is
+ * selected by its kind rather than by its position among the fenced blocks.
+ */
+function instructedObservation(prompt: string): string {
+  for (const line of prompt.split("\n")) {
+    const written = line.trim();
+    if (!written.startsWith('{"kind": "observation"')) {
+      continue;
+    }
+    return JSON.stringify(JSON.parse(written));
+  }
+  throw new Error("the observation prompt rendered no observation example to follow");
 }
 
 /** The entry this turn consumes: in order, holding at the last one. */
@@ -292,10 +332,9 @@ function scriptedProvider(trace: Trace, script: Script): AgentProviderFactory {
               reply = `PLAN-REVISION-ACKNOWLEDGED-${planRevision}`;
               break;
             case "observation": {
-              if (observation < script.observations.length) {
-                const source = script.observations[observation]!;
+              if (observation < script.observations) {
                 observation += 1;
-                reply = JSON.stringify({ kind: "observation", source });
+                reply = instructedObservation(content);
               } else {
                 reply = JSON.stringify({
                   kind: "proposal",
@@ -394,7 +433,7 @@ function runComposition(script: Script): Operation<Attempt> {
                 path: "AGENTS.md",
                 content: "Root instructions: prefer evidence over assertion.\n",
               },
-              { path: "README.md", content: "# project\n" },
+              { path: "README.md", content: `# project\n\n${README_LINE}\n` },
             ],
           },
         ],
@@ -830,6 +869,25 @@ function hostRecords(events: readonly DurableEvent[]): GitHostReconciliationReco
       }
       return parsed;
     });
+}
+
+/** Every generated-XMD record that admitted the fragment it was given. */
+function admissions(events: readonly DurableEvent[]): DurableEvent[] {
+  return events.filter((event) => {
+    if (event.type !== "yield" || event.description.type !== "generated_xmd") {
+      return false;
+    }
+    if (event.result.status !== "ok") {
+      return false;
+    }
+    const value = event.result.value;
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      value.decision === "admitted"
+    );
+  });
 }
 
 /** The commit each `<Git.Commit>` retained, in order. */
@@ -1315,16 +1373,14 @@ describe("Tier AC — the adversarial workflow, composed", () => {
           report: "IMPLEMENTOR-REPORT",
         },
       ],
-      observations: [],
+      observations: 1,
     });
     const turns = attempt.trace.calls.map((turn) => classify(turn.content));
 
-    // Every authored stage was reached, in authored order, through the real
-    // bundle: discovery, the handoff checkpoint, the plan and its verdict, then
-    // the implementor's observation/proposal envelope.
     // Authored order: discovery, the handoff checkpoint, the plan and its
     // verdict, Planning's own review checkpoint, start.md's authorization
-    // checkpoint, then the implementor's first envelope.
+    // checkpoint, then the implementor's exchange — one observation request and
+    // the proposal envelope, which the same prompt asks for in two shapes.
     expect(turns).toEqual([
       "discovery",
       "checkpoint",
@@ -1332,6 +1388,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "planVerdict",
       "checkpoint",
       "checkpoint",
+      "observation",
       "observation",
     ]);
 
@@ -1345,7 +1402,39 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       "user-checkpoint",
       "user-checkpoint",
       "implementor",
+      "implementor",
     ]);
+
+    // The implementor asked to see one file before proposing, and asked for it
+    // the way the authored prompt told it to: what it returned is that prompt's
+    // own example, copied. An example this host cannot admit stops the exchange
+    // here rather than reaching the assertions below.
+    const exchange = attempt.trace.calls.filter((turn) => classify(turn.content) === "observation");
+    expect(exchange).toHaveLength(2);
+    // Pinned as well as performed, so restoring an inadmissible spelling reads
+    // as the instruction it changed rather than as a refusal further down.
+    expect(instructedObservation(exchange[0]!.content)).toBe(
+      JSON.stringify({ kind: "observation", source: '<File path="README.md" />' }),
+    );
+
+    // XMD performed the read, not the agent: two fragments were admitted — the
+    // observation, then the proposal's own changes — and the Workspace read the
+    // observation named is retained beside them.
+    expect(admissions(attempt.events)).toHaveLength(2);
+    const reads = attempt.events.filter(
+      (event) =>
+        event.type === "yield" &&
+        event.description.type === "workspace_file" &&
+        String(event.description.name).includes("README.md"),
+    );
+    expect(reads).toHaveLength(1);
+
+    // And the result reached the agent in its *next* turn rather than the one
+    // that asked, which is the whole round trip: the agent named a read, XMD
+    // performed it against the run's Workspace, and the detached value came
+    // back as data in the following prompt.
+    expect(exchange[0]!.content).not.toContain(README_LINE);
+    expect(exchange[1]!.content).toContain(README_LINE);
 
     // The approved proposal was admitted and performed before any forge effect:
     // the generated fragment is retained, and the Workspace write landed.
@@ -1402,7 +1491,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [FIRST_VERDICT, SECOND_VERDICT],
       proposals: [FIRST_PROPOSAL, SECOND_PROPOSAL],
-      observations: [],
+      observations: 0,
     });
     expect(attempt.failure).toBeUndefined();
 
@@ -1621,7 +1710,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [SECOND_VERDICT],
       proposals: [FIRST_PROPOSAL],
-      observations: [],
+      observations: 0,
     };
 
     const started = yield* attemptRun(root, "start", forged, script);
@@ -1826,7 +1915,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
           planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
           implementationVerdicts: [SECOND_VERDICT],
           proposals: [FIRST_PROPOSAL],
-          observations: [],
+          observations: 0,
         },
       );
       expect(resumed.failure).toBeUndefined();
@@ -1869,7 +1958,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
           planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
           implementationVerdicts: [SECOND_VERDICT],
           proposals: [FIRST_PROPOSAL],
-          observations: [],
+          observations: 0,
         },
       );
       expect(resumed.failure).toBeUndefined();
@@ -1911,7 +2000,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
           planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
           implementationVerdicts: [DEFERRING_VERDICT],
           proposals: [FIRST_PROPOSAL],
-          observations: [],
+          observations: 0,
         },
       );
       expect(resumed.failure).toBeUndefined();
@@ -1946,7 +2035,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
         implementationVerdicts: [SECOND_VERDICT],
         proposals: [FIRST_PROPOSAL],
-        observations: [],
+        observations: 0,
       };
       const runId = "declined-acceptance";
       const started = yield* attemptRun(root, "start", forged, script, runId);
@@ -2025,7 +2114,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         planVerdicts: FIVE_PLAN_VERDICTS,
         implementationVerdicts: [SECOND_VERDICT],
         proposals: [FIRST_PROPOSAL],
-        observations: [],
+        observations: 0,
       });
       expect(attempt.failure).toBeUndefined();
 
@@ -2084,7 +2173,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
         planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
         implementationVerdicts: FIVE_FAILING_VERDICTS,
         proposals: FIVE_PROPOSALS,
-        observations: [],
+        observations: 0,
       });
       expect(attempt.failure).toBeUndefined();
 
@@ -2159,7 +2248,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [DEFERRING_VERDICT],
       proposals: [FIRST_PROPOSAL],
-      observations: [],
+      observations: 0,
     });
     expect(attempt.failure).toBeUndefined();
 
@@ -2217,7 +2306,7 @@ describe("Tier AC — the adversarial workflow, composed", () => {
       planVerdicts: [{ passed: true, review: "REVIEW-PASS", revisionPrompt: "" }],
       implementationVerdicts: [FIXING_VERDICT],
       proposals: [FIRST_PROPOSAL],
-      observations: [],
+      observations: 0,
     });
     expect(fixing.failure).toBeUndefined();
     expect(otherForge.calls.filter((made) => made.startsWith("issues:"))).toEqual([]);
