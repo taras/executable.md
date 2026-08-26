@@ -20,7 +20,12 @@ import { executeInstalled } from "@executablemd/core/host";
 import { retainedWorkflowInstallation } from "../../src/run.ts";
 import { GIT_HOST_EFFECT } from "../../src/git-host/effect.ts";
 import type { Json } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { Yield } from "@executablemd/durable-streams";
+import { readRetainedValues, selectYields } from "@executablemd/test-support/journal";
+import {
+  type GitHostReconciliationRecord,
+  parseGitHostReconciliationRecord,
+} from "../../src/git-host/records.ts";
 import type { WorkflowRunDatabase } from "../../mod.ts";
 import { withWorkflowWorkspace } from "../../src/deno/workspace/host.ts";
 import type { WorkflowWorkspaceOptions } from "../../src/deno/workspace/host.ts";
@@ -215,11 +220,9 @@ export function inlinePosition(source: string, anchor: string): Record<string, u
 }
 
 /** Every Git-host effect event this run journaled, in order. */
-export function* gitHostEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+export function* gitHostEvents(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events = yield* database.journal.readAll();
-  return events.filter(
-    (event) => event.type === "yield" && event.description.type === GIT_HOST_EFFECT,
-  );
+  return selectYields(events, [GIT_HOST_EFFECT]).map((selected) => selected.event);
 }
 
 /** What one Git-host effect settled as, and what it retained when it settled `ok`. */
@@ -227,20 +230,19 @@ export interface GitHostOutcomeRecord {
   readonly status: string;
   readonly name: string;
   readonly message: string;
-  readonly record: unknown;
+  readonly record: GitHostReconciliationRecord | undefined;
 }
 
 export function* gitHostOutcomes(database: WorkflowRunDatabase): Operation<GitHostOutcomeRecord[]> {
-  return (yield* gitHostEvents(database)).map((event) => {
-    const result = Object(Reflect.get(event, "result"));
-    const error = Object(Reflect.get(result, "error"));
-    return {
-      status: String(Reflect.get(result, "status")),
-      name: String(Reflect.get(error, "name") ?? ""),
-      message: String(Reflect.get(error, "message") ?? ""),
-      record: Reflect.get(result, "value"),
-    };
-  });
+  const events = yield* database.journal.readAll();
+  return readRetainedValues(events, GIT_HOST_EFFECT, parseGitHostReconciliationRecord).map(
+    (outcome) => ({
+      status: outcome.status,
+      name: outcome.status === "err" ? (outcome.error.name ?? "") : "",
+      message: outcome.status === "err" ? outcome.error.message : "",
+      record: outcome.status === "ok" ? outcome.record : undefined,
+    }),
+  );
 }
 
 /** What an operation threw, so a suite can assert on it rather than fail. */
@@ -279,25 +281,18 @@ export function causedBy<T>(
   return undefined;
 }
 
-export function* compositionEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+export function* compositionEvents(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events = yield* database.journal.readAll();
-  return events.filter(
-    (event) =>
-      event.type === "yield" &&
-      (event.description.type === WORKSPACE_REPOSITORY ||
-        event.description.type === WORKSPACE_WORKTREE),
+  return selectYields(events, [WORKSPACE_REPOSITORY, WORKSPACE_WORKTREE]).map(
+    (selected) => selected.event,
   );
 }
 
 /** Every Git operation event this run journaled, in order. */
-export function* gitEvents(database: WorkflowRunDatabase): Operation<DurableEvent[]> {
+export function* gitEvents(database: WorkflowRunDatabase): Operation<Yield[]> {
   const events = yield* database.journal.readAll();
-  return events.filter(
-    (event) =>
-      event.type === "yield" &&
-      (event.description.type === WORKSPACE_GIT_SWITCH ||
-        event.description.type === WORKSPACE_GIT_ADD ||
-        event.description.type === WORKSPACE_GIT_COMMIT),
+  return selectYields(events, [WORKSPACE_GIT_SWITCH, WORKSPACE_GIT_ADD, WORKSPACE_GIT_COMMIT]).map(
+    (selected) => selected.event,
   );
 }
 
@@ -311,13 +306,20 @@ export interface GitOutcomeRecord {
 
 export function* gitOutcomes(database: WorkflowRunDatabase): Operation<GitOutcomeRecord[]> {
   return (yield* gitEvents(database)).map((event) => {
-    const result = Object(Reflect.get(event, "result"));
-    const error = Object(Reflect.get(result, "error"));
+    const result = event.result;
+    if (result.status === "err") {
+      return {
+        status: result.status,
+        name: result.error.name ?? "",
+        message: result.error.message,
+        record: undefined,
+      };
+    }
     return {
-      status: String(Reflect.get(result, "status")),
-      name: String(Reflect.get(error, "name") ?? ""),
-      message: String(Reflect.get(error, "message") ?? ""),
-      record: Reflect.get(Object(Reflect.get(result, "value")), "record"),
+      status: result.status,
+      name: "",
+      message: "",
+      record: result.status === "ok" ? Reflect.get(Object(result.value), "record") : undefined,
     };
   });
 }

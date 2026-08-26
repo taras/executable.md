@@ -362,6 +362,9 @@ importers:
       '@effectionx/timebox':
         specifier: 0.4.3
         version: 0.4.3(effection@4.1.0)
+      '@executablemd/durable-streams':
+        specifier: workspace:*
+        version: link:../durable-streams
       effection:
         specifier: 4.1.0
         version: 4.1.0

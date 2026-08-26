@@ -209,14 +209,15 @@ export function* compositionResults(
   database: WorkflowRunDatabase,
 ): Operation<{ status: string; name: string; message: string }[]> {
   return (yield* compositionEvents(database)).map((event) => {
-    const result = Reflect.get(event, "result");
-    const status = String(Reflect.get(Object(result), "status"));
-    const error = Object(Reflect.get(Object(result), "error"));
-    return {
-      status,
-      name: String(Reflect.get(error, "name") ?? ""),
-      message: String(Reflect.get(error, "message") ?? ""),
-    };
+    const result = event.result;
+    if (result.status === "err") {
+      return {
+        status: result.status,
+        name: result.error.name ?? "",
+        message: result.error.message,
+      };
+    }
+    return { status: result.status, name: "", message: "" };
   });
 }
 
