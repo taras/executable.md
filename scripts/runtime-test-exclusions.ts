@@ -512,6 +512,12 @@ const COMPILED_BINARY: RuntimeExclusion[] = [
       "drives the compiled `dist/xmd`, which only `deno compile` produces and which no test shard builds — the subject is the binary's two loaded copies of core, a shape no Node or Bun run can build or exercise, and one the Deno shards saw only while an unrelated Deno-only build test happened to share a shard and leave the binary behind. The `smoke` job builds through README.md#Build and runs it there, beside the other suites whose subject is the binary",
     issue: "https://github.com/taras/executable.md/issues/567",
   },
+  {
+    path: "scripts/tests/adversarial-workflow-certification.test.ts",
+    reason:
+      "CF1 runs the same supervised workflow through both supported entrypoints, and one of them is the compiled `dist/xmd` no test shard builds; the rest of the suite launches the Deno source entrypoint as a subprocess, which no Node or Bun run starts either. #299's own commands own this suite: they run `deno task build` and then name this file outright, which is the only place a built binary and the certification that needs one are guaranteed to meet. It is excluded from discovery so no shard runs it without that binary — not delegated to `smoke`",
+    issue: "https://github.com/taras/executable.md/issues/299",
+  },
 ];
 
 /**

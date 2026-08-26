@@ -75,11 +75,14 @@ describe("runtime exclusions", () => {
     expect(Object.keys(exclusions).sort()).toEqual([...RUNTIMES].sort());
 
     // Deno's list is not empty and not portability-shaped. The shards run
-    // source; one suite's subject is the compiled `dist/xmd`, which only the
-    // `smoke` job builds. Anything else appearing here means a Deno test was
-    // dropped for a reason this manifest has not stated.
+    // source; both of these suites drive the compiled `dist/xmd`, which no
+    // shard builds. `smoke` owns the first; #299's own commands own the second,
+    // building the binary and then naming that file outright. Anything else
+    // appearing here means a Deno test was dropped for a reason this manifest
+    // has not stated.
     expect(exclusions.deno.map((entry) => entry.path)).toEqual([
       "scripts/tests/component-form-dispatch.test.ts",
+      "scripts/tests/adversarial-workflow-certification.test.ts",
     ]);
   });
 
