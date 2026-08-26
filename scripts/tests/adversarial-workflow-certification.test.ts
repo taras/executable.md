@@ -46,7 +46,7 @@
 
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { call, ensure, resource, scoped, sleep, spawn, until } from "effection";
+import { call, ensure, resource, scoped, spawn, until } from "effection";
 import type { Operation } from "effection";
 import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
@@ -57,17 +57,16 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
-import { chmodSync, readdirSync } from "node:fs";
-import { realpath } from "node:fs/promises";
+
+import { chmod, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { ordinaryResume, scheduleResume } from "../../packages/cli/src/scheduling.ts";
-import { runWorkflow } from "../../packages/cli/src/workflow.ts";
 import { useDenoWorkflowHost } from "../../packages/cli/src/deno-workflow.ts";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
-import type { WorkflowExecution, WorkflowHost } from "../../packages/cli/src/workflow.ts";
+import type { WorkflowExecution } from "../../packages/cli/src/workflow.ts";
 import { agentIdentityComponents, collect } from "@executablemd/core";
 import { executeInstalled } from "@executablemd/core/host";
 import { Err, Ok } from "effection";
@@ -903,7 +902,7 @@ function useFixture(
           "",
         ].join("\n"),
       );
-      chmodSync(shim, 0o755);
+      yield* until(chmod(shim, 0o755));
     }
 
     // `git`, with one locator standing in for another. Only the arguments and
@@ -941,7 +940,7 @@ function useFixture(
         "",
       ].join("\n"),
     );
-    chmodSync(shim, 0o755);
+    yield* until(chmod(shim, 0o755));
 
     const environment: Record<string, string> = {
       HOME: home,
@@ -1209,23 +1208,6 @@ function* answerRows(fixture: Fixture, runId: string): Operation<unknown[]> {
   );
 }
 
-function* journaledTypes(fixture: Fixture, runId: string): Operation<string[]> {
-  return yield* readRunDatabase(workflowRunPath(fixture.runs, runId), (database) => {
-    const rows = database.prepare("SELECT record FROM journal_events").all() as Record<
-      string,
-      unknown
-    >[];
-    return [
-      ...new Set(
-        rows.map((row) => {
-          const event = JSON.parse(String(row["record"] ?? "{}")) as Record<string, unknown>;
-          return `${Reflect.get(event, "type")}:${Reflect.get(Object(Reflect.get(event, "description")), "type")}`;
-        }),
-      ),
-    ];
-  });
-}
-
 /** The commit each `<Git.Commit>` retained, in journal order. */
 function commitsRetained(events: readonly Record<string, unknown>[]): string[] {
   return events
@@ -1296,500 +1278,484 @@ function documentExecutor(): (execution: WorkflowExecution) => Operation<Result<
 describe("Tier CF — the supervised workflow, certified from outside", () => {
   for (const entrypoint of [DENO_SOURCE, COMPILED]) {
     it(`CF1: completes the supervised workflow through ${entrypoint.name}`, function* () {
-      yield* scoped(function* () {
-        const fixture = yield* useFixture({
-          involves: ["authorize implementation"],
-          observations: 1,
-          findings: [DEFERRED],
-        });
-
-        // The run reaches the authorization checkpoint and stops there: a
-        // person is required, so it publishes one retained request, settles
-        // `suspended` and gives its executor lock back.
-        const started = yield* fixture.run(entrypoint, startArguments("certification"));
-        expectExit(started, 2);
-        const suspension = suspensionOf(started);
-
-        // Delivery retains the answer and executes nothing.
-        const before = fixture.forge.requests.length;
-        const turnsBefore = fixture.controller.prompts().length;
-        const answered = yield* fixture.run(
-          entrypoint,
-          [
-            "workflow",
-            "answer",
-            "certification",
-            suspension,
-            JSON.stringify({
-              proceed: true,
-              response: "AUTHORIZED",
-              rationale: "CERTIFICATION-AUTHORIZATION-RATIONALE",
-            }),
-          ],
-          90_000,
-        );
-        expectExit(answered, 0);
-        expect(fixture.forge.requests).toHaveLength(before);
-        expect(fixture.controller.prompts()).toHaveLength(turnsBefore);
-
-        // The continuation claims that answer and runs to acceptance.
-        const resumed = yield* fixture.run(entrypoint, ["workflow", "resume", "certification"]);
-        expectExit(resumed, 0);
-        expect(resumed.stdout).toContain("# Accepted");
-        expect(resumed.stdout).toContain("PLAN-V1");
-        expect(resumed.stdout).toContain(PROPOSAL.changes);
-        expect(resumed.stdout).toContain(`#1 (open) ${LOCATOR}/pull/1`);
-        // The report carries the exact retained reads rather than a summary of
-        // them, which is what makes the acceptance a decision about this pull
-        // request rather than about a description of one.
-        for (const evidence of [
-          "CERTIFICATION-REVIEW-BODY",
-          "CERTIFICATION-CONVERSATION-BODY",
-          "CERTIFICATION-INLINE-BODY",
-          "CERTIFICATION-CHECK",
-        ]) {
-          expect(resumed.stdout).toContain(evidence);
-        }
-
-        // Every authored stage ran, in authored order, across the two
-        // executions: discovery, the handoff checkpoint, the plan and its
-        // verdict, the plan checkpoint, the authorization checkpoint, the
-        // observation request, the proposal, the implementation verdict, the
-        // review checkpoint and the acceptance checkpoint.
-        const turns = fixture.controller.prompts().map((turn) => classify(turn.content));
-        expect(turns).toEqual([
-          "discovery",
-          "checkpoint",
-          "plan",
-          "planVerdict",
-          "checkpoint",
-          "checkpoint",
-          "observation",
-          "observation",
-          "implementationVerdict",
-          "checkpoint",
-          "checkpoint",
-        ]);
-
-        // The observation round trip: the implementor asked for the file the
-        // authored prompt told it to ask for, XMD read it, and the result came
-        // back in the next prompt rather than in the one that asked.
-        const exchange = fixture.controller
-          .prompts()
-          .filter((turn) => classify(turn.content) === "observation");
-        expect(instructedObservation(exchange[0]!.content)).toBe(
-          JSON.stringify({ kind: "observation", source: `<File path="README.md" />` }),
-        );
-        expect(exchange[0]!.content).not.toContain(README_LINE);
-        expect(exchange[1]!.content).toContain(README_LINE);
-
-        // Local Git, the publication, the pull request and the three evidence
-        // reads all happened once, in that order, against the real remote and
-        // the loopback forge.
-        expect(
-          fixture.forge.requests.filter((made) => made === "POST /repos/owner/repository/pulls"),
-        ).toHaveLength(1);
-        for (const read of [
-          "GET /repos/owner/repository/pulls/1/reviews",
-          "GET /repos/owner/repository/issues/1/comments",
-          "GET /repos/owner/repository/pulls/1/comments",
-        ]) {
-          expect(fixture.forge.requests).toContain(read);
-        }
-        expect(fixture.forge.requests.some((made) => made.endsWith("/check-runs"))).toBe(true);
-        expect(fixture.forge.requests.some((made) => made.endsWith("/status"))).toBe(true);
-
-        // The commit this run published is on the branch it named, and it is
-        // the commit message the implementor proposed.
-        const heads = remoteRefs(fixture.remote);
-        expect(heads.get("refs/heads/agent/certification")).toBeDefined();
-
-        // Issue handling: the deferred finding became exactly one issue, in
-        // the tracker the run was given.
-        expect(fixture.forge.store.issues).toHaveLength(1);
-        expect(fixture.forge.store.issues[0]?.title).toBe(DEFERRED.title);
-
-        // The run ended accepted, and its status says so.
-        const record = yield* status(fixture, entrypoint, "certification");
-        expect(Reflect.get(Object(Reflect.get(record, "record")), "status")).toBe("completed");
-
-        // The Agent profile, as the agent process itself received it: an empty
-        // working directory this host owns, no additional directory, no MCP
-        // server, an empty requested tool set, and instructions that state the
-        // deny-all ceiling.
-        const created = sessions(fixture.controller);
-        expect(created.length).toBeGreaterThan(0);
-        for (const session of created) {
-          expect(session["mcpServers"]).toEqual([]);
-          const cwd = String(session["cwd"]);
-          expect(cwd.startsWith(fixture.runs)).toBe(true);
-          expect(cwd).toContain(".sessions");
-          // What the agent itself could see there, reported at the moment it
-          // was placed: the host removes this directory with the attachment,
-          // so nothing outside the run can look at it afterwards.
-          expect(session["entries"]).toEqual([]);
-          // And it is not the Workspace, the checkout, or the caller's place.
-          expect(cwd).not.toContain("worktrees");
-          expect(cwd.startsWith(fixture.definition)).toBe(false);
-          const meta = Object(session["_meta"]);
-          const instructions = String(Reflect.get(meta, "systemPrompt"));
-          expect(instructions).toContain("no native tool authority");
-          expect(instructions).toContain("A request for a native tool permission is denied");
-          const claude = Object(Reflect.get(Object(Reflect.get(meta, "claudeCode")), "options"));
-          expect(Reflect.get(claude, "allowedTools")).toEqual([]);
-        }
-
-        // And nothing the agent was handed names a place it may not go, or a
-        // credential it may not hold.
-        const surface = agentFacing(fixture.controller);
-        expect(surface).not.toContain(TOKEN);
-        expect(surface).not.toContain(fixture.remote.locator);
-        expect(surface).not.toContain(fixture.definition);
-        expect(surface).not.toContain("worktrees/");
-      });
-    });
-  }
-
-  it("CF2: resumes a killed final workflow from the exact committed journal and Workspace frontier", function* () {
-    yield* scoped(function* () {
-      const fixture = yield* useFixture({ observations: 1, findings: [DEFERRED] });
-
-      // A real process death, after a committed effect and during the next
-      // one. The barrier is what the forge has published rather than a sleep:
-      // the pull request exists, so the publication before it committed and
-      // the reads after it have not happened.
-      const cli = DENO_SOURCE.command();
-      const child = yield* exec(cli.command, {
-        arguments: [...cli.arguments, ...startArguments("killed")],
-        cwd: fixture.definition,
-        env: fixture.environment,
-      });
-      for (const stream of ["stdout", "stderr"] as const) {
-        yield* spawn(function* () {
-          const output = yield* child[stream];
-          for (let next = yield* output.next(); !next.done; next = yield* output.next()) {
-            // Drained so a full pipe cannot stall the child before it commits.
-          }
-        });
-      }
-      yield* when(
-        function* () {
-          expect(fixture.forge.requests).toContain("POST /repos/owner/repository/pulls");
-        },
-        { timeout: 240_000 },
-      );
-      const publications = fixture.forge.requests.length;
-      const turns = fixture.controller.prompts().length;
-      process.kill(child.pid, "SIGKILL");
-      const killed = yield* child.join();
-      expect(killed.signal).toBe("SIGKILL");
-
-      // What the kill left committed, read from the run's own history.
-      const before = yield* history(fixture, DENO_SOURCE, "killed");
-      expect(before.length).toBeGreaterThan(0);
-      const frontier = yield* status(fixture, DENO_SOURCE, "killed");
-
-      // The resume replays that prefix and performs the suffix once.
-      const resumed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "killed"]);
-      expectExit(resumed, 0);
-      expect(resumed.stdout).toContain("# Accepted");
-
-      // Every event the kill left committed is still there, with the same id,
-      // the same bytes and the same Workspace root, in the same order.
-      const after = yield* history(fixture, DENO_SOURCE, "killed");
-      expect(after.slice(0, before.length)).toEqual(before);
-
-      // The Workspace the resumed execution continued from is the one the kill
-      // left current, rather than a root rebuilt from the definition.
-      const killedRoot = Reflect.get(frontier, "currentWorkspaceRootId");
-      expect(typeof killedRoot).toBe("string");
-      expect(Reflect.get(Object(Reflect.get(frontier, "journalFrontier")), "workspaceRootId")).toBe(
-        killedRoot,
-      );
-
-      // Nothing external happened twice: one pull request, and the branch the
-      // killed execution published is the one the resumed execution advanced.
-      expect(
-        fixture.forge.requests.filter((made) => made === "POST /repos/owner/repository/pulls"),
-      ).toHaveLength(1);
-      expect(fixture.forge.requests.length).toBeGreaterThanOrEqual(publications);
-      expect(fixture.controller.prompts().length).toBeGreaterThan(turns);
-
-      // A completed replay after it performs nothing at all: no Agent, no
-      // process, no Git host, no Issue, no Fetch, and no Workspace mutation.
-      const forgeCalls = fixture.forge.requests.length;
-      const contacts = fixture.controller.contacts.length;
-      const heads = remoteRefs(fixture.remote).get("refs/heads/agent/certification");
-      const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "killed"]);
-      expectExit(replayed, 0);
-      expect(fixture.forge.requests).toHaveLength(forgeCalls);
-      expect(fixture.controller.contacts).toHaveLength(contacts);
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/certification")).toBe(heads);
-      expect(yield* history(fixture, DENO_SOURCE, "killed")).toEqual(after);
-    });
-  });
-
-  it("CF3: schedules one ordinary resume for one retained answer", function* () {
-    yield* scoped(function* () {
-      // The composed workflow suspends at a real checkpoint — the last one, so
-      // what the continuation owes is the run's own report rather than another
-      // turn — and the scheduler is what continues it.
       const fixture = yield* useFixture({
-        involves: ["accept the completed change"],
+        involves: ["authorize implementation"],
         observations: 1,
         findings: [DEFERRED],
       });
-      const started = yield* fixture.run(DENO_SOURCE, startArguments("scheduled"));
+
+      // The run reaches the authorization checkpoint and stops there: a
+      // person is required, so it publishes one retained request, settles
+      // `suspended` and gives its executor lock back.
+      const started = yield* fixture.run(entrypoint, startArguments("certification"));
       expectExit(started, 2);
       const suspension = suspensionOf(started);
 
       // Delivery retains the answer and executes nothing.
       const before = fixture.forge.requests.length;
-      const turns = fixture.controller.prompts().length;
+      const turnsBefore = fixture.controller.prompts().length;
       const answered = yield* fixture.run(
-        DENO_SOURCE,
+        entrypoint,
         [
           "workflow",
           "answer",
-          "scheduled",
+          "certification",
           suspension,
           JSON.stringify({
             proceed: true,
-            response: "ACCEPTED",
-            rationale: "CERTIFICATION-ACCEPTANCE-RATIONALE",
+            response: "AUTHORIZED",
+            rationale: "CERTIFICATION-AUTHORIZATION-RATIONALE",
           }),
         ],
         90_000,
       );
       expectExit(answered, 0);
       expect(fixture.forge.requests).toHaveLength(before);
-      expect(fixture.controller.prompts()).toHaveLength(turns);
-      const suspended = yield* status(fixture, DENO_SOURCE, "scheduled");
-      expect(Reflect.get(Object(Reflect.get(suspended, "record")), "status")).toBe("suspended");
+      expect(fixture.controller.prompts()).toHaveLength(turnsBefore);
 
-      // The scheduler decides *when*, and nothing else: it invokes the
-      // ordinary resume this host built and answers with its outcome.
-      const outcome = yield* scoped(function* () {
-        yield* useFixtureEnvironment(fixture);
-        const host = yield* useDenoWorkflowHost(HELPER);
-        const resume = ordinaryResume(
-          { verbose: false, raw: false, secretDetection: true },
-          host,
-          documentExecutor(),
-        );
-        return yield* scheduleResume(resume, { runId: "scheduled" });
-      });
-      expect(outcome.exitCode).toBe(0);
+      // The continuation claims that answer and runs to acceptance.
+      const resumed = yield* fixture.run(entrypoint, ["workflow", "resume", "certification"]);
+      expectExit(resumed, 0);
+      expect(resumed.stdout).toContain("# Accepted");
+      expect(resumed.stdout).toContain("PLAN-V1");
+      expect(resumed.stdout).toContain(PROPOSAL.changes);
+      expect(resumed.stdout).toContain(`#1 (open) ${LOCATOR}/pull/1`);
+      // The report carries the exact retained reads rather than a summary of
+      // them, which is what makes the acceptance a decision about this pull
+      // request rather than about a description of one.
+      for (const evidence of [
+        "CERTIFICATION-REVIEW-BODY",
+        "CERTIFICATION-CONVERSATION-BODY",
+        "CERTIFICATION-INLINE-BODY",
+        "CERTIFICATION-CHECK",
+      ]) {
+        expect(resumed.stdout).toContain(evidence);
+      }
 
-      // One executor consumed it, one answer event was published, and the run
-      // continued exactly once.
-      const events = yield* history(fixture, DENO_SOURCE, "scheduled");
-      expect(events.filter((event) => effectOf(event) === "suspension_request")).toHaveLength(1);
-      // The answer is published on the coroutine that waited rather than on the
-      // root, so it is counted where the run keeps it: one answer event, and
-      // one delivery, claimed once.
-      console.log("=== answers table", JSON.stringify(yield* answerRows(fixture, "scheduled")));
-      const finalStatus = yield* status(fixture, DENO_SOURCE, "scheduled");
-      console.log(
-        "=== final status",
-        JSON.stringify(Reflect.get(Object(Reflect.get(finalStatus, "record")), "status")),
+      // Every authored stage ran, in authored order, across the two
+      // executions: discovery, the handoff checkpoint, the plan and its
+      // verdict, the plan checkpoint, the authorization checkpoint, the
+      // observation request, the proposal, the implementation verdict, the
+      // review checkpoint and the acceptance checkpoint.
+      const turns = fixture.controller.prompts().map((turn) => classify(turn.content));
+      expect(turns).toEqual([
+        "discovery",
+        "checkpoint",
+        "plan",
+        "planVerdict",
+        "checkpoint",
+        "checkpoint",
+        "observation",
+        "observation",
+        "implementationVerdict",
+        "checkpoint",
+        "checkpoint",
+      ]);
+
+      // The observation round trip: the implementor asked for the file the
+      // authored prompt told it to ask for, XMD read it, and the result came
+      // back in the next prompt rather than in the one that asked.
+      const exchange = fixture.controller
+        .prompts()
+        .filter((turn) => classify(turn.content) === "observation");
+      expect(instructedObservation(exchange[0]!.content)).toBe(
+        JSON.stringify({ kind: "observation", source: `<File path="README.md" />` }),
       );
-      const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "scheduled"]);
-      console.log("=== replay stdout tail", replayed.stdout.slice(-400));
-      expect(yield* journaled(fixture, "scheduled", "suspension_answer")).toHaveLength(1);
-      const completed = yield* status(fixture, DENO_SOURCE, "scheduled");
-      expect(Reflect.get(Object(Reflect.get(completed, "record")), "status")).toBe("completed");
-      // And it took no further turn: the acceptance answer is what remained.
-      expect(fixture.controller.prompts()).toHaveLength(turns);
+      expect(exchange[0]!.content).not.toContain(README_LINE);
+      expect(exchange[1]!.content).toContain(README_LINE);
+
+      // Local Git, the publication, the pull request and the three evidence
+      // reads all happened once, in that order, against the real remote and
+      // the loopback forge.
+      expect(
+        fixture.forge.requests.filter((made) => made === "POST /repos/owner/repository/pulls"),
+      ).toHaveLength(1);
+      for (const read of [
+        "GET /repos/owner/repository/pulls/1/reviews",
+        "GET /repos/owner/repository/issues/1/comments",
+        "GET /repos/owner/repository/pulls/1/comments",
+      ]) {
+        expect(fixture.forge.requests).toContain(read);
+      }
+      expect(fixture.forge.requests.some((made) => made.endsWith("/check-runs"))).toBe(true);
+      expect(fixture.forge.requests.some((made) => made.endsWith("/status"))).toBe(true);
+
+      // The commit this run published is on the branch it named, and it is
+      // the commit message the implementor proposed.
+      const heads = remoteRefs(fixture.remote);
+      expect(heads.get("refs/heads/agent/certification")).toBeDefined();
+
+      // Issue handling: the deferred finding became exactly one issue, in
+      // the tracker the run was given.
+      expect(fixture.forge.store.issues).toHaveLength(1);
+      expect(fixture.forge.store.issues[0]?.title).toBe(DEFERRED.title);
+
+      // The run ended accepted, and its status says so.
+      const record = yield* status(fixture, entrypoint, "certification");
+      expect(Reflect.get(Object(Reflect.get(record, "record")), "status")).toBe("completed");
+
+      // The Agent profile, as the agent process itself received it: an empty
+      // working directory this host owns, no additional directory, no MCP
+      // server, an empty requested tool set, and instructions that state the
+      // deny-all ceiling.
+      const created = sessions(fixture.controller);
+      expect(created.length).toBeGreaterThan(0);
+      for (const session of created) {
+        expect(session["mcpServers"]).toEqual([]);
+        const cwd = String(session["cwd"]);
+        expect(cwd.startsWith(fixture.runs)).toBe(true);
+        expect(cwd).toContain(".sessions");
+        // What the agent itself could see there, reported at the moment it
+        // was placed: the host removes this directory with the attachment,
+        // so nothing outside the run can look at it afterwards.
+        expect(session["entries"]).toEqual([]);
+        // And it is not the Workspace, the checkout, or the caller's place.
+        expect(cwd).not.toContain("worktrees");
+        expect(cwd.startsWith(fixture.definition)).toBe(false);
+        const meta = Object(session["_meta"]);
+        const instructions = String(Reflect.get(meta, "systemPrompt"));
+        expect(instructions).toContain("no native tool authority");
+        expect(instructions).toContain("A request for a native tool permission is denied");
+        const claude = Object(Reflect.get(Object(Reflect.get(meta, "claudeCode")), "options"));
+        expect(Reflect.get(claude, "allowedTools")).toEqual([]);
+      }
+
+      // And nothing the agent was handed names a place it may not go, or a
+      // credential it may not hold.
+      const surface = agentFacing(fixture.controller);
+      expect(surface).not.toContain(TOKEN);
+      expect(surface).not.toContain(fixture.remote.locator);
+      expect(surface).not.toContain(fixture.definition);
+      expect(surface).not.toContain("worktrees/");
     });
+  }
+
+  it("CF2: resumes a killed final workflow from the exact committed journal and Workspace frontier", function* () {
+    const fixture = yield* useFixture({ observations: 1, findings: [DEFERRED] });
+
+    // A real process death, after a committed effect and during the next
+    // one. The barrier is what the forge has published rather than a sleep:
+    // the pull request exists, so the publication before it committed and
+    // the reads after it have not happened.
+    const cli = DENO_SOURCE.command();
+    const child = yield* exec(cli.command, {
+      arguments: [...cli.arguments, ...startArguments("killed")],
+      cwd: fixture.definition,
+      env: fixture.environment,
+    });
+    for (const stream of ["stdout", "stderr"] as const) {
+      yield* spawn(function* () {
+        const output = yield* child[stream];
+        for (let next = yield* output.next(); !next.done; next = yield* output.next()) {
+          // Drained so a full pipe cannot stall the child before it commits.
+        }
+      });
+    }
+    yield* when(
+      function* () {
+        expect(fixture.forge.requests).toContain("POST /repos/owner/repository/pulls");
+      },
+      { timeout: 240_000 },
+    );
+    const publications = fixture.forge.requests.length;
+    const turns = fixture.controller.prompts().length;
+    process.kill(child.pid, "SIGKILL");
+    const killed = yield* child.join();
+    expect(killed.signal).toBe("SIGKILL");
+
+    // What the kill left committed, read from the run's own history.
+    const before = yield* history(fixture, DENO_SOURCE, "killed");
+    expect(before.length).toBeGreaterThan(0);
+    const frontier = yield* status(fixture, DENO_SOURCE, "killed");
+
+    // The resume replays that prefix and performs the suffix once.
+    const resumed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "killed"]);
+    expectExit(resumed, 0);
+    expect(resumed.stdout).toContain("# Accepted");
+
+    // Every event the kill left committed is still there, with the same id,
+    // the same bytes and the same Workspace root, in the same order.
+    const after = yield* history(fixture, DENO_SOURCE, "killed");
+    expect(after.slice(0, before.length)).toEqual(before);
+
+    // The Workspace the resumed execution continued from is the one the kill
+    // left current, rather than a root rebuilt from the definition.
+    const killedRoot = Reflect.get(frontier, "currentWorkspaceRootId");
+    expect(typeof killedRoot).toBe("string");
+    expect(Reflect.get(Object(Reflect.get(frontier, "journalFrontier")), "workspaceRootId")).toBe(
+      killedRoot,
+    );
+
+    // Nothing external happened twice: one pull request, and the branch the
+    // killed execution published is the one the resumed execution advanced.
+    expect(
+      fixture.forge.requests.filter((made) => made === "POST /repos/owner/repository/pulls"),
+    ).toHaveLength(1);
+    expect(fixture.forge.requests.length).toBeGreaterThanOrEqual(publications);
+    expect(fixture.controller.prompts().length).toBeGreaterThan(turns);
+
+    // A completed replay after it performs nothing at all: no Agent, no
+    // process, no Git host, no Issue, no Fetch, and no Workspace mutation.
+    const forgeCalls = fixture.forge.requests.length;
+    const contacts = fixture.controller.contacts.length;
+    const heads = remoteRefs(fixture.remote).get("refs/heads/agent/certification");
+    const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "killed"]);
+    expectExit(replayed, 0);
+    expect(fixture.forge.requests).toHaveLength(forgeCalls);
+    expect(fixture.controller.contacts).toHaveLength(contacts);
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/certification")).toBe(heads);
+    expect(yield* history(fixture, DENO_SOURCE, "killed")).toEqual(after);
+  });
+
+  it("CF3: schedules one ordinary resume for one retained answer", function* () {
+    // The composed workflow suspends at a real checkpoint — the last one, so
+    // what the continuation owes is the run's own report rather than another
+    // turn — and the scheduler is what continues it.
+    const fixture = yield* useFixture({
+      involves: ["accept the completed change"],
+      observations: 1,
+      findings: [DEFERRED],
+    });
+    const started = yield* fixture.run(DENO_SOURCE, startArguments("scheduled"));
+    expectExit(started, 2);
+    const suspension = suspensionOf(started);
+
+    // Delivery retains the answer and executes nothing.
+    const before = fixture.forge.requests.length;
+    const turns = fixture.controller.prompts().length;
+    const answered = yield* fixture.run(
+      DENO_SOURCE,
+      [
+        "workflow",
+        "answer",
+        "scheduled",
+        suspension,
+        JSON.stringify({
+          proceed: true,
+          response: "ACCEPTED",
+          rationale: "CERTIFICATION-ACCEPTANCE-RATIONALE",
+        }),
+      ],
+      90_000,
+    );
+    expectExit(answered, 0);
+    expect(fixture.forge.requests).toHaveLength(before);
+    expect(fixture.controller.prompts()).toHaveLength(turns);
+    const suspended = yield* status(fixture, DENO_SOURCE, "scheduled");
+    expect(Reflect.get(Object(Reflect.get(suspended, "record")), "status")).toBe("suspended");
+
+    // The scheduler decides *when*, and nothing else: it invokes the
+    // ordinary resume this host built and answers with its outcome.
+    const outcome = yield* scoped(function* () {
+      yield* useFixtureEnvironment(fixture);
+      const host = yield* useDenoWorkflowHost(HELPER);
+      const resume = ordinaryResume(
+        { verbose: false, raw: false, secretDetection: true },
+        host,
+        documentExecutor(),
+      );
+      return yield* scheduleResume(resume, { runId: "scheduled" });
+    });
+    expect(outcome.exitCode).toBe(0);
+
+    // One executor consumed it, one answer event was published, and the run
+    // continued exactly once.
+    const events = yield* history(fixture, DENO_SOURCE, "scheduled");
+    expect(events.filter((event) => effectOf(event) === "suspension_request")).toHaveLength(1);
+    // The answer is published on the coroutine that waited rather than on the
+    // root, so it is counted where the run keeps it: one answer event, and
+    // one delivery, claimed once.
+    console.log("=== answers table", JSON.stringify(yield* answerRows(fixture, "scheduled")));
+    const finalStatus = yield* status(fixture, DENO_SOURCE, "scheduled");
+    console.log(
+      "=== final status",
+      JSON.stringify(Reflect.get(Object(Reflect.get(finalStatus, "record")), "status")),
+    );
+    const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "scheduled"]);
+    console.log("=== replay stdout tail", replayed.stdout.slice(-400));
+    expect(yield* journaled(fixture, "scheduled", "suspension_answer")).toHaveLength(1);
+    const completed = yield* status(fixture, DENO_SOURCE, "scheduled");
+    expect(Reflect.get(Object(Reflect.get(completed, "record")), "status")).toBe("completed");
+    // And it took no further turn: the acceptance answer is what remained.
+    expect(fixture.controller.prompts()).toHaveLength(turns);
   });
 
   it("CF4: retains two named Repositories and Worktrees with dirty and unpushed state across restart", function* () {
-    yield* scoped(function* () {
-      const fixture = yield* useFixture({}, { documents: { "two.md": TWO_REPOSITORIES } });
+    const fixture = yield* useFixture({}, { documents: { "two.md": TWO_REPOSITORIES } });
 
-      // The first execution creates both checkouts, commits one change on each
-      // named branch, leaves an uncommitted file behind in both, and stops at a
-      // durable wait with nothing published.
-      const started = yield* fixture.run(DENO_SOURCE, [
-        "workflow",
-        "start",
-        "--id=two",
-        "two.md",
-        `--props-repository=${LOCATOR}`,
-      ]);
-      expectExit(started, 2);
-      const suspension = suspensionOf(started);
-      const committed = yield* history(fixture, DENO_SOURCE, "two");
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/first")).toBeUndefined();
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/second")).toBeUndefined();
+    // The first execution creates both checkouts, commits one change on each
+    // named branch, leaves an uncommitted file behind in both, and stops at a
+    // durable wait with nothing published.
+    const started = yield* fixture.run(DENO_SOURCE, [
+      "workflow",
+      "start",
+      "--id=two",
+      "two.md",
+      `--props-repository=${LOCATOR}`,
+    ]);
+    expectExit(started, 2);
+    const suspension = suspensionOf(started);
+    const committed = yield* history(fixture, DENO_SOURCE, "two");
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/first")).toBeUndefined();
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/second")).toBeUndefined();
 
-      const answered = yield* fixture.run(
-        DENO_SOURCE,
-        ["workflow", "answer", "two", suspension, JSON.stringify({ proceed: true })],
-        90_000,
-      );
-      expectExit(answered, 0);
+    const answered = yield* fixture.run(
+      DENO_SOURCE,
+      ["workflow", "answer", "two", suspension, JSON.stringify({ proceed: true })],
+      90_000,
+    );
+    expectExit(answered, 0);
 
-      // The restart observes the same state at the retained frontier: both
-      // worktrees still dirty, both commits still there, neither published.
-      const resumed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "two"]);
-      expectExit(resumed, 0);
-      // Both worktrees still hold the file neither commit staged, so the dirty
-      // state crossed the restart rather than being rebuilt from the base.
-      expect(resumed.stdout).toContain("FIRST-LEFTOVER: first left behind");
-      expect(resumed.stdout).toContain("SECOND-LEFTOVER: second left behind");
-      // And both commits are still the commits the first execution made, one
-      // per repository, distinct from each other.
-      const [first, second] = commitsRetained(committed);
-      expect(first).toBeDefined();
-      expect(second).toBeDefined();
-      expect(first).not.toBe(second);
+    // The restart observes the same state at the retained frontier: both
+    // worktrees still dirty, both commits still there, neither published.
+    const resumed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "two"]);
+    expectExit(resumed, 0);
+    // Both worktrees still hold the file neither commit staged, so the dirty
+    // state crossed the restart rather than being rebuilt from the base.
+    expect(resumed.stdout).toContain("FIRST-LEFTOVER: first left behind");
+    expect(resumed.stdout).toContain("SECOND-LEFTOVER: second left behind");
+    // And both commits are still the commits the first execution made, one
+    // per repository, distinct from each other.
+    const [first, second] = commitsRetained(committed);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first).not.toBe(second);
 
-      // And it published only what the document authored: the first branch,
-      // holding the commit the first execution made, and never the second.
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/first")).toBe(first);
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/second")).toBeUndefined();
-    });
+    // And it published only what the document authored: the first branch,
+    // holding the commit the first execution made, and never the second.
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/first")).toBe(first);
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/second")).toBeUndefined();
   });
 
   it("CF5: malformed Agent output and bounded exhaustion stop before later effects", function* () {
-    yield* scoped(function* () {
-      // A proposal envelope whose payload is not the contract the prompt
-      // supplied. The bounded repair turn does not rescue it.
-      const malformed = yield* useFixture({ observations: 1, malformedProposal: true });
-      const refused = yield* malformed.run(DENO_SOURCE, startArguments("malformed"));
-      expectExit(refused, 1);
-      for (const later of [
-        "POST /repos/owner/repository/pulls",
-        "POST /repos/owner/repository/issues",
-      ]) {
-        expect(malformed.forge.requests).not.toContain(later);
-      }
-      expect(remoteRefs(malformed.remote).get("refs/heads/agent/certification")).toBeUndefined();
-      expect(malformed.forge.store.issues).toHaveLength(0);
-      const malformedEvents = yield* history(malformed, DENO_SOURCE, "malformed");
-      expect(malformedEvents.filter((event) => effectOf(event) === "git_host_effect")).toHaveLength(
-        0,
-      );
+    // A proposal envelope whose payload is not the contract the prompt
+    // supplied. The bounded repair turn does not rescue it.
+    const malformed = yield* useFixture({ observations: 1, malformedProposal: true });
+    const refused = yield* malformed.run(DENO_SOURCE, startArguments("malformed"));
+    expectExit(refused, 1);
+    for (const later of [
+      "POST /repos/owner/repository/pulls",
+      "POST /repos/owner/repository/issues",
+    ]) {
+      expect(malformed.forge.requests).not.toContain(later);
+    }
+    expect(remoteRefs(malformed.remote).get("refs/heads/agent/certification")).toBeUndefined();
+    expect(malformed.forge.store.issues).toHaveLength(0);
+    const malformedEvents = yield* history(malformed, DENO_SOURCE, "malformed");
+    expect(malformedEvents.filter((event) => effectOf(event) === "git_host_effect")).toHaveLength(
+      0,
+    );
 
-      // A native permission request is denied and fails the turn that asked.
-      const denied = yield* useFixture({ requestsTool: "Bash(rm -rf /)" });
-      const stopped = yield* denied.run(DENO_SOURCE, startArguments("denied"));
-      expectExit(stopped, 1);
-      const decisions = denied.controller.contacts.filter(
-        (contact) => contact.kind === "permission",
-      );
-      expect(decisions.length).toBeGreaterThan(0);
-      expect(JSON.stringify(decisions[0]?.payload)).toContain("reject");
-      expect(denied.forge.requests).toHaveLength(0);
-      expect(remoteRefs(denied.remote).get("refs/heads/agent/certification")).toBeUndefined();
-    });
+    // A native permission request is denied and fails the turn that asked.
+    const denied = yield* useFixture({ requestsTool: "Bash(rm -rf /)" });
+    const stopped = yield* denied.run(DENO_SOURCE, startArguments("denied"));
+    expectExit(stopped, 1);
+    const decisions = denied.controller.contacts.filter((contact) => contact.kind === "permission");
+    expect(decisions.length).toBeGreaterThan(0);
+    expect(JSON.stringify(decisions[0]?.payload)).toContain("reject");
+    expect(denied.forge.requests).toHaveLength(0);
+    expect(remoteRefs(denied.remote).get("refs/heads/agent/certification")).toBeUndefined();
   });
 
   it("CF6: completed replay and retained history contain no hidden decision state", function* () {
-    yield* scoped(function* () {
-      // A run nobody had to be asked about, so it completes in one execution.
-      const fixture = yield* useFixture({ observations: 1, findings: [DEFERRED] });
-      const completed = yield* fixture.run(DENO_SOURCE, startArguments("accepted"));
-      console.log("=== forge log\n", fixture.forge.requests.join("\n"));
-      expectExit(completed, 0);
-      expect(completed.stdout).toContain("# Accepted");
+    // A run nobody had to be asked about, so it completes in one execution.
+    const fixture = yield* useFixture({ observations: 1, findings: [DEFERRED] });
+    const completed = yield* fixture.run(DENO_SOURCE, startArguments("accepted"));
+    console.log("=== forge log\n", fixture.forge.requests.join("\n"));
+    expectExit(completed, 0);
+    expect(completed.stdout).toContain("# Accepted");
 
-      // A completed replay performs nothing: no Agent, no forge, no Git host.
-      const forgeCalls = fixture.forge.requests.length;
-      const contacts = fixture.controller.contacts.length;
-      const head = remoteRefs(fixture.remote).get("refs/heads/agent/certification");
-      const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "accepted"]);
-      expectExit(replayed, 0);
-      expect(fixture.forge.requests).toHaveLength(forgeCalls);
-      expect(fixture.controller.contacts).toHaveLength(contacts);
-      expect(remoteRefs(fixture.remote).get("refs/heads/agent/certification")).toBe(head);
+    // A completed replay performs nothing: no Agent, no forge, no Git host.
+    const forgeCalls = fixture.forge.requests.length;
+    const contacts = fixture.controller.contacts.length;
+    const head = remoteRefs(fixture.remote).get("refs/heads/agent/certification");
+    const replayed = yield* fixture.run(DENO_SOURCE, ["workflow", "resume", "accepted"]);
+    expectExit(replayed, 0);
+    expect(fixture.forge.requests).toHaveLength(forgeCalls);
+    expect(fixture.controller.contacts).toHaveLength(contacts);
+    expect(remoteRefs(fixture.remote).get("refs/heads/agent/certification")).toBe(head);
 
-      // Every material decision this run took is in its retained history.
-      const events = yield* history(fixture, DENO_SOURCE, "accepted");
-      for (const effect of [
-        "workspace_repository",
-        "workspace_worktree",
-        "agent_prompt",
-        "generated_xmd",
-        "workspace_file",
-        "workspace_git_add",
-        "workspace_git_commit",
-        "git_host_effect",
-        "pull_request_read",
-        "issue_effect",
-      ]) {
-        expect(events.filter((event) => effectOf(event) === effect).length).toBeGreaterThan(0);
-      }
+    // Every material decision this run took is in its retained history.
+    const events = yield* history(fixture, DENO_SOURCE, "accepted");
+    for (const effect of [
+      "workspace_repository",
+      "workspace_worktree",
+      "agent_prompt",
+      "generated_xmd",
+      "workspace_file",
+      "workspace_git_add",
+      "workspace_git_commit",
+      "git_host_effect",
+      "pull_request_read",
+      "issue_effect",
+    ]) {
+      expect(events.filter((event) => effectOf(event) === effect).length).toBeGreaterThan(0);
+    }
 
-      // Nothing in it is a transcript, a host path, a provider handle, a
-      // credential, an endpoint or a Git sidecar ref.
-      const retained = JSON.stringify(events);
-      expect(retained).not.toContain(TOKEN);
-      expect(retained).not.toContain(fixture.remote.locator);
-      expect(retained).not.toContain(fixture.forge.endpoint);
-      expect(retained).not.toContain(fixture.root);
-      expect(retained).not.toContain("refs/xmd");
+    // Nothing in it is a transcript, a host path, a provider handle, a
+    // credential, an endpoint or a Git sidecar ref.
+    const retained = JSON.stringify(events);
+    expect(retained).not.toContain(TOKEN);
+    expect(retained).not.toContain(fixture.remote.locator);
+    expect(retained).not.toContain(fixture.forge.endpoint);
+    expect(retained).not.toContain(fixture.root);
+    expect(retained).not.toContain("refs/xmd");
 
-      // A compatible fork continues from a checkpoint the history offers; an
-      // incompatible one is refused.
-      // A fork continues a run that has published nothing yet, so what it
-      // proves is that the checkpoint is continuable rather than that a
-      // published effect can be performed twice — which is `<PullRequest>`'s
-      // own refusal and not this case's subject.
-      const waiting = yield* useFixture({ involves: ["authorize implementation"] });
-      const suspended = yield* waiting.run(DENO_SOURCE, startArguments("secret"));
-      expectExit(suspended, 2);
-      const forkable = yield* waiting.run(
-        DENO_SOURCE,
-        ["workflow", "history", "secret", "--forkable", "--json"],
-        90_000,
-      );
-      expectExit(forkable, 0);
-      const selected = lastForkable(forkable.stdout);
-      const forked = yield* waiting.run(DENO_SOURCE, [
+    // A compatible fork continues from a checkpoint the history offers; an
+    // incompatible one is refused.
+    // A fork continues a run that has published nothing yet, so what it
+    // proves is that the checkpoint is continuable rather than that a
+    // published effect can be performed twice — which is `<PullRequest>`'s
+    // own refusal and not this case's subject.
+    const waiting = yield* useFixture({ involves: ["authorize implementation"] });
+    const suspended = yield* waiting.run(DENO_SOURCE, startArguments("secret"));
+    expectExit(suspended, 2);
+    const forkable = yield* waiting.run(
+      DENO_SOURCE,
+      ["workflow", "history", "secret", "--forkable", "--json"],
+      90_000,
+    );
+    expectExit(forkable, 0);
+    const selected = lastForkable(forkable.stdout);
+    const forked = yield* waiting.run(DENO_SOURCE, [
+      "workflow",
+      "fork",
+      "secret",
+      `--at=${selected}`,
+      "--id=forked",
+      "workflows/adversarial-implementation/start.md",
+      `--props-request=${REQUEST}`,
+      `--props-repository=${LOCATOR}`,
+      `--props-tracker=${TRACKER}`,
+      "--props-planner=certification-planner",
+      "--props-implementor=certification-implementor",
+      "--props-branch=agent/certification",
+    ]);
+    expect([0, 2]).toContain(forked.code);
+    const incompatible = yield* waiting.run(
+      DENO_SOURCE,
+      ["workflow", "fork", "secret", `--at=${selected}`, "--id=incompatible", "two.md"],
+      90_000,
+    );
+    expectExit(incompatible, 1);
+    const suspension = suspensionOf(suspended);
+    const refusedAnswer = yield* waiting.run(
+      DENO_SOURCE,
+      [
         "workflow",
-        "fork",
+        "answer",
         "secret",
-        `--at=${selected}`,
-        "--id=forked",
-        "workflows/adversarial-implementation/start.md",
-        `--props-request=${REQUEST}`,
-        `--props-repository=${LOCATOR}`,
-        `--props-tracker=${TRACKER}`,
-        "--props-planner=certification-planner",
-        "--props-implementor=certification-implementor",
-        "--props-branch=agent/certification",
-      ]);
-      expect([0, 2]).toContain(forked.code);
-      const incompatible = yield* waiting.run(
-        DENO_SOURCE,
-        ["workflow", "fork", "secret", `--at=${selected}`, "--id=incompatible", "two.md"],
-        90_000,
-      );
-      expectExit(incompatible, 1);
-      const suspension = suspensionOf(suspended);
-      const refusedAnswer = yield* waiting.run(
-        DENO_SOURCE,
-        [
-          "workflow",
-          "answer",
-          "secret",
-          suspension,
-          JSON.stringify({
-            proceed: true,
-            response: `ghp_${"A".repeat(36)}`,
-            rationale: "a token in an answer",
-          }),
-        ],
-        90_000,
-      );
-      expectExit(refusedAnswer, 1);
-      const answerEvents = yield* history(waiting, DENO_SOURCE, "secret");
-      expect(answerEvents.filter((event) => effectOf(event) === "suspension_answer")).toHaveLength(
-        0,
-      );
-    });
+        suspension,
+        JSON.stringify({
+          proceed: true,
+          response: `ghp_${"A".repeat(36)}`,
+          rationale: "a token in an answer",
+        }),
+      ],
+      90_000,
+    );
+    expectExit(refusedAnswer, 1);
+    const answerEvents = yield* history(waiting, DENO_SOURCE, "secret");
+    expect(answerEvents.filter((event) => effectOf(event) === "suspension_answer")).toHaveLength(0);
   });
 });
