@@ -306,6 +306,9 @@ export interface GitHubIssuesOptions {
    * document can write widens it.
    */
   readonly ceiling: readonly string[];
+  /** The API base every request is built against, when not the default. */
+  readonly endpoint?: string;
+  /** An injected transport, which outranks any configured endpoint. */
   readonly access?: GitHubSource;
 }
 
@@ -321,7 +324,13 @@ export function* useGitHubIssues(options: GitHubIssuesOptions): Operation<void> 
   // A source rather than an access: it is credential-free, so holding one for
   // the middleware's whole lifetime retains nothing. A session — which does have
   // an identity — is opened per request below, after that request's ceiling.
-  const source = options.access ?? denoGitHubSource();
+  //
+  // Precedence: an injected transport, then a configured endpoint, then the
+  // platform's own GitHub. A suite that supplies its own access is not asking
+  // for a different endpoint as well.
+  const source =
+    options.access ??
+    (options.endpoint === undefined ? denoGitHubSource() : denoGitHubSource(options.endpoint));
 
   yield* IssueApi.around(
     {

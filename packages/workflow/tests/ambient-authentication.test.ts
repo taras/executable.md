@@ -61,6 +61,7 @@ import { remoteBranch, remoteRefs, useBareRemote } from "./support/git-remotes.t
 import { useGitHttpRemote } from "./support/git-http.ts";
 import type { GitHttpRemote } from "./support/git-http.ts";
 import { useHomeWithoutAuthentication, useInvokingHome } from "./support/credential-home.ts";
+import { credential, useIssueTrackerServer } from "./support/issue-tracker-server.ts";
 import {
   fixture as pullRequestFixture,
   published as publishedPullRequest,
@@ -1335,6 +1336,63 @@ describe("workflow GitHub source sessions", () => {
     // authorized.
     expect(refusal).toBeDefined();
     expect(opened).toEqual([]);
+  });
+
+  it("sends an Issue read to the API base the host configured, as this process", function* () {
+    const server = yield* useIssueTrackerServer({
+      issues: [
+        {
+          number: 7,
+          state: "open",
+          title: "an ordinary issue",
+          body: "what it says",
+          labels: ["triage"],
+          assignee: null,
+        },
+      ],
+    });
+
+    // Ambient, and only ambient: the installation below names no access, no
+    // transport and no environment, so the only credential it can reach is the
+    // one this process is standing in. Restored on every exit, so the identity
+    // this case arranged is not inherited by whatever runs next.
+    const before = process.env.GH_TOKEN;
+    yield* ensure(() => {
+      if (before === undefined) {
+        delete process.env.GH_TOKEN;
+      } else {
+        process.env.GH_TOKEN = before;
+      }
+    });
+    process.env.GH_TOKEN = credential();
+
+    const details = yield* scoped(function* () {
+      yield* useGitHubIssues({
+        ceiling: ["https://github.com/octo/project"],
+        endpoint: server.url,
+      });
+      return yield* IssueApi.operations.read("https://github.com/octo/project/issues/7", {
+        provider: GITHUB,
+      });
+    });
+
+    // A normalized answer at all is already the proof: the payload names its own
+    // loopback origin as the issue's home, and the adapter accepts that only
+    // when it is the endpoint the source was built against. The default source
+    // this middleware used to construct would have asked public GitHub.
+    expect(details).toEqual({
+      url: "https://github.com/octo/project/issues/7",
+      title: "an ordinary issue",
+      description: "what it says",
+      tags: ["triage"],
+      assignee: null,
+    });
+    expect(server.requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+      "GET /repos/octo/project/issues/7",
+    ]);
+    // Reduced to a verdict before it is asserted, so a failure prints whether
+    // the request carried this process's credential rather than printing it.
+    expect(server.requests[0]?.authorization === `Bearer ${credential()}`).toBe(true);
   });
 });
 
