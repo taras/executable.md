@@ -37,6 +37,24 @@ export type {
   WorkflowRunCreation,
 } from "./src/lifecycle/execution.ts";
 export type { WorkflowLifecycleOptions } from "./src/deno/lifecycle.ts";
+/**
+ * How a host reads a retained definition's Markdown back, and the closure it
+ * returns.
+ *
+ * Published here rather than from the package root because these describe what
+ * this adapter retains: a closure is checked against DOFS and SQLite rows, and
+ * the reader is installed into this provider. The encoding stays private —
+ * nothing that reads or writes a container is exported from any entrypoint.
+ */
+export { gitBlobIdentity } from "./src/deno/artifact/source.ts";
+export type { WorkflowDefinitionSourceReader } from "./src/deno/artifact/source.ts";
+export type {
+  DetachedXmdArtifact,
+  VerifiedXmdArtifact,
+  XmdArtifactDefinitionClosure,
+  XmdArtifactDefinitionComponent,
+  XmdArtifactDefinitionRoot,
+} from "./src/deno/artifact/types.ts";
 export {
   hashRunId,
   workflowForkStaging,

@@ -86,6 +86,7 @@ import {
 } from "../workspace/manifest.ts";
 import { decodeDofsManifest } from "../workspace/root.ts";
 import type { DofsManifest } from "../workspace/root.ts";
+import { gitBlobIdentity } from "./source.ts";
 import { canonicalJsonBytes, canonicalJsonText, entryKey } from "./manifest.ts";
 import type {
   XmdArtifactContentEntry,
@@ -1695,7 +1696,7 @@ function verifyDefinitionClosure(contents: XmdArtifactContents, reject: Reject):
   ) {
     reject("its definition source closure does not describe the definition the run retains");
   }
-  if (gitBlobId(root.content, root.objectFormat) !== root.blobId) {
+  if (gitBlobIdentity(root.content, root.objectFormat) !== root.blobId) {
     reject("the root document bytes do not hash to the identity the closure declares");
   }
 
@@ -1713,27 +1714,10 @@ function verifyDefinitionClosure(contents: XmdArtifactContents, reject: Reject):
     if (source.blobId !== component.sourceHash) {
       reject("a carried component names an object other than the one the definition declares");
     }
-    if (gitBlobId(source.content, root.objectFormat) !== source.blobId) {
+    if (gitBlobIdentity(source.content, root.objectFormat) !== source.blobId) {
       reject("a component's bytes do not hash to the identity the closure declares");
     }
   }
-}
-
-/**
- * The Git object id of some Markdown, under the definition's object format.
- *
- * A blob's identity is the hash of `blob <length>`, one NUL, then the content —
- * the header is assembled from its own bytes rather than written as a literal,
- * because a NUL inside a source file makes that file binary to every tool that
- * reads diffs.
- */
-function gitBlobId(content: string, format: "sha1" | "sha256"): string {
-  const bytes = encoder.encode(content);
-  return createHash(format)
-    .update(encoder.encode(`blob ${bytes.byteLength}`))
-    .update(new Uint8Array([0]))
-    .update(bytes)
-    .digest("hex");
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {

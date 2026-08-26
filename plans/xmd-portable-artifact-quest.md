@@ -187,8 +187,12 @@ boundaries; do not teach the artifact container to acquire execution authority.
    authenticated definition closure.
 3. Missing retrieval authority or source objects, object-format/hash mismatch,
    unreadable retained state, invalid output path, existing target, atomic
-   publication failure, cancellation, or failed temporary cleanup leaves no
-   requested output and does not claim export success.
+   publication failure, cancellation, or a temporary cleanup failure before
+   publication leaves no requested output and does not claim export success.
+   Successful atomic no-replace publication commits the export: cleanup of the
+   private entry it published from is best effort, and a failure there is
+   reported as a retained leftover beside a successful export rather than
+   invalidating or rolling back the committed artifact.
 4. A crashed source uses the existing recovery-copy discipline; export does not
    repair, settle, replay, append to, or relabel the retained source.
 5. CLI output distinguishes semantic artifact identity from final-file digest

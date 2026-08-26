@@ -187,7 +187,14 @@ function directoryPaths(
   return directories;
 }
 
-function readRetainedRows(database: DatabaseSync): RetainedJournalRow[] {
+/**
+ * Every retained journal row, in append order.
+ *
+ * A fork slices a prefix out of this; an export seals all of it. Both read the
+ * rows the same way, because what makes a row well formed is not a property of
+ * which of them is asking.
+ */
+export function readRetainedRows(database: DatabaseSync): RetainedJournalRow[] {
   const rows: RetainedJournalRow[] = [];
   for (const row of reading(
     database,
@@ -275,15 +282,17 @@ function readBlob(database: DatabaseSync, hash: string, path: string): RetainedB
   });
 }
 
-function readRepositories(
+export function readRepositories(
   database: DatabaseSync,
   path: string,
-  checkouts: ReadonlySet<string>,
+  checkouts?: ReadonlySet<string>,
 ): RetainedRepository[] {
   const repositories: RetainedRepository[] = [];
   for (const row of reading(database, "SELECT * FROM workspace_repositories ORDER BY name").all()) {
     const checkoutPath = text(row["checkout_path"], "workspace_repositories.checkout_path");
-    if (!checkouts.has(checkoutPath)) {
+    // Absent selects every row. A fork takes only the checkouts its chosen root
+    // still has a directory for; an export records what the run retains.
+    if (checkouts !== undefined && !checkouts.has(checkoutPath)) {
       continue;
     }
     repositories.push(
@@ -305,10 +314,10 @@ function readRepositories(
   return repositories;
 }
 
-function readWorktrees(
+export function readWorktrees(
   database: DatabaseSync,
   path: string,
-  checkouts: ReadonlySet<string>,
+  checkouts?: ReadonlySet<string>,
 ): RetainedWorktree[] {
   const worktrees: RetainedWorktree[] = [];
   for (const row of reading(
@@ -316,7 +325,7 @@ function readWorktrees(
     "SELECT * FROM workspace_worktrees ORDER BY repository_name, name",
   ).all()) {
     const checkoutPath = text(row["checkout_path"], "workspace_worktrees.checkout_path");
-    if (!checkouts.has(checkoutPath)) {
+    if (checkouts !== undefined && !checkouts.has(checkoutPath)) {
       continue;
     }
     worktrees.push(

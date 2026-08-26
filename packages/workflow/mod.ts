@@ -313,6 +313,14 @@ export type {
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";
+// The export request, its result and the boundary it names. The retained record
+// shapes an artifact also carries are DOFS and SQLite rows, so they are the
+// Deno entrypoint's to publish rather than this one's.
+export type {
+  WorkflowExportRequest,
+  WorkflowExportResult,
+  XmdArtifactFrontier,
+} from "./src/lifecycle/export.ts";
 export { readEventSource } from "./src/lifecycle/history.ts";
 export type { InheritedEventProvenance, WorkflowHistoryEntry } from "./src/lifecycle/history.ts";
 export { classifyForkability } from "./src/lifecycle/forkability.ts";

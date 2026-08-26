@@ -73,8 +73,16 @@ function environment(home: string): Record<string, string> {
   };
 }
 
-/** Run one Git command, failing the suite with what Git said when it refuses. */
-export function git(args: readonly string[], cwd: string, home: string): string {
+/**
+ * Run one Git command and answer with exactly what it printed.
+ *
+ * Untrimmed, because a fixture that reads a committed file back out of Git is
+ * reading bytes: a trailing newline is part of the document, and a helper that
+ * removed it would make "these are the exact bytes" a claim about something
+ * else. `git()` trims, for the object ids and branch names every other caller
+ * asks for.
+ */
+export function gitOutput(args: readonly string[], cwd: string, home: string): string {
   const output = spawnSync("git", [...args], {
     cwd,
     env: environment(home),
@@ -84,7 +92,12 @@ export function git(args: readonly string[], cwd: string, home: string): string 
   if (output.status !== 0) {
     throw new Error(`git ${args.join(" ")} exited ${output.status} in ${cwd}: ${output.stderr}`);
   }
-  return output.stdout.trim();
+  return output.stdout;
+}
+
+/** Run one Git command, failing the suite with what Git said when it refuses. */
+export function git(args: readonly string[], cwd: string, home: string): string {
+  return gitOutput(args, cwd, home).trim();
 }
 
 function* writeEntry(root: string, entry: RemoteEntry): Operation<void> {

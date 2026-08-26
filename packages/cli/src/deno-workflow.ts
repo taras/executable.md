@@ -32,6 +32,7 @@ import {
 import type { WorkflowExecutionTransitions } from "@executablemd/workflow/deno";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import type { HelperAssembly } from "@executablemd/workflow/credential-helper";
+import { readDefinitionSource } from "./workflow-source.ts";
 import type { WorkflowHost } from "./workflow.ts";
 import { gitHubIssuesConfiguration } from "./github-issues-config.ts";
 import { gitHubPullRequestsConfiguration } from "./github-pull-requests-config.ts";
@@ -59,7 +60,10 @@ export function* useDenoWorkflowHost(helper: HelperAssembly): Operation<Workflow
       return useWorkflowRunHost({ root });
     },
     useLifecycle(): Operation<void> {
-      return useWorkflowLifecycle({ root });
+      // The reader goes into the provider's closure, not onto a request. An
+      // export seals the document a run was of, and a caller that could hand
+      // that in would be sealing its own bytes as somebody else's evidence.
+      return useWorkflowLifecycle({ root, definitionSource: readDefinitionSource });
     },
     useDelivery(): Operation<void> {
       return useWorkflowInputDelivery({ root });

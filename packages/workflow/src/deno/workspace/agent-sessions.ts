@@ -95,8 +95,12 @@ export function agentSessionKey(identity: AgentSessionIdentity): string {
   return ["xmd", "workflow", "v1", digest(identity.sessionIdentity)].join(":");
 }
 
-const SELECT = `SELECT session_key, provider, agent_command, session_identity, policy,
-  assertion_kind, assertion_value, created_at FROM agent_sessions WHERE session_key = ?`;
+const COLUMNS = `session_key, provider, agent_command, session_identity, policy,
+  assertion_kind, assertion_value, created_at`;
+
+const SELECT = `SELECT ${COLUMNS} FROM agent_sessions WHERE session_key = ?`;
+
+const SELECT_ALL = `SELECT ${COLUMNS} FROM agent_sessions ORDER BY session_key`;
 
 const INSERT = `INSERT INTO agent_sessions (session_key, provider, agent_command,
   session_identity, policy, assertion_kind, assertion_value, created_at)
@@ -114,9 +118,21 @@ function text(value: unknown): string | undefined {
 
 function readRow(database: DatabaseSync, sessionKey: string): AgentSessionRecord | undefined {
   const row = database.prepare(SELECT).get(sessionKey);
-  if (row === undefined) {
-    return undefined;
-  }
+  return row === undefined ? undefined : parseSessionRow(row);
+}
+
+/**
+ * Every mapping this run holds, in one deterministic order.
+ *
+ * What an export seals. Reading them all goes through the same parse one key
+ * does, so a row an export accepts is a row a continuation would have accepted.
+ */
+export function readAllAgentSessions(database: DatabaseSync): AgentSessionRecord[] {
+  return database.prepare(SELECT_ALL).all().map(parseSessionRow);
+}
+
+function parseSessionRow(row: Record<string, unknown>): AgentSessionRecord {
+  const sessionKey = text(row["session_key"]);
   const provider = text(row["provider"]);
   const agentCommand = text(row["agent_command"]);
   const sessionIdentity = text(row["session_identity"]);
@@ -125,6 +141,7 @@ function readRow(database: DatabaseSync, sessionKey: string): AgentSessionRecord
   const value = text(row["assertion_value"]);
   const createdAt = text(row["created_at"]);
   if (
+    sessionKey === undefined ||
     provider === undefined ||
     agentCommand === undefined ||
     sessionIdentity === undefined ||

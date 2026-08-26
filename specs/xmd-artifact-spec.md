@@ -45,9 +45,22 @@ artifact or covered by a CI attestation.
 
 `--output` is required, accepts a local path ending in `.xmd`, and never accepts
 standard output. Export refuses an existing target rather than replacing it.
-The completed file appears atomically: a failure or cancellation leaves no file
-at the requested target. Provider-private temporary state is removed during
-teardown; a cleanup failure is reported and does not claim a successful export.
+The completed file appears atomically, through an atomic no-replace link: what
+appears at the requested path is the whole artifact or nothing, and a name
+something else took while the artifact was being written survives untouched.
+
+That link is the export's commit point, and every provider-private temporary is
+removed before it. A failure, a publication refusal, a cancellation or a cleanup
+failure up to that moment leaves no file at the requested target and reports
+failure. After it the artifact is never taken back. One private entry remains,
+holding the same content under a name nobody was told about; removing it is best
+effort, and a failure there is reported beside the success as a retained
+leftover rather than instead of it. Reporting that nothing was published while
+the complete artifact sits at the requested path would be false, and taking the
+file back to make it true would destroy the evidence the caller asked for. This
+is the rule a `<File>` write already follows (`specs/executable-mdx-spec.md`
+§6.13): once the commit returns, the write is reported and the leftover is
+named.
 
 ### 1.2 Inspect the file anywhere
 
@@ -440,7 +453,11 @@ Export refuses without producing the target when:
 - any retained state required by the artifact manifest is unreadable;
 - the target exists, lacks the `.xmd` extension or cannot be published
   atomically; or
-- temporary-state cleanup fails.
+- provider-private temporary cleanup fails before publication.
+
+Publication is the commit point. Cleanup of the one private entry that remains
+after it cannot invalidate or roll back the committed artifact: it is reported
+as a retained leftover beside a successful export.
 
 Inspection refuses without a partial result when recognition or manifest
 verification fails.
@@ -484,8 +501,8 @@ Architecture review freezes these invariants before implementation:
 
 | Contract | Status at this design revision |
 | --- | --- |
-| XMD artifact terminology and structural boundary | specified in `architecture.md`; unbuilt |
-| `xmd workflow export` | specified; unbuilt |
+| XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
+| `xmd workflow export` | specified; built, Deno provider only. Source retrieval is host-installed rather than caller-supplied |
 | artifact status/history and manifest verification | specified; unbuilt |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |
 | SQLite artifact container version 1 | specified as the initial encoding; the sealed container, its canonical manifest and its total read-only verifier are built. The physical schema is private and no raw table, SQL or connection is public API |
