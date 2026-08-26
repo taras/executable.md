@@ -13,7 +13,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { ensure, scoped } from "effection";
 import type { Operation } from "effection";
-import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readdir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec } from "@effectionx/process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -789,3 +789,112 @@ describe("Tier WFC — a workflow closed over a component bundle", () => {
     });
   });
 });
+
+/**
+ * Tier WFX — exporting a run's evidence to a file.
+ *
+ * The subject is the command's own boundary: what it refuses before touching a
+ * run, that a success leaves exactly one file where the caller asked for it,
+ * and that every refusal leaves that path empty. What the artifact *contains*
+ * is the workflow suites' business and is not re-proved here.
+ */
+describe("Tier WFX — xmd workflow export", () => {
+  it("WFX1: seals a completed run and reports both digests", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=release-1",
+        "flows/release.md",
+      ]).join();
+      expect(started.code).toBe(0);
+
+      const target = join(fixture.repository, "evidence.xmd");
+      const exported = yield* xmd(fixture, [
+        "workflow",
+        "export",
+        "release-1",
+        `--output=${target}`,
+      ]).join();
+
+      expect(exported.code).toBe(0);
+      // The report is the command's result, so it goes where every other
+      // inspection result goes.
+      expect(exported.stdout).toContain(`workflow artifact: ${target}`);
+      expect(exported.stdout).toContain("workflow run: release-1");
+
+      const identity = digest(exported.stdout, "workflow artifact identity: ");
+      const bytes = digest(exported.stdout, "workflow artifact sha256: ");
+      expect(identity).toMatch(/^[0-9a-f]{64}$/);
+      expect(bytes).toMatch(/^[0-9a-f]{64}$/);
+      // Reported separately because they answer different questions.
+      expect(identity).not.toBe(bytes);
+
+      expect(yield* exists(target)).toBe(true);
+      // Nothing staged is left beside it.
+      expect(
+        (yield* readdir(fixture.repository)).filter((name) => name.startsWith(".xmd-export-")),
+      ).toEqual([]);
+    });
+  });
+
+  it("WFX2: refuses a destination it cannot write, and leaves it alone", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const started = yield* xmd(fixture, [
+        "workflow",
+        "start",
+        "--id=release-1",
+        "flows/release.md",
+      ]).join();
+      expect(started.code).toBe(0);
+
+      const target = join(fixture.repository, "taken.xmd");
+      yield* writeTextFile(target, "somebody else's file\n");
+
+      const refusals = [
+        // No destination at all.
+        ["workflow", "export", "release-1"],
+        // A name that does not say what the file is.
+        ["workflow", "export", "release-1", `--output=${join(fixture.repository, "run.db")}`],
+        // A container cannot arrive on a stream.
+        ["workflow", "export", "release-1", "--output=-"],
+        // Somebody's file is not a destination.
+        ["workflow", "export", "release-1", `--output=${target}`],
+      ];
+
+      const codes: (number | undefined)[] = [];
+      for (const args of refusals) {
+        codes.push((yield* xmd(fixture, args).join()).code);
+      }
+      expect(codes).toEqual([1, 1, 1, 1]);
+
+      // The one that already existed is untouched, and the others made nothing.
+      expect(yield* readTextFile(target)).toBe("somebody else's file\n");
+      expect(yield* exists(join(fixture.repository, "run.db"))).toBe(false);
+    });
+  });
+
+  it("WFX3: refuses a run it does not have, without creating the target", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      const target = join(fixture.repository, "absent.xmd");
+      const refused = yield* xmd(fixture, [
+        "workflow",
+        "export",
+        "no-such-run",
+        `--output=${target}`,
+      ]).join();
+
+      expect(refused.code).toBe(1);
+      expect(yield* exists(target)).toBe(false);
+    });
+  });
+});
+
+/** One reported digest, by the line that labels it. */
+function digest(output: string, label: string): string | undefined {
+  return output
+    .split("\n")
+    .find((line) => line.startsWith(label))
+    ?.slice(label.length)
+    .trim();
+}
