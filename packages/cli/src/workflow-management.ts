@@ -44,8 +44,10 @@ import { rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
+  DefinitionRetrieval,
   WorkflowArtifactIdentity,
   WorkflowHistoryEntry,
+  WorkflowInspectionSnapshot,
   WorkflowLifecycleSnapshot,
   WorkflowRunRecord,
 } from "@executablemd/workflow";
@@ -104,7 +106,11 @@ export function runWorkflowManagement(
         if (!snapshot.ok) {
           return refuse(snapshot.error);
         }
-        write(request.json ? json(snapshot.value) : renderStatus(snapshot.value));
+        write(
+          request.json
+            ? json(snapshot.value)
+            : renderStatus(snapshot.value, snapshot.value.retrieval),
+        );
         return { exitCode: 0 };
       }
       case "list": {
@@ -204,7 +210,18 @@ function renderArtifact(path: string, artifact: WorkflowArtifactIdentity): strin
   ].join("\n");
 }
 
-function renderStatus(snapshot: WorkflowLifecycleSnapshot): string {
+/**
+ * The lines every snapshot has, and the retrieval line only a retained run does.
+ *
+ * `retrieval` arrives as its own argument rather than off the snapshot, because
+ * it is not a member of the shared inspection shape: a retained run has one and
+ * an artifact has none, and reading it from the value would make this renderer
+ * expect a member half its callers cannot supply.
+ */
+function renderStatus(
+  snapshot: WorkflowInspectionSnapshot,
+  retrieval?: DefinitionRetrieval,
+): string {
   const { record } = snapshot;
   const lines = [
     `run: ${record.runId}`,
@@ -218,10 +235,8 @@ function renderStatus(snapshot: WorkflowLifecycleSnapshot): string {
   if (record.stopReason !== undefined) {
     lines.push(`stop reason: ${describeReason(record)}`);
   }
-  if (snapshot.retrieval !== undefined) {
-    lines.push(
-      `retrieval: revision ${snapshot.retrieval.revision} at ${snapshot.retrieval.updatedAt}`,
-    );
+  if (retrieval !== undefined) {
+    lines.push(`retrieval: revision ${retrieval.revision} at ${retrieval.updatedAt}`);
   }
   if (snapshot.lineage !== undefined) {
     lines.push(
@@ -360,7 +375,7 @@ function describeResult(event: DurableEvent): string {
   }
 }
 
-function describeDefinition(snapshot: WorkflowLifecycleSnapshot): string {
+function describeDefinition(snapshot: WorkflowInspectionSnapshot): string {
   const { definition } = snapshot.record;
   const target = definition.targetPath === undefined ? "" : `#${definition.targetPath}`;
   return `${definition.objectId} ${definition.rootDocumentPath}${target}`;

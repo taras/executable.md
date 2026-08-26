@@ -23,7 +23,7 @@
 
 import type { XmdArtifactFrontier } from "./export.ts";
 import type { WorkflowHistoryEntry } from "./history.ts";
-import type { WorkflowLifecycleSnapshot } from "./api.ts";
+import type { WorkflowInspectionSnapshot } from "./api.ts";
 
 /**
  * Which artifact answered, and the boundary it holds.
@@ -41,14 +41,18 @@ export interface WorkflowArtifactIdentity {
 }
 
 /**
- * One artifact's lifecycle snapshot: the run's own, and whose evidence it is.
+ * One artifact's snapshot: what the run said about itself, and whose evidence
+ * this is.
  *
- * `retrieval` is absent, and absent as a fact rather than as an omission. An
+ * It extends the shared inspection base rather than the retained-run snapshot,
+ * so `retrieval` is not a key of this type. That is the whole point: an
  * artifact excludes where its definition could be fetched from now, because
  * that is authority belonging to the machine that exported rather than
- * something true about the run.
+ * something true about the run — and a type that merely never assigned the
+ * member would leave the exclusion resting on what one projection happens to
+ * write.
  */
-export interface WorkflowArtifactSnapshot extends WorkflowLifecycleSnapshot {
+export interface WorkflowArtifactSnapshot extends WorkflowInspectionSnapshot {
   readonly artifact: WorkflowArtifactIdentity;
 }
 

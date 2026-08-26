@@ -97,7 +97,11 @@ Artifact status JSON is the retained-run snapshot with one added member:
 
 `retrieval` is absent, and absent as a fact: an artifact excludes where its
 definition could be fetched from now, because that is authority belonging to the
-machine that exported rather than something true about the run.
+machine that exported rather than something true about the run. The shared
+inspection result declares the members both forms have, the retained-run result
+alone declares `retrieval`, and the artifact result declares the artifact
+metadata — so an artifact snapshot has no such member to carry, rather than a
+member one projection happens to leave unset.
 
 Artifact history JSON is an envelope rather than the retained-run array, because
 the identity and the frontier have nowhere else to go — repeating them on every

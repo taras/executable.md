@@ -533,9 +533,8 @@ interface WorkflowForkLineage {
   readonly checkpointWorkspaceRootId: string;
 }
 
-interface WorkflowLifecycleSnapshot {
+interface WorkflowInspectionSnapshot {
   readonly record: WorkflowRunRecord;
-  readonly retrieval?: DefinitionRetrieval;
   readonly executions: readonly DocumentExecutionRecord[];
   readonly journalFrontier?: {
     readonly eventId: string;
@@ -543,6 +542,10 @@ interface WorkflowLifecycleSnapshot {
   };
   readonly currentWorkspaceRootId: string;
   readonly lineage?: WorkflowForkLineage;
+}
+
+interface WorkflowLifecycleSnapshot extends WorkflowInspectionSnapshot {
+  readonly retrieval?: DefinitionRetrieval;
 }
 
 interface WorkflowDeletion {
@@ -560,7 +563,7 @@ interface WorkflowArtifactIdentity {
   readonly frontier: XmdArtifactFrontier;
 }
 
-interface WorkflowArtifactSnapshot extends WorkflowLifecycleSnapshot {
+interface WorkflowArtifactSnapshot extends WorkflowInspectionSnapshot {
   readonly artifact: WorkflowArtifactIdentity;
 }
 
@@ -585,12 +588,16 @@ interface WorkflowLifecycleApi {
 The two artifact operations are siblings of the retained-run pair rather than a
 widening of it. A run ID names live lifecycle authority in this host's storage;
 a path names immutable evidence somebody is holding, and no run has to exist for
-it to answer. Their results are the same lifecycle and history values plus which
-artifact answered and the boundary it was sealed at, so `WorkflowArtifactSnapshot`
-extends the retained snapshot rather than restating it. An artifact carries no
-`retrieval`: where a definition could be fetched from now is authority belonging
-to the machine that exported. The path is never part of a result, so two copies
-of one artifact answer identically.
+it to answer.
+
+`WorkflowInspectionSnapshot` is what a run says about itself, and both forms are
+it. The retained snapshot alone adds `retrieval`, because where a definition
+could be fetched from now is a fact about the machine holding the run rather
+than about the run; the artifact snapshot alone adds which artifact answered and
+the boundary it was sealed at. Neither extends the other. That is what makes an
+artifact's exclusion of retrieval a property of the type rather than a habit of
+one projection: there is no such member to set. The path is never part of a
+result either, so two copies of one artifact answer identically.
 
 The executor lock's public fields describe it and never validate it. Lifecycle
 transitions accept the exact object separately from their data

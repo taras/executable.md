@@ -310,6 +310,7 @@ export type {
   ExecutorLock,
   WorkflowDeletion,
   WorkflowForkLineage,
+  WorkflowInspectionSnapshot,
   WorkflowLifecycleApi,
   WorkflowLifecycleSnapshot,
 } from "./src/lifecycle/api.ts";

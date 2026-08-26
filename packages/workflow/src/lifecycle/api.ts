@@ -72,15 +72,21 @@ export interface WorkflowForkLineage {
 }
 
 /**
- * Everything one run says about itself, read together.
+ * What a run says about itself, whoever is holding it.
  *
- * One snapshot, so the record, its retrieval metadata, its executions, its
- * journal frontier and its current Workspace root cannot describe different
- * moments of the same run.
+ * One snapshot, so the record, its executions, its journal frontier and its
+ * current Workspace root cannot describe different moments of the same run.
+ *
+ * Every member here is true of the run. What is deliberately *not* here is
+ * retrieval metadata: where a definition could be fetched from now is a fact
+ * about the machine holding the run rather than about the run, so it belongs to
+ * the retained-run snapshot alone and is not a key of this type at all. A
+ * sealed artifact projects these members and nothing else, and stating that as
+ * a shared base is what makes "an artifact carries no retrieval" checkable
+ * rather than a promise about what one implementation happens to write.
  */
-export interface WorkflowLifecycleSnapshot {
+export interface WorkflowInspectionSnapshot {
   readonly record: WorkflowRunRecord;
-  readonly retrieval?: DefinitionRetrieval;
   readonly executions: readonly DocumentExecutionRecord[];
   /** The last retained event and the root it was associated with. */
   readonly journalFrontier?: {
@@ -90,6 +96,18 @@ export interface WorkflowLifecycleSnapshot {
   readonly currentWorkspaceRootId: string;
   /** Where this run was forked from, when it was forked from anywhere. */
   readonly lineage?: WorkflowForkLineage;
+}
+
+/**
+ * One retained run's snapshot: what it says about itself, and where this host
+ * can find its definition again.
+ *
+ * `retrieval` is the one member a retained run has and evidence about a run
+ * does not. It is replaceable, credential-free host arrangement — which is
+ * exactly why it stays here rather than in the shared base.
+ */
+export interface WorkflowLifecycleSnapshot extends WorkflowInspectionSnapshot {
+  readonly retrieval?: DefinitionRetrieval;
 }
 
 /**
