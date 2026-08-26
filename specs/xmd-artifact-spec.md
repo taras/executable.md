@@ -484,8 +484,8 @@ Architecture review freezes these invariants before implementation:
 
 | Contract | Status at this design revision |
 | --- | --- |
-| XMD artifact terminology and structural boundary | specified in `architecture.md`; unbuilt |
-| `xmd workflow export` | specified; unbuilt |
+| XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
+| `xmd workflow export` | specified; built, Deno provider only. Source retrieval is host-installed rather than caller-supplied |
 | artifact status/history and manifest verification | specified; unbuilt |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |
 | SQLite artifact container version 1 | specified as the initial encoding; the sealed container, its canonical manifest and its total read-only verifier are built. The physical schema is private and no raw table, SQL or connection is public API |

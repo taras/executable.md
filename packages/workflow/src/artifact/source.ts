@@ -13,6 +13,10 @@
  */
 
 import { createHash } from "node:crypto";
+import type { Operation, Result } from "effection";
+import type { Json } from "@executablemd/durable-streams";
+import type { WorkflowDefinition } from "../storage/definition.ts";
+import type { XmdArtifactDefinitionClosure } from "./types.ts";
 
 const encoder = new TextEncoder();
 
@@ -31,3 +35,20 @@ export function gitBlobIdentity(content: string, objectFormat: "sha1" | "sha256"
     .update(bytes)
     .digest("hex");
 }
+
+/**
+ * How one host turns a retained definition back into the Markdown it names.
+ *
+ * Installed into the lifecycle provider and captured in its closure — never
+ * carried on a request and never reachable through a contextual name. That
+ * distinction is the whole point: a closure travelling on the export request
+ * would be source somebody handed in, and an artifact is supposed to be
+ * evidence about a run rather than about whatever bytes its caller supplied.
+ *
+ * Reaching a repository is the host's business, so what the provider knows is
+ * only that this returns a closure or says why it cannot.
+ */
+export type WorkflowDefinitionSourceReader = (
+  definition: WorkflowDefinition,
+  retrieval: Json | undefined,
+) => Operation<Result<XmdArtifactDefinitionClosure>>;

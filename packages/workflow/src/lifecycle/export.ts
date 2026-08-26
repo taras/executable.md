@@ -7,7 +7,7 @@
  * frontier once, and hands the result to the artifact container — which knows
  * nothing about runs, locks or repositories and receives only values.
  *
- * ## The definition source closure arrives already authenticated
+ * ## The source is fetched, never supplied
  *
  * A run retains what its definition *is* — an object format, a commit, a path,
  * a blob identity per component — and where that definition could be fetched
@@ -15,10 +15,11 @@
  * into bytes means opening a repository, and repository access belongs to the
  * host that has it rather than to the lifecycle provider that keeps the run.
  *
- * So the caller obtains and authenticates the closure, and passes it in. What
- * this operation guarantees is the other half: that the closure it was given
- * describes the definition the frontier it read actually retains. A caller
- * cannot seal one run's evidence around another run's source.
+ * So the host installs a reader into the provider, and the provider calls it
+ * with the definition the frontier it just read actually retains. Nothing about
+ * the source travels on this request. A request is a value anything holding the
+ * contextual lifecycle name can construct, and source arriving that way would
+ * make an artifact evidence about its caller's bytes rather than about a run.
  *
  * ## Staging is the caller's, and so is publication
  *
@@ -30,7 +31,7 @@
  * artifact at the path it was given, or produces nothing and says why.
  */
 
-import type { XmdArtifactDefinitionClosure, XmdArtifactFrontier } from "../artifact/types.ts";
+import type { XmdArtifactFrontier } from "../artifact/types.ts";
 
 /** What one export is asked to seal, and where to build it. */
 export interface WorkflowExportRequest {
@@ -41,15 +42,6 @@ export interface WorkflowExportRequest {
    * from. Must not exist, and names the artifact rather than a directory.
    */
   readonly stagingPath: string;
-  /**
-   * The root and component Markdown this run's definition names, already read
-   * from the retained commit and verified against the identities that
-   * definition holds.
-   *
-   * Checked against the frontier's own definition before anything is sealed, so
-   * a closure belonging to another run refuses rather than being written.
-   */
-  readonly closure: XmdArtifactDefinitionClosure;
 }
 
 /** What one successful export produced. */

@@ -94,8 +94,15 @@ import { workflowForkStaging, workflowRunPath } from "./path.ts";
 import { authorizedRoot, checkRunId } from "./provider.ts";
 import { reading, readTransaction } from "./reading.ts";
 import type { DetachedXmdArtifact } from "../artifact/types.ts";
+import type { WorkflowDefinitionSourceReader } from "../artifact/source.ts";
+import type { WorkflowDefinition } from "../storage/definition.ts";
+import type { Json } from "@executablemd/durable-streams";
 import { writeXmdArtifact } from "./artifact/mod.ts";
-import { readExportFrontier } from "./artifact-frontier.ts";
+import {
+  matchesRetainedDefinition,
+  readExportFrontier,
+  readRetrievalMetadata,
+} from "./artifact-frontier.ts";
 import type { WorkflowExportRequest, WorkflowExportResult } from "../lifecycle/export.ts";
 import { readDocumentExecution, readRetrieval, readRunRecord } from "./rows.ts";
 import { translateSqliteError, verifySchema, WorkflowReadonlyRollbackError } from "./schema.ts";
@@ -149,6 +156,15 @@ function* unobserved(): Operation<void> {
 export interface WorkflowLifecycleOptions {
   /** The directory this host keeps runs in. Absolute, as storage requires. */
   readonly root: string;
+  /**
+   * How this host reads a retained definition's Markdown back, for export.
+   *
+   * Captured in the provider's closure at installation and never reachable
+   * afterwards. A host that installs none can inspect and control runs and
+   * cannot export one — which is the honest answer, because an export it could
+   * perform without this would be sealing source nobody fetched.
+   */
+  readonly definitionSource?: WorkflowDefinitionSourceReader;
 }
 
 /**
@@ -203,7 +219,7 @@ export function* installWorkflowLifecycle(
         return yield* runHistory(root, runId, observe);
       },
       *export([request]) {
-        return yield* exportRun(root, executors, request, observe);
+        return yield* exportRun(root, executors, options.definitionSource, request, observe);
       },
     },
     { at: "min" },
@@ -571,6 +587,7 @@ function* acquire(
 function* exportRun(
   root: string,
   executors: ExecutorLockRegistry,
+  readDefinitionSource: WorkflowDefinitionSourceReader | undefined,
   request: WorkflowExportRequest,
   observe: RecoveryObserver,
 ): Operation<Result<WorkflowExportResult>> {
@@ -578,8 +595,21 @@ function* exportRun(
   if (!checked.ok) {
     return checked;
   }
+  if (readDefinitionSource === undefined) {
+    return Err(
+      new WorkflowRequestError(
+        "this host installs no way to read a retained definition's source, so it cannot export " +
+          "a run. An artifact carries the document the run was of, and one sealed without it " +
+          "would be evidence nobody could continue from.",
+      ),
+    );
+  }
 
-  const detached = yield* scoped(function* (): Operation<Result<DetachedXmdArtifact>> {
+  // The lock covers selection and detachment, and stops there. Reading the
+  // definition's source means opening a repository, and holding a run
+  // unrunnable for as long as that takes would buy nothing: the frontier is
+  // already values in memory, and no later execution can change what they say.
+  const selected = yield* scoped(function* (): Operation<Result<SelectedFrontier>> {
     const hold = yield* executors.acquire(root, checked.value);
     if (hold === undefined) {
       return Err(new WorkflowExportBusyError(checked.value));
@@ -587,15 +617,34 @@ function* exportRun(
     return yield* atRun(
       root,
       checked.value,
-      (database, record, path) => readExportFrontier(database, record, path, request.closure),
+      (database, record, path) => ({
+        detached: readExportFrontier(database, record, path),
+        definition: record.definition,
+        retrieval: readRetrievalMetadata(database),
+      }),
       observe,
     );
   });
-  if (!detached.ok) {
-    return detached;
+  if (!selected.ok) {
+    return selected;
   }
 
-  const written = yield* writeXmdArtifact(request.stagingPath, detached.value);
+  const closure = yield* readDefinitionSource(selected.value.definition, selected.value.retrieval);
+  if (!closure.ok) {
+    return closure;
+  }
+  // Asked even though the host fetched it: a reader is host code, and the one
+  // thing the provider can still check is that what came back describes the
+  // definition this frontier retains rather than some other run's.
+  const matched = matchesRetainedDefinition(selected.value.definition, closure.value);
+  if (!matched.ok) {
+    return matched;
+  }
+
+  const written = yield* writeXmdArtifact(request.stagingPath, {
+    ...selected.value.detached,
+    definition: closure.value,
+  });
   if (!written.ok) {
     return written;
   }
@@ -605,6 +654,13 @@ function* exportRun(
     identity: written.value.identity,
     fileSha256: written.value.fileSha256,
   });
+}
+
+/** What one locked selection detached, before any source was fetched. */
+interface SelectedFrontier {
+  readonly detached: Omit<DetachedXmdArtifact, "definition">;
+  readonly definition: WorkflowDefinition;
+  readonly retrieval: Json | undefined;
 }
 
 function* inspectRun(

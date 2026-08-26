@@ -564,8 +564,9 @@ absolute directory. Where a run's database is on a host is arrangement, not
 identity (§5.2).
 
 Status, list and history for retained runs are built (§4), and so are cancel and
-delete. Artifact export, artifact inspection and an artifact-backed fork are
-specified in `specs/xmd-artifact-spec.md` and are unbuilt.
+delete, and export. Artifact export is built; artifact inspection and an
+artifact-backed fork are specified in `specs/xmd-artifact-spec.md` and remain
+unbuilt.
 Repository, Worktree and Dir are built (§6); the Git operations of §7 are not.
 The executor lock and the atomic lifecycle transitions built on it are #367's,
 and they replace the opportunistic orphan closure that preceded them: liveness
@@ -3146,7 +3147,7 @@ fetch operation requires its own language and durability contract.
 | `xmd workflow answer` and the `suspension_answer` effect | built by #300 |
 | workflow scheduling (watchers, unattended iteration, remote hosts) | #300 |
 | history fork | built (§11); Deno provider only |
-| XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; unbuilt |
+| XMD artifact export, inspection and fork source | specified in `specs/xmd-artifact-spec.md`; `xmd workflow export` is built, Deno provider only. Artifact inspection and the artifact-backed fork remain unbuilt |
 | workflow Agent isolation | built by #302: no directory attachment, an empty host-owned working directory, no MCP servers, an empty requested tool set and deny-all with a failing permission path; the portable no-tool proof is tracked by #496 |
 | workflow Agent session retention | built by #302: a row in the run's own database, keyed by the engine-derived Session expansion identity alone — the authored name is descriptive — with provider, agent command and policy fingerprint beside it as compatibility attributes. The mapping commits after the provider's canonical tagged assertion and before the first Prompt; occupancy of a provider key is never identity, and missing, mismatched, replaced or ambiguous assertions each refuse instead of starting a replacement session |
 | generated-XMD admission | built by #369, through `@executablemd/core/host`; the workflow policy wrapper is internal. Host policy is a read table and a write table of exact pinned identities, each entry carrying the authored forms it is admitted for, and an authored `allow` selects a canonical subset of the closed classes `read` and `write` — omitted means `read`. The complete fragment is preflighted inside one `generated_xmd` effect before its first generated effect |

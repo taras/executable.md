@@ -219,7 +219,7 @@ const OPTIONS_BY_ACTION: Readonly<Record<string, readonly string[]>> = Object.fr
 
 export const workflowConfig = object({
   action: {
-    description: "start, resume, fork, answer, status, list, history, cancel or delete",
+    description: "start, resume, fork, answer, status, list, history, cancel, delete or export",
     ...field(z.string().optional(), cli.argument()),
   },
   target: {

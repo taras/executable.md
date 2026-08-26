@@ -30,15 +30,13 @@
  * completed run and a failed run both report successfully.
  */
 
-import { ensure, resource, scoped, until } from "effection";
-import type { Operation } from "effection";
+import { ensure, Err, Ok, resource, scoped, until } from "effection";
+import type { Operation, Result } from "effection";
 import { exists, rm } from "@effectionx/fs";
 import { mkdtempSync } from "node:fs";
-import { rename } from "node:fs/promises";
+import { link } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { gitBlobIdentity, WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
-import type { XmdArtifactDefinitionClosure } from "@executablemd/workflow";
-import { loadRetainedDefinition } from "./workflow-definition.ts";
+import { WorkflowInputDelivery, WorkflowLifecycle } from "@executablemd/workflow";
 import type {
   WorkflowHistoryEntry,
   WorkflowLifecycleSnapshot,
@@ -342,20 +340,58 @@ function table(rows: readonly (readonly string[])[]): string {
 }
 
 /**
+ * What an export does to the filesystem, so a test can make each step fail.
+ *
+ * Plain functions passed in, defaulting to the real ones. Not a contextual name
+ * and not a new dependency: publication and cleanup are filesystem races that
+ * do not reproduce by waiting, and the only honest way to see what an export
+ * leaves behind when one of them fails is to make it fail on purpose.
+ */
+export interface ExportFilesystem {
+  /** Create `output` as a second name for `staging`, or fail if it is taken. */
+  link(staging: string, output: string): Operation<void>;
+  /** Remove a directory and everything under it. */
+  remove(directory: string): Operation<void>;
+  /** Remove one file, used to take back a target this export just published. */
+  unlink(target: string): Operation<void>;
+}
+
+const REAL_FILESYSTEM: ExportFilesystem = {
+  *link(staging: string, output: string): Operation<void> {
+    yield* until(link(staging, output));
+  },
+  *remove(directory: string): Operation<void> {
+    yield* rm(directory, { recursive: true, force: true });
+  },
+  *unlink(target: string): Operation<void> {
+    yield* rm(target, { force: true });
+  },
+};
+
+/**
  * Seal one run at `output`, and put nothing there unless it worked.
  *
- * Three steps that each refuse on their own terms. The run's own snapshot says
- * what definition it retains and where that definition could be fetched from;
- * the repository turns that back into the exact Markdown and proves it against
- * the identities the definition holds; and the provider chooses a frontier
- * under the executor lock and writes the container.
+ * The provider chooses a frontier under the executor lock, reads the run's own
+ * definition source through the reader this host installed into it, and writes
+ * the container. Nothing about the source travels from here.
  *
- * The artifact is built beside its destination and moved onto it. A rename
- * within one directory is atomic, so an onlooker sees the finished file or no
- * file — never a half-written one wearing the name a user asked for. Building
- * somewhere else and copying would give up exactly that.
+ * Publication is a link, not a rename. A rename replaces whatever is at the
+ * destination, so an existence check before it is a promise about a moment that
+ * has already passed by the time the move happens. Linking fails if the name is
+ * taken, atomically, so a file that appeared while the artifact was being built
+ * survives untouched and this refuses instead.
+ *
+ * An export that cannot clean up after itself has not finished, so it takes the
+ * target back rather than leaving a published artifact beside state nobody
+ * owns. Success is printed last, after there is nothing left to remove.
  */
-function* exportArtifact(runId: string, output: string): Operation<WorkflowOutcome> {
+export function* exportArtifact(
+  runId: string,
+  output: string,
+  filesystem: ExportFilesystem = REAL_FILESYSTEM,
+): Operation<WorkflowOutcome> {
+  // Asked early so an obvious mistake costs nothing, and asked again by the
+  // link below, which is the one that actually decides.
   if (yield* exists(output)) {
     return refuse(
       new Error(
@@ -365,47 +401,39 @@ function* exportArtifact(runId: string, output: string): Operation<WorkflowOutco
     );
   }
 
-  const snapshot = yield* WorkflowLifecycle.operations.inspect(runId);
-  if (!snapshot.ok) {
-    return refuse(snapshot.error);
-  }
-  const definition = snapshot.value.record.definition;
-  const sources = yield* loadRetainedDefinition(definition, snapshot.value.retrieval?.metadata);
-  if (!sources.ok) {
-    return refuse(sources.error);
-  }
-
-  const closure: XmdArtifactDefinitionClosure = {
-    root: {
-      objectFormat: definition.objectFormat,
-      pinnedCommit: definition.objectId,
-      rootDocumentPath: definition.rootDocumentPath,
-      ...(definition.targetPath === undefined ? {} : { targetPath: definition.targetPath }),
-      // Derived from the bytes the repository just handed back, and compared
-      // with them again by the container. A definition pins a commit and a
-      // path, never the document's own identity.
-      blobId: gitBlobIdentity(sources.value.source, definition.objectFormat),
-      content: sources.value.source,
-    },
-    components: sources.value.components.map((component) => ({
-      name: component.name,
-      path: component.path,
-      blobId: component.sourceHash,
-      content: component.content,
-    })),
-  };
-
   return yield* scoped(function* (): Operation<WorkflowOutcome> {
-    const staging = yield* useExportStaging(output);
+    const staging = yield* useExportStaging(output, filesystem);
     const sealed = yield* WorkflowLifecycle.operations.export({
       runId,
-      stagingPath: staging,
-      closure,
+      stagingPath: staging.path,
     });
     if (!sealed.ok) {
       return refuse(sealed.error);
     }
-    yield* until(rename(staging, output));
+
+    const published = yield* publish(filesystem, staging.path, output);
+    if (!published.ok) {
+      return refuse(published.error);
+    }
+
+    const cleaned = yield* staging.discard();
+    if (!cleaned.ok) {
+      // The artifact exists at the target and this export is not finished, so
+      // the target goes back. Leaving it would report failure beside a file
+      // that looks exactly like a success.
+      try {
+        yield* filesystem.unlink(output);
+      } catch (error) {
+        return refuse(
+          new Error(
+            `xmd workflow export could not clean up, and could not take back ${output} either. ` +
+              "Remove it, and the temporary directory beside it, by hand.",
+            { cause: error },
+          ),
+        );
+      }
+      return refuse(cleaned.error);
+    }
 
     write(
       [
@@ -423,6 +451,35 @@ function* exportArtifact(runId: string, output: string): Operation<WorkflowOutco
 }
 
 /**
+ * Give the finished artifact its name, or refuse because something took it.
+ *
+ * `link` is the no-clobber move: it creates the destination and fails with
+ * `EEXIST` if the name already exists, in one step nothing can happen in the
+ * middle of.
+ */
+function* publish(
+  filesystem: ExportFilesystem,
+  staging: string,
+  output: string,
+): Operation<Result<void>> {
+  try {
+    yield* filesystem.link(staging, output);
+    return Ok();
+  } catch (error) {
+    const taken = error instanceof Error && "code" in error && error.code === "EEXIST";
+    return Err(
+      new Error(
+        taken
+          ? `xmd workflow export will not replace ${output}, which something created while the ` +
+              "artifact was being written. It is left exactly as it is."
+          : `xmd workflow export could not put the artifact at ${output}. Nothing was published.`,
+        { cause: error },
+      ),
+    );
+  }
+}
+
+/**
  * A directory beside the destination, removed with this scope.
  *
  * Beside it because a rename is atomic only within one filesystem, and the only
@@ -430,11 +487,47 @@ function* exportArtifact(runId: string, output: string): Operation<WorkflowOutco
  * is left behind on failure is a temporary directory nobody was told about,
  * rather than a file at the path a user will go looking at.
  */
-function useExportStaging(output: string): Operation<string> {
+function useExportStaging(output: string, filesystem: ExportFilesystem): Operation<ExportStaging> {
   return resource(function* (provide) {
+    // Created and named in one step, with the ensure registered before anything
+    // can suspend, so nothing is left by a cancellation between the two.
     // oxlint-disable-next-line local/no-sync-filesystem
     const directory = mkdtempSync(join(dirname(resolve(output)), ".xmd-export-"));
-    yield* ensure(() => rm(directory, { recursive: true, force: true }));
-    yield* provide(join(directory, "artifact.xmd"));
+    let discarded = false;
+    // The backstop. A failure, a refusal or a cancellation all reach this, and
+    // an explicit discard that already succeeded makes it a no-op.
+    yield* ensure(function* () {
+      if (!discarded) {
+        // Cancellation reaches this too, which is what leaves nothing behind
+        // when an export is interrupted between creating the directory and
+        // finishing with it.
+        yield* rm(directory, { recursive: true, force: true });
+      }
+    });
+    yield* provide({
+      path: join(directory, "artifact.xmd"),
+      *discard(): Operation<Result<void>> {
+        try {
+          yield* filesystem.remove(directory);
+          discarded = true;
+          return Ok();
+        } catch (error) {
+          return Err(
+            new Error(
+              `the artifact was published at ${output}, and the temporary directory ` +
+                `${directory} could not be removed. Remove it when you no longer need it.`,
+              { cause: error },
+            ),
+          );
+        }
+      },
+    });
   });
+}
+
+/** A place to build the artifact, and the removal that finishes the export. */
+interface ExportStaging {
+  readonly path: string;
+  /** Remove the staging directory, reporting a failure rather than hiding it. */
+  discard(): Operation<Result<void>>;
 }

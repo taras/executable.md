@@ -28,6 +28,9 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import { Err, Ok, type Result } from "effection";
+import type { Json } from "@executablemd/durable-streams";
+import type { WorkflowDefinition } from "../storage/definition.ts";
 import type {
   DetachedXmdArtifact,
   XmdArtifactDefinitionClosure,
@@ -41,7 +44,7 @@ import type { RetainedBlob, RetainedManifest } from "./fork-source.ts";
 import { readForkLineage } from "./fork-write.ts";
 import { readRepositories, readRetainedRows, readWorktrees } from "./fork-source.ts";
 import { reading } from "./reading.ts";
-import { readDocumentExecution } from "./rows.ts";
+import { readDocumentExecution, readRetrieval } from "./rows.ts";
 import { readAllAgentSessions } from "./workspace/agent-sessions.ts";
 import { bytes, integer } from "./workspace/manifest.ts";
 import {
@@ -65,10 +68,7 @@ export function readExportFrontier(
   database: DatabaseSync,
   record: WorkflowRunRecord,
   path: string,
-  closure: XmdArtifactDefinitionClosure,
-): DetachedXmdArtifact {
-  requireMatchingClosure(record, closure);
-
+): Omit<DetachedXmdArtifact, "definition"> {
   const journal = readExportJournal(database);
   const roots = retainedWorkspaceRoots(database).map((rootId) =>
     loadWorkspaceRoot(database, rootId, path),
@@ -105,12 +105,23 @@ export function readExportFrontier(
     worktrees: readWorktrees(database, path),
     answers: readAllRetainedAnswers(database),
     agentSessions: readAllAgentSessions(database),
-    definition: closure,
   };
 }
 
+/** Where this host could fetch the definition from, as the run last recorded it. */
+export function readRetrievalMetadata(database: DatabaseSync): Json | undefined {
+  // The whole row: retrieval is parsed as the record it is — metadata, the
+  // revision that counts replacements, and when it was last written — and a
+  // projection of one column would hand that parser two members it cannot find.
+  const row = reading(database, "SELECT * FROM definition_retrieval WHERE id = 1").get();
+  if (row === undefined) {
+    return undefined;
+  }
+  return readRetrieval(row).metadata;
+}
+
 /**
- * Refuse a closure that is not this run's.
+ * Whether a fetched closure is this run's, as a refusal or nothing.
  *
  * The identities are compared, not the bytes: whether the Markdown hashes to
  * what the definition names is the artifact writer's question, and asking it
@@ -118,11 +129,10 @@ export function readExportFrontier(
  * catches is the closure belonging to a different definition entirely, which
  * no amount of hashing downstream would notice.
  */
-function requireMatchingClosure(
-  record: WorkflowRunRecord,
+export function matchesRetainedDefinition(
+  definition: WorkflowDefinition,
   closure: XmdArtifactDefinitionClosure,
-): void {
-  const definition = record.definition;
+): Result<void> {
   const root = closure.root;
   if (
     root.objectFormat !== definition.objectFormat ||
@@ -130,11 +140,14 @@ function requireMatchingClosure(
     root.rootDocumentPath !== definition.rootDocumentPath ||
     root.targetPath !== definition.targetPath
   ) {
-    throw new WorkflowRequestError(
-      `the definition source offered for workflow run ${JSON.stringify(record.runId)} does not ` +
-        "describe the definition that run retains, so it is not this run's source.",
+    return Err(
+      new WorkflowRequestError(
+        "the definition source this host read back does not describe the definition the run " +
+          "retains, so it is not this run's source.",
+      ),
     );
   }
+  return Ok();
 }
 
 function readLineageCreatedAt(database: DatabaseSync, path: string): string {

@@ -18,16 +18,17 @@ import type { Operation } from "effection";
 import { join } from "node:path";
 import { readXmdArtifact } from "../src/deno/artifact/mod.ts";
 import type { XmdArtifactDefinitionClosure } from "../src/artifact/types.ts";
+import { Ok, scoped } from "effection";
+import type { Result } from "effection";
 import { WorkflowLifecycle } from "../mod.ts";
+import type { WorkflowDefinitionSourceReader } from "../src/artifact/source.ts";
+import { installWorkflowLifecycle } from "../src/deno/lifecycle.ts";
+import type { WorkflowExecutionTransitions } from "../deno.ts";
+import { installWorkflowRunStorage } from "../src/deno/provider.ts";
+import { useWorkflowRunConnections } from "../src/deno/connections.ts";
+import { SavepointObservation } from "../src/deno/savepoints.ts";
 import { gitBlobId } from "./support/artifact-fixture.ts";
-import {
-  creation,
-  definition,
-  SHA1,
-  useStorageRoot,
-  withExecutorRun,
-  withRunHost,
-} from "./support/storage.ts";
+import { creation, definition, SHA1, useStorageRoot, withExecutorRun } from "./support/storage.ts";
 
 const ROOT_DOCUMENT = "# Release\n\nnothing to see here\n";
 
@@ -45,19 +46,56 @@ function closure(): XmdArtifactDefinitionClosure {
   };
 }
 
-function* exportRun(
-  runId: string,
-  stagingPath: string,
-  source: XmdArtifactDefinitionClosure = closure(),
-) {
-  return yield* WorkflowLifecycle.operations.export({ runId, stagingPath, closure: source });
+/**
+ * Export through the provider-neutral surface.
+ *
+ * `forged` is offered on the request the way a caller holding the contextual
+ * lifecycle name would offer it. The request declares no such member, and the
+ * point of passing it anyway is that it reaches nothing: what gets sealed is
+ * whatever the host's installed reader returns.
+ */
+function* exportRun(runId: string, stagingPath: string, forged?: XmdArtifactDefinitionClosure) {
+  return yield* WorkflowLifecycle.operations.export({
+    runId,
+    stagingPath,
+    ...(forged === undefined ? {} : { closure: forged }),
+  });
+}
+
+/** The reader a host installs: it returns this run's real retained source. */
+// deno-lint-ignore require-yield
+function* honestSource(): Operation<Result<XmdArtifactDefinitionClosure>> {
+  return Ok(closure());
+}
+
+/**
+ * Storage and lifecycle, with the source reader this host installs.
+ *
+ * The reader is an installation argument, so a test that wants a different one
+ * installs a different host — which is the only way to change it, and the point
+ * of the boundary.
+ */
+function withExportHost<T>(
+  root: string,
+  source: WorkflowDefinitionSourceReader | undefined,
+  body: (transitions: WorkflowExecutionTransitions) => Operation<T>,
+): Operation<T> {
+  return scoped(function* () {
+    const connections = yield* useWorkflowRunConnections(yield* SavepointObservation.get());
+    yield* installWorkflowRunStorage({ root }, {}, connections);
+    const transitions = yield* installWorkflowLifecycle(
+      { root, ...(source === undefined ? {} : { definitionSource: source }) },
+      connections,
+    );
+    return yield* body(transitions);
+  });
 }
 
 /** One settled run, and the storage root it lives in. */
 function useSettledRun(runId = "release-1.4"): Operation<string> {
   return (function* () {
     const root = yield* useStorageRoot();
-    yield* withRunHost(root, function* (transitions) {
+    yield* withExportHost(root, honestSource, function* (transitions) {
       yield* withExecutorRun(
         transitions,
         { runId, action: "start", creation: creation({ definition: definition() }) },
@@ -81,7 +119,9 @@ describe("exporting a workflow run", () => {
     const root = yield* useStorageRoot();
     const target = join(root, "busy.xmd");
 
-    yield* withRunHost(root, function* (transitions) {
+    // A host that is configured correctly, so the refusal under test is the
+    // live executor rather than a missing reader.
+    yield* withExportHost(root, honestSource, function* (transitions) {
       yield* withExecutorRun(
         transitions,
         { runId: "release-1.4", action: "start", creation: creation() },
@@ -102,7 +142,7 @@ describe("exporting a workflow run", () => {
     const root = yield* useSettledRun();
     const target = join(root, "evidence.xmd");
 
-    const sealed = yield* withRunHost(root, function* () {
+    const sealed = yield* withExportHost(root, honestSource, function* () {
       return yield* exportRun("release-1.4", target);
     });
     if (!sealed.ok) {
@@ -128,7 +168,7 @@ describe("exporting a workflow run", () => {
     expect(opened.value.frontier).toEqual(sealed.value.frontier);
 
     // The run is still there, still readable, and still says what it said.
-    const after = yield* withRunHost(root, function* () {
+    const after = yield* withExportHost(root, honestSource, function* () {
       return yield* WorkflowLifecycle.operations.inspect("release-1.4");
     });
     if (!after.ok) {
@@ -137,16 +177,17 @@ describe("exporting a workflow run", () => {
     expect(after.value.record.status).toBe("completed");
   });
 
-  it("XE3 refuses a closure that is not this run's definition", function* () {
+  it("XE3 refuses source the host read back that is not this run's", function* () {
     const root = yield* useSettledRun();
     const target = join(root, "wrong-source.xmd");
     const other = closure();
 
-    const refused = yield* withRunHost(root, function* () {
-      return yield* exportRun("release-1.4", target, {
-        ...other,
-        root: { ...other.root, rootDocumentPath: "workflows/other.md" },
-      });
+    // deno-lint-ignore require-yield
+    const wrongRun: WorkflowDefinitionSourceReader = function* () {
+      return Ok({ ...other, root: { ...other.root, rootDocumentPath: "workflows/other.md" } });
+    };
+    const refused = yield* withExportHost(root, wrongRun, function* () {
+      return yield* exportRun("release-1.4", target);
     });
 
     expect(refused.ok).toBe(false);
@@ -154,11 +195,51 @@ describe("exporting a workflow run", () => {
     expect(yield* exists(target)).toBe(false);
   });
 
-  it("XE4 refuses an absent run without inventing one", function* () {
+  it("XE4 seals the host's source, not a closure offered on the request", function* () {
+    const root = yield* useSettledRun();
+    const target = join(root, "forged.xmd");
+
+    // Every descriptor field the run retains, arbitrary Markdown, and the blob
+    // id that Markdown really hashes to — internally consistent, and offered
+    // the way anything holding the contextual lifecycle name could offer it.
+    const forged = closure();
+    const lie = "# Not what ran\n\nthis document never executed\n";
+    const sealed = yield* withExportHost(root, honestSource, function* () {
+      return yield* exportRun("release-1.4", target, {
+        ...forged,
+        root: { ...forged.root, blobId: gitBlobId(lie), content: lie },
+      });
+    });
+    if (!sealed.ok) {
+      throw sealed.error;
+    }
+
+    const opened = yield* readXmdArtifact(target);
+    if (!opened.ok) {
+      throw opened.error;
+    }
+    // The request reached nothing: what was sealed is what the host read.
+    expect(opened.value.definition.root.content).toBe(ROOT_DOCUMENT);
+    expect(opened.value.definition.root.content).not.toBe(lie);
+  });
+
+  it("XE5 refuses to export at all when the host installed no reader", function* () {
+    const root = yield* useSettledRun();
+    const target = join(root, "no-reader.xmd");
+
+    const refused = yield* withExportHost(root, undefined, function* () {
+      return yield* exportRun("release-1.4", target);
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(yield* exists(target)).toBe(false);
+  });
+
+  it("XE6 refuses an absent run without inventing one", function* () {
     const root = yield* useStorageRoot();
     const target = join(root, "absent.xmd");
 
-    const refused = yield* withRunHost(root, function* () {
+    const refused = yield* withExportHost(root, honestSource, function* () {
       return yield* exportRun("no-such-run", target);
     });
 
