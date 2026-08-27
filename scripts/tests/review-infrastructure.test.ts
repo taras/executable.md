@@ -25,7 +25,7 @@ interface ProcessResult {
 }
 
 interface DocumentRunOptions {
-  componentDirs?: string[];
+  includes?: string[];
   env?: Record<string, string>;
   glob?: Array<{ path: string; isFile: boolean; isDirectory: boolean }>;
   stat?: (path: string) => { exists: boolean; isFile: boolean; isDirectory: boolean } | undefined;
@@ -149,7 +149,7 @@ function* run(
   );
 
   const stream = new InMemoryStream();
-  const execution = yield* execute({ path: "doc.md", stream, componentDirs: ["components"] });
+  const execution = yield* execute({ path: "doc.md", stream, includes: ["components"] });
   yield* forEach(function* () {}, execution.output);
   const result = yield* execution;
   expect(result.ok).toBe(true);
@@ -196,7 +196,7 @@ function* runDocumentResult(
     const execution = yield* execute({
       path: "doc.md",
       stream,
-      componentDirs: options.componentDirs ?? ["components"],
+      includes: options.includes ?? ["components"],
     });
     yield* forEach(function* () {}, execution.output);
     const result = yield* execution;
@@ -289,7 +289,7 @@ describe("review infrastructure", () => {
       '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" />\n```ts eval\nconst summary = `${diagnostics.length}:${diagnostics[0].ruleId}`;\n```\n{summary}</Output>',
       { ".reviews/components/OxlintDiagnostics.ts": "" },
       {
-        componentDirs: [".reviews/components"],
+        includes: [".reviews/components"],
         process: {
           exitCode: 1,
           stdout: JSON.stringify([
@@ -317,7 +317,7 @@ describe("review infrastructure", () => {
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
         { ".reviews/components/OxlintDiagnostics.ts": "" },
         {
-          componentDirs: [".reviews/components"],
+          includes: [".reviews/components"],
           process: { exitCode: 0, stdout: "not json", stderr: "" },
         },
       ),
@@ -327,7 +327,7 @@ describe("review infrastructure", () => {
         '<Output><OxlintDiagnostics files={["a.ts"]} as="diagnostics" /></Output>',
         { ".reviews/components/OxlintDiagnostics.ts": "" },
         {
-          componentDirs: [".reviews/components"],
+          includes: [".reviews/components"],
           process: { exitCode: 2, stdout: "[]", stderr: "invocation failed" },
         },
       ),
@@ -346,7 +346,7 @@ describe("review infrastructure", () => {
         {
           ".reviews/components/OxlintDiagnostics.ts": "",
         },
-        { componentDirs: [".reviews/components"] },
+        { includes: [".reviews/components"] },
       ),
     ).toBe(true);
     expect(calls).toBe(0);
@@ -415,7 +415,7 @@ describe("review infrastructure", () => {
       "</Output>",
     ].join("\n");
     const options = {
-      componentDirs: [".reviews/components"],
+      includes: [".reviews/components"],
       env: {
         GITHUB_TOKEN: "test-token",
         GITHUB_REPOSITORY: "taras/executable.md",
@@ -465,7 +465,7 @@ describe("review infrastructure", () => {
     const result = yield* runDocumentResult(
       document,
       { ".reviews/components/CommentReviewState.ts": "" },
-      { componentDirs: [".reviews/components"] },
+      { includes: [".reviews/components"] },
     );
     expect(result.ok).toBe(true);
     expect(result.journal).toContain("true:true:1");
@@ -500,7 +500,7 @@ describe("review infrastructure", () => {
       }
       return undefined;
     };
-    const baseOptions = { componentDirs: [".reviews/components"], glob: [] };
+    const baseOptions = { includes: [".reviews/components"], glob: [] };
 
     const unavailable = yield* runDocumentResult(document, component, {
       ...baseOptions,
@@ -586,7 +586,7 @@ describe("review infrastructure", () => {
       document,
       { ".reviews/components/ReviewContext.ts": "" },
       {
-        componentDirs: [".reviews/components"],
+        includes: [".reviews/components"],
         env: { BASE_SHA: "base", HEAD_SHA: "head", PR_BODY: "local body" },
         process: (command) =>
           command.includes("--name-status")
@@ -601,7 +601,7 @@ describe("review infrastructure", () => {
       document,
       { ".reviews/components/ReviewContext.ts": "" },
       {
-        componentDirs: [".reviews/components"],
+        includes: [".reviews/components"],
         process: { exitCode: 1, stdout: "", stderr: "git diff failed" },
       },
     );
@@ -667,7 +667,7 @@ describe("review infrastructure", () => {
         "packages/example.ts": "first\nsecond\n",
       },
       {
-        componentDirs: [".reviews/components"],
+        includes: [".reviews/components"],
         glob: [{ path: "packages/example.ts", isFile: true, isDirectory: false }],
       },
     );
@@ -705,7 +705,7 @@ describe("review infrastructure", () => {
     const selected = yield* runDocumentResult(
       '<Finding when={true} severity="error" message="Broken contract." />',
       components,
-      { componentDirs: OPERATIONAL_DIRS },
+      { includes: OPERATIONAL_DIRS },
     );
     expect(selected.ok).toBe(true);
     expect(selected.text).toBe("🔴 Broken contract.");
@@ -713,7 +713,7 @@ describe("review infrastructure", () => {
     const suppressed = yield* runDocumentResult(
       '<Finding when={false} severity="error" message="Broken contract." />',
       components,
-      { componentDirs: OPERATIONAL_DIRS },
+      { includes: OPERATIONAL_DIRS },
     );
     expect(suppressed.ok).toBe(true);
     expect(suppressed.text).toBe("");
@@ -735,13 +735,13 @@ describe("review infrastructure", () => {
       ].join("\n");
 
     const clean = yield* runDocumentResult(summary(true), components, {
-      componentDirs: OPERATIONAL_DIRS,
+      includes: OPERATIONAL_DIRS,
     });
     expect(clean.ok).toBe(true);
     expect(clean.text).toBe("### Static Analysis\n\n✅ Oxlint found no issues.");
 
     const unavailable = yield* runDocumentResult(summary(false), components, {
-      componentDirs: OPERATIONAL_DIRS,
+      includes: OPERATIONAL_DIRS,
     });
     expect(unavailable.ok).toBe(true);
     // The selected branch keeps the blank lines the two suppressed blocks left
@@ -769,7 +769,7 @@ describe("review infrastructure", () => {
       warning(["packages/core/src/expand.ts"]),
       components,
       {
-        componentDirs: OPERATIONAL_DIRS,
+        includes: OPERATIONAL_DIRS,
       },
     );
     expect(ordinary.ok).toBe(true);
@@ -778,7 +778,7 @@ describe("review infrastructure", () => {
     const changed = yield* runDocumentResult(
       warning([".github/workflows/release.yml"]),
       components,
-      { componentDirs: OPERATIONAL_DIRS },
+      { includes: OPERATIONAL_DIRS },
     );
     expect(changed.ok).toBe(true);
     expect(changed.text).toContain("> [!WARNING]");
@@ -797,7 +797,7 @@ describe("review infrastructure", () => {
         '<UnusedInDiff pr={pr} construct="type" message="{count}: {names}." />',
       ].join("\n"),
       unusedComponents,
-      { componentDirs: OPERATIONAL_DIRS },
+      { includes: OPERATIONAL_DIRS },
     );
     expect(unused.ok).toBe(true);
     expect(unused.text).toBe("");
@@ -831,7 +831,7 @@ describe("review infrastructure", () => {
       [...props({ pr: { added: [] } }), "<CommentReview pr={pr} />"].join("\n"),
       reviewComponents,
       {
-        componentDirs: OPERATIONAL_DIRS,
+        includes: OPERATIONAL_DIRS,
         env: {
           GITHUB_TOKEN: "test-token",
           GITHUB_REPOSITORY: "taras/executable.md",
@@ -878,7 +878,7 @@ describe("review infrastructure", () => {
             "<ExtraneousCodePolicy pr={pr} diagnostics={diagnostics} doctor={doctor} />",
           ].join("\n"),
           components,
-          { componentDirs: OPERATIONAL_DIRS },
+          { includes: OPERATIONAL_DIRS },
         );
         expect(result.ok).toBe(true);
         return { calls, text: result.text };
@@ -924,7 +924,7 @@ describe("review infrastructure", () => {
         "<RepoCleanupPolicy diagnostics={diagnostics} doctor={doctor} fileList={fileList} />",
       ].join("\n"),
       components,
-      { componentDirs: OPERATIONAL_DIRS },
+      { includes: OPERATIONAL_DIRS },
     );
     expect(clean.ok).toBe(true);
     expect(clean.text).toBe("### Cleanup Policy\n\n✅ No code health issues detected.");

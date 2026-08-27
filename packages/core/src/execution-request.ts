@@ -162,11 +162,11 @@ class CanonicalRequest implements ExecutionRequest {
  * the defaults it feeds are unchanged.
  */
 function detachOptions(options: ExecuteOptions): ExecuteOptions {
-  const { props, componentDirs, modifiers, ...rest } = options;
+  const { props, includes, modifiers, ...rest } = options;
   return frozen({
     ...rest,
     ...(props === undefined ? {} : { props: detachProps(props) }),
-    ...(componentDirs === undefined ? {} : { componentDirs: frozen([...componentDirs]) }),
+    ...(includes === undefined ? {} : { includes: frozen([...includes]) }),
     ...(modifiers === undefined ? {} : { modifiers: frozen({ ...modifiers }) }),
   });
 }

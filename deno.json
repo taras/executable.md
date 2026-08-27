@@ -67,10 +67,10 @@
     "vendor:verify": "deno run --allow-read --allow-write=/tmp --allow-env --allow-run --cached-only --frozen scripts/verify-cloudflare-dofs.ts",
     "check": "deno check --frozen && deno check --frozen .reviews/components/*.ts",
     "check:jsr": "deno publish --dry-run --allow-dirty",
-    "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.jsonl",
-    "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.local.jsonl",
-    "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.jsonl",
-    "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.analyze.ci.jsonl",
-    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --component-dir .reviews/components --component-dir .reviews/policies --component-dir packages/core/components -j .reviews/journal.dispatch.jsonl"
+    "review": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.md --include .reviews/components --include .reviews/policies --include packages/core/components -j .reviews/journal.jsonl",
+    "review:local": "deno run --allow-all packages/cli/src/deno.ts run .reviews/ReviewPR.local.md --include .reviews/components --include .reviews/policies --include packages/core/components -j .reviews/journal.local.jsonl",
+    "analyze": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepo.md --include .reviews/components --include .reviews/policies --include packages/core/components -j .reviews/journal.analyze.jsonl",
+    "analyze:ci": "deno run --allow-all packages/cli/src/deno.ts run .reviews/AnalyzeRepoCI.md --include .reviews/components --include .reviews/policies --include packages/core/components -j .reviews/journal.analyze.ci.jsonl",
+    "analyze:dispatch": "deno run --allow-all packages/cli/src/deno.ts run .reviews/DispatchRepoAnalysis.md --include .reviews/components --include .reviews/policies --include packages/core/components -j .reviews/journal.dispatch.jsonl"
   }
 }

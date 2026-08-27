@@ -31,10 +31,10 @@ import { RESERVED_STRUCTURAL } from "../structural.ts";
 import type { ComponentOrigin, ComponentRegistry, ComponentSelection } from "../types.ts";
 
 /** Where components are looked for when nothing else is configured. */
-export const DEFAULT_COMPONENT_DIRS: readonly string[] = ["components", "."];
+export const DEFAULT_INCLUDES: readonly string[] = ["components", "."];
 
 export interface SelectOptions {
-  componentDirs?: readonly string[];
+  includes?: readonly string[];
   /** What a host or package registered; core's defaults are added beneath it. */
   registry?: ComponentRegistry;
   /**
@@ -72,10 +72,10 @@ function candidates(baseName: string, dir: string): string[] {
  */
 export function* probeComponentPath(
   name: string,
-  componentDirs: readonly string[],
+  includes: readonly string[],
 ): Operation<string | undefined> {
   const baseName = name.replace(/\./g, "/");
-  for (const dir of componentDirs) {
+  for (const dir of includes) {
     for (const candidate of candidates(baseName, dir)) {
       const found = yield* stat(candidate);
       if (found.exists && found.isFile) {
@@ -109,7 +109,7 @@ export function* selectComponent(
   name: string,
   options: SelectOptions = {},
 ): Operation<ComponentSelection> {
-  const componentDirs = options.componentDirs ?? DEFAULT_COMPONENT_DIRS;
+  const includes = options.includes ?? DEFAULT_INCLUDES;
   const entry = effectiveRegistry(options.registry).get(name);
 
   if (RESERVED_STRUCTURAL.has(name)) {
@@ -134,7 +134,7 @@ export function* selectComponent(
     };
   }
 
-  const path = yield* probeComponentPath(name, componentDirs);
+  const path = yield* probeComponentPath(name, includes);
   if (path !== undefined) {
     return { kind: "repository", path };
   }
@@ -149,7 +149,7 @@ export function* selectComponent(
 
   return {
     kind: "unresolved",
-    searched: [...componentDirs],
+    searched: [...includes],
     registered: entry ? registeredOrigins(entry) : [],
   };
 }

@@ -115,7 +115,7 @@ describe("smoke test", { sanitizeOps: false, sanitizeResources: false }, () => {
     const options: ExecuteOptions = {
       path: "smoke-test/README.md",
       stream,
-      componentDirs: ["smoke-test", "packages/core/components"],
+      includes: ["smoke-test", "packages/core/components"],
     };
 
     const live = yield* runSmokeSession(options);

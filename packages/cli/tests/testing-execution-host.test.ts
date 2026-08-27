@@ -138,6 +138,39 @@ describe("nested execution under the production run host", () => {
     expect(yield* readdir(project)).toEqual(["README.md"]);
   });
 
+  /**
+   * The child resolves component names through what the outer command was
+   * given, not through a search path a nested execution decides for itself:
+   * `elsewhere` is on no default path, and the child's own document is inline
+   * text with no directory of its own.
+   */
+  it("resolves a child's component only through the outer command's includes", function* () {
+    const project = yield* useProject({
+      "elsewhere/Greeting.md": doc("hello from the configured include"),
+      "README.md": doc(
+        '<Test name="nested resolution">',
+        '<Execution host="run" source={"<Greeting />\\n"} as="child">',
+        '<CollectOutput as="output" />',
+        "",
+        '<AssertStringIncludes actual={output} expected="hello from the configured include" />',
+        "</Execution>",
+        "</Test>",
+      ),
+    });
+
+    const configured = yield* runCli(["test", "README.md", "--include", "elsewhere"], {
+      cwd: project,
+    }).join();
+    expect(configured.code).toBe(0);
+
+    // Without it the child has nowhere to find the name and renders nothing,
+    // which is what makes the passing run above evidence that the setting
+    // reached the child rather than something the default path supplied.
+    const bare = yield* runCli(["test", "README.md"], { cwd: project }).join();
+    expect(bare.code).not.toBe(0);
+    expect(bare.stdout + bare.stderr).toContain("1 of 1 tests failed");
+  });
+
   it("refuses <Execution> outside a canonical <Test>", function* () {
     const project = yield* useProject({
       "child.md": doc("child"),

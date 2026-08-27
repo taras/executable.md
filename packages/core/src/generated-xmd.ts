@@ -34,7 +34,7 @@
  * ## A name is not an identity
  *
  * The host admits pinned identities: the exact definition each admitted name
- * runs. Resolution never consults `componentDirs`, a registration, or the
+ * runs. Resolution never consults `includes`, a registration, or the
  * workflow component bundle, so a repository `Fetch.md` — or any same-name file
  * beside the checkout — answers nothing here. `Component.importComponent`
  * middleware still composes around every import and may observe or refuse one;

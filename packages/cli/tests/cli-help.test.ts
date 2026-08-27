@@ -73,7 +73,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).toContain("markdown document to execute");
     expect(stdout).toContain("-e, --eval");
     expect(stdout).toContain("Exactly one root document is required");
-    expect(stdout).toContain("--component-dir");
+    expect(stdout).toContain("--include");
     expect(stderr).not.toContain("Invalid input");
   });
 
@@ -81,6 +81,7 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     const { stdout } = yield* runCli(["test", "--help"]).expect();
     expect(stdout).toContain("Usage: xmd test [OPTIONS] [path]");
     expect(stdout).toContain("markdown document or directory to test");
+    expect(stdout).toContain("--include");
   });
 
   it("CH4: --version prints the version", function* () {

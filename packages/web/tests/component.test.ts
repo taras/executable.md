@@ -314,7 +314,7 @@ describe("WebForm: a repository file outranks the registration", () => {
     const doc = join(dir, "README.md");
     yield* writeFile(doc, "<WebForm />\n");
 
-    const run = yield* runWebFormDoc(doc, { realFiles: true, componentDirs: [dir] });
+    const run = yield* runWebFormDoc(doc, { realFiles: true, includes: [dir] });
 
     expect(run.output).toContain("the repository's own form");
     // The registered default never ran, so nothing was served.
@@ -332,7 +332,7 @@ describe("WebForm: a repository file outranks the registration", () => {
     const doc = join(dir, "README.md");
     yield* writeFile(doc, "<WebForm />\n");
 
-    const run = yield* runWebFormDoc(doc, { realFiles: true, componentDirs: [dir] });
+    const run = yield* runWebFormDoc(doc, { realFiles: true, includes: [dir] });
 
     expect(run.output).toContain("the repository's own function");
     expect(run.effects.served).toBe(0);

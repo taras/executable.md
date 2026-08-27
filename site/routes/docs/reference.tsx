@@ -41,7 +41,7 @@ export default define.page(function Reference() {
           — print journal entries to stderr.
         </li>
         <li>
-          <code>--component-dir</code>{" "}
+          <code>--include</code>{" "}
           — add a component search directory (repeatable).
         </li>
         <li>

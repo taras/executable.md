@@ -186,15 +186,15 @@ jobs:
       - name: Smoke test the compiled binary
         run: |
           ./dist/xmd test smoke-test/README.md \
-            --component-dir smoke-test \
-            --component-dir packages/core/components \
+            --include smoke-test \
+            --include packages/core/components \
             --raw
 
       - name: Smoke test attached-service ping-pong with the compiled binary
         run: |
           ./dist/xmd test smoke-test/attached-service-ping-pong.test.md \
-            --component-dir smoke-test \
-            --component-dir packages/core/components \
+            --include smoke-test \
+            --include packages/core/components \
             --raw
 
       # Foreground execution is about what a caller sees and what status they
@@ -239,7 +239,7 @@ jobs:
 
           # Components resolve from the current directory, not from the root's
           # identity, so a search path still finds them.
-          ./dist/xmd -e '<Badge />' --component-dir smoke-test --raw | grep -q '✓ verified'
+          ./dist/xmd -e '<Badge />' --include smoke-test --raw | grep -q '✓ verified'
 
           # So does an ordinary relative filesystem read.
           ./dist/xmd -e '<File path="smoke-test/Badge.md" />' --raw | grep -q 'verified'
@@ -379,7 +379,7 @@ jobs:
       - name: Smoke test xmd run through ACPX
         run: |
           ./dist/xmd test smoke-test/agent/README.md \
-            --component-dir smoke-test/agent/components \
+            --include smoke-test/agent/components \
             --raw
 
   # The host document-filesystem contract, on every target a release ships.

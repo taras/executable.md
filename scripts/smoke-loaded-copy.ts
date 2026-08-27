@@ -58,7 +58,7 @@ await main(function* () {
     arguments: [
       "-e",
       "<LoadedCopyPrintedError />\n\nAFTER_LOADED_COPY",
-      "--component-dir",
+      "--include",
       components,
       "--raw",
     ],

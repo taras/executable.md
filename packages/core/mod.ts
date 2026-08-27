@@ -214,7 +214,7 @@ export {
   registerComponents,
 } from "./src/components/registration.ts";
 export type { ComponentRegistration } from "./src/components/registration.ts";
-export { DEFAULT_COMPONENT_DIRS, selectComponent } from "./src/components/select.ts";
+export { DEFAULT_INCLUDES, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";
 export { RESERVED_STRUCTURAL } from "./src/structural.ts";

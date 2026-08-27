@@ -1858,7 +1858,7 @@ run but are absent from the diagnostic trace.
 | `src/structural.ts` | `RESERVED_STRUCTURAL` — the structural constructs, reserved against registration and repository files (§5.3) |
 | `src/scope-local.ts` | `updateOwn()`, `readOwn()` — own-scope context updates, the one use of `Scope.hasOwn` (§5.3) |
 | `src/components/registration.ts` | `registerComponents()`, `ComponentRegistration`, `ComponentRegistrationError`, `mergeRegistry()` — scope-local registration (§5.3) |
-| `src/components/select.ts` | `selectComponent()`, `DEFAULT_COMPONENT_DIRS` — the resolver execution and inspection share (§5.3) |
+| `src/components/select.ts` | `selectComponent()`, `DEFAULT_INCLUDES` — the resolver execution and inspection share (§5.3) |
 | `src/components/registry.ts` | `CORE_REGISTRY` — the components core supplies, as non-reserved defaults (§5.3) |
 | `src/fetch-request.ts` | `prepareFetchRequest()`, `FetchRequest`, `FetchRequestError` — what `<Fetch>` admits before transport (§6.18) |
 | `src/fetch-response.ts` | `detachHeaders()`, `detachStatus()`, `FetchResponseRecord` — the response detached from the provider's (§6.18) |
@@ -2686,7 +2686,7 @@ Some components are core's own: `<TempDir>` (§6.11), `<Json>`, `<Parse>` and
 (§6.14), and `<Fetch>` (§6.18). Each is already
 in the module graph, so it ships in the compiled binary and every published
 package without a search path or a bundling step, and a document invokes it with
-no `--component-dir`.
+no `--include`.
 
 They are ordinary **defaults**, not reserved names: a repository component
 called `Parse.md` is chosen ahead of core's `<Parse>`, exactly as it would be
@@ -2780,7 +2780,7 @@ function* durableImportComponent(
   const selection = (yield createDurableOperation<DurableSelection>(
     { type: "import_component", name },
     function* () {
-      const selected = yield* selectComponent(name, { componentDirs, registry });
+      const selected = yield* selectComponent(name, { includes, registry });
 
       if (selected.kind === "repository") {
         const readTextFile = API.Fs.operations.readTextFile;
@@ -3921,7 +3921,7 @@ construction, because the shape is what a forger copies.
 Nor can a component authenticate it. A reader that recognized an invocation by
 private state would recognize only the copy of core it was imported with, and a
 component can be loaded from disk beside its own copy while the engine that
-minted the invocation is another — the compiled CLI resolving `--component-dir`
+minted the invocation is another — the compiled CLI resolving `--include`
 is exactly that. So the method stays observation, and **no component reads the
 form to select an effect at all**.
 
@@ -7512,7 +7512,7 @@ workflow and returns a `DocumentExecution` handle. Options:
   root and its selector from one document reference
 - `stream` — the durable stream that journals the run
 - `props?` — JSON values supplied to the root document (default: `{}`)
-- `componentDirs?` — component search directories (default:
+- `includes?` — component search directories (default:
   `["components", "."]`)
 - `modifiers?` — custom modifier factories registered alongside the
   built-ins (`exec`, `silent`, `eval`, `ephemeral`, `persist`, `timeout`,

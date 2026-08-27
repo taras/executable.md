@@ -79,7 +79,7 @@ function* run(
   stream: InMemoryStream = new InMemoryStream(),
 ): Operation<Json> {
   return yield* collect(
-    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, componentDirs: [] }, [
+    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, [
       installation(components),
       ...extra,
     ]),
@@ -128,7 +128,7 @@ function* attempted(
     {
       ...retainedSource(ROOT_PATH, source),
       stream: new InMemoryStream(),
-      componentDirs: [],
+      includes: [],
     },
     [installation(components)],
   );
@@ -504,7 +504,7 @@ describe("Tier WB — public import middleware cannot widen a bundle", () => {
         yield* execute({
           ...retainedSource(ROOT_PATH, "<Anything />\n"),
           stream: new InMemoryStream(),
-          componentDirs: [],
+          includes: [],
         }),
       );
     });

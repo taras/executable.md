@@ -14,6 +14,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stat } from "@executablemd/runtime";
 import { runCli } from "@executablemd/test-support/launch";
+import { componentSearchPath } from "../src/test-target.ts";
 
 const FIXTURES = path.resolve("packages/cli/tests/fixtures/discovery");
 
@@ -266,6 +267,31 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     expect(headings(stdout)).toEqual(["alpha/Widget.test.md", "beta/Widget.test.md"]);
     expect(stdout).toContain("Alpha widget");
     expect(stdout).toContain("Beta widget");
+  });
+
+  /**
+   * The composition itself, rather than a run that depends on it. A repeated
+   * directory keeps its first position however it is spelled, so a configured
+   * include cannot promote itself ahead of the document's own directory by
+   * naming it a second time.
+   */
+  it("DT32: composition is document directory, target root, then the configured includes", function* () {
+    const root = path.join(os.tmpdir(), `xmd-dt32-${randomUUID()}`);
+    const document = {
+      path: path.join(root, "nested", "deep.test.md"),
+      relativePath: "nested/deep.test.md",
+    };
+
+    const search = componentSearchPath(document, root, [
+      // The document's own directory, spelled exactly as composition spells it…
+      path.join(root, "nested"),
+      // …and the target root, spelled differently but resolving to the same
+      // directory.
+      `${root}${path.sep}.`,
+      "components",
+    ]);
+
+    expect(search).toEqual([path.join(root, "nested"), root, "components"]);
   });
 
   it("DT26: a --pattern with no value is rejected", function* () {

@@ -59,7 +59,7 @@ describe("compiled form dispatch across loaded copies", () => {
     const loaded = yield* run(directory, [
       "-e",
       '<File path="probe.txt" />',
-      "--component-dir",
+      "--include",
       join(REPOSITORY, SHADOWING),
       "--raw",
     ]);
@@ -87,7 +87,7 @@ describe("compiled form dispatch across loaded copies", () => {
     const wrote = yield* run(directory, [
       "-e",
       '<File path="written.md">from the second copy</File>',
-      "--component-dir",
+      "--include",
       search,
       "--raw",
     ]);
@@ -98,7 +98,7 @@ describe("compiled form dispatch across loaded copies", () => {
     const deleted = yield* run(directory, [
       "-e",
       '<File.Delete path="doomed.md" />',
-      "--component-dir",
+      "--include",
       search,
       "--raw",
     ]);
@@ -109,7 +109,7 @@ describe("compiled form dispatch across loaded copies", () => {
     const paired = yield* run(directory, [
       "-e",
       '<File.Delete path="kept.md">paired</File.Delete>',
-      "--component-dir",
+      "--include",
       search,
       "--raw",
     ]);

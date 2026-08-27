@@ -144,7 +144,7 @@ yield* Sample.around({
         yield* execute({
           path: "doc.md",
           stream,
-          componentDirs: ["components", "."],
+          includes: ["components", "."],
         }),
       ),
     );
@@ -203,7 +203,7 @@ yield* Sample.around({
         yield* execute({
           path: "doc.md",
           stream,
-          componentDirs: ["components", "."],
+          includes: ["components", "."],
         }),
       ),
     );
@@ -583,7 +583,7 @@ yield* Sample.around({
           yield* execute({
             path: "doc.md",
             stream,
-            componentDirs: ["components", "."],
+            includes: ["components", "."],
           }),
         );
       }),

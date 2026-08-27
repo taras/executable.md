@@ -301,7 +301,7 @@ function* runDoc(doc: string, options: RunOptions = {}): Operation<Run> {
     const execution = yield* execute({
       path: docPath,
       stream,
-      componentDirs: [dir],
+      includes: [dir],
       ...(options.secretDetection === undefined
         ? {}
         : { secretDetection: options.secretDetection }),

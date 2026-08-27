@@ -12,7 +12,7 @@
  * and all passing.
  *
  * The child host's settings restate `xmd test`'s single-document defaults —
- * the `--component-dir` default and secret detection on — so a document that
+ * the `--include` default and secret detection on — so a document that
  * passes here proves the same assembly the command builds. Output is consumed
  * and discarded: the document's report belongs to its own execution, and a
  * result left unread would hold the completion open.
@@ -57,7 +57,7 @@ export function runMarkdownTier(document: string): Operation<MarkdownTierRun> {
     const tests = yield* useTesting();
     const installService = SERVICES[cliRuntime()];
     const testingHost = testingExecutionHost({
-      componentDirs: ["components", "."],
+      includes: ["components", "."],
       secretDetection: true,
       installService,
     });

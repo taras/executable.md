@@ -23,7 +23,7 @@ describe("xmd CLI", () => {
     expect(result.stdout).toContain("Regular content stays.");
   });
 
-  // The colocated story for a core-owned component. No --component-dir: a
+  // The colocated story for a core-owned component. No --include: a
   // built-in resolves from the module graph, not from a search path.
   it("test runs a core component's colocated document with no search path", function* () {
     const result = yield* runCli(

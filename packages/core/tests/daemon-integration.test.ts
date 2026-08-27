@@ -92,7 +92,7 @@ describe("Tier Q — Daemon integration", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -141,7 +141,7 @@ describe("Tier Q — Daemon integration", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 

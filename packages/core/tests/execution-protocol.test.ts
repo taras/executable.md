@@ -896,7 +896,7 @@ describe("Tier EP — the execution protocol", () => {
           // terminal accepted a copy of it.
           Reflect.set(options, "stream", smuggled);
           Reflect.set(options, "path", "/nowhere/replaced.md");
-          const dirs = options.componentDirs;
+          const dirs = options.includes;
           if (Array.isArray(dirs)) {
             Reflect.set(dirs, 0, "/nowhere");
             Reflect.set(dirs, "length", 0);
@@ -916,7 +916,7 @@ describe("Tier EP — the execution protocol", () => {
         yield* execute({
           ...inlineSource(source),
           stream: accepted,
-          componentDirs: acceptedDirs,
+          includes: acceptedDirs,
           modifiers: acceptedModifiers,
           props: { nested, items },
         }),

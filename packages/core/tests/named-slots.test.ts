@@ -693,7 +693,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     // renderChildren() should capture both the slotted Header and body content
@@ -727,7 +727,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     // Both X and Y should be included in renderChildren output
@@ -762,7 +762,7 @@ describe("Tier NS-E — renderChildren interaction", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     // renderChildren renders ALL children in source order
@@ -883,7 +883,7 @@ describe("Tier NS-F — Edge cases", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     const events = yield* stream.readAll();
@@ -914,7 +914,7 @@ describe("Tier NS-F — Edge cases", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     // Replay — same stream, same output
@@ -922,7 +922,7 @@ describe("Tier NS-F — Edge cases", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output2).toBe(output1);
@@ -1046,7 +1046,7 @@ describe("Tier NS-H — Nested projection points", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output).toContain("host got: captured: MATERIAL");
@@ -1069,7 +1069,7 @@ describe("Tier NS-H — Nested projection points", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output).toContain("item 1: MATERIAL");

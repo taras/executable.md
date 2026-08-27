@@ -38,9 +38,9 @@ jobs:
           DEEPINFRA_TOKEN: ${{ secrets.DEEPINFRA_TOKEN }}
         run: |
           ./dist/xmd run .reviews/ReviewPR.md \
-            --component-dir .reviews/components \
-            --component-dir .reviews/policies \
-            --component-dir packages/core/components \
+            --include .reviews/components \
+            --include .reviews/policies \
+            --include packages/core/components \
             -j .reviews/journal.jsonl \
             --verbose
 

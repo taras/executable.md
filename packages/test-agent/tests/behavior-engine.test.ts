@@ -64,7 +64,7 @@ function* useEngine(source: string): Operation<Engine> {
     },
   });
 
-  const execution = yield* execute({ path: docPath, stream, componentDirs: [] });
+  const execution = yield* execute({ path: docPath, stream, includes: [] });
   yield* spawn(function* () {
     const result = yield* execution;
     if (result.ok) {

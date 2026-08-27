@@ -43,7 +43,7 @@ import type { HostServiceInstaller } from "./cli.ts";
 /** What the entrypoint already decided, and a child must not decide again. */
 export interface TestingHostSettings {
   /** The component search path this run resolves names through. */
-  readonly componentDirs: string[];
+  readonly includes: string[];
   /** Whether durable events are scanned for credentials before they persist. */
   readonly secretDetection: boolean;
   /** The native service adapter this entrypoint supplies. */
@@ -117,7 +117,7 @@ function* runProfileChild(
       ...root,
       stream,
       props: request.props,
-      componentDirs: settings.componentDirs,
+      includes: settings.includes,
       secretDetection: settings.secretDetection,
       retainProcessOutput: diagnostic,
     },

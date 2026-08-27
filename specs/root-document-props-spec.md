@@ -345,7 +345,7 @@ Its relevant options are:
   `<eval>` identity.
 - `stream` — durable stream that journals the run.
 - `props?` — JSON values supplied to the root document; defaults to `{}`.
-- `componentDirs?` — component search directories.
+- `includes?` — component search directories.
 - `modifiers?` — custom modifier factories.
 
 `path` is the only document-path field; there is no compatibility alias.

@@ -164,7 +164,7 @@ const runConfig = object({
     aliases: ["-e"],
     ...field(z.string().optional()),
   },
-  componentDir: {
+  include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
@@ -226,7 +226,7 @@ const testConfig = object({
     description: "glob for test documents, relative to a directory target (repeatable)",
     ...field(z.array(z.string()), field.default(["**/*.test.md"]), field.array()),
   },
-  componentDir: {
+  include: {
     description: "component search directory",
     ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
   },
@@ -538,7 +538,7 @@ function keepsProcessOutput(journal: string | undefined): boolean {
 
 interface DocumentConfig {
   root: RootDocumentSource;
-  componentDir: string[];
+  include: string[];
   verbose: boolean;
   journal: string | undefined;
   raw: boolean;
@@ -662,8 +662,7 @@ function* runDocument(
   mode: DocumentMode,
   installService: HostServiceInstaller,
 ): Operation<Result<void>> {
-  const { root, componentDir, verbose, journal, raw, secretDetection, retainProcessOutput } =
-    config;
+  const { root, include, verbose, journal, raw, secretDetection, retainProcessOutput } = config;
 
   // Every CLI invocation starts from an empty stream unless the caller owns
   // one. --journal writes current-run diagnostics only; existing traces are
@@ -744,7 +743,7 @@ function* runDocument(
   // before document code begins, so a child is offered exactly what this
   // command assembled — and never a second description of it.
   const testingHost = testingExecutionHost({
-    componentDirs: componentDir,
+    includes: include,
     secretDetection,
     installService,
   });
@@ -758,7 +757,7 @@ function* runDocument(
       ...root,
       stream,
       props: mode.props,
-      componentDirs: componentDir,
+      includes: include,
       secretDetection,
       // Whatever the host path decided. A run that keeps nothing forwards its
       // commands' output to the reader and accumulates none of it.
@@ -972,7 +971,7 @@ function* test(
       {
         ...config,
         root: { path: document.path },
-        componentDir: componentSearchPath(document, target.root, config.componentDir),
+        include: componentSearchPath(document, target.root, config.include),
       },
       { testing: true },
       installService,
@@ -1829,7 +1828,7 @@ function* dispatch(
               // search path would read the mutable checkout beside it, so a
               // repository component fails to resolve rather than resolving
               // to content the definition does not describe.
-              componentDir: [],
+              include: [],
               verbose: request.verbose,
               journal: undefined,
               raw: request.raw,
