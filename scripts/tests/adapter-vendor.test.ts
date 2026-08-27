@@ -19,7 +19,7 @@ import type { Operation } from "effection";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { decodeBase64 } from "@std/encoding/base64";
+import { Buffer } from "node:buffer";
 import { embeddedAdapterIdentities } from "@executablemd/acp";
 
 const VENDOR = "packages/acp/vendor/adapters";
@@ -87,7 +87,7 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
       declared.map((snapshot) => snapshot.provider),
     );
     for (const snapshot of embedded) {
-      const bytes = decodeBase64(snapshot.base64);
+      const bytes = Buffer.from(snapshot.base64, "base64");
       expect({
         provider: snapshot.provider,
         sha256: createHash("sha256").update(bytes).digest("hex"),

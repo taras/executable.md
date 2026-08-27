@@ -42,11 +42,11 @@
  * continuing an exact conversation.
  */
 
-import { decodeBase64 } from "@std/encoding/base64";
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import { ensure, type Operation, scoped } from "effection";
+import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { rename, writeFile } from "node:fs/promises";
@@ -99,7 +99,9 @@ function digestOf(bytes: Uint8Array): string {
  * prefix is the failure a length check alone reads as success.
  */
 function tarballOf(snapshot: EmbeddedAdapterSnapshot): Uint8Array {
-  const bytes = decodeBase64(snapshot.base64);
+  // `node:buffer` rather than a JSR encoding module: this is production code and
+  // has to decode identically under Deno, the dnt npm artifact and Bun.
+  const bytes = new Uint8Array(Buffer.from(snapshot.base64, "base64"));
   if (bytes.byteLength !== snapshot.byteLength) {
     throw new AdapterSnapshotError(
       `the embedded ${snapshot.provider} adapter is ${bytes.byteLength} bytes, and this build ` +

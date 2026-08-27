@@ -2128,6 +2128,20 @@ that appends that Prompt and its association; if that transaction rolls back,
 the table goes with it. No migration scans a run's existing Prompts, and nothing
 synthesizes an association for one.
 
+**The adapter is this host's own, for now.** A checkpoint can only come from
+the adapter, and no published Codex or Claude release reports one. So a workflow
+run executes the snapshots this build carries — each packed from an exact patched
+upstream commit by that project's own build — rather than the adapter `npx` would
+resolve, and the registry it installs is closed to those two providers. An agent
+this host carries no snapshot for is refused rather than resolved elsewhere.
+
+A snapshot is verified against its recorded digest and materialized before the
+first Prompt, and every failure refuses: falling back to a published adapter
+would complete every Prompt, retain nothing, and say nothing about why. Nothing
+is materialized for a document that opens no `<Session>`. This is temporary and
+carried with its own exit gate; the retention contract above does not change
+when a provider returns to a published release.
+
 **Nothing presents a checkpoint.** It is a way back into somebody's conversation,
 and neither the human nor the JSON form of `status`, `list` or `history` carries
 its kind or its value. The rendered Prompt output, the serialized `agent_prompt`
