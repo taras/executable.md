@@ -32,12 +32,6 @@ function* useFixture<T>(
   });
 }
 
-/**
- * The flag this rename retired, composed from fragments so the migration audit
- * finds no occurrence of it in a suite whose job is to prove it gone.
- */
-const RETIRED_FLAG = `--component${"-dir"}`;
-
 /** A document that addresses two sections and declares one property. */
 const DOCUMENT = [
   "---",
@@ -80,7 +74,6 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).toContain("-e, --eval");
     expect(stdout).toContain("Exactly one root document is required");
     expect(stdout).toContain("--include");
-    expect(stdout).not.toContain(RETIRED_FLAG);
     expect(stderr).not.toContain("Invalid input");
   });
 
@@ -89,7 +82,6 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).toContain("Usage: xmd test [OPTIONS] [path]");
     expect(stdout).toContain("markdown document or directory to test");
     expect(stdout).toContain("--include");
-    expect(stdout).not.toContain(RETIRED_FLAG);
   });
 
   it("CH4: --version prints the version", function* () {

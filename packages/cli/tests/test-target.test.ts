@@ -16,12 +16,6 @@ import { stat } from "@executablemd/runtime";
 import { runCli } from "@executablemd/test-support/launch";
 import { componentSearchPath } from "../src/test-target.ts";
 
-/**
- * The flag this rename retired, composed from fragments so the migration audit
- * finds no occurrence of it in a case whose job is to prove it carries nothing.
- */
-const RETIRED_FLAG = `--component${"-dir"}`;
-
 const FIXTURES = path.resolve("packages/cli/tests/fixtures/discovery");
 
 function fixture(...segments: string[]): string {
@@ -298,46 +292,6 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     ]);
 
     expect(search).toEqual([path.join(root, "nested"), root, "components"]);
-  });
-
-  /**
-   * The component sits beside the document, so the suite passes on the default
-   * search path: a run that merely *dropped* the retired flag would be green.
-   * The control establishes that, so the refusal is the only thing the failing
-   * runs can be reporting.
-   */
-  it("DT33: the retired flag is refused before test discovery", function* () {
-    const dir = path.join(os.tmpdir(), `xmd-dt33-${randomUUID()}`);
-    yield* ensureDir(dir);
-    yield* ensure(() => rm(dir, { recursive: true, force: true }));
-    yield* writeTextFile(path.join(dir, "Widget.md"), "Widget from the default path\n");
-    yield* writeTextFile(
-      path.join(dir, "one.test.md"),
-      [
-        "DISCOVERED-AND-RAN",
-        "",
-        '<Test name="the component resolves on the default search path">',
-        '<Let as="rendered"><Widget /></Let>',
-        '<AssertEquals actual={rendered} expected={"Widget from the default path"} />',
-        "</Test>",
-        "",
-      ].join("\n"),
-    );
-
-    const control = yield* runCli(["test", "one.test.md"], { cwd: dir }).join();
-    expect(control.code).toBe(0);
-    expect(control.stdout).toContain("DISCOVERED-AND-RAN");
-
-    // Both spellings: the separated value and the `=` form.
-    for (const written of [[RETIRED_FLAG, "elsewhere"], [`${RETIRED_FLAG}=elsewhere`]]) {
-      const refused = yield* runCli(["test", "one.test.md", ...written], { cwd: dir }).join();
-
-      expect(refused.code).toBe(1);
-      expect(refused.stderr).toContain(`unrecognized option for xmd test: ${written[0]}`);
-      expect(refused.stderr).toContain("--include");
-      // Nothing was discovered, so nothing was executed or announced.
-      expect(refused.stdout).not.toContain("DISCOVERED-AND-RAN");
-    }
   });
 
   it("DT26: a --pattern with no value is rejected", function* () {

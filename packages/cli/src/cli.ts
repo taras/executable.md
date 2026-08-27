@@ -400,49 +400,6 @@ function findTimeoutFlag(args: string[]): string | undefined {
   );
 }
 
-const INCLUDE_OPTION = "--include";
-
-/**
- * The option `--include` replaced (#271).
- *
- * Assembled rather than written whole. The repository's migration audit greps
- * for the retired spelling and requires no match, and a literal here would be
- * indistinguishable from a caller that was never migrated — so the one place
- * the old name still has to exist says so by construction.
- */
-const RETIRED_INCLUDE_OPTION = ["--component", "dir"].join("-");
-
-/**
- * Refuse the retired include option on `xmd run` and `xmd test`.
- *
- * The rename is a clean break with no alias, and the argument parser ignores
- * options it does not define rather than rejecting them. Silence is the wrong
- * answer here for the same reason it is for a safety option: a caller who wrote
- * the old spelling is saying where components come from, and would otherwise
- * watch the run search the defaults instead — failing somewhere unrelated, or
- * succeeding while ignoring what they asked for.
- *
- * Read from what the parser did *not* consume, never from raw argv. A token's
- * spelling does not make it an option: a caller may name a directory after the
- * retired flag itself, and `--include` has already taken that token as its
- * value by the time this runs. Scanning argv would refuse the one caller who is
- * using the new option correctly.
- *
- * Both spellings are refused, the separated value and the `=` form. Tokens
- * after `--` belong to the document, not to xmd.
- */
-function findRetiredIncludeFlag(args: string[]): string | undefined {
-  for (const arg of args) {
-    if (arg === "--") {
-      return undefined;
-    }
-    if (arg === RETIRED_INCLUDE_OPTION || arg.startsWith(`${RETIRED_INCLUDE_OPTION}=`)) {
-      return arg;
-    }
-  }
-  return undefined;
-}
-
 /**
  * Install what the command line asked for, and nothing else: a field nobody
  * wrote stays as the enclosing scope has it, which for a run is no timeout.
@@ -1714,21 +1671,6 @@ function* dispatch(
     console.error(secretDetectionError);
     yield* exit(1);
     return;
-  }
-
-  // Before the run resolves its props and before a test target is discovered:
-  // the two commands that take includes answer for the retired spelling here,
-  // rather than each deciding later what to do about a directory it never got.
-  if (command.name === "run" || command.name === "test") {
-    const retired = findRetiredIncludeFlag(parsed.remainder.args ?? []);
-    if (retired) {
-      console.error(
-        `unrecognized option for xmd ${command.name}: ${retired} — ` +
-          `a component search directory is named by ${INCLUDE_OPTION}`,
-      );
-      yield* exit(1);
-      return;
-    }
   }
 
   switch (command.name) {

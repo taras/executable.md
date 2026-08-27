@@ -44,12 +44,6 @@ const VALUE_DOC = [
   "<Return value={{ ok: true }} />",
 ].join("\n");
 
-/**
- * The flag this rename retired, composed from fragments so the migration audit
- * finds no occurrence of it in a case whose job is to prove it carries nothing.
- */
-const RETIRED_FLAG = `--component${"-dir"}`;
-
 /** A directory holding the given files, removed when the test ends. */
 function* useWorkspace(files: Record<string, string>): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-inline-cli-")));
@@ -231,73 +225,6 @@ describe(
       // …and an explicit value replaces the defaults rather than extending
       // them, so the candidate sitting on the default path never competes.
       expect(stdout).not.toContain("from the default path");
-    });
-
-    /**
-     * The clean break, observed where a caller hits it.
-     *
-     * The document resolves its component from the default path, so a run that
-     * merely *dropped* the retired flag would print and exit 0 — which is what
-     * the control below establishes, and what makes the refusal the only thing
-     * the failing runs can be reporting.
-     */
-    it("IE26: the retired flag is refused before the document runs", function* () {
-      const root = yield* useWorkspace({ "Greeting.md": "from the default path\n" });
-
-      const control = yield* runCli(["-e", "<Greeting />\n", "--raw"], { cwd: root }).join();
-      expect(control.code).toBe(0);
-      expect(control.stdout).toContain("from the default path");
-
-      // Both spellings: the separated value and the `=` form.
-      for (const written of [[RETIRED_FLAG, "first"], [`${RETIRED_FLAG}=first`]]) {
-        const refused = yield* runCli(["-e", "<Greeting />\n", ...written, "--raw"], {
-          cwd: root,
-        }).join();
-
-        expect(refused.code).toBe(1);
-        expect(refused.stderr).toContain(`unrecognized option for xmd run: ${written[0]}`);
-        expect(refused.stderr).toContain("--include");
-        // The document never ran: the control is what its output looks like.
-        expect(refused.stdout).not.toContain("from the default path");
-      }
-    });
-
-    it("IE27: a retired spelling after -- belongs to the document, not to xmd", function* () {
-      const root = yield* useWorkspace({ "Greeting.md": "from the default path\n" });
-
-      const { code, stdout } = yield* runCli(
-        ["-e", "<Greeting />\n", "--raw", "--", RETIRED_FLAG, "first"],
-        { cwd: root },
-      ).join();
-
-      expect(code).toBe(0);
-      expect(stdout).toContain("from the default path");
-    });
-
-    /**
-     * A token's spelling does not make it an option. This directory is named
-     * exactly like the retired flag, and naming a directory is what `--include`
-     * is for — so the refusal reads what the parser did not consume rather than
-     * argv, which would reject the one caller using the new option correctly.
-     */
-    it("IE28: a directory named like the retired flag is a usable include", function* () {
-      const root = yield* useWorkspace({});
-      yield* ensureDir(join(root, RETIRED_FLAG));
-      yield* writeTextFile(
-        join(root, RETIRED_FLAG, "Greeting.md"),
-        "from a strangely named directory\n",
-      );
-
-      // Both ways of writing the value: separated, where the parser consumes
-      // the next token, and the `=` form, where it never becomes one.
-      for (const written of [["--include", RETIRED_FLAG], [`--include=${RETIRED_FLAG}`]]) {
-        const { code, stdout } = yield* runCli(["-e", "<Greeting />\n", ...written, "--raw"], {
-          cwd: root,
-        }).join();
-
-        expect(code).toBe(0);
-        expect(stdout).toContain("from a strangely named directory");
-      }
     });
 
     it("IE18: running an inline document leaves the directory as it was", function* () {
