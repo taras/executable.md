@@ -234,23 +234,44 @@ describe(
     });
 
     /**
-     * The clean break, observed where a caller would hit it. The retired flag
-     * is not an option this CLI defines, so it contributes no directory and
-     * the run searches the defaults — which is what an alias would hide.
+     * The clean break, observed where a caller hits it.
+     *
+     * The document resolves its component from the default path, so a run that
+     * merely *dropped* the retired flag would print and exit 0 — which is what
+     * the control below establishes, and what makes the refusal the only thing
+     * the failing runs can be reporting.
      */
-    it("IE26: the retired flag contributes no include", function* () {
-      const root = yield* useWorkspace({});
-      yield* ensureDir(join(root, "first"));
-      yield* writeTextFile(join(root, "first", "Greeting.md"), "from the first include\n");
+    it("IE26: the retired flag is refused before the document runs", function* () {
+      const root = yield* useWorkspace({ "Greeting.md": "from the default path\n" });
 
-      const { code, stdout, stderr } = yield* runCli(
-        ["-e", "<Greeting />\n", RETIRED_FLAG, "first", "--raw"],
+      const control = yield* runCli(["-e", "<Greeting />\n", "--raw"], { cwd: root }).join();
+      expect(control.code).toBe(0);
+      expect(control.stdout).toContain("from the default path");
+
+      // Both spellings: the separated value and the `=` form.
+      for (const written of [[RETIRED_FLAG, "first"], [`${RETIRED_FLAG}=first`]]) {
+        const refused = yield* runCli(["-e", "<Greeting />\n", ...written, "--raw"], {
+          cwd: root,
+        }).join();
+
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain(`unrecognized option for xmd run: ${written[0]}`);
+        expect(refused.stderr).toContain("--include");
+        // The document never ran: the control is what its output looks like.
+        expect(refused.stdout).not.toContain("from the default path");
+      }
+    });
+
+    it("IE27: a retired spelling after -- belongs to the document, not to xmd", function* () {
+      const root = yield* useWorkspace({ "Greeting.md": "from the default path\n" });
+
+      const { code, stdout } = yield* runCli(
+        ["-e", "<Greeting />\n", "--raw", "--", RETIRED_FLAG, "first"],
         { cwd: root },
       ).join();
 
-      expect(code).toBe(1);
-      expect(stdout).not.toContain("from the first include");
-      expect(stderr).toContain("Cannot resolve component: Greeting (searched: components, .)");
+      expect(code).toBe(0);
+      expect(stdout).toContain("from the default path");
     });
 
     it("IE18: running an inline document leaves the directory as it was", function* () {

@@ -300,34 +300,44 @@ describe("Tier DT — xmd test targets", { sanitizeOps: false, sanitizeResources
     expect(search).toEqual([path.join(root, "nested"), root, "components"]);
   });
 
-  it("DT33: the retired flag contributes no include to a test document", function* () {
+  /**
+   * The component sits beside the document, so the suite passes on the default
+   * search path: a run that merely *dropped* the retired flag would be green.
+   * The control establishes that, so the refusal is the only thing the failing
+   * runs can be reporting.
+   */
+  it("DT33: the retired flag is refused before test discovery", function* () {
     const dir = path.join(os.tmpdir(), `xmd-dt33-${randomUUID()}`);
-    yield* ensureDir(path.join(dir, "elsewhere"));
+    yield* ensureDir(dir);
     yield* ensure(() => rm(dir, { recursive: true, force: true }));
-    yield* writeTextFile(path.join(dir, "elsewhere", "Widget.md"), "Widget from elsewhere\n");
+    yield* writeTextFile(path.join(dir, "Widget.md"), "Widget from the default path\n");
     yield* writeTextFile(
       path.join(dir, "one.test.md"),
       [
-        '<Test name="the include is where the component comes from">',
+        "DISCOVERED-AND-RAN",
+        "",
+        '<Test name="the component resolves on the default search path">',
         '<Let as="rendered"><Widget /></Let>',
-        '<AssertEquals actual={rendered} expected={"Widget from elsewhere"} />',
+        '<AssertEquals actual={rendered} expected={"Widget from the default path"} />',
         "</Test>",
         "",
       ].join("\n"),
     );
 
-    const granted = yield* runCli(["test", "one.test.md", "--include", "elsewhere"], {
-      cwd: dir,
-    }).join();
-    expect(granted.code).toBe(0);
+    const control = yield* runCli(["test", "one.test.md"], { cwd: dir }).join();
+    expect(control.code).toBe(0);
+    expect(control.stdout).toContain("DISCOVERED-AND-RAN");
 
-    const retired = yield* runCli(["test", "one.test.md", RETIRED_FLAG, "elsewhere"], {
-      cwd: dir,
-    }).join();
-    expect(retired.code).toBe(1);
-    expect(retired.stdout + retired.stderr).toContain(
-      "Cannot resolve component: Widget (searched: components, .)",
-    );
+    // Both spellings: the separated value and the `=` form.
+    for (const written of [[RETIRED_FLAG, "elsewhere"], [`${RETIRED_FLAG}=elsewhere`]]) {
+      const refused = yield* runCli(["test", "one.test.md", ...written], { cwd: dir }).join();
+
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain(`unrecognized option for xmd test: ${written[0]}`);
+      expect(refused.stderr).toContain("--include");
+      // Nothing was discovered, so nothing was executed or announced.
+      expect(refused.stdout).not.toContain("DISCOVERED-AND-RAN");
+    }
   });
 
   it("DT26: a --pattern with no value is rejected", function* () {
