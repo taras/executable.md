@@ -1,6 +1,6 @@
 {
   "name": "@executablemd/core",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "exports": {
     ".": "./mod.ts",
     "./host": "./host.ts"
