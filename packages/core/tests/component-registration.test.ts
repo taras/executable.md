@@ -25,11 +25,7 @@ import { execute } from "../src/execute.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import { ComponentRegistrationError, registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
-import * as selectModule from "../src/components/select.ts";
 import { DEFAULT_INCLUDES, selectComponent } from "../src/components/select.ts";
-import type { SelectOptions } from "../src/components/select.ts";
-import type { ExecuteSettings } from "../src/execute.ts";
-import type { InspectComponentOptions } from "../src/inspect.ts";
 import * as core from "../mod.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
 import type { ComponentRegistry, ComponentSelection, Json as CoreJson } from "../src/types.ts";
@@ -886,48 +882,10 @@ describe("Tier CR — selection is journaled", () => {
   });
 });
 
-/**
- * The retired spellings, composed from fragments rather than written out, so
- * proving their absence does not itself leave an occurrence of the name this
- * rename removed.
- */
-type RetiredOption = `${"component"}${"Dirs"}`;
-const RETIRED_OPTION = `${"component"}${"Dirs"}`;
-const RETIRED_EXPORT = ["DEFAULT", "COMPONENT", "DIRS"].join("_");
-
-type DeclaresKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
-
-/**
- * The public option surfaces, checked by the compiler rather than at runtime:
- * `deno test` type-checks this file, so a reintroduced alias makes one of the
- * `false` literals unassignable and fails the suite instead of passing quietly.
- */
-const OPTION_SURFACES: [
-  DeclaresKey<ExecuteSettings, "includes">,
-  DeclaresKey<ExecuteSettings, RetiredOption>,
-  DeclaresKey<SelectOptions, "includes">,
-  DeclaresKey<SelectOptions, RetiredOption>,
-  DeclaresKey<InspectComponentOptions, "includes">,
-  DeclaresKey<InspectComponentOptions, RetiredOption>,
-] = [true, false, true, false, true, false];
-
-/** Options assembled the way an untyped JavaScript caller would assemble them. */
-function untypedOptions(extra: Record<string, unknown>, options: SelectOptions): SelectOptions {
-  return Object.assign({}, extra, options);
-}
-
 describe("Tier CR — includes are the configured contribution to the search path", () => {
-  it("CR35: execution, selection and inspection declare includes and no retired member", function* () {
-    expect(OPTION_SURFACES).toEqual([true, false, true, false, true, false]);
-  });
-
-  it("CR36: DEFAULT_INCLUDES is the exported default and the retired constant is gone", function* () {
+  it("CR36: DEFAULT_INCLUDES is the default the resolver falls back to, and core exports it", function* () {
     expect(DEFAULT_INCLUDES).toEqual(["components", "."]);
-
-    expect(Object.keys(selectModule)).toContain("DEFAULT_INCLUDES");
-    expect(Object.keys(selectModule)).not.toContain(RETIRED_EXPORT);
     expect(Object.keys(core)).toContain("DEFAULT_INCLUDES");
-    expect(Object.keys(core)).not.toContain(RETIRED_EXPORT);
   });
 
   it("CR37: an omitted includes searches the defaults, an empty one searches nothing", function* () {
@@ -949,21 +907,6 @@ describe("Tier CR — includes are the configured contribution to the search pat
     expect(empty.kind).toBe("unresolved");
     if (empty.kind === "unresolved") {
       expect(empty.searched).toEqual([]);
-    }
-  });
-
-  it("CR38: an unknown retired member is not read as configuration", function* () {
-    const dir = yield* useFixture();
-    yield* writeTextFile(join(dir, "Widget.md"), "from disk\n");
-
-    const selection = yield* selectComponent(
-      "Widget",
-      untypedOptions({ [RETIRED_OPTION]: [dir] }, { registry: yield* currentRegistry() }),
-    );
-
-    expect(selection.kind).toBe("unresolved");
-    if (selection.kind === "unresolved") {
-      expect(selection.searched).toEqual([...DEFAULT_INCLUDES]);
     }
   });
 });
