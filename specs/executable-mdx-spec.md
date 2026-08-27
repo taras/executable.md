@@ -2852,9 +2852,11 @@ stays beneath the configured include whichever way it is spelled. The include is
 reduced to a prefix before an entry is joined to it, by segments rather than by
 spelling: a `.` segment and an empty one carry no meaning, so `.`, `./` and
 `.//` all name the working directory, and `./Ns` and `.//Ns` both name `Ns`.
-Whether a read is absolute is decided by the include's own leading separator
-alone, so no relative spelling produces one and an absolute include stays
-absolute. A `..` segment is kept rather than resolved. Every
+The include's own leading separators are kept exactly as written and are the
+only thing that decides whether a read is absolute, so no relative spelling
+produces one and a root a leading run names — `//server/share` — stays the root
+that was configured rather than a different directory one separator away. A
+`..` segment is kept rather than resolved. Every
 segment above it was admitted by the same test, so a directory whose segment
 fails it — lower-case, hidden, dotted, or otherwise outside the grammar — holds
 no path `probeComponentPath()` could ever walk, and its complete subtree is
@@ -9491,6 +9493,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, and a selection-relevant link to a directory or to nothing each fail the whole request; a relevant link to a file is selected; a link behind a lower-case, dotted or hidden prefix is ignored even beside one that is refused; and the diagnostic names the configured include and the logical entry rather than the resolved target |
 | SY13b | An unreadable reachable directory | An include root that refuses, and a valid-name directory beneath it that refuses, each fail the whole request rather than shortening the catalog |
 | SY13c | Include spellings | `.`, `./` and `.//` read the same directories and `./Ns` and `.//Ns` read the same directories, none of them absolute, and each spelling still selects exactly what it selects today |
+| SY13d | An absolute root | An include with two leading separators reads only beneath that exact prefix; the directory one separator away throws if it is read |
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |

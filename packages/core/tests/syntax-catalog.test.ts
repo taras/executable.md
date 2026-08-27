@@ -64,14 +64,16 @@ const MISSING: StatResult = { exists: false, isFile: false, isDirectory: false }
  * the way a host resolves one before it is looked up: `.` and empty segments
  * carry no meaning, and a leading separator is what makes a path absolute.
  *
- * An absolute path stays absolute and so matches nothing in this tree, which is
- * what makes a read that escapes the include observable here at all.
+ * An absolute path stays absolute — with its leading separators intact, because
+ * `//server/share` and `/server/share` are different roots — and so matches
+ * nothing a relative key holds. That is what makes a read that escapes the
+ * include, or lands one separator away from it, observable here at all.
  */
 function resolve(path: string): string {
-  const absolute = path.startsWith("/");
+  const leading = /^\/*/.exec(path)?.[0] ?? "";
   const segments = path.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (absolute) {
-    return `/${segments.join("/")}`;
+  if (leading !== "") {
+    return `${leading}${segments.join("/")}`;
   }
   return segments.length === 0 ? "." : segments.join("/");
 }
@@ -104,7 +106,7 @@ function lstat(tree: Tree, path: string): LinkStatResult {
 }
 
 function read(tree: Tree, path: string): string {
-  const node = tree[path];
+  const node = tree[resolve(path)];
   const content = node?.kind === "file" || node?.kind === "link" ? node.content : undefined;
   if (content === undefined) {
     throw new Error(`ENOENT: no such file: ${path}`);
@@ -588,6 +590,35 @@ describe("Tier SY: include boundaries", () => {
       expect(reads.filter((read) => read.startsWith("/"))).toEqual([]);
       expect([...reads].sort()).toEqual([...spelling.reads]);
       expect(names(userProvided(catalog))).toEqual([...spelling.selects]);
+    }
+  });
+
+  it("SY13d: keeps an absolute include's leading separators, which name its root", function* () {
+    // `//server/share` is a UNC share on Windows, and two leading separators are
+    // implementation-defined on POSIX. Collapsing them names `/server/share` —
+    // a different directory, one separator away — so the share below holds the
+    // components and `/server/share` holds a trap that throws if it is read.
+    const tree: Tree = {
+      "//server/share": { kind: "directory" },
+      "//server/share/Direct.md": markdown("direct\n"),
+      "//server/share/Ns": { kind: "directory" },
+      "//server/share/Ns/Widget.md": markdown("nested\n"),
+      "//server/share/node_modules": { kind: "directory" },
+      "//server/share/node_modules/Widget.md": markdown("out of reach\n"),
+      "/server/share": { kind: "directory" },
+      "/server/share/Trap.md": markdown("one separator away\n"),
+    };
+
+    for (const include of ["//server/share", "//server/share/"]) {
+      const reads: string[] = [];
+      const catalog = yield* catalogFor(tree, [include], {
+        unreadable: ["/server/share", "//server/share/node_modules"],
+        reads,
+      });
+
+      expect(reads.every((read) => read.startsWith("//server/share"))).toBe(true);
+      expect([...reads].sort()).toEqual(["//server/share", "//server/share/Ns"]);
+      expect(names(userProvided(catalog))).toEqual(["Direct", "Ns.Widget"]);
     }
   });
 

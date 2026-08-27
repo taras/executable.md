@@ -64,19 +64,24 @@ function normalizePath(path: string): string {
  *
  * Read segment by segment rather than by trimming spellings: `.` segments and
  * empty ones between separators carry no meaning, so `.`, `./` and `.//` all
- * name the working directory and reduce to `.`. Whether the result is absolute
- * is decided once, by the include's own leading separator, which is why no
- * relative spelling can produce an absolute read and `/abs` stays `/abs`.
+ * name the working directory and reduce to `.`.
+ *
+ * The include's own leading separators are kept exactly as written, and they
+ * are the only thing that decides whether a read is absolute. No relative
+ * spelling can therefore produce an absolute read, and a root that a leading
+ * run names — `//server/share` is a UNC share on Windows, and two leading
+ * separators are implementation-defined on POSIX — stays the root the caller
+ * configured rather than a different directory one separator away.
  *
  * A `..` segment is kept rather than resolved. Resolving it would take the
  * working directory this deliberately never reads, and keeping it lexical is
  * what a relative include already meant.
  */
 function includePrefix(include: string): string {
-  const absolute = include.startsWith("/");
+  const leading = /^\/*/.exec(include)?.[0] ?? "";
   const segments = include.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (absolute) {
-    return `/${segments.join("/")}`;
+  if (leading !== "") {
+    return `${leading}${segments.join("/")}`;
   }
   return segments.length === 0 ? "." : segments.join("/");
 }
