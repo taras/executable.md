@@ -2845,10 +2845,32 @@ candidate order, repository override and registered fallback above are not
 restated anywhere. A repository component that overrides an ordinary default
 appears once, under user-provided, with its repository origin.
 
+**Enumeration follows the grammar while it walks.** An include is read one
+directory level at a time through the contextual `API.Fs`, and a directory is
+entered only when its own segment is a valid component-name segment. Every read
+stays beneath the configured include whichever way it is spelled. The include is
+reduced to a prefix before an entry is joined to it, by segments rather than by
+spelling: a `.` segment and an empty one carry no meaning, so `.`, `./` and
+`.//` all name the working directory, and `./Ns` and `.//Ns` both name `Ns`.
+The include's own leading separators are kept exactly as written and are the
+only thing that decides whether a read is absolute, so no relative spelling
+produces one and a root a leading run names — `//server/share` — stays the root
+that was configured rather than a different directory one separator away. A
+`..` segment is kept rather than resolved. Every
+segment above it was admitted by the same test, so a directory whose segment
+fails it — lower-case, hidden, dotted, or otherwise outside the grammar — holds
+no path `probeComponentPath()` could ever walk, and its complete subtree is
+skipped without being read. The default includes are `["components", "."]`, and
+what this decides is whether describing a repository reads its `node_modules`,
+its `.git` and its build output before discarding every path in them.
+
 **A partial catalog is never presented as a complete one.** A missing include
 contributes nothing, exactly as it does during execution. An include that exists
 but cannot be enumerated fails the whole request: one that is not a directory,
-one that cannot be read, and one that is itself a symbolic link.
+one that cannot be read, and one that is itself a symbolic link. A directory
+beneath it that a name reaches and that cannot be read fails the request the
+same way — pruning removes what no name reaches, never a failure on a path one
+does.
 
 Traversal reports a symbolic link and never follows it. A reported link is
 classified only when its complete logical path could take part in selection:
@@ -9466,8 +9488,12 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
+| SY7c | Pruning | A lower-case, hidden or dotted directory is never read — at the top level or deeper — while the direct, nested and index candidates beside it stay discoverable; every skipped directory throws if it is read, and the recorded reads name only the ones a name reaches |
 | SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
 | SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, and a selection-relevant link to a directory or to nothing each fail the whole request; a relevant link to a file is selected; a link behind a lower-case, dotted or hidden prefix is ignored even beside one that is refused; and the diagnostic names the configured include and the logical entry rather than the resolved target |
+| SY13b | An unreadable reachable directory | An include root that refuses, and a valid-name directory beneath it that refuses, each fail the whole request rather than shortening the catalog |
+| SY13c | Include spellings | `.`, `./` and `.//` read the same directories and `./Ns` and `.//Ns` read the same directories, none of them absolute, and each spelling still selects exactly what it selects today |
+| SY13d | An absolute root | An include with two leading separators reads only beneath that exact prefix; the directory one separator away throws if it is read |
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
@@ -10606,10 +10632,10 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 | VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |
 
-### Tier FS — Contextual link classification
+### Tier FS — Contextual link classification and directory reads
 
 Runs against real symbolic links in a temporary directory, because an in-memory
-stub has nothing for a link to point at and so cannot tell the two operations
+stub has nothing for a link to point at and so cannot tell the operations
 apart.
 
 | # | Test | Verify |
@@ -10618,6 +10644,7 @@ apart.
 | FS2 | Plain entries | The two agree about a regular file and a directory |
 | FS3/FS4 | Links | `lstat` reports the link itself while `stat` follows it to the file or directory it names |
 | FS5 | A dangling link | `stat` answers as it does for absence; `lstat` reports the link, which is what makes the two distinguishable |
+| FS6 | One directory level | `readDirectory` reports the direct entries as plain name and type values, a link among them by itself, nothing nested, and in no promised order |
 
 ### Tier FR — The runtime Fetch adapter
 

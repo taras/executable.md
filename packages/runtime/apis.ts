@@ -126,6 +126,22 @@ export interface LinkStatResult {
 }
 
 /**
+ * One entry of a directory, as the entry itself rather than as what it leads
+ * to.
+ *
+ * Plain data: a caller reads members, never host methods, so the same values
+ * cross a substituted provider and the default adapter. A symbolic link reports
+ * `isSymbolicLink: true` with `isFile` and `isDirectory` both false, whatever
+ * it points at — the same shape `lstat` answers with.
+ */
+export interface DirectoryEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+}
+
+/**
  * Minimal response headers interface.
  *
  * Uses a minimal interface instead of the global `Headers` type to avoid
@@ -471,6 +487,17 @@ interface FsHandler {
    */
   lstat(path: string): Operation<LinkStatResult>;
   /**
+   * The entries one directory holds directly, in whatever order the host
+   * reports them.
+   *
+   * One level, and nothing more: it does not recurse, does not follow a
+   * symbolic link, does not sort, and does not soften a directory that cannot
+   * be read into an empty answer. A caller that walks a tree decides for itself
+   * which directories are worth reading, which is what lets it skip a subtree
+   * entirely rather than filter one it has already walked.
+   */
+  readDirectory(path: string): Operation<DirectoryEntry[]>;
+  /**
    * Files and symbolic links beneath `root` whose path relative to it matches
    * `patterns` and matches none of `exclude`. Paths come back relative and
    * POSIX-separated, which is what both pattern lists are matched against, so a
@@ -597,6 +624,19 @@ export const API: {
         }
         throw err;
       }
+    },
+
+    *readDirectory(path: string): Operation<DirectoryEntry[]> {
+      const entries: DirectoryEntry[] = [];
+      for (const entry of yield* FsApi.operations.readdirDirents(path)) {
+        entries.push({
+          name: entry.name,
+          isFile: entry.isFile(),
+          isDirectory: entry.isDirectory(),
+          isSymbolicLink: entry.isSymbolicLink(),
+        });
+      }
+      return entries;
     },
 
     *glob(options: {
@@ -766,6 +806,9 @@ export const readTextFile: typeof API.Fs.operations.readTextFile = API.Fs.operat
 export const stat: typeof API.Fs.operations.stat = API.Fs.operations.stat;
 
 export const lstat: typeof API.Fs.operations.lstat = API.Fs.operations.lstat;
+
+export const readDirectory: typeof API.Fs.operations.readDirectory =
+  API.Fs.operations.readDirectory;
 
 export const glob: typeof API.Fs.operations.glob = API.Fs.operations.glob;
 

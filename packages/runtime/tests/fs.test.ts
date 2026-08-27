@@ -1,10 +1,13 @@
 /**
- * Tier FS — the contextual filesystem's link classification.
+ * Tier FS — the contextual filesystem's link classification, and the one level
+ * `readDirectory` answers with.
  *
  * `stat` answers about what a path leads to and `lstat` answers about the entry
  * itself. The difference only shows on a symbolic link, so every case here is
  * built from real links in a temporary directory: an in-memory stub cannot
  * tell the two operations apart because it has nothing for a link to point at.
+ * `readDirectory` reads the same tree for the same reason — a link is an entry
+ * it reports as itself.
  *
  * `mkdtemp`, `realpath` and `symlink` have no `@effectionx/fs` equivalent;
  * everything else goes through the contextual operations under test.
@@ -19,7 +22,7 @@ import { mkdir, mkdtemp, realpath, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
-import { lstat, stat } from "../apis.ts";
+import { lstat, readDirectory, stat } from "../apis.ts";
 
 /**
  * A directory symlink, spelled the way the running platform accepts one. A
@@ -46,8 +49,10 @@ function useFixture(): Operation<Fixture> {
 
     const file = join(root, "file.txt");
     const directory = join(root, "directory");
+    const nested = join(directory, "nested.txt");
     yield* writeTextFile(file, "content\n");
     yield* until(mkdir(directory));
+    yield* writeTextFile(nested, "nested\n");
 
     const fileLink = join(root, "file-link.txt");
     const directoryLink = join(root, "directory-link");
@@ -159,5 +164,30 @@ describe("Tier FS: link classification", () => {
       isDirectory: false,
       isSymbolicLink: true,
     });
+  });
+});
+
+describe("Tier FS: one directory level", () => {
+  it("FS6: reports the direct entries as plain values, and nothing beneath them", function* () {
+    const fixture = yield* useFixture();
+
+    const entries = yield* readDirectory(fixture.root);
+
+    // Host enumeration order is not part of the answer, so the comparison
+    // fixes an order the host never promised.
+    expect([...entries].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      { name: "dangling", isFile: false, isDirectory: false, isSymbolicLink: true },
+      { name: "directory", isFile: false, isDirectory: true, isSymbolicLink: false },
+      { name: "directory-link", isFile: false, isDirectory: false, isSymbolicLink: true },
+      { name: "file-link.txt", isFile: false, isDirectory: false, isSymbolicLink: true },
+      { name: "file.txt", isFile: true, isDirectory: false, isSymbolicLink: false },
+    ]);
+
+    // One level: the file inside `directory` is reported by reading that
+    // directory, never by reading its parent.
+    expect(entries.map((entry) => entry.name)).not.toContain("nested.txt");
+    expect((yield* readDirectory(fixture.directory)).map((entry) => entry.name)).toEqual([
+      "nested.txt",
+    ]);
   });
 });

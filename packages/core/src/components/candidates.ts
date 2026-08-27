@@ -28,9 +28,17 @@
  * implementation execution would have selected. Refusing it anyway would fail
  * `xmd syntax` in any ordinary package repository, whose `node_modules` is full
  * of directory links no name reaches.
+ *
+ * That same relevance decides where the walk goes, not just what it reports.
+ * `probeComponentPath()` enters a directory only through a valid name segment,
+ * so a directory whose own segment is not one holds nothing any name reaches,
+ * and its whole subtree is skipped without being read. The default includes are
+ * `["components", "."]`, and reading a repository's `node_modules`, `.git` and
+ * build output to discard every path in them is what made `xmd syntax` take
+ * thirteen seconds where the walk it actually needs takes well under one.
  */
 
-import { glob, lstat, stat } from "@executablemd/runtime";
+import { lstat, readDirectory, stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { isComponentName, isComponentNameSegment } from "./registration.ts";
 
@@ -50,7 +58,53 @@ function normalizePath(path: string): string {
   return path.replace(/^\.\//, "");
 }
 
-/** The path an entry has relative to the working directory, not to its root. */
+/**
+ * The include as a path prefix, so that joining a relative entry to it cannot
+ * change what kind of path it is.
+ *
+ * Read segment by segment rather than by trimming spellings: `.` segments and
+ * empty ones between separators carry no meaning, so `.`, `./` and `.//` all
+ * name the working directory and reduce to `.`.
+ *
+ * The include's own leading separators are kept exactly as written, and they
+ * are the only thing that decides whether a read is absolute. No relative
+ * spelling can therefore produce an absolute read, and a root that a leading
+ * run names — `//server/share` is a UNC share on Windows, and two leading
+ * separators are implementation-defined on POSIX — stays the root the caller
+ * configured rather than a different directory one separator away.
+ *
+ * A `..` segment is kept rather than resolved. Resolving it would take the
+ * working directory this deliberately never reads, and keeping it lexical is
+ * what a relative include already meant.
+ */
+function includePrefix(include: string): string {
+  const leading = /^\/*/.exec(include)?.[0] ?? "";
+  const segments = include.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (leading !== "") {
+    return `${leading}${segments.join("/")}`;
+  }
+  return segments.length === 0 ? "." : segments.join("/");
+}
+
+/** Where a directory read is issued, for an entry `prefix` below the include. */
+function readPath(include: string, prefix: string): string {
+  const root = includePrefix(include);
+  if (prefix === "") {
+    return root;
+  }
+  if (root === ".") {
+    return prefix;
+  }
+  return root.endsWith("/") ? `${root}${prefix}` : `${root}/${prefix}`;
+}
+
+/**
+ * The path an entry has relative to the working directory, not to its root.
+ *
+ * Spelled as `probeComponentPath()` spells a candidate, because this is what
+ * the link classification asks `stat` about and the two have to agree about
+ * what a link under a given include leads to.
+ */
 function within(include: string, path: string): string {
   return normalizePath(include === "." ? path : `${include}/${path}`);
 }
@@ -129,36 +183,62 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
       throw includeFailure(include, "it is not a directory.");
     }
 
-    for (const entry of yield* glob({ patterns: ["**/*"], root: include })) {
-      if (entry.isFile) {
-        add(names, entry.path);
-        continue;
-      }
-
-      // Reported and not a file: `glob` reports a symbolic link by its own path
-      // and never follows it, so this is the one shape left.
-      if (!selectionRelevant(entry.path)) {
-        continue;
-      }
-      // `stat` follows the link, which is the only thing asked of it here — what
-      // the link leads to, never where. The resolved host path stays out of the
-      // classification and out of every message below.
-      const target = yield* stat(within(include, entry.path));
-      if (target.exists && target.isFile) {
-        add(names, entry.path);
-        continue;
-      }
-      throw includeFailure(
-        include,
-        `${JSON.stringify(entry.path)} is a symbolic link to ${
-          target.exists ? "a directory" : "nothing"
-        }, and a link is never followed — so the components it could have supplied ` +
-          "cannot be listed.",
-      );
-    }
+    yield* collect(include, "", names);
   }
 
   return names;
+}
+
+/**
+ * Every name one directory contributes, and every name the directories worth
+ * entering beneath it contribute.
+ *
+ * `prefix` is the directory's path relative to the include, so what the
+ * grammar is applied to is the logical path a name would have to produce —
+ * never the host path the read is issued against.
+ */
+function* collect(include: string, prefix: string, names: Set<string>): Operation<void> {
+  const directory = readPath(include, prefix);
+
+  for (const entry of yield* readDirectory(directory)) {
+    const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+
+    if (entry.isFile) {
+      add(names, path);
+      continue;
+    }
+
+    if (entry.isDirectory) {
+      // Every segment above this one was admitted by the same test, so the
+      // segment alone decides whether any component name reaches inside.
+      if (isComponentNameSegment(entry.name)) {
+        yield* collect(include, path, names);
+      }
+      continue;
+    }
+
+    if (!entry.isSymbolicLink) {
+      continue;
+    }
+    if (!selectionRelevant(path)) {
+      continue;
+    }
+    // `stat` follows the link, which is the only thing asked of it here — what
+    // the link leads to, never where. The resolved host path stays out of the
+    // classification and out of every message below.
+    const target = yield* stat(within(include, path));
+    if (target.exists && target.isFile) {
+      add(names, path);
+      continue;
+    }
+    throw includeFailure(
+      include,
+      `${JSON.stringify(path)} is a symbolic link to ${
+        target.exists ? "a directory" : "nothing"
+      }, and a link is never followed — so the components it could have supplied ` +
+        "cannot be listed.",
+    );
+  }
 }
 
 function add(names: Set<string>, path: string): void {
