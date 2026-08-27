@@ -35,6 +35,7 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
+import type { EmbeddedAdapters } from "@executablemd/acp";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -67,6 +68,27 @@ function observation(source: string): ScriptedTurn {
 
 function proposal(source: string): ScriptedTurn {
   return { reply: JSON.stringify({ kind: "proposal", source }) };
+}
+
+/**
+ * Embedded adapters that install nothing.
+ *
+ * These suites substitute the ACPX runtime, so no adapter is ever spawned and a
+ * real `npm install` of one would be minutes of network for a process that
+ * never starts. What still matters is *that the profile asks* — so this records
+ * every request, and Tier AM proves what the real one does with it.
+ */
+function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } {
+  const materialized: string[] = [];
+  return {
+    materialized,
+    providers: ["codex", "claude"],
+    command: (provider) => `node /nonexistent/${provider}-adapter.js`,
+    // deno-lint-ignore require-yield
+    *materialize(provider: string): Operation<void> {
+      materialized.push(provider);
+    },
+  };
 }
 
 /** A turn identity that exists nowhere else in this repository. */
@@ -126,6 +148,8 @@ function runFixture(
     readonly props?: Record<string, Json>;
     /** Answers one admitted HTTP read, and counts what was asked for. */
     readonly transport?: { readonly performed: string[] };
+    /** The embedded adapters this attachment materializes from. */
+    readonly adapters?: EmbeddedAdapters;
   } = {},
 ): Operation<Attempt> {
   return scoped(function* () {
@@ -198,6 +222,7 @@ function runFixture(
               attachment,
               defaultAgent: "codex",
               sessionStore: options.sessionStore ?? makeStore(),
+              adapters: options.adapters ?? stubAdapters(),
               ...(options.createRuntime === undefined
                 ? {}
                 : { createRuntime: options.createRuntime }),
@@ -663,6 +688,25 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       expect(admitted(attempt.events)).toHaveLength(0);
       expect(typed(attempt.events, "generated_xmd")).toHaveLength(0);
       expect(typed(attempt.events, "workspace_file")).toHaveLength(0);
+    });
+  });
+
+  it("WAL11: the profile materializes the adapter a placement names, and only then", function* () {
+    const root = yield* useStorageRoot();
+    const source = yield* documentWithNote();
+
+    yield* withStorage(root, function* () {
+      const database = yield* createRun();
+      const fake = createFakeAcp();
+      fake.script(proposal("nothing to change"));
+      const adapters = stubAdapters();
+
+      yield* runFixture(root, database, source, { createRuntime: fake.create, adapters });
+
+      // Asked for, by name, before ACPX was contacted — which is what makes a
+      // broken snapshot a refusal rather than a Prompt sent to whatever `npx`
+      // would have resolved.
+      expect(adapters.materialized).toContain("codex");
     });
   });
 

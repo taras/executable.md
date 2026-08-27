@@ -31,6 +31,24 @@
  * can hold residue after an unstructured process death — and nothing is ever
  * copied into it or read back out of it.
  *
+ * ## Which adapter answers
+ *
+ * Not the one `npx` would fetch. A workflow Prompt has to name the provider turn
+ * it completed, and no published Codex or Claude adapter reports that yet, so
+ * this profile runs the snapshots this build carries
+ * (`packages/acp/vendor/adapters/PROVENANCE.md`) and refuses any agent it holds
+ * no snapshot for.
+ *
+ * The registry is closed for that reason. Falling through to a published adapter
+ * would produce a run that completed every Prompt and retained nothing, and said
+ * nothing about why — the exact silence this feature exists to remove.
+ *
+ * Materialization is lazy and belongs to the placement: a document that never
+ * opens a `<Session>` installs nothing, extracts nothing and spawns nothing. A
+ * document that does gets its adapter verified on disk before ACPX is contacted,
+ * which is what makes a broken snapshot a refusal rather than a Prompt that
+ * quietly went to the wrong binary.
+ *
  * ## Where a Prompt lands in that conversation
  *
  * The session row says which conversation this run is having. Which turn each
@@ -43,17 +61,21 @@
  */
 
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { Operation } from "effection";
 import {
   createAcpxProvider,
   createAcpxSessionStore,
+  createEmbeddedAdapters,
   DEFAULT_AGENT_NAME,
+  embeddedAdapterRegistry,
   retainedSession,
 } from "@executablemd/acp";
 import type {
   AcpxProviderDependencies,
   AcpxSessionPolicy,
   AcpxSessionStore,
+  EmbeddedAdapters,
 } from "@executablemd/acp";
 import {
   installAgentComponents,
@@ -170,6 +192,14 @@ export interface WorkflowAgentProfileOptions {
    * process on first use.
    */
   readonly createRuntime?: AcpxProviderDependencies["createRuntime"];
+  /**
+   * The embedded adapters this profile runs.
+   *
+   * The default materializes this build's own snapshots beneath `root`. A suite
+   * substitutes one to watch what a placement asked for, or to prove a refusal
+   * without a real install.
+   */
+  readonly adapters?: EmbeddedAdapters;
 }
 
 /**
@@ -208,6 +238,7 @@ function sessionPolicy(
   paths: ProviderSessionPaths,
   policy: string,
   store: AcpxSessionStore,
+  adapters: EmbeddedAdapters,
 ): { policy: AcpxSessionPolicy; retainedSessionKey: (placementKey: string) => string | undefined } {
   const assertions = assertionsFor(store);
   const emptied = new Set<string>();
@@ -244,6 +275,12 @@ function sessionPolicy(
             "engine derives. Nothing else names a session this run can retain.",
         );
       }
+      // Before anything else this placement does, and before ACPX is contacted:
+      // the adapter that will answer has to be on disk and prove it is the
+      // snapshot this build records. A refusal here costs the run a Prompt it
+      // never sent, which is the cheap direction.
+      yield* adapters.materialize(context.agentName);
+
       const identity = identityOf({
         agentCommand: context.agentCommand,
         sessionIdentity: context.sessionIdentity,
@@ -328,10 +365,17 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
   const store = options.sessionStore ?? createAcpxSessionStore(paths.store);
   const policy = workflowSessionPolicyDigest();
   const defaultAgent = options.defaultAgent ?? DEFAULT_AGENT_NAME;
-  const sessions = sessionPolicy(options.attachment.database, paths, policy, store);
+  // Content-addressed beside the run store rather than inside one run: two runs
+  // asking for the same adapter name the same directory, and a snapshot this
+  // build does not carry names a different one.
+  const adapters = options.adapters ?? createEmbeddedAdapters(join(options.root, "adapters"));
+  const sessions = sessionPolicy(options.attachment.database, paths, policy, store, adapters);
 
   const factory: AgentProviderFactory = createAcpxProvider({
     sessionStore: store,
+    // Closed, and this host's own: an agent it carries no snapshot for is
+    // refused rather than resolved to whatever `npx` would fetch.
+    agentRegistry: embeddedAdapterRegistry(adapters),
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,
