@@ -53,14 +53,19 @@
  * an exclusive claim, and the holder re-checks under it before removing
  * anything.
  *
- * The claim is an entry in a directory, and every entry's name is used once and
- * never again. That is what makes pruning a dead owner safe: removing
- * `claims/<id>` can only ever remove the exact claim that was inspected.
+ * The claim is a ticket: the directory `claims/<n>`, taken by renaming a
+ * prepared directory onto that name, which only one attempt can win and which
+ * is never handed out a second time.
  *
- * Holding is decided by order rather than by creation — an attempt holds the
- * claim when its own entry is the earliest still-live one — so releasing is
- * removing that one entry, and a process killed mid-recovery leaves an entry a
- * later attempt can identify as dead and prune.
+ * Two properties come from that, and the claim needs both. Because numbers are
+ * never reissued, finishing a dead holder's ticket can only ever act on the
+ * exact ticket that was inspected. Because they are taken in ascending order,
+ * an attempt arriving later cannot obtain a lower number, so it cannot come to
+ * precede a holder that has already been elected.
+ *
+ * The holder is the lowest ticket still outstanding. Releasing is marking one
+ * finished, and a process killed mid-recovery leaves a ticket whose owner a
+ * later attempt reads as dead and finishes on its behalf.
  *
  * ## It refuses; it never falls back
  *
@@ -108,6 +113,13 @@ const MARKER = ".xmd-adapter";
 /** How long an attempt waits on somebody else's recovery, and how often. */
 const RECOVERY_POLL_MS = 25;
 const RECOVERY_ATTEMPTS = 400;
+
+/** Inside a ticket: who took it, and whether it is finished with. */
+const OWNER = "owner";
+const DONE = "done";
+
+/** A ceiling on ticket numbers, so a pathological claims directory cannot spin. */
+const MAX_TICKETS = 10_000;
 
 /** Who holds a recovery claim, so a later attempt can tell live from dead. */
 interface RecoveryOwner {
@@ -403,61 +415,91 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Put this attempt's claim into the directory, and answer with its path.
+   * Take the next free ticket, and answer with its number.
    *
-   * The name is used once: a timestamp so ordering is roughly arrival order,
-   * and a uuid so it is unique regardless. Written whole and then renamed in,
-   * because a reader must never see a half-written record — and a rename onto a
-   * name nothing else will ever choose cannot collide.
+   * A ticket is the directory `claims/<n>`. It is prepared complete elsewhere
+   * and renamed into place, because a rename will not replace a directory that
+   * has anything in it — so exactly one attempt can take any given number, and a
+   * ticket is never visible half-made.
+   *
+   * A number, once taken, is never given out again: the directory stays after
+   * its holder has finished with it. That is the guarantee the election rests
+   * on. An attempt arriving later cannot obtain a number below one already
+   * taken, so it cannot come to sit ahead of a holder.
+   *
+   * Ordering names by time could not offer that. Two claims made in the same
+   * millisecond were separated only by the random part of their names, and a
+   * clock adjustment could hand a later arrival an earlier name — either way an
+   * elected holder could be preceded after the fact.
    */
-  function* enterClaims(claims: string): Operation<string> {
+  function* takeTicket(claims: string): Operation<number> {
     yield* ensureDir(claims);
-    const name = `${Date.now().toString(36).padStart(9, "0")}-${randomUUID()}`;
-    const mine = join(claims, name);
-    const staging = `${mine}.writing`;
+    const staging = join(claims, `.taking-${randomUUID()}`);
+    yield* ensureDir(staging);
+    yield* ensure(() => until(rmPath(staging, { recursive: true, force: true }).catch(() => {})));
+
     const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
-    yield* until(writeFile(staging, `${JSON.stringify(owner)}\n`));
-    yield* until(renamePath(staging, mine));
-    return mine;
+    yield* until(writeFile(join(staging, OWNER), `${JSON.stringify(owner)}\n`));
+
+    for (let ticket = 0; ticket < MAX_TICKETS; ticket += 1) {
+      try {
+        yield* until(renamePath(staging, join(claims, String(ticket))));
+      } catch {
+        continue;
+      }
+      return ticket;
+    }
+    throw new AdapterSnapshotError(
+      `recovery for this adapter has been claimed ${MAX_TICKETS} times under ${claims} without ` +
+        "finishing. Remove that directory by hand once nothing is using the adapter.",
+    );
+  }
+
+  /** Finish one ticket. The number itself is never handed out again. */
+  function* releaseTicket(claims: string, ticket: number): Operation<void> {
+    yield* until(writeFile(join(claims, String(ticket), DONE), "").catch(() => {}));
   }
 
   /**
    * Whether this attempt now holds the claim.
    *
-   * Prunes entries whose owner is a dead process on this host, then elects the
-   * earliest surviving name. Pruning is by exact entry name, and a name is used
-   * once and never again — so a prune can only ever remove the claim it just
-   * inspected. A single fixed lock name could not offer that: two attempts can
-   * both read it as abandoned, one takes it and re-claims, and the other's
-   * delayed removal then throws away a claim that is now live and somebody
-   * else's.
+   * The holder is the lowest ticket still outstanding, so every number below
+   * this attempt's own is examined in order: a finished ticket is passed over, a
+   * ticket whose owner is a dead process on this host is finished here, and a
+   * live owner, an owner on another machine, or a record that cannot be read
+   * each stop the election where it stands. The last one says so, because
+   * refusing to act on what it cannot read is the only safe reading of somebody
+   * else's claim.
    *
-   * A live owner, an owner on another machine, and an entry that cannot be read
-   * are each left exactly alone. The last one blocks and says so, because
-   * refusing to act on what it cannot understand is the only safe reading of
-   * somebody else's claim.
+   * Finishing a dead holder's ticket is safe for the reason the election is:
+   * the number is never reissued, so this can only ever act on the exact ticket
+   * it just read.
    */
-  function* electClaim(claims: string, mine: string): Operation<"held" | "waiting" | "unreadable"> {
-    let names: string[];
+  function* electTicket(
+    claims: string,
+    mine: number,
+  ): Operation<"held" | "waiting" | "unreadable"> {
+    let ahead: number[];
     try {
-      names = (yield* until(readdir(claims))).filter((name) => !name.endsWith(".writing")).sort();
+      ahead = (yield* until(readdir(claims)))
+        .map((name) => Number.parseInt(name, 10))
+        .filter((ticket) => Number.isInteger(ticket) && ticket < mine)
+        .sort((left, right) => left - right);
     } catch {
       return "waiting";
     }
 
-    for (const name of names) {
-      const entry = join(claims, name);
-      if (entry === mine) {
-        return "held";
+    for (const ticket of ahead) {
+      const holder = join(claims, String(ticket));
+      if (yield* exists(join(holder, DONE))) {
+        continue;
       }
       let owner: RecoveryOwner | undefined;
       try {
-        owner = parseOwner(yield* readTextFile(entry));
-      } catch (error) {
-        if (Reflect.get(Object(error), "code") === "ENOENT") {
-          // Released while this was reading. The next name decides.
-          continue;
-        }
+        owner = parseOwner(yield* readTextFile(join(holder, OWNER)));
+      } catch {
+        // A ticket is complete before it is visible, so there is no reading of
+        // this that says the claim ahead is free.
         return "unreadable";
       }
       if (owner === undefined) {
@@ -466,9 +508,9 @@ export function createEmbeddedAdapters(
       if (owner.host !== hostname() || alive(owner.pid)) {
         return "waiting";
       }
-      yield* until(rmPath(entry, { force: true }).catch(() => {}));
+      yield* releaseTicket(claims, ticket);
     }
-    return "waiting";
+    return "held";
   }
 
   /**
@@ -495,16 +537,16 @@ export function createEmbeddedAdapters(
     let settled = false;
 
     yield* scoped(function* () {
-      const mine = yield* enterClaims(claims);
+      const mine = yield* takeTicket(claims);
       // Registered before the wait it guards, so a halt anywhere below still
       // takes this attempt out of the election.
-      yield* ensure(() => until(rmPath(mine, { force: true }).catch(() => {})));
+      yield* ensure(() => releaseTicket(claims, mine));
 
       for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
-        const status = yield* electClaim(claims, mine);
+        const status = yield* electTicket(claims, mine);
         if (status === "unreadable") {
           throw new AdapterSnapshotError(
-            `a recovery claim under ${claims} cannot be read, so this host cannot tell whether ` +
+            `a recovery ticket under ${claims} cannot be read, so this host cannot tell whether ` +
               "another process is still using it. Remove it by hand once nothing is.",
           );
         }

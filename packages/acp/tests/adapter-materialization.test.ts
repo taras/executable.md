@@ -49,6 +49,36 @@ function digestOf(provider: string): string {
   return snapshot.sha256;
 }
 
+/** A recovery ticket somebody else took, staged by hand. */
+function* plantTicket(
+  claims: string,
+  ticket: number,
+  owner: { pid: number | undefined; host: string },
+): Operation<void> {
+  const directory = join(claims, String(ticket));
+  yield* ensureDir(directory);
+  yield* writeTextFile(join(directory, "owner"), `${JSON.stringify(owner)}\n`);
+}
+
+/** Which ticket numbers are taken, lowest first. */
+function* takenTickets(claims: string): Operation<number[]> {
+  return (yield* until(readdir(claims)))
+    .map((name) => Number.parseInt(name, 10))
+    .filter((ticket) => Number.isInteger(ticket))
+    .sort((left, right) => left - right);
+}
+
+/** Wait until `ticket` has been taken, so a barrier is read from the claim. */
+function* untilTicketTaken(claims: string, ticket: number): Operation<void> {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    if ((yield* takenTickets(claims)).includes(ticket)) {
+      return;
+    }
+    yield* sleep(50);
+  }
+  throw new Error(`ticket ${ticket} was never taken under ${claims}`);
+}
+
 /** What a failed operation raised, as a value rather than a throw. */
 function* refusal(body: () => Operation<unknown>): Operation<unknown> {
   try {
@@ -235,7 +265,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(other.executablePath("codex"))).toBe(true);
   });
 
-  it("AM12: a recovery claim left by a dead process is reclaimed, not waited on", function* () {
+  it("AM12: a recovery ticket left by a dead process is finished, not waited on", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const claims = `${target}.claims`;
@@ -245,62 +275,54 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
-    // A claim whose owner is genuinely gone: a real process, run to completion,
-    // whose pid is therefore dead. Inventing a number could collide with a
-    // live process and make this test lie.
+    // A ticket whose owner is genuinely gone: a real process, run to
+    // completion, whose pid is therefore dead. Inventing a number could collide
+    // with a live process and make this test lie.
     const finished = spawnSync(process.execPath, ["eval", "0"]);
     expect(finished.status).toBe(0);
-    const deadPid = finished.pid;
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-planted"),
-      `${JSON.stringify({ pid: deadPid, host: hostname(), at: Date.now() })}\n`,
-    );
+    yield* plantTicket(claims, 0, { pid: finished.pid, host: hostname() });
 
     yield* adapters.materialize("codex");
 
-    // Reclaimed and published, rather than waiting out an owner that is never
+    // Finished and published, rather than waiting out an owner that is never
     // coming back. Without this, one process killed mid-recovery would wedge
     // the adapter permanently — the exact abandoned-state failure the recovery
     // path exists to remove.
     expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(true);
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
-    // The dead owner's claim is pruned rather than left for the next attempt to
-    // puzzle over.
-    expect(yield* exists(join(claims, "000000000-planted"))).toBe(false);
+    // Marked finished rather than removed. The number stays taken, which is
+    // what stops it being handed to somebody arriving later.
+    expect(yield* exists(join(claims, "0", "done"))).toBe(true);
   });
 
-  it("AM13: a claim held by a live process on this host is never taken", function* () {
+  it("AM13: a ticket held by a live process on this host is never finished", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
     const adapters = createEmbeddedAdapters(root);
 
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
     // This very process: alive by construction.
-    const claims = `${target}.claims`;
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-planted"),
-      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
-    );
+    yield* plantTicket(claims, 0, { pid: process.pid, host: hostname() });
 
     const attempt = yield* spawn(() => adapters.materialize("codex"));
     yield* sleep(300);
 
-    // It waits. The claim is untouched and nothing has been removed or
+    // It waits. The ticket is outstanding and nothing has been removed or
     // published, because the owner is alive and may be mid-recovery.
-    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
+    expect(yield* exists(join(claims, "0", "done"))).toBe(false);
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
     yield* attempt.halt();
   });
 
-  it("AM14: a claim owned by another host is never taken", function* () {
+  it("AM14: a ticket owned by another host is never finished", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
     const adapters = createEmbeddedAdapters(root);
 
     yield* ensureDir(join(target, "node_modules"));
@@ -309,22 +331,17 @@ describe("Tier AM — embedded adapter materialization", () => {
     // A dead pid, but on a machine this host cannot ask about. Liveness is only
     // knowable locally, so this must be left alone rather than assumed gone.
     const finished = spawnSync(process.execPath, ["eval", "0"]);
-    const claims = `${target}.claims`;
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-planted"),
-      `${JSON.stringify({ pid: finished.pid, host: `not-${hostname()}`, at: Date.now() })}\n`,
-    );
+    yield* plantTicket(claims, 0, { pid: finished.pid, host: `not-${hostname()}` });
 
     const attempt = yield* spawn(() => adapters.materialize("codex"));
     yield* sleep(300);
 
-    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
+    expect(yield* exists(join(claims, "0", "done"))).toBe(false);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
     yield* attempt.halt();
   });
 
-  it("AM15: a partial claim is not read as free, and nothing is touched", function* () {
+  it("AM15: a ticket whose record says nothing is not read as free, and nothing is touched", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const stale = join(target, "node_modules", "stale.txt");
@@ -340,26 +357,28 @@ describe("Tier AM — embedded adapter materialization", () => {
 
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(stale, "half an install\n");
-    // Exactly what a process killed between creating a claim and writing it
-    // would leave: the name exists and says nothing.
-    yield* ensureDir(claims);
-    yield* writeTextFile(join(claims, "000000000-planted"), "");
+    // A ticket taken, holding a record that says nothing — what a truncated or
+    // half-flushed write would leave behind. The protocol itself cannot produce
+    // it, because a ticket is complete before it is visible, which is exactly
+    // why finding one has to stop rather than be explained away as free.
+    yield* ensureDir(join(claims, "0"));
+    yield* writeTextFile(join(claims, "0", "owner"), "");
 
     const refused = yield* refusal(() => adapters.materialize("codex"));
 
-    // Refused, and named, rather than waited out or stolen. This host cannot
-    // tell whether somebody is still using it, and guessing either way is
-    // worse than saying so.
+    // Refused, and named, rather than waited out or stepped over. This host
+    // cannot tell whether somebody is still using it, and guessing either way
+    // is worse than saying so.
     expect(refused).toBeInstanceOf(AdapterSnapshotError);
     expect((refused as Error).message).toContain("cannot be read");
     // Nothing was entered and nothing was moved.
     expect(cleanups).toBe(0);
     expect(yield* exists(stale)).toBe(true);
-    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
+    expect(yield* exists(join(claims, "0", "done"))).toBe(false);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
   });
 
-  it("AM16: a claim holding a foreign record is left alone for the same reason", function* () {
+  it("AM16: a ticket holding a foreign record is left alone for the same reason", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const claims = `${target}.claims`;
@@ -376,21 +395,18 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
     // Readable, but not a record this build wrote — so its owner is unknown,
     // which is not the same as absent.
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-planted"),
-      `${JSON.stringify({ something: "else" })}\n`,
-    );
+    yield* ensureDir(join(claims, "0"));
+    yield* writeTextFile(join(claims, "0", "owner"), `${JSON.stringify({ something: "else" })}\n`);
 
     const refused = yield* refusal(() => adapters.materialize("codex"));
 
     expect(refused).toBeInstanceOf(AdapterSnapshotError);
     expect(cleanups).toBe(0);
-    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
+    expect(yield* exists(join(claims, "0", "done"))).toBe(false);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
   });
 
-  it("AM17: waiting out a live claim never reaches cleanup or mutates the target", function* () {
+  it("AM17: waiting out a live ticket never reaches cleanup or mutates the target", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const stale = join(target, "node_modules", "stale.txt");
@@ -406,13 +422,9 @@ describe("Tier AM — embedded adapter materialization", () => {
 
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(stale, "half an install\n");
-    // This process: alive for the whole test, so the claim is never reclaimable
+    // This process: alive for the whole test, so the ticket is never finishable
     // and the attempt can only wait.
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-planted"),
-      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
-    );
+    yield* plantTicket(claims, 0, { pid: process.pid, host: hostname() });
 
     const attempt = yield* spawn(() => adapters.materialize("codex"));
     yield* sleep(400);
@@ -425,55 +437,72 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* attempt.halt();
   });
 
-  it("AM18: a delayed prune cannot take a claim that replaced the one it inspected", function* () {
+  it("AM18: an attempt arriving after a holder is elected cannot precede it", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const claims = `${target}.claims`;
-    const adapters = createEmbeddedAdapters(root);
 
     yield* ensureDir(join(target, "node_modules"));
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
-    // The ABA ordering, staged by hand. An attempt inspects a claim, finds it
-    // abandoned, and its removal is delayed. In the gap the abandoned claim is
-    // taken away and a *live* one appears — and the delayed removal must not be
-    // able to touch that live claim.
-    const dead = spawnSync(process.execPath, ["eval", "0"]);
-    expect(dead.status).toBe(0);
-    yield* ensureDir(claims);
-    const abandoned = join(claims, "000000000-abandoned");
-    yield* writeTextFile(
-      abandoned,
-      `${JSON.stringify({ pid: dead.pid, host: hostname(), at: Date.now() })}\n`,
-    );
+    let cleanups = 0;
+    const elected = withResolvers<void>();
+    const release = withResolvers<void>();
+    const holder = createEmbeddedAdapters(root, {
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+        elected.resolve();
+        yield* release.operation;
+      },
+    });
+    const later = createEmbeddedAdapters(root, {
+      // deno-lint-ignore require-yield
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+      },
+    });
 
-    // What the delayed attempt decided to remove: that exact name. Simulate the
-    // gap by replacing the abandoned claim with a live one under a *different*
-    // name, the way a real reclaim-then-re-claim does.
-    yield* rm(abandoned, { force: true });
-    const live = join(claims, "000000001-live");
-    yield* writeTextFile(
-      live,
-      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
-    );
+    const first = yield* spawn(() => holder.materialize("codex"));
+    yield* elected.operation;
+    // The holder is inside the critical section, and its ticket is the only one
+    // outstanding.
+    expect(yield* takenTickets(claims)).toEqual([0]);
 
-    // The delayed removal now fires. Under a single fixed lock name it would
-    // have moved whatever occupies that path — which is the live claim. Under
-    // one-use names it can only name the entry it inspected, which is gone.
-    yield* rm(abandoned, { force: true });
+    // The second attempt arrives strictly afterwards, and the question this
+    // case exists for is whether it can end up ahead. Waited for by its ticket
+    // rather than by a clock: it stages a whole install before it reaches the
+    // claim at all, so a fixed pause would be measuring npm.
+    const second = yield* spawn(() => later.materialize("codex"));
+    yield* untilTicketTaken(claims, 1);
+    yield* sleep(200);
 
-    const attempt = yield* spawn(() => adapters.materialize("codex"));
-    yield* sleep(300);
-
-    // The live claim is untouched and still exclusive: the attempt is waiting
-    // behind it, having removed and published nothing.
-    expect(yield* exists(live)).toBe(true);
+    // It cannot, and not by luck. Numbers are handed out in ascending order and
+    // never handed out twice, so an arrival can only ever sit behind an elected
+    // holder. Ordering by name could not promise that: two claims made in the
+    // same millisecond were separated only by a random suffix, and a clock
+    // adjustment could give a later arrival an earlier name — either of which
+    // put a second attempt in front of a holder already in the cleanup.
+    expect(yield* takenTickets(claims)).toEqual([0, 1]);
+    expect(cleanups).toBe(1);
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
-    yield* attempt.halt();
+
+    release.resolve();
+    yield* all([first, second]);
+
+    // Only ever one cleanup: the arrival waited out the barrier and then read
+    // what the holder published rather than recovering over it.
+    expect(cleanups).toBe(1);
+    expect(yield* exists(later.executablePath("codex"))).toBe(true);
+    expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
+    // Both numbers stay taken after their holders are finished with them. That
+    // is the whole barrier: 0 can never be issued again, so nothing that comes
+    // later can acquire a number below one already elected.
+    expect(yield* exists(join(claims, "0", "done"))).toBe(true);
+    expect(yield* exists(join(claims, "1", "done"))).toBe(true);
   });
 
-  it("AM19: two attempts racing one abandoned claim leave exactly one holder", function* () {
+  it("AM19: two attempts racing one abandoned ticket leave exactly one holder", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const claims = `${target}.claims`;
@@ -482,15 +511,12 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
     const dead = spawnSync(process.execPath, ["eval", "0"]);
-    yield* ensureDir(claims);
-    yield* writeTextFile(
-      join(claims, "000000000-abandoned"),
-      `${JSON.stringify({ pid: dead.pid, host: hostname(), at: Date.now() })}\n`,
-    );
+    yield* plantTicket(claims, 0, { pid: dead.pid, host: hostname() });
 
-    // Both see the same abandoned claim and both prune it. Only one can then be
-    // the earliest live entry, so only one enters the cleanup — which is what a
-    // reclaim keyed on a reusable name could not guarantee.
+    // Both find the same abandoned ticket and both finish it. Only one of them
+    // can then be the lowest outstanding number, so only one enters the
+    // cleanup — which a claim keyed on a reusable name could not guarantee,
+    // because both could take it in turn and each believe it held it.
     let cleanups = 0;
     const observers = {
       *beforeRecoveryCleanup(): Operation<void> {
