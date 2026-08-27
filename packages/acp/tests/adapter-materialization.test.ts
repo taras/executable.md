@@ -319,6 +319,101 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* attempt.halt();
   });
 
+  it("AM15: a partial claim is not read as free, and nothing is touched", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const stale = join(target, "node_modules", "stale.txt");
+    const lock = `${target}.recovering`;
+
+    let cleanups = 0;
+    const adapters = createEmbeddedAdapters(root, {
+      // deno-lint-ignore require-yield
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+      },
+    });
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(stale, "half an install\n");
+    // Exactly what a process killed between creating a claim and writing it
+    // would leave: the name exists and says nothing.
+    yield* writeTextFile(lock, "");
+
+    const refused = yield* refusal(() => adapters.materialize("codex"));
+
+    // Refused, and named, rather than waited out or stolen. This host cannot
+    // tell whether somebody is still using it, and guessing either way is
+    // worse than saying so.
+    expect(refused).toBeInstanceOf(AdapterSnapshotError);
+    expect((refused as Error).message).toContain("cannot be read");
+    // Nothing was entered and nothing was moved.
+    expect(cleanups).toBe(0);
+    expect(yield* exists(stale)).toBe(true);
+    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+  });
+
+  it("AM16: a claim holding a foreign record is left alone for the same reason", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const lock = `${target}.recovering`;
+
+    let cleanups = 0;
+    const adapters = createEmbeddedAdapters(root, {
+      // deno-lint-ignore require-yield
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+      },
+    });
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+    // Readable, but not a record this build wrote — so its owner is unknown,
+    // which is not the same as absent.
+    yield* writeTextFile(lock, `${JSON.stringify({ something: "else" })}\n`);
+
+    const refused = yield* refusal(() => adapters.materialize("codex"));
+
+    expect(refused).toBeInstanceOf(AdapterSnapshotError);
+    expect(cleanups).toBe(0);
+    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+  });
+
+  it("AM17: waiting out a live claim never reaches cleanup or mutates the target", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const stale = join(target, "node_modules", "stale.txt");
+    const lock = `${target}.recovering`;
+
+    let cleanups = 0;
+    const adapters = createEmbeddedAdapters(root, {
+      // deno-lint-ignore require-yield
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+      },
+    });
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(stale, "half an install\n");
+    // This process: alive for the whole test, so the claim is never reclaimable
+    // and the attempt can only wait.
+    yield* writeTextFile(
+      lock,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    const attempt = yield* spawn(() => adapters.materialize("codex"));
+    yield* sleep(400);
+
+    // Never enters the critical section without the claim: the cleanup
+    // observer is the first thing inside it, and it has not been reached.
+    expect(cleanups).toBe(0);
+    expect(yield* exists(stale)).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+    yield* attempt.halt();
+  });
+
   it("AM9: edited adapter bytes are refused rather than executed", function* () {
     const root = yield* useRoot();
     const adapters = createEmbeddedAdapters(root);

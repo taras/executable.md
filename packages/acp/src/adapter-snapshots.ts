@@ -72,7 +72,14 @@
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
+import {
+  link,
+  readdir,
+  readFile,
+  rename as renamePath,
+  rm as rmPath,
+  writeFile,
+} from "node:fs/promises";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import { ensure, type Operation, scoped, sleep } from "effection";
@@ -408,52 +415,74 @@ export function createEmbeddedAdapters(
   /**
    * Take the recovery claim, or report that somebody else has it.
    *
-   * `wx` creates the file exclusively and writes its contents in the same call,
-   * so a claim never exists without saying who made it — which is what a
-   * reclaimer needs, and what a bare directory could not offer.
+   * Written whole, then linked into place. `wx` would have been simpler and
+   * wrong: it creates the file and *then* writes it, so a process killed in
+   * between leaves a claim that exists and says nothing — the same
+   * indistinguishable-owner state a bare directory left, which is what this
+   * record exists to remove. `link` publishes a name for a file that is already
+   * complete, and fails if the name is taken, so a claim is never observed
+   * half-written and exactly one attempt wins.
    */
-  function* claim(lock: string): Operation<boolean> {
-    const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
-    try {
-      yield* until(writeFile(lock, `${JSON.stringify(owner)}\n`, { flag: "wx" }));
-      return true;
-    } catch {
-      return false;
-    }
+  function claim(lock: string): Operation<boolean> {
+    return scoped(function* () {
+      const staging = `${lock}.claim-${randomUUID()}`;
+      yield* ensure(() => until(rmPath(staging, { force: true }).catch(() => {})));
+      const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
+      yield* until(writeFile(staging, `${JSON.stringify(owner)}\n`));
+      try {
+        yield* until(link(staging, lock));
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   /**
-   * Take back a claim whose owner is gone, if that is what this is.
+   * What is at the claim, as far as this host can tell.
    *
-   * Only for an owner on this host whose process no longer exists: a live
-   * owner, an owner on another machine, and a claim this cannot read are all
-   * left exactly alone, because stealing one would be the very thing the claim
-   * prevents.
-   *
-   * The reclaim itself is a rename, so when several attempts notice the same
-   * dead owner at once exactly one of them moves it and the rest simply find it
-   * gone.
+   * The three answers are different decisions, and collapsing them was a
+   * defect: `absent` means try again, `orphaned` means take it back, and
+   * `held` means leave it alone. A claim that cannot be read — a permission
+   * error, damage, a record from something else — is `held`, because refusing
+   * to act on what it cannot understand is the only safe reading of somebody
+   * else's lock.
    */
-  function* reclaimIfOrphaned(lock: string): Operation<boolean> {
-    let owner: RecoveryOwner | undefined;
+  function* inspectClaim(lock: string): Operation<"absent" | "orphaned" | "held" | "unreadable"> {
+    let raw: string;
     try {
-      owner = parseOwner(yield* readTextFile(lock));
-    } catch {
-      // Vanished between the failed claim and this read: it is already free.
-      return true;
+      raw = yield* readTextFile(lock);
+    } catch (error) {
+      // Only a missing file means free. Every other failure is this host being
+      // unable to tell, which is not permission to remove anything.
+      return Reflect.get(Object(error), "code") === "ENOENT" ? "absent" : "unreadable";
     }
-    if (owner === undefined || owner.host !== hostname() || alive(owner.pid)) {
-      return false;
+    const owner = parseOwner(raw);
+    if (owner === undefined) {
+      return "unreadable";
     }
+    if (owner.host !== hostname() || alive(owner.pid)) {
+      return "held";
+    }
+    return "orphaned";
+  }
+
+  /**
+   * Take back a claim whose owner is gone.
+   *
+   * Only ever called for an `orphaned` claim. The reclaim is a rename, so when
+   * several attempts notice the same dead owner at once exactly one of them
+   * moves it and the rest simply find it gone.
+   */
+  function* reclaim(lock: string): Operation<void> {
     const aside = `${lock}.orphaned-${randomUUID()}`;
     try {
       yield* until(renamePath(lock, aside));
     } catch {
       // Another attempt reclaimed it first. Theirs is as good as ours.
-      return true;
+      return;
     }
     yield* until(rmPath(aside, { force: true }).catch(() => {}));
-    return true;
   }
 
   /**
@@ -476,27 +505,45 @@ export function createEmbeddedAdapters(
   ): Operation<void> {
     const lock = `${target}.recovering`;
 
-    for (let round = 0; round < RECOVERY_ROUNDS; round += 1) {
+    // Explicit, because everything below it is the critical section. A loop
+    // that could fall out of its rounds and carry on would be removing a
+    // directory it never owned.
+    let held = false;
+    for (let round = 0; round < RECOVERY_ROUNDS && !held; round += 1) {
       if (yield* claim(lock)) {
+        held = true;
         break;
       }
-      // Somebody else holds it. If they are gone, take it back; otherwise wait
-      // for them and answer from what they publish.
-      if (yield* reclaimIfOrphaned(lock)) {
+      const state = yield* inspectClaim(lock);
+      if (state === "unreadable") {
+        throw new AdapterSnapshotError(
+          `the recovery claim at ${lock} cannot be read, so this host cannot tell whether ` +
+            "another process is still using it. Remove it by hand once nothing is.",
+        );
+      }
+      if (state === "absent") {
         continue;
       }
+      if (state === "orphaned") {
+        yield* reclaim(lock);
+        continue;
+      }
+      // Somebody live holds it. Wait for what they publish rather than racing.
       for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
         yield* sleep(RECOVERY_POLL_MS);
         if (yield* published(snapshot)) {
           return;
         }
-        if (yield* reclaimIfOrphaned(lock)) {
+        if ((yield* inspectClaim(lock)) === "orphaned") {
+          yield* reclaim(lock);
           break;
         }
       }
-      if (round + 1 === RECOVERY_ROUNDS) {
-        throw failure;
-      }
+    }
+
+    if (!held) {
+      // Never the critical section without the claim.
+      throw failure;
     }
 
     yield* scoped(function* () {
