@@ -33,7 +33,11 @@ import {
   workspaceRoot,
   type WorkspaceRootEntry,
 } from "../../src/deno/workspace/manifest.ts";
-import type { DetachedXmdArtifact } from "../../src/deno/artifact/mod.ts";
+import type {
+  DetachedXmdArtifact,
+  XmdArtifactAgentPortability,
+} from "../../src/deno/artifact/mod.ts";
+import type { AgentSessionRecord } from "../../src/deno/workspace/agent-sessions.ts";
 
 const encoder = new TextEncoder();
 
@@ -485,22 +489,214 @@ export function richArtifact(): DetachedXmdArtifact {
 }
 
 /** One Agent session mapping, retained under the key its identity derives. */
-function agentSession() {
-  const identity = {
+function agentSession(
+  sessionIdentity = "expansion:release/Agent[0]/Session[0]",
+  assertion = "sess_01J",
+  createdAt = "2026-01-02T03:05:00.000Z",
+): AgentSessionRecord {
+  return {
     provider: "acp",
     agentCommand: "claude",
-    sessionIdentity: "expansion:release/Agent[0]/Session[0]",
-  };
-  return {
-    ...identity,
+    sessionIdentity,
     sessionKey: [
       "xmd",
       "workflow",
       "v1",
-      createHash("sha256").update(identity.sessionIdentity, "utf8").digest("hex").slice(0, 32),
+      createHash("sha256").update(sessionIdentity, "utf8").digest("hex").slice(0, 32),
     ].join(":"),
     policy: "deny-all",
-    assertion: { kind: "acp/sessionId", value: "sess_01J" },
-    createdAt: "2026-01-02T03:05:00.000Z",
+    assertion: { kind: "acp/sessionId", value: assertion },
+    createdAt,
+  };
+}
+
+/**
+ * Two canaries a bundle carries, and neither is credential-shaped on purpose.
+ *
+ * What a bundle may hold is a provider's business — transcripts, tool state, a
+ * secret a conversation repeated, the exporting host's own paths — and the
+ * claim these prove is that the container returns those bytes exactly and that
+ * no ordinary presentation renders them. A literal that looked like a real
+ * credential would be the same evidence and would also arrive in every diff of
+ * this file.
+ */
+export const BUNDLE_SECRET_CANARY = "bundle-secret-canary-4d1c";
+export const BUNDLE_PATH_CANARY = "/Users/exporter/Library/Caches/agent/session-9";
+
+/**
+ * The checkpoint tokens the finalized fixture retains.
+ *
+ * Distinct from every other string this fixture produces, so a projection that
+ * rendered one could not be mistaken for a projection of an ordinary field.
+ */
+export const CHECKPOINT_TOKENS = {
+  portableFirst: "checkpoint-canary-alpha-7b2",
+  portableSecond: "checkpoint-canary-beta-3e9",
+  incomplete: "checkpoint-canary-gamma-1c4",
+  uncaptured: "checkpoint-canary-delta-5a8",
+} as const;
+
+/** The three sessions the finalized fixture classifies, beside the one that has no Prompt. */
+export const FINALIZED_SESSIONS = {
+  portable: agentSession(
+    "expansion:release/Agent[1]/Session[0]",
+    "sess_02P",
+    "2026-01-02T03:06:00.000Z",
+  ),
+  incomplete: agentSession(
+    "expansion:release/Agent[2]/Session[0]",
+    "sess_03C",
+    "2026-01-02T03:07:00.000Z",
+  ),
+  uncaptured: agentSession(
+    "expansion:release/Agent[3]/Session[0]",
+    "sess_04V",
+    "2026-01-02T03:08:00.000Z",
+  ),
+} as const;
+
+/** The opaque bytes the portable session was captured as. */
+export function agentBundle(): Uint8Array {
+  return encoder.encode(
+    [
+      "xmd-agent-bundle/v0",
+      `secret ${BUNDLE_SECRET_CANARY}`,
+      `origin ${BUNDLE_PATH_CANARY}`,
+      "transcript (opaque to this container)",
+      "",
+    ].join("\n"),
+  );
+}
+
+/**
+ * One retained Prompt, as the durable event a live run journals for it.
+ *
+ * The result is the serialized Prompt record the Agent package's own parser
+ * reads, so the fixture cannot drift from the shape the artifact verifier
+ * authenticates against.
+ */
+function promptEvent(
+  session: AgentSessionRecord,
+  sequence: number,
+  status: "completed" | "failed" | "cancelled",
+): DurableEvent {
+  return {
+    type: "yield",
+    coroutineId: "root.1",
+    description: {
+      type: "agent_prompt",
+      name: `${session.sessionIdentity}#${sequence}`,
+      input: `turn ${sequence}`,
+    },
+    result: {
+      status: "ok",
+      value: {
+        sequence,
+        agent: session.agentCommand,
+        sessionKey: session.sessionKey,
+        agentSessionId: session.assertion.value,
+        status,
+        text: `turn ${sequence} reply`,
+        ...(status === "completed" ? {} : { stopReason: "refusal" }),
+      },
+    },
+  };
+}
+
+/**
+ * The same snapshot, finalized: every session that retained a Prompt is
+ * classified.
+ *
+ * The Prompts run in a coroutine of their own, appended after everything the
+ * rich snapshot already held, so the durable positions the suspension
+ * identities are derived from cannot move. One session is portable with two
+ * ordered associations and a bundle; one lacks retained evidence because a
+ * Prompt failed; one was complete and captured by nothing. The mapping the rich
+ * snapshot already carried retains no Prompt at all, so it is classified by
+ * nothing — which is the shape a finalized artifact has to accept.
+ */
+export function finalizedArtifact(): DetachedXmdArtifact {
+  const base = richArtifact();
+  const workspaceRootId = base.frontier.currentWorkspaceRootId;
+  const { portable, incomplete, uncaptured } = FINALIZED_SESSIONS;
+
+  const events: readonly DurableEvent[] = [
+    promptEvent(portable, 0, "completed"),
+    promptEvent(portable, 1, "completed"),
+    promptEvent(incomplete, 0, "completed"),
+    promptEvent(incomplete, 1, "failed"),
+    promptEvent(uncaptured, 0, "completed"),
+  ];
+  const first = base.journal.length;
+  const ids = events.map((_, index) => `event-${first + index}`);
+  const journal = [
+    ...base.journal,
+    ...events.map((event, index) => ({
+      eventId: `event-${first + index}`,
+      record: serializeDurableEvent(event),
+      workspaceRootId,
+    })),
+  ];
+
+  const bundle = agentBundle();
+  const checkpoint = (eventId: string | undefined, token: string) => ({
+    eventId: eventId ?? "",
+    tokenKind: "acp/checkpoint",
+    token,
+  });
+  const portability: readonly XmdArtifactAgentPortability[] = [
+    {
+      sessionKey: portable.sessionKey,
+      sessionIdentity: portable.sessionIdentity,
+      provider: portable.provider,
+      agentCommand: portable.agentCommand,
+      policy: portable.policy,
+      associations: [
+        checkpoint(ids[0], CHECKPOINT_TOKENS.portableFirst),
+        checkpoint(ids[1], CHECKPOINT_TOKENS.portableSecond),
+      ],
+      availability: "portable",
+      bundleKind: "acp/session-bundle",
+      compatibilityId: "acp/claude/1",
+      sourceProviderSession: {
+        kind: portable.assertion.kind,
+        value: portable.assertion.value,
+      },
+      bundledProviderSession: { kind: "acp/sessionId", value: "sess_02P_transported" },
+      identityAllocationMode: "provider-allocated",
+      bundleLength: bundle.byteLength,
+      bundleSha256: sha256Hex(bundle),
+    },
+    {
+      sessionKey: incomplete.sessionKey,
+      sessionIdentity: incomplete.sessionIdentity,
+      provider: incomplete.provider,
+      agentCommand: incomplete.agentCommand,
+      policy: incomplete.policy,
+      associations: [checkpoint(ids[2], CHECKPOINT_TOKENS.incomplete)],
+      availability: "unavailable",
+      reason: "checkpoint-token-unavailable",
+    },
+    {
+      sessionKey: uncaptured.sessionKey,
+      sessionIdentity: uncaptured.sessionIdentity,
+      provider: uncaptured.provider,
+      agentCommand: uncaptured.agentCommand,
+      policy: uncaptured.policy,
+      associations: [checkpoint(ids[4], CHECKPOINT_TOKENS.uncaptured)],
+      availability: "unavailable",
+      reason: "provider-capability-unavailable",
+    },
+  ];
+
+  return {
+    ...base,
+    frontier: { ...base.frontier, finalEventId: `event-${first + events.length - 1}` },
+    journal,
+    agentSessions: [...base.agentSessions, portable, incomplete, uncaptured],
+    agentEvidence: {
+      portability,
+      bundles: [{ sessionKey: portable.sessionKey, bytes: bundle }],
+    },
   };
 }

@@ -24,23 +24,44 @@ import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { chmod, mkdir, readFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { readXmdArtifact, writeXmdArtifact } from "../src/deno/artifact/mod.ts";
 import type {
   DetachedXmdArtifact,
   VerifiedXmdArtifact,
+  XmdArtifactAgentBundle,
+  XmdArtifactAgentPortability,
+  XmdArtifactPortableAgentSession,
+  XmdArtifactUnavailableAgentSession,
   XmdArtifactWriteResult,
 } from "../src/deno/artifact/mod.ts";
+import type { XmdArtifactEncoding } from "../src/deno/artifact/types.ts";
 import { XmdArtifactContainerLayout } from "../src/deno/artifact/write.ts";
-import { canonicalJsonText, sha256Hex } from "../src/deno/artifact/manifest.ts";
-import { type JsonObject, parseJsonObject } from "../src/storage/members.ts";
+import {
+  buildXmdArtifactManifest,
+  canonicalJsonText,
+  sha256Hex,
+} from "../src/deno/artifact/manifest.ts";
+import { encodeXmdArtifactInventory } from "../src/deno/artifact/records.ts";
+import { type JsonObject, parseJsonObject, parseJsonValue } from "../src/storage/members.ts";
 import { XMD_ARTIFACT_APPLICATION_ID } from "../src/deno/artifact/schema.ts";
 import { APPLICATION_ID as LIVE_RUN_APPLICATION_ID } from "../src/deno/schema.ts";
 import * as publishedDeno from "../deno.ts";
 import * as publishedRoot from "../mod.ts";
-import { richArtifact, SUSPENSIONS, wait } from "./support/artifact-fixture.ts";
+import {
+  agentBundle,
+  BUNDLE_PATH_CANARY,
+  BUNDLE_SECRET_CANARY,
+  CHECKPOINT_TOKENS,
+  finalizedArtifact,
+  FINALIZED_SESSIONS,
+  richArtifact,
+  SUSPENSIONS,
+  wait,
+} from "./support/artifact-fixture.ts";
 import { serializeDurableEvent } from "@executablemd/durable-streams";
-import type { DurableEvent } from "@executablemd/durable-streams";
+import type { DurableEvent, Json } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../src/suspension/answer.ts";
 
 const encoder = new TextEncoder();
@@ -117,6 +138,19 @@ function storedText(path: string, kind: string, identity: string): string {
       throw new Error(`no ${kind} record is stored under ${identity}`);
     }
     return new TextDecoder().decode(content);
+  } finally {
+    database.close();
+  }
+}
+
+/** How many rows of one kind a sealed container holds. */
+function rowsOfKind(path: string, kind: string): number {
+  const database = new DatabaseSync(path, { readOnly: true });
+  try {
+    const row = database
+      .prepare("SELECT count(*) AS rows FROM xmd_artifact_content WHERE kind = ?")
+      .get(kind);
+    return Number(row?.["rows"]);
   } finally {
     database.close();
   }
@@ -258,6 +292,204 @@ function foreignDatabase(path: string, applicationId: number): string {
   return path;
 }
 
+/** The portable classification the finalized fixture carries. */
+function portableOf(contents: DetachedXmdArtifact): XmdArtifactPortableAgentSession {
+  const record = contents.agentEvidence?.portability.find(
+    (each) => each.availability === "portable",
+  );
+  if (record === undefined || record.availability !== "portable") {
+    throw new Error("the finalized snapshot classifies no session as portable");
+  }
+  return record;
+}
+
+/** The same snapshot, carrying the Agent evidence it is handed. */
+function evidenced(
+  base: DetachedXmdArtifact,
+  portability: readonly XmdArtifactAgentPortability[],
+  bundles: readonly XmdArtifactAgentBundle[],
+): DetachedXmdArtifact {
+  return { ...base, agentEvidence: { portability, bundles } };
+}
+
+/** The finalized snapshot, with its portable classification changed. */
+function mutatedPortable(
+  change: (record: XmdArtifactPortableAgentSession) => XmdArtifactAgentPortability,
+): DetachedXmdArtifact {
+  const base = finalizedArtifact();
+  const evidence = base.agentEvidence;
+  if (evidence === undefined) {
+    throw new Error("the finalized snapshot carries no Agent evidence");
+  }
+  return evidenced(
+    base,
+    evidence.portability.map((record) =>
+      record.availability === "portable" ? change(record) : record,
+    ),
+    evidence.bundles,
+  );
+}
+
+/** The finalized snapshot, with one unavailable classification changed. */
+function mutatedUnavailable(
+  reason: "checkpoint-token-unavailable" | "provider-capability-unavailable",
+  change: (record: XmdArtifactUnavailableAgentSession) => XmdArtifactAgentPortability,
+): DetachedXmdArtifact {
+  const base = finalizedArtifact();
+  const evidence = base.agentEvidence;
+  if (evidence === undefined) {
+    throw new Error("the finalized snapshot carries no Agent evidence");
+  }
+  return evidenced(
+    base,
+    evidence.portability.map((record) =>
+      record.availability === "unavailable" && record.reason === reason ? change(record) : record,
+    ),
+    evidence.bundles,
+  );
+}
+
+/** The artifact identity one snapshot's inventory derives, with no file at all. */
+function derivedIdentity(contents: DetachedXmdArtifact): string {
+  return buildXmdArtifactManifest(encodeXmdArtifactInventory(contents), (kind) => {
+    throw new Error(`the snapshot offers more than one ${kind} record under one identity`);
+  }).identity;
+}
+
+/** One byte column of one row, checked rather than coerced. */
+function bytesColumn(row: Record<string, unknown> | undefined, column: string): Uint8Array {
+  const value = row?.[column];
+  if (!(value instanceof Uint8Array)) {
+    throw new Error(`the row carries no ${column}`);
+  }
+  return value;
+}
+
+function encodingOf(value: string): XmdArtifactEncoding {
+  if (value === "canonical-json" || value === "utf8" || value === "bytes") {
+    return value;
+  }
+  throw new Error(`the row declares no encoding this artifact version has`);
+}
+
+/**
+ * A copy, damaged, and then sealed again over what the damage left.
+ *
+ * The stored manifest and identity are recomputed from the rows that are
+ * actually there, so a damaged file reaches the profile gate instead of being
+ * turned away by the header comparison that runs before it. Proving that
+ * comparison still wins is a separate case, which damages and does not reseal.
+ */
+function* resealed(
+  source: string,
+  target: string,
+  damage: (database: DatabaseSync) => void,
+): Operation<string> {
+  yield* copyFile(source, target);
+  const database = new DatabaseSync(target);
+  try {
+    damage(database);
+    const entries = database
+      .prepare("SELECT kind, identity, encoding, content FROM xmd_artifact_content")
+      .all()
+      .map((row) => ({
+        kind: textColumn(row, "kind"),
+        identity: parseJsonValue(
+          JSON.parse(textColumn(row, "identity")),
+          "$",
+          (reason) => new Error(`a stored identity ${reason}`),
+        ),
+        encoding: encodingOf(textColumn(row, "encoding")),
+        content: bytesColumn(row, "content"),
+      }));
+    const built = buildXmdArtifactManifest(entries, (kind) => {
+      throw new Error(`two ${kind} records under one identity`);
+    });
+    database
+      .prepare("UPDATE xmd_artifact_header SET manifest = ?, identity = ? WHERE id = 1")
+      .run(built.bytes, built.identity);
+  } finally {
+    database.close();
+  }
+  return target;
+}
+
+function insertRow(
+  database: DatabaseSync,
+  kind: string,
+  identity: Json,
+  encoding: XmdArtifactEncoding,
+  content: Uint8Array,
+): void {
+  database
+    .prepare(
+      "INSERT INTO xmd_artifact_content (kind, identity, encoding, length, sha256, content) " +
+        "VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .run(
+      kind,
+      canonicalJsonText(identity),
+      encoding,
+      content.byteLength,
+      sha256Hex(content),
+      content,
+    );
+}
+
+function dropRow(database: DatabaseSync, kind: string, identity: string): void {
+  database
+    .prepare("DELETE FROM xmd_artifact_content WHERE kind = ? AND identity = ?")
+    .run(kind, identity);
+}
+
+function rewriteBytes(
+  database: DatabaseSync,
+  kind: string,
+  identity: string,
+  content: Uint8Array,
+): void {
+  database
+    .prepare(
+      "UPDATE xmd_artifact_content SET content = ?, length = ?, sha256 = ? " +
+        "WHERE kind = ? AND identity = ?",
+    )
+    .run(content, content.byteLength, sha256Hex(content), kind, identity);
+}
+
+const PORTABILITY_KIND = "agent-session-portability";
+const BUNDLE_KIND = "agent-session-bundle-bytes";
+
+/** One stored portability record, edited in place. */
+function editPortability(
+  source: string,
+  sessionKey: string,
+  edit: (record: JsonObject) => JsonObject,
+): (database: DatabaseSync) => void {
+  const identity = canonicalJsonText(sessionKey);
+  return (database) => {
+    rewrite(
+      database,
+      PORTABILITY_KIND,
+      identity,
+      canonicalJsonText(edit(storedRecord(source, PORTABILITY_KIND, identity))),
+    );
+  };
+}
+
+/** The association rows one stored record carries. */
+function storedAssociations(record: JsonObject): JsonObject[] {
+  const value = record["associations"];
+  if (!Array.isArray(value)) {
+    throw new Error("the stored record carries no associations");
+  }
+  return value.map(parsedObject);
+}
+
+/** The same record, without one member. */
+function without(record: JsonObject, member: string): JsonObject {
+  return Object.fromEntries(Object.entries(record).filter(([key]) => key !== member));
+}
+
 /** What the file is, and what is beside it. */
 function* fingerprint(path: string, directory: string) {
   return {
@@ -339,6 +571,9 @@ describe("XMD artifact container version 1", () => {
     expect(bySuspension(read.answers)).toEqual(bySuspension(contents.answers));
     expect(read.agentSessions).toEqual(contents.agentSessions);
     expect(read.definition).toEqual(contents.definition);
+    // Merged legacy V1 holds neither Agent kind, so it carries no evidence
+    // member at all rather than an empty one a caller could read as a decision.
+    expect(read.agentEvidence).toBeUndefined();
 
     // Workspace roots and their content survive as bytes, not as a summary.
     expect(read.roots.map((root) => root.rootId).sort()).toEqual(
@@ -622,15 +857,24 @@ describe("XMD artifact container version 1", () => {
     const read = yield* opened(path);
     const sealedFixture = richArtifact();
 
+    // A provider checkpoint token is retained evidence rather than authority
+    // over the host that issued it, so the ban is on the names that would carry
+    // authority — and the two members that may be called `token` are named.
     const forbiddenNames =
-      /retrieval|credential|token|password|secret|connection|statement|transaction|database|lock|handle|sessionDirectory|hostPath/i;
-    walk(read, (key, value) => {
-      expect(forbiddenNames.test(key)).toBe(false);
-      expect(typeof value).not.toBe("function");
-      if (typeof value === "string") {
-        expect(value.includes(directory)).toBe(false);
-      }
-    });
+      /retrieval|credential|authentication|password|secret|connection|statement|transaction|database|lock|handle|sessionDirectory|hostPath/i;
+    const detached = (value: unknown) => {
+      walk(value, (key, member) => {
+        expect(forbiddenNames.test(key)).toBe(false);
+        if (/token/i.test(key)) {
+          expect(["token", "tokenKind"]).toContain(key);
+        }
+        expect(typeof member).not.toBe("function");
+        if (typeof member === "string") {
+          expect(member.includes(directory)).toBe(false);
+        }
+      });
+    };
+    detached(read);
 
     // The caller's own snapshot is no longer connected to what was sealed.
     // `Reflect.set` rather than a cast: the members are readonly because they
@@ -694,6 +938,32 @@ describe("XMD artifact container version 1", () => {
 
     const reread = yield* opened(path);
     expect(reread.identity).toBe(read.identity);
+
+    // The same two claims about the values this version added. A descriptor,
+    // its nested provider identities and its ordered associations are frozen;
+    // a bundle's bytes cannot be, so they answer with a copy the way every
+    // other byte leaf does.
+    const finalized = yield* sealed(directory, "finalized.xmd", finalizedArtifact());
+    const evidence = (yield* opened(finalized.path)).agentEvidence;
+    expect(evidence).toBeDefined();
+    detached(evidence);
+    const classification = evidence?.portability[0];
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(Object.isFrozen(evidence?.portability)).toBe(true);
+    expect(Object.isFrozen(classification)).toBe(true);
+    expect(Object.isFrozen(classification?.associations)).toBe(true);
+    expect(Object.isFrozen(classification?.associations[0])).toBe(true);
+    expect(Reflect.set(classification ?? {}, "availability", "portable")).toBe(false);
+    expect(Reflect.set(classification?.associations[0] ?? {}, "token", "rewritten")).toBe(false);
+
+    const sealedBundle = agentBundle();
+    const carried = evidence?.bundles[0];
+    expect(Reflect.set(carried ?? {}, "bytes", new Uint8Array([1]))).toBe(false);
+    const handedBundle = carried?.bytes ?? new Uint8Array();
+    handedBundle[0] = (handedBundle[0] ?? 0) ^ 0xff;
+    expect(Buffer.from(carried?.bytes ?? new Uint8Array()).toString("hex")).toBe(
+      Buffer.from(sealedBundle).toString("hex"),
+    );
   });
 
   it("C8 holds the semantic invariants a live run holds", function* () {
@@ -1038,6 +1308,634 @@ describe("XMD artifact container version 1", () => {
     expect(Object.keys(publishedRoot).some((name) => name.toLowerCase().includes("artifact"))).toBe(
       false,
     );
+  });
+});
+
+/**
+ * Tier XA — version 1, finalized with Agent portability evidence.
+ *
+ * The container, its identity domain and its verifier are the ones C1–C9
+ * already hold; what is new is that a sealed artifact says, for every logical
+ * Agent session that contributed a retained Prompt, either how a fork would
+ * continue it or exactly why nothing could. So these cases are about the two
+ * profiles version 1 now has: that merged legacy artifacts still open and gain
+ * nothing, that a finalized one is total, and that the confidential bytes it
+ * carries stay bytes.
+ */
+describe("XMD artifact version 1 Agent portability evidence", () => {
+  it("F2 makes every Agent term and retained byte part of the identity", function* () {
+    const base = finalizedArtifact();
+    const baseline = derivedIdentity(base);
+    const portable = portableOf(base);
+    const evidence = base.agentEvidence;
+    const flipped = agentBundle();
+    flipped[0] = (flipped[0] ?? 0) ^ 0xff;
+
+    // Encoding participation, not semantic validity: what is being asked is
+    // whether one changed term reaches the manifest, and a term that only
+    // reached it in valid combinations would not be part of the identity.
+    const variations: readonly (readonly [string, DetachedXmdArtifact])[] = [
+      [
+        "sessionKey",
+        mutatedPortable((record) => ({ ...record, sessionKey: `${record.sessionKey}x` })),
+      ],
+      [
+        "sessionIdentity",
+        mutatedPortable((record) => ({ ...record, sessionIdentity: `${record.sessionIdentity}x` })),
+      ],
+      ["provider", mutatedPortable((record) => ({ ...record, provider: "other" }))],
+      ["agentCommand", mutatedPortable((record) => ({ ...record, agentCommand: "other" }))],
+      ["policy", mutatedPortable((record) => ({ ...record, policy: "allow-all" }))],
+      ["bundleKind", mutatedPortable((record) => ({ ...record, bundleKind: "other" }))],
+      ["compatibilityId", mutatedPortable((record) => ({ ...record, compatibilityId: "other" }))],
+      [
+        "identityAllocationMode",
+        mutatedPortable((record) => ({ ...record, identityAllocationMode: "caller-allocated" })),
+      ],
+      [
+        "bundleLength",
+        mutatedPortable((record) => ({ ...record, bundleLength: record.bundleLength + 1 })),
+      ],
+      ["bundleSha256", mutatedPortable((record) => ({ ...record, bundleSha256: "0".repeat(64) }))],
+      [
+        "sourceProviderSession.kind",
+        mutatedPortable((record) => ({
+          ...record,
+          sourceProviderSession: { ...record.sourceProviderSession, kind: "other/kind" },
+        })),
+      ],
+      [
+        "sourceProviderSession.value",
+        mutatedPortable((record) => ({
+          ...record,
+          sourceProviderSession: { ...record.sourceProviderSession, value: "other-value" },
+        })),
+      ],
+      [
+        "bundledProviderSession.kind",
+        mutatedPortable((record) => ({
+          ...record,
+          bundledProviderSession: { ...record.bundledProviderSession, kind: "other/kind" },
+        })),
+      ],
+      [
+        "bundledProviderSession.value",
+        mutatedPortable((record) => ({
+          ...record,
+          bundledProviderSession: { ...record.bundledProviderSession, value: "other-value" },
+        })),
+      ],
+      [
+        "association.eventId",
+        mutatedPortable((record) => ({
+          ...record,
+          associations: record.associations.map((association, index) =>
+            index === 0 ? { ...association, eventId: "event-0" } : association,
+          ),
+        })),
+      ],
+      [
+        "association.tokenKind",
+        mutatedPortable((record) => ({
+          ...record,
+          associations: record.associations.map((association, index) =>
+            index === 0 ? { ...association, tokenKind: "other/kind" } : association,
+          ),
+        })),
+      ],
+      [
+        "association.token",
+        mutatedPortable((record) => ({
+          ...record,
+          associations: record.associations.map((association, index) =>
+            index === 0 ? { ...association, token: "other-token" } : association,
+          ),
+        })),
+      ],
+      [
+        "association order",
+        mutatedPortable((record) => ({
+          ...record,
+          associations: [...record.associations].reverse(),
+        })),
+      ],
+      [
+        "availability",
+        mutatedPortable((record) => ({
+          sessionKey: record.sessionKey,
+          sessionIdentity: record.sessionIdentity,
+          provider: record.provider,
+          agentCommand: record.agentCommand,
+          policy: record.policy,
+          associations: record.associations,
+          availability: "unavailable",
+          reason: "provider-capability-unavailable",
+        })),
+      ],
+      [
+        "reason",
+        mutatedUnavailable("checkpoint-token-unavailable", (record) => ({
+          ...record,
+          reason: "provider-capability-unavailable",
+        })),
+      ],
+      [
+        "one bundle byte",
+        evidenced(base, evidence?.portability ?? [], [
+          { sessionKey: portable.sessionKey, bytes: flipped },
+        ]),
+      ],
+    ];
+
+    // The evidence takes part at all: the same snapshot without it is a
+    // different artifact.
+    const { agentEvidence: _dropped, ...legacy } = base;
+    expect(derivedIdentity(legacy)).not.toBe(baseline);
+
+    const derived = variations.map(
+      ([name, contents]) => [name, derivedIdentity(contents)] as const,
+    );
+    // Named rather than counted, so a term that stopped participating says
+    // which one it was.
+    expect(derived.filter(([, identity]) => identity === baseline).map(([name]) => name)).toEqual(
+      [],
+    );
+    expect(new Set([baseline, ...derived.map(([, identity]) => identity)]).size).toBe(
+      variations.length + 1,
+    );
+  });
+
+  it("F3 opens both frozen historical artifacts and synthesizes nothing", function* () {
+    // Bytes an earlier reader and writer actually emitted, generated once at
+    // the commits named beside them and never regenerated by this build.
+    const historical = [
+      {
+        name: "the merged PR #610 writer, from richArtifact()",
+        generatedAt: "b952af602437e0c1db2137a74453504ae7541da5",
+        path: fileURLToPath(new URL("./fixtures/legacy-v1-610.xmd", import.meta.url)),
+        fileSha256: "bc812c577bbeebcf4801d29ac0d1fdf5eaf1d7e4d0b2c64e51f3f6867f46bfa8",
+        identity: "02dc7d81e0cd6c4712a4f9aeb2b38535c641cd8658f16dd212caf4993bfc74ca",
+        runId: "release-1.4",
+        status: "suspended",
+        journal: 8,
+        finalEventId: "event-7",
+      },
+      {
+        name: "the PR #615 head, through `xmd workflow export`",
+        generatedAt: "0962ea2d69abab66c5ad39ea06ea931ae0a93f8a",
+        path: fileURLToPath(new URL("./fixtures/legacy-v1-615-export.xmd", import.meta.url)),
+        fileSha256: "520bb74ee4edd70d7fecd5077acdd7c2cd4b79b6551f7cd0aa122dc9920a42e3",
+        identity: "c1857b0dd95724adf0a28a22de3c47da6698943c33a50fa11e3e4875ecc686ef",
+        runId: "release-1",
+        status: "completed",
+        journal: 6,
+        finalEventId: "c64f8a11-5d7e-4151-867a-833ff7255cb4",
+      },
+    ];
+
+    for (const frozen of historical) {
+      expect(sha256Hex(yield* until(readFile(frozen.path)))).toBe(frozen.fileSha256);
+      const read = yield* opened(frozen.path);
+      expect(read.identity).toBe(frozen.identity);
+      expect(read.run.runId).toBe(frozen.runId);
+      expect(read.run.status).toBe(frozen.status);
+      expect(read.journal.length).toBe(frozen.journal);
+      expect(read.frontier.finalEventId).toBe(frozen.finalEventId);
+      expect(read.definition.root.content.length).toBeGreaterThan(0);
+      // No record, no token, no bundle and no marker is reconstructed for it.
+      expect(read.agentEvidence).toBeUndefined();
+      expect(rowsOfKind(frozen.path, "agent-session-portability")).toBe(0);
+      expect(rowsOfKind(frozen.path, "agent-session-bundle-bytes")).toBe(0);
+    }
+
+    // A legacy artifact that does hold retained Prompts: the sessions stay
+    // unclassified, because merged legacy V1 never promised a classification.
+    const directory = yield* useArtifactDirectory();
+    const { agentEvidence: _dropped, ...legacy } = finalizedArtifact();
+    const { path } = yield* sealed(directory, "legacy-prompts.xmd", legacy);
+    const read = yield* opened(path);
+    expect(read.agentEvidence).toBeUndefined();
+    expect(read.journal.length).toBe(finalizedArtifact().journal.length);
+    expect(read.agentSessions.length).toBe(4);
+    expect(read.journal.filter((row) => row.record.includes("agent_prompt")).length).toBe(5);
+  });
+
+  it("F4 classifies every session or refuses the file", function* () {
+    const directory = yield* useArtifactDirectory();
+    const contents = finalizedArtifact();
+    const { path } = yield* sealed(directory, "finalized.xmd", contents);
+
+    const read = yield* opened(path);
+    const byKey = (records: readonly XmdArtifactAgentPortability[]) =>
+      [...records].sort((left, right) => left.sessionKey.localeCompare(right.sessionKey));
+    expect(byKey(read.agentEvidence?.portability ?? [])).toEqual(
+      byKey(contents.agentEvidence?.portability ?? []),
+    );
+    expect(portableOf(read).associations.map((association) => association.token)).toEqual([
+      CHECKPOINT_TOKENS.portableFirst,
+      CHECKPOINT_TOKENS.portableSecond,
+    ]);
+    expect(read.agentEvidence?.bundles.length).toBe(1);
+
+    const portableKey = FINALIZED_SESSIONS.portable.sessionKey;
+    const incompleteKey = FINALIZED_SESSIONS.incomplete.sessionKey;
+    const uncapturedKey = FINALIZED_SESSIONS.uncaptured.sessionKey;
+    const idle = richArtifact().agentSessions[0];
+    if (idle === undefined) {
+      throw new Error("the rich snapshot retains no Agent session mapping");
+    }
+    const promptless = {
+      sessionKey: idle.sessionKey,
+      sessionIdentity: idle.sessionIdentity,
+      provider: idle.provider,
+      agentCommand: idle.agentCommand,
+      policy: idle.policy,
+      associations: [],
+      availability: "unavailable",
+      reason: "provider-capability-unavailable",
+    };
+
+    const turns = contents.journal.slice(richArtifact().journal.length).map((row) => row.eventId);
+    const firstTurn = turns[0] ?? "";
+    const secondTurn = turns[1] ?? "";
+    const incompleteTurn = turns[2] ?? "";
+    const failedTurn = turns[3] ?? "";
+
+    const withAssociations = (key: string, change: (associations: JsonObject[]) => JsonObject[]) =>
+      editPortability(path, key, (record) => ({
+        ...record,
+        associations: change(storedAssociations(record)),
+      }));
+
+    const cases: readonly (readonly [string, string, (database: DatabaseSync) => void])[] = [
+      [
+        "nothing classified beside retained bundle bytes",
+        "XmdArtifactInventoryError",
+        (database) => {
+          for (const key of [portableKey, incompleteKey, uncapturedKey]) {
+            dropRow(database, PORTABILITY_KIND, canonicalJsonText(key));
+          }
+        },
+      ],
+      [
+        "one Prompt-contributing session unclassified",
+        "XmdArtifactInventoryError",
+        (database) => dropRow(database, PORTABILITY_KIND, canonicalJsonText(incompleteKey)),
+      ],
+      [
+        "a record for a session that retained no Prompt",
+        "XmdArtifactInventoryError",
+        (database) =>
+          insertRow(
+            database,
+            PORTABILITY_KIND,
+            idle.sessionKey,
+            "canonical-json",
+            encoder.encode(canonicalJsonText(promptless)),
+          ),
+      ],
+      [
+        "bundle bytes for a session that retained no Prompt",
+        "XmdArtifactInventoryError",
+        (database) =>
+          insertRow(database, BUNDLE_KIND, idle.sessionKey, "bytes", encoder.encode("orphan")),
+      ],
+      [
+        "a record stored under another session's identity",
+        "XmdArtifactInventoryError",
+        editPortability(path, portableKey, (record) => ({ ...record, sessionKey: incompleteKey })),
+      ],
+      [
+        "a record missing a member the union declares",
+        "XmdArtifactRecordError",
+        editPortability(path, portableKey, (record) => without(record, "policy")),
+      ],
+      [
+        "an association carrying an empty token",
+        "XmdArtifactRecordError",
+        withAssociations(portableKey, (associations) =>
+          associations.map((association, index) =>
+            index === 0 ? { ...association, token: "" } : association,
+          ),
+        ),
+      ],
+      [
+        "an availability the union does not declare",
+        "XmdArtifactRecordError",
+        editPortability(path, portableKey, (record) => ({ ...record, availability: "maybe" })),
+      ],
+      [
+        "an unavailable reason the union does not declare",
+        "XmdArtifactRecordError",
+        editPortability(path, incompleteKey, (record) => ({ ...record, reason: "unknown" })),
+      ],
+      [
+        "an identity allocation mode the union does not declare",
+        "XmdArtifactRecordError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          identityAllocationMode: "host-allocated",
+        })),
+      ],
+      [
+        "a portable record carrying an unavailable member",
+        "XmdArtifactRecordError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          reason: "provider-capability-unavailable",
+        })),
+      ],
+      [
+        "an unavailable record carrying a portable member",
+        "XmdArtifactRecordError",
+        editPortability(path, incompleteKey, (record) => ({
+          ...record,
+          bundleKind: "acp/session-bundle",
+        })),
+      ],
+      [
+        "a record disagreeing with the mapping it classifies",
+        "XmdArtifactInventoryError",
+        editPortability(path, portableKey, (record) => ({ ...record, policy: "allow-all" })),
+      ],
+      [
+        "a portable record naming a source session nobody asserted",
+        "XmdArtifactInventoryError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          sourceProviderSession: { kind: "acp/sessionId", value: "sess_other" },
+        })),
+      ],
+      [
+        "a retained Prompt whose session mapping is gone",
+        "XmdArtifactInventoryError",
+        (database) => dropRow(database, "agent-session", canonicalJsonText(portableKey)),
+      ],
+      [
+        "a dangling association",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) =>
+          associations.map((association, index) =>
+            index === 0 ? { ...association, eventId: "event-999" } : association,
+          ),
+        ),
+      ],
+      [
+        "a repeated association",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) => [
+          associations[0] ?? {},
+          associations[0] ?? {},
+        ]),
+      ],
+      [
+        "reordered associations",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) => [...associations].reverse()),
+      ],
+      [
+        "an association naming an event that is not a Prompt",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) =>
+          associations.map((association, index) =>
+            index === 0 ? { ...association, eventId: "event-0" } : association,
+          ),
+        ),
+      ],
+      [
+        "an association naming another session's Prompt",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) =>
+          associations.map((association, index) =>
+            index === 1 ? { ...association, eventId: incompleteTurn } : association,
+          ),
+        ),
+      ],
+      [
+        "an association naming a Prompt that failed",
+        "XmdArtifactInventoryError",
+        withAssociations(incompleteKey, (associations) => [
+          ...associations,
+          { eventId: failedTurn, tokenKind: "acp/checkpoint", token: "checkpoint-canary-eps-2f7" },
+        ]),
+      ],
+      [
+        "an association naming a Prompt that was cancelled",
+        "XmdArtifactInventoryError",
+        (database) => {
+          const identity = canonicalJsonText(failedTurn);
+          const event = parsedObject(JSON.parse(storedText(path, "journal-record", identity)));
+          const result = parsedObject(event["result"]);
+          const record = parsedObject(result["value"]);
+          rewrite(
+            database,
+            "journal-record",
+            identity,
+            JSON.stringify({
+              ...event,
+              result: { ...result, value: { ...record, status: "cancelled" } },
+            }),
+          );
+          withAssociations(incompleteKey, (associations) => [
+            ...associations,
+            {
+              eventId: failedTurn,
+              tokenKind: "acp/checkpoint",
+              token: "checkpoint-canary-zeta-6b1",
+            },
+          ])(database);
+        },
+      ],
+      [
+        "a portable record that covers only some of its Prompts",
+        "XmdArtifactInventoryError",
+        withAssociations(portableKey, (associations) => associations.slice(0, 1)),
+      ],
+      [
+        "an unavailable record claiming a capability reason it cannot have",
+        "XmdArtifactInventoryError",
+        editPortability(path, incompleteKey, (record) => ({
+          ...record,
+          reason: "provider-capability-unavailable",
+        })),
+      ],
+      [
+        "an unavailable record claiming intrinsic loss it does not have",
+        "XmdArtifactInventoryError",
+        editPortability(path, uncapturedKey, (record) => ({
+          ...record,
+          reason: "checkpoint-token-unavailable",
+        })),
+      ],
+      [
+        "a portable record with no bundle",
+        "XmdArtifactInventoryError",
+        (database) => dropRow(database, BUNDLE_KIND, canonicalJsonText(portableKey)),
+      ],
+      [
+        "an unavailable record carrying bundle bytes",
+        "XmdArtifactInventoryError",
+        (database) =>
+          insertRow(database, BUNDLE_KIND, incompleteKey, "bytes", encoder.encode("captured")),
+      ],
+      [
+        "a bundle length that is not the bytes",
+        "XmdArtifactInventoryError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          bundleLength: agentBundle().byteLength + 1,
+        })),
+      ],
+      [
+        "a bundle hash that is not the bytes",
+        "XmdArtifactInventoryError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          bundleSha256: "0".repeat(64),
+        })),
+      ],
+      [
+        "a bundle hash in upper case",
+        "XmdArtifactRecordError",
+        editPortability(path, portableKey, (record) => ({
+          ...record,
+          bundleSha256: sha256Hex(agentBundle()).toUpperCase(),
+        })),
+      ],
+      [
+        "a bundle byte that changed",
+        "XmdArtifactInventoryError",
+        (database) => {
+          const bytes = agentBundle();
+          bytes[0] = (bytes[0] ?? 0) ^ 0xff;
+          rewriteBytes(database, BUNDLE_KIND, canonicalJsonText(portableKey), bytes);
+        },
+      ],
+    ];
+
+    // The reseal is not what refuses these: an undamaged copy, sealed again
+    // over exactly the rows it already held, still opens under its own identity.
+    const control = yield* resealed(path, join(directory, "resealed.xmd"), (database) => {
+      database.exec("PRAGMA user_version = 1");
+    });
+    expect((yield* opened(control)).identity).toBe(read.identity);
+
+    const outcomes: string[] = [];
+    for (const [index, [name, , damage]] of cases.entries()) {
+      const target = yield* resealed(path, join(directory, `f4-${index}.xmd`), damage);
+      const failure = yield* refused(target);
+      outcomes.push(`${name}: ${failure.name}`);
+      // A refusal returns no value at all, never a partial projection.
+      expect(yield* readXmdArtifact(target)).toMatchObject({ ok: false });
+    }
+    expect(outcomes).toEqual(cases.map(([name, expected]) => `${name}: ${expected}`));
+
+    // The same edit, without recomputing the header: the comparison that runs
+    // before any profile interpretation is what answers, and it says so.
+    const stale = yield* damaged(
+      path,
+      join(directory, "stale.xmd"),
+      editPortability(path, portableKey, (record) => ({ ...record, policy: "allow-all" })),
+    );
+    expect((yield* refused(stale)).name).toBe("XmdArtifactManifestMismatchError");
+
+    // Two things no file can hold, because the container's own key merges them.
+    // A caller's snapshot can still offer them, so the writer refuses before a
+    // container exists.
+    const evidence = contents.agentEvidence;
+    const twice: readonly (readonly [string, DetachedXmdArtifact])[] = [
+      [
+        "record-twice.xmd",
+        evidenced(
+          contents,
+          [...(evidence?.portability ?? []), portableOf(contents)],
+          evidence?.bundles ?? [],
+        ),
+      ],
+      [
+        "bundle-twice.xmd",
+        evidenced(contents, evidence?.portability ?? [], [
+          ...(evidence?.bundles ?? []),
+          { sessionKey: portableKey, bytes: agentBundle() },
+        ]),
+      ],
+    ];
+    for (const [name, snapshot] of twice) {
+      const written = yield* writeXmdArtifact(join(directory, name), snapshot);
+      expect(written.ok ? "" : written.error.name).toBe("XmdArtifactInventoryError");
+      expect(yield* exists(join(directory, name))).toBe(false);
+    }
+  });
+
+  it("F5 identifies finalized evidence rather than the file it sits in", function* () {
+    const directory = yield* useArtifactDirectory();
+    const room = join(directory, "room");
+    yield* until(mkdir(room));
+    const contents = finalizedArtifact();
+
+    const compact = yield* XmdArtifactContainerLayout.with({ pageSize: 512 }, function* () {
+      return yield* sealed(room, "compact.xmd", contents);
+    });
+    const roomy = yield* XmdArtifactContainerLayout.with(
+      { pageSize: 8192, vacuum: true },
+      function* () {
+        return yield* sealed(room, "roomy.xmd", contents);
+      },
+    );
+    expect(roomy.result.identity).toBe(compact.result.identity);
+    expect(roomy.result.fileSha256).not.toBe(compact.result.fileSha256);
+
+    const before = yield* fingerprint(compact.path, room);
+    yield* until(chmod(room, 0o555));
+    yield* ensure(() => until(chmod(room, 0o755)));
+    yield* opened(compact.path);
+    const after = yield* fingerprint(compact.path, room);
+    expect(after).toEqual(before);
+    for (const suffix of ["-journal", "-wal", "-shm", ".lock"]) {
+      expect(after.siblings.some((name) => name.endsWith(suffix))).toBe(false);
+    }
+  });
+
+  it("F6 admits no host authority into a descriptor and keeps bundles opaque", function* () {
+    const directory = yield* useArtifactDirectory();
+    const { path } = yield* sealed(directory, "finalized.xmd", finalizedArtifact());
+    const portableKey = FINALIZED_SESSIONS.portable.sessionKey;
+
+    // Exact-schema exclusion rather than payload inspection: each of these is
+    // an unknown descriptor member, and `session_options.env` is refused as one
+    // rather than by anybody looking at what it holds.
+    const forbidden: readonly (readonly [string, JsonObject])[] = [
+      ["credential", { credential: "whatever this host holds" }],
+      ["endpoint", { endpoint: "https://provider.invalid/sessions" }],
+      ["session_options", { session_options: { env: { HOME: "/home/exporter" } } }],
+      ["liveStore", { liveStore: "provider-session-store" }],
+      ["hostPath", { hostPath: "/home/exporter/.agent" }],
+    ];
+    const outcomes: string[] = [];
+    for (const [index, [name, member]] of forbidden.entries()) {
+      const target = yield* resealed(
+        path,
+        join(directory, `f6-${index}.xmd`),
+        editPortability(path, portableKey, (record) => ({ ...record, ...member })),
+      );
+      outcomes.push(`${name}: ${(yield* refused(target)).name}`);
+    }
+    expect(outcomes).toEqual(forbidden.map(([name]) => `${name}: XmdArtifactRecordError`));
+
+    // The payload itself is never scanned and never scrubbed, so both canaries
+    // come back exactly — and one changed byte is a different bundle.
+    const read = yield* opened(path);
+    const carried = new TextDecoder().decode(
+      read.agentEvidence?.bundles[0]?.bytes ?? new Uint8Array(),
+    );
+    expect(carried).toContain(BUNDLE_SECRET_CANARY);
+    expect(carried).toContain(BUNDLE_PATH_CANARY);
+    expect(Buffer.from(read.agentEvidence?.bundles[0]?.bytes ?? []).toString("hex")).toBe(
+      Buffer.from(agentBundle()).toString("hex"),
+    );
+    const flipped = agentBundle();
+    flipped[0] = (flipped[0] ?? 0) ^ 0xff;
+    expect(sha256Hex(flipped)).not.toBe(sha256Hex(agentBundle()));
   });
 });
 

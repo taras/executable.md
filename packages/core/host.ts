@@ -118,3 +118,15 @@ export type {
   TestHarnessBinding,
   TestHarnessInstaller,
 } from "./src/test-harness.ts";
+
+/**
+ * The durable Agent Prompt record, for a host that reads a retained journal.
+ *
+ * A sealed workflow artifact classifies each Agent session by what its retained
+ * Prompts say, and the only thing that can answer that is the parser the live
+ * run already records through. A second reading of the same durable value would
+ * be a second contract, so the parser and the effect type it belongs to cross
+ * the boundary instead.
+ */
+export { AGENT_PROMPT, parsePromptRecord } from "./src/agent/journal.ts";
+export type { PromptRecord } from "./src/agent/journal.ts";

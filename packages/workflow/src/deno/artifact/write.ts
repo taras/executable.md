@@ -52,8 +52,11 @@ import {
 import { buildXmdArtifactManifest, sha256Hex } from "./manifest.ts";
 import { readXmdArtifact } from "./read.ts";
 import {
+  decodeXmdArtifactAgentEvidence,
   decodeXmdArtifactInventory,
   encodeXmdArtifactInventory,
+  partitionXmdArtifactEntries,
+  verifyXmdArtifactAgentEvidence,
   verifyXmdArtifactSemantics,
 } from "./records.ts";
 import {
@@ -123,8 +126,13 @@ function* seal(path: string, contents: DetachedXmdArtifact): Operation<XmdArtifa
     // through the reader's own parser. A snapshot this build could not decode
     // is refused here, where there is still nothing on disk to remove.
     const entries = encodeXmdArtifactInventory(contents);
-    const detached = decodeXmdArtifactInventory(entries, path);
+    const { base, agent } = partitionXmdArtifactEntries(entries);
+    const detached = decodeXmdArtifactInventory(base, path);
     yield* verifyXmdArtifactSemantics(detached, path);
+    const evidence = decodeXmdArtifactAgentEvidence(agent, path);
+    if (evidence !== undefined) {
+      verifyXmdArtifactAgentEvidence(detached, evidence, path);
+    }
     const built = buildXmdArtifactManifest(entries, (kind) => {
       throw new XmdArtifactInventoryError(
         path,
