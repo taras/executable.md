@@ -22,16 +22,36 @@
  * and nothing has to decide whether an existing directory is current — the
  * question does not arise.
  *
- * That is also what lets {@link EmbeddedAdapters.command} answer before
- * anything is on disk. The path is derived from the digest, so the command a
- * session key is built from is known early and never changes underneath it.
+ * ## Identity is not the launch path
+ *
+ * Two different things are needed, and conflating them was a defect: an adapter
+ * has a **stable identity** — its provider, package, version and snapshot
+ * digest — and a **host-local launch path** under whatever root this machine
+ * materialized into.
+ *
+ * Only the identity is durable. It is what a retained Agent session records and
+ * what a sealed artifact carries, so two machines running the same snapshot
+ * agree, and a run exported from one is readable on the other. The path appears
+ * nowhere durable: it names a directory that exists on one host, and putting it
+ * in an artifact would make where a file happened to live a compatibility term.
+ *
+ * The launch path is quoted, because a root containing a space is an ordinary
+ * thing on a developer's machine and an unquoted command would split there.
  *
  * ## Published atomically, verified before use
  *
  * Materialization happens in a private temporary directory and is published by
  * one rename. A concurrent run either wins that rename or finds the directory
- * already there — both then verify the marker before using it, so nobody
- * executes a tree another process is still filling.
+ * already there — both then verify before using it, so nobody executes a tree
+ * another process is still filling.
+ *
+ * Replacing an *abandoned* tree is the one step that cannot be done by rename
+ * alone, because a rename will not overwrite a non-empty directory. Removing it
+ * first is a decision that goes stale: another attempt may publish a valid tree
+ * between the observation and the removal, and deleting that would pull the
+ * files out from under an adapter already running. So recovery is serialized on
+ * an exclusive lock — `mkdir` is atomic, and exactly one attempt gets it — and
+ * the holder re-checks under the lock before removing anything.
  *
  * ## It refuses; it never falls back
  *
@@ -43,9 +63,10 @@
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { mkdir, readdir, readFile, rmdir } from "node:fs/promises";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
-import { ensure, type Operation, scoped } from "effection";
+import { ensure, type Operation, scoped, sleep } from "effection";
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -66,18 +87,65 @@ export class AdapterSnapshotError extends Error {
  *
  * Written last and read first. A tree without it is a tree some earlier attempt
  * abandoned part-way, which is exactly the tree that must not be run.
+ *
+ * It carries two digests, not one: the snapshot this directory was published
+ * for, and the content of the adapter package as installed. The second is what
+ * makes a cache hit mean anything — a marker alone says only that some attempt
+ * finished here, and the JavaScript beside it could have been edited since.
  */
 const MARKER = ".xmd-adapter";
+
+/** How long an attempt waits on somebody else's recovery, and how often. */
+const RECOVERY_POLL_MS = 25;
+const RECOVERY_ATTEMPTS = 400;
+
+/** What one materialized directory recorded about itself. */
+interface Published {
+  readonly snapshot: string;
+  readonly content: string;
+}
+
+function parseMarker(raw: string): Published | undefined {
+  try {
+    const value: unknown = JSON.parse(raw);
+    const snapshot = Reflect.get(Object(value), "snapshot");
+    const content = Reflect.get(Object(value), "content");
+    if (typeof snapshot !== "string" || typeof content !== "string") {
+      return undefined;
+    }
+    return { snapshot, content };
+  } catch {
+    return undefined;
+  }
+}
 
 export interface EmbeddedAdapters {
   /** Every provider this host carries an adapter for. */
   readonly providers: readonly string[];
   /**
-   * The command that runs one provider's embedded adapter.
+   * What this adapter *is*, independent of where this host put it.
    *
-   * Answers before the adapter is on disk: the path is the snapshot's digest,
-   * so it is known from the bytes rather than from the filesystem. Refuses a
-   * provider this host carries no snapshot for.
+   * The durable half: provider, package, version and snapshot digest, and
+   * nothing about this machine. A retained Agent session records this and a
+   * sealed artifact carries it, so the same snapshot compares equal wherever it
+   * was materialized.
+   */
+  identity(provider: string): string;
+  /**
+   * Where this host will execute one provider's adapter from.
+   *
+   * The path on its own, for a caller that needs to inspect or verify it rather
+   * than launch it. Host-local like {@link EmbeddedAdapters.command}, and
+   * retained nowhere.
+   */
+  executablePath(provider: string): string;
+  /**
+   * The command that launches one provider's embedded adapter here.
+   *
+   * The host-local half, and never retained. Answers before the adapter is on
+   * disk, because the path is the snapshot's digest beneath a known root. The
+   * path is quoted: a materialization root may contain a space, and an unquoted
+   * command would split there.
    */
   command(provider: string): string;
   /**
@@ -120,7 +188,44 @@ function tarballOf(snapshot: EmbeddedAdapterSnapshot): Uint8Array {
 
 /** Where one snapshot's entry point lands once npm has installed it. */
 function entryPoint(root: string, snapshot: EmbeddedAdapterSnapshot): string {
-  return join(root, snapshot.sha256, "node_modules", snapshot.package, "dist", "index.js");
+  return join(installedPackage(root, snapshot), "dist", "index.js");
+}
+
+/** The adapter package itself, as npm unpacked it from the snapshot. */
+function installedPackage(root: string, snapshot: EmbeddedAdapterSnapshot): string {
+  return join(root, snapshot.sha256, "node_modules", snapshot.package);
+}
+
+/**
+ * A digest over the adapter package's own installed content.
+ *
+ * The adapter, not its dependency tree. Those belong to npm, legitimately vary
+ * between resolutions, and hashing them would make an ordinary reinstall look
+ * like tampering. What this covers is the code this repository vendored and
+ * this host executes.
+ *
+ * Path and bytes together, in one deterministic order, so a renamed file is as
+ * visible as an edited one.
+ */
+function* contentDigest(directory: string): Operation<string> {
+  const digest = createHash("sha256");
+  const walk = function* (current: string, prefix: string): Operation<void> {
+    const entries = yield* until(readdir(current, { withFileTypes: true }));
+    for (const entry of [...entries].sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const at = join(current, entry.name);
+      const name = `${prefix}${entry.name}`;
+      if (entry.isDirectory()) {
+        digest.update(`d:${name}\n`);
+        yield* walk(at, `${name}/`);
+        continue;
+      }
+      const bytes = yield* until(readFile(at));
+      digest.update(`f:${name}:${bytes.byteLength}\n`);
+      digest.update(bytes);
+    }
+  };
+  yield* walk(directory, "");
+  return digest.digest("hex");
 }
 
 /**
@@ -170,13 +275,32 @@ function* install(
 }
 
 /**
+ * What a suite may observe between the steps of a recovery.
+ *
+ * Dependency injection, deliberately, rather than anything a scope can reach:
+ * supplied by whoever constructs the materializer and by nobody else. It exists
+ * because the ordering this guards against cannot otherwise be produced — a
+ * second attempt has to publish in the exact window between one attempt's
+ * observation and its removal, and ordinary scheduling will not reliably put it
+ * there. `PrivateWorkspaceOptions.decorateFilesystem` exists for the same
+ * reason.
+ */
+export interface EmbeddedAdapterObservers {
+  /** Runs after a recovery takes its lock and before it removes anything. */
+  readonly beforeRecoveryCleanup?: () => Operation<void>;
+}
+
+/**
  * The embedded adapters, materializing beneath `root`.
  *
  * `root` is host-owned private state. Nothing a document can name reaches it,
  * and nothing here reads anything back out of it except the adapter it just
  * verified.
  */
-export function createEmbeddedAdapters(root: string): EmbeddedAdapters {
+export function createEmbeddedAdapters(
+  root: string,
+  observers: EmbeddedAdapterObservers = {},
+): EmbeddedAdapters {
   const byProvider = new Map(
     EMBEDDED_ADAPTER_SNAPSHOTS.map((snapshot) => [snapshot.provider, snapshot]),
   );
@@ -192,33 +316,118 @@ export function createEmbeddedAdapters(root: string): EmbeddedAdapters {
     return snapshot;
   }
 
+  /**
+   * Whether a verified adapter is already on disk for this snapshot.
+   *
+   * Three questions, in order: is there a marker, does it name this snapshot,
+   * and does the installed package still hash to what that marker recorded. The
+   * third is the one that matters on a cache hit — without it, JavaScript
+   * edited after publication runs unchallenged under a marker that still looks
+   * right.
+   *
+   * A marker naming another snapshot is damage and raises. Content that no
+   * longer matches is *not* treated as damage: the directory is abandoned work
+   * as far as this host is concerned, so it answers false and lets
+   * materialization replace it.
+   */
   function* published(snapshot: EmbeddedAdapterSnapshot): Operation<boolean> {
-    const marker = join(root, snapshot.sha256, MARKER);
+    const directory = join(root, snapshot.sha256);
+    const marker = join(directory, MARKER);
     if (!(yield* exists(marker))) {
+      return false;
+    }
+    const recorded = parseMarker(yield* readTextFile(marker));
+    if (recorded === undefined) {
       return false;
     }
     // The marker names what it published. A directory carrying another
     // snapshot's name under this digest is damage, not a cache hit.
-    const recorded = (yield* readTextFile(marker)).trim();
-    if (recorded !== snapshot.sha256) {
+    if (recorded.snapshot !== snapshot.sha256) {
       throw new AdapterSnapshotError(
-        `the materialized ${snapshot.provider} adapter at ${join(root, snapshot.sha256)} ` +
-          `records ${recorded || "nothing"} rather than ${snapshot.sha256}`,
+        `the materialized ${snapshot.provider} adapter at ${directory} records ` +
+          `${recorded.snapshot} rather than ${snapshot.sha256}`,
       );
     }
     if (!(yield* exists(entryPoint(root, snapshot)))) {
-      throw new AdapterSnapshotError(
-        `the materialized ${snapshot.provider} adapter is missing its entry point`,
-      );
+      return false;
     }
-    return true;
+    return (yield* contentDigest(installedPackage(root, snapshot))) === recorded.content;
+  }
+
+  /**
+   * Replace an abandoned tree at the target, under an exclusive lock.
+   *
+   * Reached only when the rename failed and what is there does not verify.
+   * The lock makes "check, then remove" one decision instead of two: without
+   * it, a second attempt could publish a valid tree in the gap and this one
+   * would delete it, taking the files out from under an adapter that had
+   * already resolved and might already be running.
+   *
+   * An attempt that does not get the lock never removes anything. It waits
+   * for the holder and then answers from what the holder published.
+   */
+  function* recover(
+    snapshot: EmbeddedAdapterSnapshot,
+    staging: string,
+    target: string,
+    failure: unknown,
+  ): Operation<void> {
+    const lock = `${target}.recovering`;
+    let held = false;
+    try {
+      // Atomic across processes: exactly one `mkdir` of a given name wins.
+      yield* until(mkdir(lock));
+      held = true;
+    } catch {
+      held = false;
+    }
+
+    if (!held) {
+      // Somebody else is recovering. Wait for them rather than racing, and
+      // take whatever they published.
+      for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
+        yield* sleep(RECOVERY_POLL_MS);
+        if (yield* published(snapshot)) {
+          return;
+        }
+      }
+      throw failure;
+    }
+
+    yield* scoped(function* () {
+      yield* ensure(() => until(rmdir(lock).catch(() => {})));
+      const observe = observers.beforeRecoveryCleanup;
+      if (observe !== undefined) {
+        yield* observe();
+      }
+      // Asked again under the lock, because the answer from before it may
+      // have gone stale in exactly the window this lock closes.
+      if (yield* published(snapshot)) {
+        return;
+      }
+      yield* rm(target, { recursive: true, force: true });
+      yield* until(rename(staging, target));
+    });
   }
 
   return {
     providers: [...byProvider.keys()],
 
+    identity(provider: string): string {
+      const snapshot = snapshotFor(provider);
+      return `xmd-embedded-adapter:${snapshot.provider}:${snapshot.package}@${snapshot.version}+${snapshot.sha256}`;
+    },
+
+    executablePath(provider: string): string {
+      return entryPoint(root, snapshotFor(provider));
+    },
+
     command(provider: string): string {
-      return `node ${entryPoint(root, snapshotFor(provider))}`;
+      // Quoted, and with any embedded quote escaped: ACPX splits this command
+      // line, and a root holding a space or a quote would otherwise become two
+      // arguments or an unterminated one.
+      const path = entryPoint(root, snapshotFor(provider)).replaceAll('"', '\\"');
+      return `node "${path}"`;
     },
 
     *materialize(provider: string): Operation<void> {
@@ -241,27 +450,27 @@ export function createEmbeddedAdapters(root: string): EmbeddedAdapters {
         yield* ensure(() => rm(staging, { recursive: true, force: true }));
 
         yield* install(staging, snapshot, bytes);
-        yield* writeTextFile(join(staging, MARKER), `${snapshot.sha256}\n`);
-
-        // An unpublished directory at the target is what an attempt killed
-        // part-way through leaves behind. It carries no marker, so nothing has
-        // ever executed from it and nothing is resolving through it — and
-        // leaving it would wedge this adapter for good, since a rename cannot
-        // replace a non-empty directory. Concurrent attempts never write here
-        // directly, so the only thing this can remove is abandoned work.
-        if (!(yield* published(snapshot))) {
-          yield* rm(target, { recursive: true, force: true });
-        }
+        // Recorded from what was actually installed, so a later read compares
+        // the bytes it is about to execute rather than a claim about them.
+        const content = yield* contentDigest(join(staging, "node_modules", snapshot.package));
+        yield* writeTextFile(
+          join(staging, MARKER),
+          `${JSON.stringify({ snapshot: snapshot.sha256, content })}\n`,
+        );
 
         try {
-          // One rename publishes every byte at once. A concurrent run either
-          // loses this race or wins it; either way nothing observes a tree that
-          // is still being filled.
+          // The ordinary path, and lock-free: one rename publishes every byte at
+          // once, and it simply fails if anything is already there.
           yield* until(rename(staging, target));
+          return;
         } catch (error) {
-          if (!(yield* published(snapshot))) {
-            throw error;
+          if (yield* published(snapshot)) {
+            // Another attempt got there first with a tree that verifies. Its
+            // work is as good as this one's, and this staging tree is removed
+            // by the ensure above.
+            return;
           }
+          yield* recover(snapshot, staging, target, error);
         }
       });
 

@@ -4,7 +4,8 @@
   "description": "ACPX agent provider for executable.md documents: drives coding agents over the Agent Client Protocol.",
   "type": "module",
   "exports": {
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    "./embedded-adapters": "./embedded-adapters.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",

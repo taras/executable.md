@@ -66,17 +66,21 @@ import type { Operation } from "effection";
 import {
   createAcpxProvider,
   createAcpxSessionStore,
-  createEmbeddedAdapters,
   DEFAULT_AGENT_NAME,
-  embeddedAdapterRegistry,
   retainedSession,
 } from "@executablemd/acp";
 import type {
   AcpxProviderDependencies,
   AcpxSessionPolicy,
   AcpxSessionStore,
-  EmbeddedAdapters,
 } from "@executablemd/acp";
+// A separate entrypoint because the embedded adapters are temporary (#636) and
+// must not become part of the package's stable surface.
+import {
+  createEmbeddedAdapters,
+  embeddedAdapterRegistry,
+} from "@executablemd/acp/embedded-adapters";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import {
   installAgentComponents,
   installPermissionMode,
@@ -245,10 +249,20 @@ function sessionPolicy(
   /** What each placement key was placed for, so the commit names the same thing. */
   const placed = new Map<string, AgentSessionIdentity>();
 
-  function identityOf(context: { agentCommand: string; sessionIdentity: string }) {
+  /**
+   * What this run retains about which agent a session belongs to.
+   *
+   * The adapter's stable identity — provider, package, version and snapshot
+   * digest — never the command that launches it. That command names a directory
+   * beneath this host's materialization root, and retaining it would make where
+   * this machine put a file part of the session's identity and of every artifact
+   * sealed from the run: the same snapshot on another host would compare as a
+   * different agent.
+   */
+  function identityOf(context: { agentName: string; sessionIdentity: string }) {
     return {
       provider: PROVIDER,
-      agentCommand: context.agentCommand,
+      agentCommand: adapters.identity(context.agentName),
       sessionIdentity: context.sessionIdentity,
     };
   }
@@ -282,11 +296,11 @@ function sessionPolicy(
       yield* adapters.materialize(context.agentName);
 
       const identity = identityOf({
-        agentCommand: context.agentCommand,
+        agentName: context.agentName,
         sessionIdentity: context.sessionIdentity,
       });
       const sessionKey = agentSessionKey(identity);
-      const placementKey = `${sessionKey}:${placementSuffix(context.agentCommand)}`;
+      const placementKey = `${sessionKey}:${placementSuffix(identity.agentCommand)}`;
       placed.set(placementKey, identity);
 
       const read = yield* transactAgentSessions(database, function* (sessions) {

@@ -20,7 +20,8 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Buffer } from "node:buffer";
-import { embeddedAdapterIdentities } from "@executablemd/acp";
+import { gunzipSync } from "node:zlib";
+import { embeddedAdapterIdentities } from "@executablemd/acp/embedded-adapters";
 
 const VENDOR = "packages/acp/vendor/adapters";
 
@@ -35,6 +36,38 @@ const REVIEWED = {
     patchedCommit: "dcb7d52b0bd52a0a7a6cd5d539698f9735281b07",
   },
 } as const;
+
+/**
+ * Every file the archive actually contains, read from its own tar headers.
+ *
+ * The manifest's list is what a reviewer reads instead of unpacking, so
+ * comparing that list against itself proves nothing. This walks the 512-byte
+ * header blocks so the comparison is against the archive.
+ */
+function archiveInventory(tarball: Uint8Array): string[] {
+  const raw = gunzipSync(tarball);
+  const names: string[] = [];
+  for (let at = 0; at + 512 <= raw.length; ) {
+    const header = raw.subarray(at, at + 512);
+    // Two consecutive zero blocks end the archive.
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
+    const name = Buffer.from(header.subarray(0, 100)).toString("utf8").replace(/\0.*$/, "");
+    const size = Number.parseInt(
+      Buffer.from(header.subarray(124, 136)).toString("utf8").replace(/\0.*$/, "").trim(),
+      8,
+    );
+    const type = String.fromCharCode(header[156] ?? 0);
+    // '0' and '\0' are ordinary files; directories and metadata entries are not
+    // what the manifest lists.
+    if (type === "0" || type === "\0") {
+      names.push(name);
+    }
+    at += 512 + Math.ceil((Number.isNaN(size) ? 0 : size) / 512) * 512;
+  }
+  return names.sort();
+}
 
 interface ManifestSnapshot {
   provider: string;
@@ -116,14 +149,18 @@ describe("Tier AD — embedded ACP adapter snapshots", () => {
     }
   });
 
-  it("AD4: the manifest file list is exact, and carries no provider CLI", function* () {
+  it("AD4: the manifest inventory is exactly what the archive contains", function* () {
     for (const snapshot of yield* manifest()) {
       const bytes = yield* until(readFile(join(VENDOR, snapshot.tarball)));
-      // Read from the archive rather than trusted from the manifest: the list is
-      // what a reviewer reads instead of unpacking, so it has to be the archive's
-      // own answer.
-      const listed = new Set(snapshot.files);
-      expect(listed.size).toBe(snapshot.files.length);
+
+      // The archive's own answer, not the manifest compared with itself. A file
+      // added to or dropped from the tarball has to show up here, because this
+      // is the list a reviewer trusts instead of unpacking.
+      expect({ tarball: snapshot.tarball, files: archiveInventory(bytes) }).toEqual({
+        tarball: snapshot.tarball,
+        files: [...snapshot.files].sort(),
+      });
+
       expect(snapshot.files.some((name) => name.endsWith("package.json"))).toBe(true);
       expect(snapshot.files.some((name) => name.endsWith("LICENSE"))).toBe(true);
       // The agent itself is a dependency, never a vendored byte. A snapshot

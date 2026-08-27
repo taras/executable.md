@@ -35,7 +35,7 @@ import {
 import { executeInstalled } from "@executablemd/core/host";
 import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
-import type { EmbeddedAdapters } from "@executablemd/acp";
+import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -83,7 +83,12 @@ function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } 
   return {
     materialized,
     providers: ["codex", "claude"],
-    command: (provider) => `node /nonexistent/${provider}-adapter.js`,
+    // Stable, and deliberately carrying no path: this is what a retained
+    // session and a sealed artifact record, so it must not vary with where a
+    // host materialized anything.
+    identity: (provider) => `xmd-embedded-adapter:${provider}:test@0.0.0+${"0".repeat(64)}`,
+    executablePath: (provider) => `/nonexistent/${provider}-adapter.js`,
+    command: (provider) => `node "/nonexistent/${provider}-adapter.js"`,
     // deno-lint-ignore require-yield
     *materialize(provider: string): Operation<void> {
       materialized.push(provider);

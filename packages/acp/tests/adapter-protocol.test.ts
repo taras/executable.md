@@ -52,7 +52,7 @@ function useAdapter(provider: string, environment: Record<string, string>): Oper
 
     const adapters = createEmbeddedAdapters(join(root, "adapters"));
     yield* adapters.materialize(provider);
-    const entry = adapters.command(provider).slice("node ".length);
+    const entry = adapters.executablePath(provider);
 
     const child: ChildProcess = spawn(process.execPath, [entry], {
       env: { ...process.env, ...environment },

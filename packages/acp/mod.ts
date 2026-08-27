@@ -15,21 +15,11 @@
  */
 
 export { createAcpxProvider } from "./src/provider.ts";
-/**
- * The ACP adapters this build carries, and how a host puts one on disk.
- *
- * Exported for the workflow Agent profile, which is the only caller: a run
- * whose Prompts must name their turns cannot use a published adapter, because
- * none emits that yet. `packages/acp/vendor/adapters/PROVENANCE.md` records
- * what is carried and what removes it.
- */
-export {
-  AdapterSnapshotError,
-  createEmbeddedAdapters,
-  embeddedAdapterIdentities,
-  embeddedAdapterRegistry,
-} from "./src/adapter-snapshots.ts";
-export type { EmbeddedAdapters, EmbeddedAdapterSnapshot } from "./src/adapter-snapshots.ts";
+// The embedded ACP adapters are deliberately absent from this entrypoint. They
+// are a temporary arrangement with an exit gate (#636), and anything exported
+// here is a stable contract somebody may depend on — removing it later would be
+// a compatibility break earned by a workaround. A host reaches them through
+// `@executablemd/acp/embedded-adapters`, which goes away with them.
 export type {
   AcpMcpServer,
   AcpxProviderDependencies,

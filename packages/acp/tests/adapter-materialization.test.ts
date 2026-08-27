@@ -25,12 +25,17 @@ import {
   embeddedAdapterIdentities,
   embeddedAdapterRegistry,
 } from "../src/adapter-snapshots.ts";
+import { cp, readFile, writeFile } from "node:fs/promises";
+import { sleep, withResolvers } from "effection";
 
 function* useRoot(): Operation<string> {
   const root = yield* until(mkdtemp(join(tmpdir(), "xmd-am-")));
   yield* ensure(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+/** The package a materialized Codex adapter is installed as. */
+const CODEX_PACKAGE = "@agentclientprotocol/codex-acp";
 
 /** The digest one provider's snapshot materializes under. */
 function digestOf(provider: string): string {
@@ -111,7 +116,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     // it would have made one crashed run poison this adapter permanently.
     expect(yield* exists(join(directory, ".xmd-adapter"))).toBe(true);
     expect(yield* exists(join(directory, "node_modules", "stale.txt"))).toBe(false);
-    expect(yield* exists(adapters.command("codex").slice("node ".length))).toBe(true);
+    expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
   });
 
   it("AM5: a marker naming another snapshot is damage, not a cache hit", function* () {
@@ -119,7 +124,10 @@ describe("Tier AM — embedded adapter materialization", () => {
     const adapters = createEmbeddedAdapters(root);
     const directory = join(root, digestOf("codex"));
     yield* ensureDir(directory);
-    yield* writeTextFile(join(directory, ".xmd-adapter"), `${"0".repeat(64)}\n`);
+    yield* writeTextFile(
+      join(directory, ".xmd-adapter"),
+      `${JSON.stringify({ snapshot: "0".repeat(64), content: "0".repeat(64) })}\n`,
+    );
 
     const refused = yield* refusal(() => adapters.materialize("codex"));
 
@@ -133,7 +141,7 @@ describe("Tier AM — embedded adapter materialization", () => {
 
     yield* adapters.materialize("codex");
 
-    const entry = adapters.command("codex").slice("node ".length);
+    const entry = adapters.executablePath("codex");
     expect(yield* exists(entry)).toBe(true);
     expect(yield* exists(join(root, digestOf("codex"), ".xmd-adapter"))).toBe(true);
 
@@ -144,6 +152,140 @@ describe("Tier AM — embedded adapter materialization", () => {
     // No staging left behind on the happy path.
     const entries = yield* until(readdir(root));
     expect(entries.filter((name) => name.startsWith(".staging-"))).toEqual([]);
+  });
+
+  it("AM8: a recovery re-checks under its lock and never deletes what appeared", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+
+    // A valid published tree, built elsewhere, ready to drop in.
+    const donorRoot = yield* useRoot();
+    const donor = createEmbeddedAdapters(donorRoot);
+    yield* donor.materialize("codex");
+    const donorTree = join(donorRoot, digestOf("codex"));
+
+    // The exact ordering the lock exists for: the recovering attempt has
+    // already decided the target is abandoned, and a valid tree appears in the
+    // window before it acts on that decision.
+    let appeared = false;
+    const recovering = createEmbeddedAdapters(root, {
+      *beforeRecoveryCleanup(): Operation<void> {
+        yield* rm(target, { recursive: true, force: true });
+        yield* until(cp(donorTree, target, { recursive: true }));
+        appeared = true;
+      },
+    });
+
+    // Abandoned work at the target, so the attempt takes the recovery path.
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    const entry = recovering.executablePath("codex");
+    yield* recovering.materialize("codex");
+
+    expect(appeared).toBe(true);
+    // Re-checked under the lock, so the stale decision was not acted on: what
+    // appeared is still there, byte for byte, and is what the adapter resolves
+    // to. Removing it would have pulled the files out from under an adapter
+    // another run had already resolved and might be running.
+    expect(yield* exists(entry)).toBe(true);
+    expect(yield* until(readFile(entry))).toEqual(
+      yield* until(readFile(join(donorTree, "node_modules", CODEX_PACKAGE, "dist", "index.js"))),
+    );
+  });
+
+  it("AM8b: a second attempt neither deletes nor publishes while a recovery holds the lock", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const stale = join(target, "node_modules", "stale.txt");
+
+    const entered = withResolvers<void>();
+    const release = withResolvers<void>();
+    const recovering = createEmbeddedAdapters(root, {
+      *beforeRecoveryCleanup(): Operation<void> {
+        entered.resolve();
+        yield* release.operation;
+      },
+    });
+    const other = createEmbeddedAdapters(root);
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(stale, "half an install\n");
+
+    const first = yield* spawn(() => recovering.materialize("codex"));
+    yield* entered.operation;
+    const second = yield* spawn(() => other.materialize("codex"));
+    // Long enough for the second attempt to have tried and been turned away.
+    yield* sleep(250);
+
+    // It is waiting, not racing: it has removed nothing and published nothing
+    // while somebody else holds the recovery.
+    expect(yield* exists(stale)).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+
+    release.resolve();
+    yield* all([first, second]);
+
+    // Both converge on the one tree the holder published.
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(true);
+    expect(yield* exists(stale)).toBe(false);
+    expect(yield* exists(other.executablePath("codex"))).toBe(true);
+  });
+
+  it("AM9: edited adapter bytes are refused rather than executed", function* () {
+    const root = yield* useRoot();
+    const adapters = createEmbeddedAdapters(root);
+    yield* adapters.materialize("codex");
+    const entry = adapters.executablePath("codex");
+    const original = yield* until(readFile(entry));
+
+    // The marker is untouched, so nothing about the directory *looks* wrong.
+    // Only the bytes changed — which is the whole point: a cache hit that
+    // checked a marker alone would run this.
+    yield* until(writeFile(entry, `${original.toString("utf8")}\n// tampered\n`));
+
+    yield* adapters.materialize("codex");
+
+    // Rematerialized before use, back to exactly the recorded content.
+    expect(yield* until(readFile(entry))).toEqual(original);
+  });
+
+  it("AM10: identity is stable across hosts; only the launch path is local", function* () {
+    const plain = yield* useRoot();
+    // A root with a space in it, which is ordinary on a developer's machine and
+    // would split an unquoted command line.
+    const spaced = join(yield* useRoot(), "Application Support", "xmd runs");
+    yield* ensureDir(spaced);
+
+    const here = createEmbeddedAdapters(plain);
+    const there = createEmbeddedAdapters(spaced);
+
+    // What a run retains and an artifact carries: identical, because it names
+    // the snapshot rather than the machine.
+    expect(there.identity("codex")).toBe(here.identity("codex"));
+    expect(there.identity("claude")).toBe(here.identity("claude"));
+    expect(here.identity("codex")).toContain(digestOf("codex"));
+    expect(here.identity("codex")).not.toContain(plain);
+
+    // What each host launches: its own, and quoted so the space survives.
+    expect(there.executablePath("codex")).not.toBe(here.executablePath("codex"));
+    expect(there.command("codex")).toContain('"');
+    expect(there.command("codex")).toContain(spaced);
+  });
+
+  it("AM11: an adapter materializes and launches from a root containing a space", function* () {
+    const root = join(yield* useRoot(), "Application Support", "xmd runs");
+    yield* ensureDir(root);
+    const adapters = createEmbeddedAdapters(root);
+
+    yield* adapters.materialize("codex");
+
+    // The path survives materialization, and the command ACPX would split
+    // reduces to that exact single argument.
+    expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
+    const command = adapters.command("codex");
+    expect(command.startsWith('node "')).toBe(true);
+    expect(command.slice('node "'.length, -1)).toBe(adapters.executablePath("codex"));
   });
 
   it("AM7: two concurrent materializations converge on one directory", function* () {
@@ -159,6 +301,6 @@ describe("Tier AM — embedded adapter materialization", () => {
     // returning.
     const entries = yield* until(readdir(root));
     expect(entries).toEqual([digestOf("codex")]);
-    expect(yield* exists(adapters.command("codex").slice("node ".length))).toBe(true);
+    expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
   });
 });
