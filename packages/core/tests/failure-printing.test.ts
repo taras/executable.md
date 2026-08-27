@@ -249,7 +249,7 @@ describe("Tier CF — failing is the default", () => {
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [dir],
+        includes: [dir],
       });
       const subscription = yield* execution.output;
       let next = yield* subscription.next();

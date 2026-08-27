@@ -40,7 +40,7 @@ function* said(tmpDir: string, stream: InMemoryStream): Operation<string> {
   const execution = yield* execute({
     path: path.join(tmpDir, "doc.md"),
     stream,
-    componentDirs: [path.join(tmpDir, "components"), tmpDir],
+    includes: [path.join(tmpDir, "components"), tmpDir],
   });
   const result = yield* execution;
   return result.ok ? String(result.value) : result.error.message;
@@ -559,14 +559,14 @@ describe("Tier EP — Expression prop evaluation", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     const output2 = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output1).toContain("count=7");

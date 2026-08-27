@@ -79,7 +79,7 @@ function run(dir: string): Operation<Json> {
         yield* execute({
           path: join(dir, "doc.md"),
           stream: new InMemoryStream(),
-          componentDirs: [dir],
+          includes: [dir],
         }),
       ),
     );
@@ -98,7 +98,7 @@ function runOutcome(dir: string): Operation<{ ok: boolean; output: string }> {
     const execution = yield* execute({
       path: join(dir, "doc.md"),
       stream: new InMemoryStream(),
-      componentDirs: [dir],
+      includes: [dir],
     });
     const chunks: string[] = [];
     yield* forEach(function* (chunk: string) {
@@ -160,9 +160,7 @@ describe("Tier TD — TempDir", () => {
     const stream = new InMemoryStream();
     const output = yield* scoped(function* () {
       yield* useHostFiles();
-      return yield* collect(
-        yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
-      );
+      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
     });
 
     expect(String(output)).toContain("inside");
@@ -451,9 +449,7 @@ describe("Tier TD — TempDir", () => {
           },
         });
         const rendered = String(
-          yield* collect(
-            yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
-          ),
+          yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] })),
         );
         return `${rendered}\n${displayed}`;
       }),
@@ -477,7 +473,7 @@ describe("Tier TD — TempDir", () => {
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(partial),
-        componentDirs: [dir],
+        includes: [dir],
       });
       return yield* execution;
     });
@@ -551,7 +547,7 @@ describe("Tier TD — TempDir", () => {
       yield* scoped(function* () {
         yield* useHostFiles();
         return yield* collect(
-          yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
+          yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }),
         );
       }),
     );
@@ -570,7 +566,7 @@ describe("Tier TD — TempDir", () => {
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(partial),
-        componentDirs: [dir],
+        includes: [dir],
       });
       return yield* execution;
     });
@@ -621,7 +617,7 @@ describe("Tier TD — TempDir", () => {
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [dir],
+        includes: [dir],
       });
       return yield* execution;
     });

@@ -103,7 +103,7 @@ function run(fixture: Fixture, source: string, install?: () => Operation<void>):
       yield* install();
     }
     const output: Json = yield* collect(
-      yield* execute({ path, stream: new InMemoryStream(), componentDirs: [fixture.workspace] }),
+      yield* execute({ path, stream: new InMemoryStream(), includes: [fixture.workspace] }),
     );
     return String(output);
   });

@@ -68,13 +68,13 @@ export default define.page(function Providers() {
         search path:
       </p>
       <CodeBlock command>
-        {"xmd run packages/core/examples/hello-world.md --component-dir packages/core/components"}
+        {"xmd run packages/core/examples/hello-world.md --include packages/core/components"}
       </CodeBlock>
       <p>
         The example above also needs an <code>ANTHROPIC_API_KEY</code>{" "}
         in the environment and a local Ollama server running{" "}
         <code>llama3.2</code>. Embedding the built-in components into the binary
-        (so <code>--component-dir</code> isn't required) is on the roadmap.
+        (so <code>--include</code> isn't required) is on the roadmap.
       </p>
 
       <NextCard href="/docs/agents" label="Coding agents" />

@@ -2893,7 +2893,7 @@ check expressible against the shape is one a forger satisfies by construction.
 And a reader that recognized an invocation by private state would recognize only
 the copy of core it was imported with — while a component can be loaded from
 disk beside its own copy, which is what the compiled CLI does for
-`--component-dir`. Copy-local authentication and caller-visible behavior are the
+`--include`. Copy-local authentication and caller-visible behavior are the
 two wrong ownership sites.
 
 So **invocation-form dispatch** owns it: the canonical, engine-owned association

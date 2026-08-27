@@ -25,7 +25,12 @@ import { execute } from "../src/execute.ts";
 import { inspectComponent } from "../src/inspect.ts";
 import { ComponentRegistrationError, registerComponents } from "../src/components/registration.ts";
 import type { ComponentRegistration } from "../src/components/registration.ts";
-import { selectComponent } from "../src/components/select.ts";
+import * as selectModule from "../src/components/select.ts";
+import { DEFAULT_INCLUDES, selectComponent } from "../src/components/select.ts";
+import type { SelectOptions } from "../src/components/select.ts";
+import type { ExecuteSettings } from "../src/execute.ts";
+import type { InspectComponentOptions } from "../src/inspect.ts";
+import * as core from "../mod.ts";
 import { CORE_ORIGIN } from "../src/components/registry.ts";
 import type { ComponentRegistry, ComponentSelection, Json as CoreJson } from "../src/types.ts";
 
@@ -79,7 +84,7 @@ function currentRegistry(): Operation<ComponentRegistry> {
 /** Resolve `name` against the current scope, looking in `dirs` for files. */
 function* select(name: string, dirs: string[] = []): Operation<ComponentSelection> {
   return yield* selectComponent(name, {
-    componentDirs: dirs,
+    includes: dirs,
     registry: yield* currentRegistry(),
   });
 }
@@ -105,13 +110,13 @@ function* thrown(body: () => Operation<unknown>): Operation<Error | undefined> {
   }
 }
 
-function run(dir: string, componentDirs: string[] = [dir]): Operation<Json> {
+function run(dir: string, includes: string[] = [dir]): Operation<Json> {
   return scoped(function* () {
     // `API.Files` has no host default, and `<TempDir>` is one of the components
     // these cases resolve.
     yield* useHostFiles();
     return yield* collect(
-      yield* execute({ path: join(dir, "doc.md"), stream: new InMemoryStream(), componentDirs }),
+      yield* execute({ path: join(dir, "doc.md"), stream: new InMemoryStream(), includes }),
     );
   });
 }
@@ -583,7 +588,7 @@ describe("Tier CR — what a document gets", () => {
 describe("Tier CR — inspection describes without running", () => {
   it("CR25: inspection and execution agree on one of core's components", function* () {
     const dir = yield* useFixture();
-    const info = yield* inspectComponent({ name: "Glob", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Glob", includes: [dir] });
     const selection = yield* select("Glob", [dir]);
 
     expect(info.kind).toBe("registered");
@@ -596,7 +601,7 @@ describe("Tier CR — inspection describes without running", () => {
 
   it("CR25b: Fetch is an ordinary core default with a closed props schema", function* () {
     const dir = yield* useFixture();
-    const info = yield* inspectComponent({ name: "Fetch", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Fetch", includes: [dir] });
 
     expect(info.kind).toBe("registered");
     if (info.kind !== "registered" || info.origin.kind !== "registered") {
@@ -623,7 +628,7 @@ describe("Tier CR — inspection describes without running", () => {
 
   it("CR25c: Json is an ordinary core default taking one captured operand", function* () {
     const dir = yield* useFixture();
-    const info = yield* inspectComponent({ name: "Json", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Json", includes: [dir] });
 
     expect(info.kind).toBe("registered");
     if (info.kind !== "registered" || info.origin.kind !== "registered") {
@@ -655,7 +660,7 @@ describe("Tier CR — inspection describes without running", () => {
     // Importing this would throw at module scope; inspection must not.
     yield* writeTextFile(join(dir, "Widget.ts"), 'throw new Error("imported!");\n');
 
-    const info = yield* inspectComponent({ name: "Widget", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Widget", includes: [dir] });
     expect(info.kind).toBe("function");
     expect(info.kind === "function" && info.origin.kind === "repository" && info.origin.path).toBe(
       join(dir, "Widget.ts"),
@@ -679,7 +684,7 @@ describe("Tier CR — inspection describes without running", () => {
       ].join("\n"),
     );
 
-    const info = yield* inspectComponent({ name: "Widget", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Widget", includes: [dir] });
     expect(info.kind).toBe("markdown");
     if (info.kind === "markdown") {
       expect(Object.keys((info.props.properties ?? {}) as Record<string, unknown>)).toEqual([
@@ -690,7 +695,7 @@ describe("Tier CR — inspection describes without running", () => {
 
   it("CR29: an unresolved name inspects to where it looked", function* () {
     const dir = yield* useFixture();
-    const info = yield* inspectComponent({ name: "Absent", componentDirs: [dir] });
+    const info = yield* inspectComponent({ name: "Absent", includes: [dir] });
     expect(info.kind).toBe("unresolved");
     expect(info.kind === "unresolved" && info.searched).toEqual([dir]);
   });
@@ -712,9 +717,7 @@ describe("Tier CR — selection is journaled", () => {
   function runOn(dir: string, stream: InMemoryStream): Operation<Json> {
     return scoped(function* () {
       yield* useHostFiles();
-      return yield* collect(
-        yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
-      );
+      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
     });
   }
 
@@ -781,9 +784,7 @@ describe("Tier CR — selection is journaled", () => {
   ): Operation<Json> {
     return scoped(function* () {
       yield* registerComponents(registrations);
-      return yield* collect(
-        yield* execute({ path: join(dir, "doc.md"), stream, componentDirs: [dir] }),
-      );
+      return yield* collect(yield* execute({ path: join(dir, "doc.md"), stream, includes: [dir] }));
     });
   }
 
@@ -815,7 +816,7 @@ describe("Tier CR — selection is journaled", () => {
           yield* execute({
             path: join(dir, "doc.md"),
             stream: yield* partial(stream),
-            componentDirs: [dir],
+            includes: [dir],
           }),
         );
       }),
@@ -881,6 +882,88 @@ describe("Tier CR — selection is journaled", () => {
         }
       });
       expect(thrown).toBeInstanceOf(ComponentRegistrationError);
+    }
+  });
+});
+
+/**
+ * The retired spellings, composed from fragments rather than written out, so
+ * proving their absence does not itself leave an occurrence of the name this
+ * rename removed.
+ */
+type RetiredOption = `${"component"}${"Dirs"}`;
+const RETIRED_OPTION = `${"component"}${"Dirs"}`;
+const RETIRED_EXPORT = ["DEFAULT", "COMPONENT", "DIRS"].join("_");
+
+type DeclaresKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
+
+/**
+ * The public option surfaces, checked by the compiler rather than at runtime:
+ * `deno test` type-checks this file, so a reintroduced alias makes one of the
+ * `false` literals unassignable and fails the suite instead of passing quietly.
+ */
+const OPTION_SURFACES: [
+  DeclaresKey<ExecuteSettings, "includes">,
+  DeclaresKey<ExecuteSettings, RetiredOption>,
+  DeclaresKey<SelectOptions, "includes">,
+  DeclaresKey<SelectOptions, RetiredOption>,
+  DeclaresKey<InspectComponentOptions, "includes">,
+  DeclaresKey<InspectComponentOptions, RetiredOption>,
+] = [true, false, true, false, true, false];
+
+/** Options assembled the way an untyped JavaScript caller would assemble them. */
+function untypedOptions(extra: Record<string, unknown>, options: SelectOptions): SelectOptions {
+  return Object.assign({}, extra, options);
+}
+
+describe("Tier CR — includes are the configured contribution to the search path", () => {
+  it("CR35: execution, selection and inspection declare includes and no retired member", function* () {
+    expect(OPTION_SURFACES).toEqual([true, false, true, false, true, false]);
+  });
+
+  it("CR36: DEFAULT_INCLUDES is the exported default and the retired constant is gone", function* () {
+    expect(DEFAULT_INCLUDES).toEqual(["components", "."]);
+
+    expect(Object.keys(selectModule)).toContain("DEFAULT_INCLUDES");
+    expect(Object.keys(selectModule)).not.toContain(RETIRED_EXPORT);
+    expect(Object.keys(core)).toContain("DEFAULT_INCLUDES");
+    expect(Object.keys(core)).not.toContain(RETIRED_EXPORT);
+  });
+
+  it("CR37: an omitted includes searches the defaults, an empty one searches nothing", function* () {
+    const omitted = yield* selectComponent("AbsentByDefault", {
+      registry: yield* currentRegistry(),
+    });
+    expect(omitted.kind).toBe("unresolved");
+    if (omitted.kind === "unresolved") {
+      expect(omitted.searched).toEqual([...DEFAULT_INCLUDES]);
+      // The reported list is this selection's own, so reading it cannot edit
+      // the default every later selection falls back to.
+      omitted.searched.push("smuggled");
+      expect(DEFAULT_INCLUDES).toEqual(["components", "."]);
+    }
+
+    // An explicitly empty contribution is not absence: `??` keeps it, where
+    // `||` would widen it back to the defaults.
+    const empty = yield* select("AbsentByDefault", []);
+    expect(empty.kind).toBe("unresolved");
+    if (empty.kind === "unresolved") {
+      expect(empty.searched).toEqual([]);
+    }
+  });
+
+  it("CR38: an unknown retired member is not read as configuration", function* () {
+    const dir = yield* useFixture();
+    yield* writeTextFile(join(dir, "Widget.md"), "from disk\n");
+
+    const selection = yield* selectComponent(
+      "Widget",
+      untypedOptions({ [RETIRED_OPTION]: [dir] }, { registry: yield* currentRegistry() }),
+    );
+
+    expect(selection.kind).toBe("unresolved");
+    if (selection.kind === "unresolved") {
+      expect(selection.searched).toEqual([...DEFAULT_INCLUDES]);
     }
   });
 });

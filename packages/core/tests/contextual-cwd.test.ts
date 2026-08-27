@@ -115,7 +115,7 @@ function run(fixture: Fixture): Operation<Json> {
       yield* execute({
         path: join(fixture.root, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [fixture.root],
+        includes: [fixture.root],
       }),
     );
     return displayed;

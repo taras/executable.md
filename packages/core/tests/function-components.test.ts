@@ -76,7 +76,7 @@ function runObserved(dir: string): Operation<ObservedRun> {
       yield* execute({
         path: path.join(dir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [path.join(dir, "components"), dir],
+        includes: [path.join(dir, "components"), dir],
       }),
     );
     return { output: String(output), observed };
@@ -92,7 +92,7 @@ function said(dir: string, stream: InMemoryStream = new InMemoryStream()): Opera
     const execution = yield* execute({
       path: path.join(dir, "doc.md"),
       stream,
-      componentDirs: [path.join(dir, "components"), dir],
+      includes: [path.join(dir, "components"), dir],
     });
     const result = yield* execution;
     return result.ok ? String(result.value) : result.error.message;
@@ -326,7 +326,7 @@ describe("Tier FC — Function components", () => {
     const execution = yield* execute({
       path: path.join(tmpDir, "doc.md"),
       stream: new InMemoryStream(),
-      componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      includes: [path.join(tmpDir, "components"), tmpDir],
     });
     const subscription = yield* execution.output;
     let next = yield* subscription.next();
@@ -440,14 +440,14 @@ describe("Tier FC — Function components", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     const output2 = yield* collect(
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
     expect(output1).toContain("STATIC-OUTPUT");
@@ -729,7 +729,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -743,7 +743,7 @@ describe("Tier O — Eval scope hierarchy", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream: new InMemoryStream(partial),
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -775,7 +775,7 @@ describe("Tier RT — Retained resources under durability", () => {
         yield* execute({
           path: path.join(dir, "doc.md"),
           stream,
-          componentDirs: [path.join(dir, "components"), dir],
+          includes: [path.join(dir, "components"), dir],
         }),
       );
     });

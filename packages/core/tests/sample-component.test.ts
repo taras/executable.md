@@ -120,7 +120,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -166,7 +166,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -207,7 +207,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -233,7 +233,7 @@ describe("Tier SC — Sample component", () => {
     const execution = yield* execute({
       path: path.join(tmpDir, "doc.md"),
       stream,
-      componentDirs: [path.join(tmpDir, "components"), tmpDir],
+      includes: [path.join(tmpDir, "components"), tmpDir],
     });
     const result = yield* execution;
 
@@ -270,7 +270,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -281,7 +281,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -314,7 +314,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -353,7 +353,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -400,7 +400,7 @@ describe("Tier SC — Sample component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -736,7 +736,7 @@ describe("Tier IN — Instruction component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -769,7 +769,7 @@ describe("Tier IN — Instruction component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -811,7 +811,7 @@ describe("Tier IN — Instruction component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -843,7 +843,7 @@ describe("Tier IN — Instruction component", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -902,7 +902,7 @@ describe("Tier AG — Agent component pattern", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 
@@ -982,7 +982,7 @@ describe("Tier AG — Agent component pattern", () => {
       yield* execute({
         path: path.join(tmpDir, "doc.md"),
         stream,
-        componentDirs: [path.join(tmpDir, "components"), tmpDir],
+        includes: [path.join(tmpDir, "components"), tmpDir],
       }),
     );
 

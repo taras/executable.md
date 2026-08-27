@@ -14,7 +14,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { ensure, until } from "effection";
 import type { Operation } from "effection";
-import { readTextFile, rm, writeTextFile } from "@effectionx/fs";
+import { ensureDir, readTextFile, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,12 @@ const VALUE_DOC = [
   "",
   "<Return value={{ ok: true }} />",
 ].join("\n");
+
+/**
+ * The flag this rename retired, composed from fragments so the migration audit
+ * finds no occurrence of it in a case whose job is to prove it carries nothing.
+ */
+const RETIRED_FLAG = `--component${"-dir"}`;
 
 /** A directory holding the given files, removed when the test ends. */
 function* useWorkspace(files: Record<string, string>): Operation<string> {
@@ -201,10 +207,50 @@ describe(
       const implicit = yield* runCli(["-e", "<Greeting />\n", "--raw"], { cwd: root }).expect();
       expect(implicit.stdout).toContain("Hello from a component");
 
-      const explicit = yield* runCli(["-e", "<Greeting />\n", "--component-dir", ".", "--raw"], {
+      const explicit = yield* runCli(["-e", "<Greeting />\n", "--include", ".", "--raw"], {
         cwd: root,
       }).expect();
       expect(explicit.stdout).toContain("Hello from a component");
+    });
+
+    it("IE25: repeated includes are searched in caller order, replacing the defaults", function* () {
+      const root = yield* useWorkspace({ "Greeting.md": "from the default path\n" });
+      for (const dir of ["first", "second"]) {
+        yield* ensureDir(join(root, dir));
+        yield* writeTextFile(join(root, dir, "Greeting.md"), `from the ${dir} include\n`);
+      }
+
+      const { stdout } = yield* runCli(
+        ["-e", "<Greeting />\n", "--include", "first", "--include", "second", "--raw"],
+        { cwd: root },
+      ).expect();
+
+      // Argv order is the search order…
+      expect(stdout).toContain("from the first include");
+      expect(stdout).not.toContain("from the second include");
+      // …and an explicit value replaces the defaults rather than extending
+      // them, so the candidate sitting on the default path never competes.
+      expect(stdout).not.toContain("from the default path");
+    });
+
+    /**
+     * The clean break, observed where a caller would hit it. The retired flag
+     * is not an option this CLI defines, so it contributes no directory and
+     * the run searches the defaults — which is what an alias would hide.
+     */
+    it("IE26: the retired flag contributes no include", function* () {
+      const root = yield* useWorkspace({});
+      yield* ensureDir(join(root, "first"));
+      yield* writeTextFile(join(root, "first", "Greeting.md"), "from the first include\n");
+
+      const { code, stdout, stderr } = yield* runCli(
+        ["-e", "<Greeting />\n", RETIRED_FLAG, "first", "--raw"],
+        { cwd: root },
+      ).join();
+
+      expect(code).toBe(1);
+      expect(stdout).not.toContain("from the first include");
+      expect(stderr).toContain("Cannot resolve component: Greeting (searched: components, .)");
     });
 
     it("IE18: running an inline document leaves the directory as it was", function* () {

@@ -122,7 +122,7 @@ function runWith(
     if (install) {
       yield* install();
     }
-    return yield* collect(yield* execute({ path, stream, componentDirs: [fixture.workspace] }));
+    return yield* collect(yield* execute({ path, stream, includes: [fixture.workspace] }));
   });
 }
 

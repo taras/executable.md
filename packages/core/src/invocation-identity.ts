@@ -372,7 +372,7 @@ export function isFormDispatcher(fn: unknown): boolean {
  *
  * Built by whichever copy of core is performing the execution — canonical
  * definition construction calls this, never the component module — so a
- * component loaded from disk through `--component-dir` is wrapped by the copy
+ * component loaded from disk through `--include` is wrapped by the copy
  * that minted the invocation. That is what makes the compiled binary's embedded
  * defaults and a repository-loaded copy behave the same.
  *

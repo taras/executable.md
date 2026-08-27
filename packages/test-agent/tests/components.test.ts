@@ -40,7 +40,7 @@ interface RunOptions {
    * The default dirs resolve against the process cwd, not the temp project, so
    * a fixture component is invisible without this.
    */
-  componentDirs?: string[];
+  includes?: string[];
   /** Mutable contextual cwd served to the document. */
   cwdRef?: { value: string; flipTo: string };
 }
@@ -93,8 +93,8 @@ function* runDoc(files: Record<string, string>, options?: RunOptions): Operation
         {
           path: path.join(dir, "doc.md"),
           stream: new InMemoryStream(),
-          ...(options?.componentDirs
-            ? { componentDirs: options.componentDirs.map((d) => path.join(dir, d)) }
+          ...(options?.includes
+            ? { includes: options.includes.map((d) => path.join(dir, d)) }
             : {}),
         },
         [{ components: agentIdentityComponents() }],
@@ -546,7 +546,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         "doc.md": "<TestAgent>\nbody\n</TestAgent>\n",
         "components/TestAgent.md": withProps("LOCAL TEST AGENT"),
       },
-      { componentDirs: ["components", "."] },
+      { includes: ["components", "."] },
     );
     expect(agentRun.output).toContain("LOCAL TEST AGENT");
 
@@ -563,7 +563,7 @@ describe("Tier TV — TestAgent components", { sanitizeOps: false, sanitizeResou
         ].join("\n"),
         "components/TestAgent/Scenario.md": withProps("LOCAL SCENARIO"),
       },
-      { componentDirs: ["components", "."] },
+      { includes: ["components", "."] },
     );
     expect(scenarioRun.output).toContain("LOCAL SCENARIO");
   });

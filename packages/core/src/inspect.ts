@@ -112,7 +112,7 @@ export interface InspectComponentOptions {
   /** The name a document would write. */
   name: string;
   /** Where to look, matching the search path execution uses. */
-  componentDirs?: string[];
+  includes?: string[];
 }
 
 /**
@@ -145,9 +145,9 @@ export type ComponentInfo =
  * journal.
  */
 export function* inspectComponent(options: InspectComponentOptions): Operation<ComponentInfo> {
-  const { name, componentDirs } = options;
+  const { name, includes } = options;
   const registry = yield* Component.operations.registry;
-  const selected = yield* selectComponent(name, { componentDirs, registry });
+  const selected = yield* selectComponent(name, { includes, registry });
 
   switch (selected.kind) {
     case "structural":

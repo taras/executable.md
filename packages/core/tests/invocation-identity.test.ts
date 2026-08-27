@@ -107,7 +107,7 @@ function run(
   source: string,
   components: readonly IdentityComponent[],
   install?: () => Operation<void>,
-  componentDirs: readonly string[] = [],
+  includes: readonly string[] = [],
 ): Operation<void> {
   return scoped(function* () {
     const installation: ExecutionInstallation = {
@@ -119,7 +119,7 @@ function run(
         {
           ...inlineSource(source),
           stream: new InMemoryStream(),
-          componentDirs: [...componentDirs],
+          includes: [...includes],
         },
         [installation],
       ),
@@ -131,7 +131,7 @@ function run(
 function rendered(
   source: string,
   components: readonly IdentityComponent[],
-  componentDirs: readonly string[] = [],
+  includes: readonly string[] = [],
 ): Operation<string> {
   return scoped(function* () {
     const settled = yield* collect(
@@ -139,7 +139,7 @@ function rendered(
         {
           ...inlineSource(source),
           stream: new InMemoryStream(),
-          componentDirs: [...componentDirs],
+          includes: [...includes],
         },
         [{ components }],
       ),

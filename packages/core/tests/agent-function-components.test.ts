@@ -144,7 +144,7 @@ function* runDoc(
       {
         path: docPath,
         stream: new InMemoryStream(),
-        componentDirs: [dir],
+        includes: [dir],
       },
       [{ components: agentIdentityComponents() }],
     );
@@ -351,7 +351,7 @@ describe("Tier AF — registered defaults a document can replace", () => {
   it("AF13: each name resolves to core's registration when nothing is on disk", function* () {
     yield* installAgentComponents();
     for (const name of names) {
-      const info = yield* inspectComponent({ name, componentDirs: [] });
+      const info = yield* inspectComponent({ name, includes: [] });
       expect(info.kind).toBe("registered");
       expect(
         info.kind === "registered" && info.origin.kind === "registered" && info.origin.origin,
@@ -364,7 +364,7 @@ describe("Tier AF — registered defaults a document can replace", () => {
     // It names durable work after its own invocation, so it exists only where
     // an execution was told about it — a document run by a host that declares
     // none has no `<Session>` at all, which is the safe direction.
-    const info = yield* inspectComponent({ name: "Session", componentDirs: [] });
+    const info = yield* inspectComponent({ name: "Session", includes: [] });
     expect(info.kind).toBe("unresolved");
   });
 

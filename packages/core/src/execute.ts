@@ -113,7 +113,7 @@ import { daemonFactory } from "./modifiers/daemon.ts";
 import { ephemeralFactory } from "./modifiers/ephemeral.ts";
 import { serviceFactory } from "./modifiers/service.ts";
 import {
-  DEFAULT_COMPONENT_DIRS,
+  DEFAULT_INCLUDES,
   effectiveRegistry,
   selectComponent,
   unresolvedMessage,
@@ -151,7 +151,7 @@ export interface ExecuteSettings {
   props?: Record<string, Json>;
 
   /** Component search directories (default: ["./components", "./"]) */
-  componentDirs?: string[];
+  includes?: string[];
 
   /** Custom modifier factories to register */
   modifiers?: Record<string, ModifierFactory>;
@@ -358,7 +358,7 @@ function* durableImportComponent(
       }
 
       const selected = yield* selectComponent(name, {
-        componentDirs: searchPaths,
+        includes: searchPaths,
         registry,
         ...(bundle === undefined ? {} : { workflow: bundle }),
       });
@@ -1912,7 +1912,7 @@ function* executeDocument(
   const {
     stream,
     props = {},
-    componentDirs = [...DEFAULT_COMPONENT_DIRS],
+    includes = [...DEFAULT_INCLUDES],
     modifiers: customModifiers = {},
     secretDetection,
     retainProcessOutput = true,
@@ -2040,7 +2040,7 @@ function* executeDocument(
             const definition = yield* durableImportComponent(
               name,
               name === "__root__" ? root : undefined,
-              componentDirs,
+              includes,
               registered,
               position,
               bundle,

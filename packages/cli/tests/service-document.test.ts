@@ -62,7 +62,7 @@ function* runDocument(stream: InMemoryStream): Operation<string> {
         yield* execute({
           path: "doc.md",
           stream,
-          componentDirs: ["components", "."],
+          includes: ["components", "."],
         }),
       );
     }),

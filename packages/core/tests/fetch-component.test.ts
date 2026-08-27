@@ -162,7 +162,7 @@ function run(
   source: string,
   options: {
     stream?: InMemoryStream;
-    componentDirs?: string[];
+    includes?: string[];
     props?: Record<string, string>;
   } = {},
 ): Operation<Run> {
@@ -175,7 +175,7 @@ function run(
         yield* execute({
           path,
           stream,
-          ...(options.componentDirs === undefined ? {} : { componentDirs: options.componentDirs }),
+          ...(options.includes === undefined ? {} : { includes: options.includes }),
           ...(options.props === undefined ? {} : { props: options.props }),
         }),
       );
@@ -881,7 +881,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     const shadowed = yield* scoped(function* () {
       yield* useCeiling(performed);
       return yield* run(workspace, doc(`<Fetch url="${URL_ONE}" />`), {
-        componentDirs: [components],
+        includes: [components],
       });
     });
 
@@ -894,7 +894,7 @@ describe("Tier FE — who is allowed to perform the request", () => {
     yield* rm(join(components, "Fetch.md"));
     const probe = yield* useAnswer({ status: 200, body: "core" });
     const core = yield* run(workspace, doc(`<Fetch url="${URL_ONE}" />`), {
-      componentDirs: [components],
+      includes: [components],
     });
     expect(core.failure).toBe(undefined);
     expect(probe.performed).toEqual([{ url: URL_ONE, init: { method: "GET", headers: {} } }]);

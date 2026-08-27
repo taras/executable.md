@@ -179,7 +179,7 @@ in order: its own directory, the target root, then the configured component
 directories. A repeated directory keeps its first position. A component
 therefore resolves beside the test that invokes it however deep in the suite it
 sits, and two directories may hold same-named components without either
-reaching the other. No `--component-dir` is needed, and the working directory
+reaching the other. No `--include` is needed, and the working directory
 does not change.
 
 A single-document target keeps the configured component directories exactly.

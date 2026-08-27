@@ -91,7 +91,7 @@ function run(
         yield* execute({
           path,
           stream: options.stream ?? new InMemoryStream(),
-          componentDirs: [workspace],
+          includes: [workspace],
         }),
       );
       return { output: String(output), delegated };

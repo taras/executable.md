@@ -57,7 +57,7 @@ function* run(
   extra: readonly ExecutionInstallation[] = [],
 ): Operation<Json> {
   return yield* collect(
-    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, componentDirs: [] }, [
+    yield* executeInstalled({ ...retainedSource(ROOT_PATH, source), stream, includes: [] }, [
       workflowBundleInstallation(components),
       ...extra,
     ]),

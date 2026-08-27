@@ -59,7 +59,7 @@ export interface RunOptions {
   /** Extra files beside the document. */
   files?: Record<string, string>;
   /** Component search directories, for repository-override cases. */
-  componentDirs?: string[];
+  includes?: string[];
   /**
    * Read documents and components from the real filesystem instead of a stub.
    *
@@ -143,7 +143,7 @@ export function* runWebFormDoc(source: string, options: RunOptions = {}): Operat
     const execution = yield* execute({
       path: options.realFiles ? source : "README.md",
       stream,
-      componentDirs: options.componentDirs,
+      includes: options.includes,
     });
 
     // Every test here is about what a failure did or did not cause, so the

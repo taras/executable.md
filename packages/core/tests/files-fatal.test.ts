@@ -92,7 +92,7 @@ function run(dir: string, source: string, install?: () => Operation<void>): Oper
       const execution = yield* execute({
         path: join(dir, "doc.md"),
         stream: new InMemoryStream(),
-        componentDirs: [dir],
+        includes: [dir],
       });
       try {
         chunks.push(String(yield* collect(execution)));

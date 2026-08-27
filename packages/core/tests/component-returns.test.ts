@@ -46,7 +46,7 @@ interface Run {
 function* runExecution(options: {
   path: string;
   stream: DurableStream;
-  componentDirs?: string[];
+  includes?: string[];
   commands: string[];
 }): Operation<Run> {
   const { commands } = options;
@@ -61,7 +61,7 @@ function* runExecution(options: {
   const execution = yield* execute({
     path: options.path,
     stream: options.stream,
-    componentDirs: options.componentDirs,
+    includes: options.includes,
   });
   const result = yield* execution;
   const output = yield* forEach(function* (_chunk: string) {}, execution.output);
@@ -119,7 +119,7 @@ function runFixture(files: Record<string, string>): Operation<Run> {
     return yield* runExecution({
       path: path.join(dir, "doc.md"),
       stream: new InMemoryStream(),
-      componentDirs: [dir],
+      includes: [dir],
       commands: [],
     });
   });

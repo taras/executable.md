@@ -164,7 +164,7 @@ function runDocument(workspace: string, order: Order): Operation<string> {
     yield* useTempFileCompiler();
     yield* installAll(order);
     const output = yield* collect(
-      yield* executeInstalled({ path, stream: new InMemoryStream(), componentDirs: [workspace] }, [
+      yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
         { components: agentIdentityComponents() },
       ]),
     );
@@ -173,12 +173,12 @@ function runDocument(workspace: string, order: Order): Operation<string> {
 }
 
 /** What every registered name resolves to, under one installation order. */
-function resolveAll(order: Order, componentDirs: string[] = []): Operation<Map<string, string>> {
+function resolveAll(order: Order, includes: string[] = []): Operation<Map<string, string>> {
   return scoped(function* () {
     yield* installAll(order);
     const resolved = new Map<string, string>();
     for (const name of REGISTERED) {
-      resolved.set(name, describeOrigin(yield* inspectComponent({ name, componentDirs })));
+      resolved.set(name, describeOrigin(yield* inspectComponent({ name, includes })));
     }
     return resolved;
   });
@@ -280,13 +280,12 @@ describe("Tier XP — cross-package resolution", () => {
       yield* useTempFileCompiler();
       yield* installAll("test-agent-first");
       return {
-        info: yield* inspectComponent({ name: "Each", componentDirs: [workspace] }),
+        info: yield* inspectComponent({ name: "Each", includes: [workspace] }),
         output: String(
           yield* collect(
-            yield* executeInstalled(
-              { path, stream: new InMemoryStream(), componentDirs: [workspace] },
-              [{ components: agentIdentityComponents() }],
-            ),
+            yield* executeInstalled({ path, stream: new InMemoryStream(), includes: [workspace] }, [
+              { components: agentIdentityComponents() },
+            ]),
           ),
         ),
       };

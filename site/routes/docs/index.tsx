@@ -138,7 +138,7 @@ export default define.page(function GettingStarted({ url }) {
           — print journal entries to stderr while running.
         </li>
         <li>
-          <code>--component-dir</code>{" "}
+          <code>--include</code>{" "}
           — add component search directories (defaults to{" "}
           <code>components</code> and <code>.</code>).
         </li>

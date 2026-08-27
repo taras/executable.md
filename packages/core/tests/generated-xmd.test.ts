@@ -206,7 +206,7 @@ function evaluate(
   candidate: GeneratedXmdRequest,
   options: {
     stream?: InMemoryStream;
-    componentDirs?: readonly string[];
+    includes?: readonly string[];
     installations?: readonly ExecutionInstallation[];
     /** A later parent durable effect, offered by the same owning preparation. */
     after?: () => Operation<void>;
@@ -225,7 +225,7 @@ function evaluate(
       {
         ...retainedSource(ROOT_PATH, ROOT_SOURCE),
         stream,
-        componentDirs: [...(options.componentDirs ?? [])],
+        includes: [...(options.includes ?? [])],
       },
       [installation, ...(options.installations ?? [])],
     );
@@ -437,7 +437,7 @@ describe("Tier GX — only pinned identities execute", () => {
         pinnedFetch([ADMITTED_REQUEST]),
         probe(),
       ]),
-      { componentDirs: [workspace] },
+      { includes: [workspace] },
     );
 
     expect(attempt.failure).toBe(undefined);
@@ -452,7 +452,7 @@ describe("Tier GX — only pinned identities execute", () => {
     yield* writeTextFile(join(workspace, "Helper.md"), "the repository component ran.\n");
 
     const attempt = yield* evaluate(request("<Helper />\n", [probe()]), {
-      componentDirs: [workspace],
+      includes: [workspace],
     });
 
     expect(attempt.failure).toContain("did not admit");
@@ -738,7 +738,7 @@ describe("Tier GX — what the run keeps", () => {
         });
         yield* collect(
           yield* executeInstalled(
-            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, componentDirs: [] },
+            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
             [installation],
           ),
         );
@@ -1126,7 +1126,7 @@ describe("Tier GX — a resumed run is held to the ceilings it was admitted unde
         });
         yield* collect(
           yield* executeInstalled(
-            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, componentDirs: [] },
+            { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream: holding, includes: [] },
             [installation],
           ),
         );
@@ -1870,7 +1870,7 @@ describe("Tier GXC — a name is not a form", () => {
             mutations: [pinnedFileWrite(), nest(), pinnedFileDelete()],
           },
         ),
-        { componentDirs: [workspace] },
+        { includes: [workspace] },
       );
       return { evaluated, files: [...files.performed] };
     });

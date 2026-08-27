@@ -112,7 +112,7 @@ function evaluate(
       );
     });
     const execution = yield* executeInstalled(
-      { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream, componentDirs: [] },
+      { ...retainedSource(ROOT_PATH, ROOT_SOURCE), stream, includes: [] },
       [installation],
     );
     const result = yield* execution;
