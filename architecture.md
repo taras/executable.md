@@ -3057,14 +3057,67 @@ Configuration is installed before the child's root is imported. The harness
 reads its own children in two passes: a scan that expands the declaration prefix
 and stops where assertion content begins, and — after the child is over — the
 ordinary pass in which the declarations answer with what they observed and the
-assertions run. A declaration is recognized by the definition it resolves to, so
-a repository component of the same name is an ordinary component and the scan
-ends where it is written.
+assertions run. A component declaration is recognized by the definition it
+resolves to, so a repository component of the same name is ordinary content and
+the scan ends where it is written. A structural declaration is recognized only
+where canonical grammar owns it; a same-named repository file cannot become
+one.
 
 Journal configuration and journal observation are separate. A run without a
 diagnostic declaration retains nothing and allocates no journal because output
 was displayed; observation grants no retention, and asking to observe a journal
 nothing selected is malformed configuration that fails before the root import.
+
+A `run` child may receive deterministic Agent behavior and elicitation answers
+through two more declarations in that same prefix. `<TestAgent>` contains only
+its `<TestAgent.Scenario>` declarations there, and `<Answers>` contains only its
+`<Answer>` matchers. Each wrapper may appear at most once for one `<Execution>`.
+They reuse the existing TestAgent scenario and Answers matcher contracts; this
+placement changes where those declarations apply, not what either language
+means. `<Answers delegate={true}>` is refused in this position: a test that
+supplied answers does not fall through to the run profile's live WebForm.
+The TestAgent declaration is recognized only when ordinary resolution selected
+the package's exact definition; a repository `TestAgent` is ordinary assertion
+content and configures nothing. Answers is core's reserved structural syntax,
+so a same-named repository file never becomes its declaration.
+
+The declarations belong to that exact child. They are parsed and detached
+before the host-profile request is issued, installed before the root import,
+and discarded only after the child and its provider teardown finish. A sibling
+`<Execution>` receives a fresh TestAgent partition and a fresh answer set, even
+under the same canonical `<Test>`; a session never continues from one child
+into another. Cancelling the owning test halts the child and waits for both
+providers to finish before any assertion or sibling proceeds.
+
+What crosses the boundary is frozen test data: normalized scenario
+declarations, behavior-document sources and answer matchers. No Agent provider
+factory, Elicitation middleware, Context value, Api handler,
+`ExecutionInstallation`, controller or scope crosses it. The trusted host
+profile consumes that exact data and constructs the deterministic providers
+inside the isolated child scope. Public host-profile middleware may inspect or
+refuse the immutable request on its existing terms; it cannot replace the
+configuration, construct a provider or publish a child outcome.
+
+A TestAgent declaration installs the same controlled Agent provider, native
+launcher and complete seven-word Agent surface that `<TestAgent>` supplies to
+an ordinary test, including the execution-declared `<Session>` identity. An
+Answers declaration installs its matcher provider nearer than the run profile's
+WebForm and never delegates an unmatched request to it. Without either
+declaration, the run profile behaves exactly as it does without this feature;
+nothing installed in the outer test crosses the isolation boundary implicitly.
+
+These declarations do not reserve or seal any child component name. The child
+keeps ordinary `host="run"` resolution: repository components may shadow
+`Session`, `Prompt` and the other Agent defaults. The declarations configure
+the provider the selected first-party components can reach; they do not force
+those components to be selected. A host that needs a closed first-party
+orchestration establishes that separately as part of that host's own execution
+contract.
+
+Scenario source, provider-private behavior journals and answer configuration do
+not enter the child journal. A selected first-party Prompt or Elicit still
+records its ordinary durable result through the child's production journal and
+secret gate, so replay reaches neither deterministic provider.
 
 ### Trusted host orchestration
 
@@ -3354,6 +3407,7 @@ Status is measured against main.
 | foreground command routing and retention | forwards a child's channels live, captures stdout for a `<Let as>` region, and retains output only when the host asked for a record | built on the #441 stack |
 | `exec as="name"` | binds one command's settled outcome — exit status, stdout and stderr — as an ordinary mutable binding; the block displays neither channel, renders nothing, and a nonzero status raises nothing. Only the built-in exec terminal and the built-in `timeout` may compose one, authorized by factory identity rather than by registered name, and asked for through a capability-backed request public middleware composes around but cannot issue, claim twice or answer | built on the #447 stack |
 | testing harness (`<Execution>`) | runs another document as a real root under a production host profile, authorized by canonical `<Test>` alone: declarations installed before the root import, child output displayed progressively and collected only when asked, journal retention selected independently of observation, and the outcome published by the invocation's own terminal through a request public middleware composes around but cannot answer | built on the #454 stack for `host="run"`; the workflow profile and `<WorkflowRun>` are unbuilt, and a host that offers no workflow profile refuses them |
+| nested run-profile Agent and elicitation declarations | lets one `<Execution host="run">` declare one child-scoped `<TestAgent>` scenario set and one non-delegating `<Answers>` matcher set; only frozen test data crosses the harness request, the trusted host constructs both providers inside the isolated child, siblings share no session or provider state, ordinary component shadowing remains in force, and the child journal retains only the selected Prompt and Elicit components' ordinary results | defined, unbuilt (#641) |
 | `Config` run deadline / exec default / Fetch default | three independently owned contextual timeouts, absent unless configured, each read by exactly one consumer | built on main |
 | native session launch (`<Session.Launch>` / `launchAgentSession()`) | prepares one durable coding-agent session from the rendered body of `<Session.Launch>` and hands the provider's native UI the terminal for that exact session, then continues the document after it exits. The body renders completely first and only what it rendered crosses as the instruction layer; the launch performs no model turn; the run's one foreground-terminal lease is taken before an agent is resolved, so a host with no terminal refuses without probing for an installed CLI. A session is constructed once, by one of two mechanisms, and its create-once construction route says which. Where the provider returns the identity, the ACPX provider creates the session, installs the layer at creation, releases ACP ownership before the spawn, and marks its handle stale so a later `<Prompt>` reattaches. Where the adapter names its own sessions, it allocates the identity inside ownership before any process exists, the native process creates the session under that name from a private mode-0600 instruction file, and ACP creates nothing — the instruction text reaches neither argv nor environment, and the file is removed on success, failure and cancellation alike while ownership is still held. Neither route converts into the other: an eager `<Session>` publishes ACP-first before it establishes anything and keeps that account even if establishing fails, and a launch meeting it refuses before an identity exists. A `<Session>` or `<Prompt>` meeting a bound client-allocated route attaches under the route's exact identity; a legacy unbound route or an unavailable attachment capability refuses before a turn and creates no substitute conversation. Phases are retained as `agent_session_launch` records under one expansion identity — `prepared` before ownership is released, then `detached`, then `exited` — so a completed replay launches nothing, a replay holding only `prepared` proves the handoff never began and may still create under the retained identity, and one holding `detached` resumes and never falls back. The public route carries an opaque one-use launch request and answers nothing; authority to run and retain a phase is delivered to the installed provider directly, so neither a returned completion nor a rebuilt request authors a launch. Every operation that can act on an advertised session takes exclusive ownership under one natural key first, through a coordinator the host built and passed in; contention refuses instead of queueing, and an owner that never proved it stopped leaves a recovery tombstone. A host that cannot say who owns a session refuses every advertised operation, and one that cannot say how a session was constructed additionally refuses an agent that names its own — before any provider effect. Every private setup or child-creation failure is normalized to `process-creation-failed` with fixed provider-owned text, carrying no path, argv, environment or host message. No launch path discards persistent provider state. A client-allocated session is bound to one executable build: the build is observed inside ownership before an identity is allocated, the binding is published with the V2 route and retained beside the prepared record, the native child runs the exact observed path in place of the launcher name, and every later create, resume, attachment and incomplete replay reobserves and compares before a process, an ensure or a turn. A `<Session>` or `<Prompt>` meeting a bound client-native route attaches to it: it reobserves the build, requires any retained provider arrangement to assert that same conversation, calls ensure with the route identity as `resumeSessionId`, and requires the provider to report that identity before a turn — refusing on missing capability, build drift, missing history or a differing assertion without creating a substitute conversation. ACP runtimes are partitioned by resolved agent command and binding, each handle is closed by the partition that created it, and a bound partition is torn down when its last handle closes. A legacy V1 client-native route keeps exactly the released native-only behavior and never attaches | built on the #517 stack, extended by the #519 and #561 stacks; Deno and the compiled binary assemble the host — coordinator, route store and executable observer — and Node and Bun keep the same advertised names while assembling none of it, so every advertised operation refuses before provider work; `claude` is advertised for native launch after passing the client-allocated gate at Claude Code 2.1.241 on macOS arm64 (#520) and separately for client-native attachment after passing the native-to-ACP marker gate (#561), and Codex remains unadvertised because nothing has run its provider-returned claims against an installed Codex; `Agent.AddDir` is unbuilt |
 | `<Fetch>` | performs one XMD-mediated HTTP read through contextual `API.Fetch`, admitting the whole request before transport, and retains the normalized request and the detached response as one `fetch` durable observation; capture decides whether a status is data or a failure, and the trusted host's destination ceiling sits below the component | built on the #456 stack; a generated fragment may name the pinned identity only for a request the trusted host stated exactly, on the #369 stack |

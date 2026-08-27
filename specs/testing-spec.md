@@ -344,9 +344,85 @@ allocates no journal because output was displayed. `<CollectJournal as="…">`
 binds a read-only snapshot of a journal the host already selected; it grants no
 retention, and declaring it without a selected journal is malformed.
 
-A declaration is recognized by the definition it resolves to, never by its name.
-A repository `CollectOutput.md` is chosen ahead of this package's, so it is an
-ordinary component: it renders where it is written and configures nothing.
+A component declaration is recognized by the definition it resolves to, never
+by its name. A repository `CollectOutput.md` is chosen ahead of this package's,
+so it is an ordinary component: it renders where it is written and configures
+nothing. A structural declaration is recognized only where core's grammar owns
+it; `<Answers>` below is reserved syntax, so a repository file never supplies
+that declaration.
+
+### Deterministic Agent and elicitation configuration
+
+A `run` child can receive deterministic Agent behavior and elicitation answers
+without changing the document it executes:
+
+```md
+<Test name="revises one generated document">
+  <Execution host="run" target="./prompt.md" as="run">
+    <TestAgent>
+      <TestAgent.Scenario
+        session="review"
+        src="./agents/review.md"
+      />
+    </TestAgent>
+
+    <Answers>
+      <Answer
+        template="Review this program:{?source}"
+        value={{ decision: "approve" }}
+      />
+    </Answers>
+
+    <AssertEquals actual={run.result.ok} expected={true} />
+  </Execution>
+</Test>
+```
+
+In this exact position, `<TestAgent>` and `<Answers>` are declarations rather
+than wrappers around assertion content. Each is a direct child of `<Execution>`
+in its declaration prefix and may appear at most once. The TestAgent declaration
+contains one or more direct `<TestAgent.Scenario>` children and no other content.
+The Answers declaration contains one or more direct `<Answer>` matchers and no
+other content. Their props, scenario documents, matcher templates, declaration
+order and validation keep the contracts in `test-agent-spec.md` and executable
+MDX §6.16.2. Both declarations belong only to `host="run"`; another host profile
+refuses them before creating a child.
+
+`<Answers delegate={true}>` is invalid as child configuration. An unmatched
+elicitation fails through the Answers matcher provider and never falls through
+to the `run` profile's WebForm. A malformed declaration, an unreadable behavior
+document, a duplicate scenario mapping or malformed answer data fails before
+the child root is imported. A well-formed answer that does not satisfy the
+child's eventual Elicit schema fails at that Elicit through ordinary final
+response validation.
+
+The configuration belongs to one exact `<Execution>`. Its TestAgent provider,
+session state, scenario journals and answer matchers are created inside that
+child's isolated scope and are torn down before its outcome is published. A
+sibling execution receives fresh state even when it repeats the same
+declarations under the same `<Test>`; a named session cannot continue across
+the boundary. The behavior-document path resolves from the outer test document
+under the TestAgent package's existing containment rule.
+
+Only detached declaration data enters the host-profile request. A test cannot
+send an Agent provider, Elicitation middleware, context, Api handler, execution
+installation, controller or scope to the child. The trusted host consumes the
+immutable data and installs the controlled providers before root import. Host
+middleware may observe or refuse that request and cannot alter the declarations
+or supply an outcome.
+
+With TestAgent configuration, the child receives the controlled provider,
+controlled native launcher and all seven ordinary Agent defaults, including
+`<Session>`. Normal run-profile component resolution still decides whether those
+defaults are selected: a repository `Prompt` or `Session` shadows the first-party
+default exactly as it does under `xmd run`. With no TestAgent declaration, no
+outer TestAgent provider crosses into the child. With no Answers declaration,
+the run profile retains its ordinary WebForm provider.
+
+Scenario configuration, provider-private behavior journals and declared answers
+are not child journal records. Prompts and elicitations the child actually
+performs retain their ordinary production results and replay without contacting
+either controlled provider.
 
 ### Authority
 

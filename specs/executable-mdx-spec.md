@@ -1173,6 +1173,15 @@ anywhere — so a repository `Test` selected ahead of core's default confers non
 of it, and neither does a name, a context, a prop or any middleware. The authored surface, the declarations that configure a child, and the
 outcome it publishes are specified in `specs/testing-spec.md`.
 
+Two declarations let a canonical test supply deterministic dependencies to one
+`run` child without editing the child source. A direct `<TestAgent>` declaration
+contains its scenario declarations; a direct `<Answers>` declaration contains
+its answer matchers. The host-profile request carries their detached data, not a
+provider or middleware, and the trusted host installs the controlled providers
+inside that child's isolated scope before root import. A sibling child receives
+fresh state. The child still uses ordinary run-profile component resolution, so
+repository components may shadow the first-party Agent defaults.
+
 `<PrintErrors>`'s authority is
 carried by execution-owned structure — the element hands it to the expansion of
 its own body, which carries it to everything the region causes: the branches,
@@ -7285,6 +7294,13 @@ without saying what the answer is would otherwise open a browser and wait for
 somebody who is not coming; with none installed it fails immediately, and an
 `<Answers>` region (§6.16.2) is how a test says what the answer is.
 
+A nested `host="run"` child is a run profile, so without explicit child
+configuration it retains that profile's WebForm provider. One `<Answers>` in the
+declaration prefix of the owning `<Execution>` instead supplies a
+non-delegating matcher provider for that child alone. An unmatched request fails
+there and never opens the form; a sibling execution receives a fresh matcher
+set.
+
 The elicitation path is also callable by a host directly — `elicit({ message,
 schema })`, or the `prepareElicitation`/`runPreparedElicitation` split when the
 caller needs compilation to happen before it renders its message. That is what
@@ -7298,6 +7314,13 @@ expand, and a registered component only ever sees `content()` — rendered text,
 by which point a matcher's `value` expression and its own position are gone. A
 repository file named `Answers.md` therefore never stands in for one, and could
 not implement matcher semantics if it did.
+
+The ordinary placement wraps the region whose elicitations it answers. Its one
+other placement is as a direct declaration in an `<Execution host="run">`
+declaration prefix (`testing-spec.md`). There it contains only one or more
+`<Answer>` matchers, configures the isolated child rather than the assertion
+body, and may appear once. `delegate` must be absent or `false`: child
+configuration never falls through to the run profile's live WebForm.
 
 A component that elicits internally asks whoever the host's provider reaches.
 Sometimes the surrounding document already knows the answer — a workflow
@@ -7378,6 +7401,13 @@ nothing but matchers — it could never answer anything), both template forms at
 once, a template that will not parse, a missing `value`, and a `value` that is
 not JSON. A region whose matchers are malformed does not expand its body: one
 that cannot be trusted to answer should not run something that will ask.
+
+The direct `<Execution>` declaration is the exception to the ordinary
+"nothing but matchers" refusal: its only purpose is to configure a child, so it
+requires matchers and permits no ordinary body. Malformed matcher configuration
+still fails before the child root imports. A structurally valid answer that does
+not satisfy the schema of the child's eventual `<Elicit>` fails at that
+invocation through the same final validation as any other provider answer.
 
 Replay restores recorded answers through the ordinary durability path, so
 matchers see nothing on replay and a region needs only what this run will
