@@ -33,6 +33,7 @@ import { Err } from "effection";
 import type { Operation } from "effection";
 import {
   Component,
+  documented,
   registerComponents,
   Execution,
   TestActivation,
@@ -47,10 +48,17 @@ import { boundary, record, Test, testing, TestFailureError } from "./test-api.ts
 import { requireCompleteTestingActivation } from "./activation.ts";
 import type { BoundaryOutcome, TestResult } from "./test-api.ts";
 import { readCompletedRun } from "./journal.ts";
-import { ASSERTION_PROPS, ASSERTIONS, assertionComponent, capturesFor } from "./assertions.ts";
+import {
+  ASSERTION_PROPS,
+  ASSERTIONS,
+  assertionComponent,
+  assertionContext,
+  assertionDescription,
+  capturesFor,
+} from "./assertions.ts";
 import { AssertThrows, ASSERT_THROWS_PROPS, createTestHandlers } from "./handlers.ts";
 import { Testing, TESTING_PROPS } from "./testing-component.ts";
-import { HARNESS_REGISTRATIONS } from "./execution-harness.ts";
+import { HARNESS_REGISTRATIONS, TESTING_ORIGIN } from "./execution-harness.ts";
 import {
   absorbTestFailure,
   RaisedSegmentError,
@@ -76,6 +84,70 @@ const TEST_TIMEOUT_MS = 20_000;
  * public `testing` boolean has registered what a test does without owning
  * anywhere for a result to go.
  */
+/**
+ * Everything this package makes resolvable, as plain declarations.
+ *
+ * Registration and activation are separate concerns, and this is registration
+ * alone: reading the list installs no handler, no execution middleware and no
+ * activation guard, so `xmd syntax` can describe the testing half of the `run`
+ * profile without a testing session existing. `installHandlers()` below
+ * registers exactly this list and arranges the operational half separately.
+ *
+ * `<Test>` is deliberately absent: that construct is core's, and what this
+ * package installs is what a test *does* (#441).
+ */
+export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
+  // Non-reserved defaults: a repository component of any of these names is
+  // chosen ahead of them, as it would be ahead of any other package's.
+  {
+    name: "Testing",
+    origin: TESTING_ORIGIN,
+    fn: Testing,
+    props: TESTING_PROPS,
+    ...documented({
+      description:
+        "Enables testing mode for its expanded subtree and reports the tests discovered " +
+        "inside it. A boundary that discovers no test fails, and a failing test inside one " +
+        "fails the execution.",
+      as: null,
+      context: "The Markdown expanded in testing mode.",
+    }),
+  },
+  {
+    name: "AssertThrows",
+    origin: TESTING_ORIGIN,
+    fn: AssertThrows,
+    props: ASSERT_THROWS_PROPS,
+    captures: ["message"],
+    ...documented({
+      description:
+        "Passes when expanding its content fails. The optional `message` operand constrains " +
+        "which failure counts.",
+      as: null,
+      context: "The Markdown expected to fail.",
+    }),
+  },
+  // The nested-execution harness. Registered like everything else here, and
+  // authoritative like nothing else here: each invocation asks canonical
+  // `<Test>` for the authority, so registering the name grants none of it and
+  // a repository component of the same name receives ordinary semantics.
+  ...HARNESS_REGISTRATIONS.map((registration) => ({ ...registration })),
+  // The table stays data: it names the comparison and the props each kind
+  // takes, and the registration is built from it rather than beside it.
+  ...[...ASSERTIONS.values()].map((assertion) => ({
+    name: assertion.name,
+    origin: TESTING_ORIGIN,
+    fn: assertionComponent(assertion),
+    props: ASSERTION_PROPS,
+    captures: capturesFor(assertion.kind),
+    ...documented({
+      description: assertionDescription(assertion),
+      as: null,
+      context: assertionContext(assertion.kind),
+    }),
+  })),
+];
+
 export function* installTestingComponents(options?: { verbose?: boolean }): Operation<void> {
   yield* installHandlers(createTestHandlers({ timeoutMs: TEST_TIMEOUT_MS }), options);
 }
@@ -145,33 +217,7 @@ export function* installHandlers(
     },
   });
 
-  // Non-reserved defaults: a repository component of either name is chosen
-  // ahead of these, as it would be ahead of any other package's.
-  const registrations: ComponentRegistration[] = [
-    { name: "Testing", origin: "@executablemd/testing", fn: Testing, props: TESTING_PROPS },
-    // The table stays data: it names the comparison and the props each kind
-    // takes, and the registration is built from it rather than beside it.
-    {
-      name: "AssertThrows",
-      origin: "@executablemd/testing",
-      fn: AssertThrows,
-      props: ASSERT_THROWS_PROPS,
-      captures: ["message"],
-    },
-    // The nested-execution harness. Registered like everything else here, and
-    // authoritative like nothing else here: each invocation asks canonical
-    // `<Test>` for the authority, so registering the name grants none of it and
-    // a repository component of the same name receives ordinary semantics.
-    ...HARNESS_REGISTRATIONS.map((registration) => ({ ...registration })),
-    ...[...ASSERTIONS.values()].map((assertion) => ({
-      name: assertion.name,
-      origin: "@executablemd/testing",
-      fn: assertionComponent(assertion),
-      props: ASSERTION_PROPS,
-      captures: capturesFor(assertion.kind),
-    })),
-  ];
-  yield* registerComponents(registrations);
+  yield* registerComponents(TESTING_REGISTRATIONS);
   yield* Execution.around({
     *execute([request], next) {
       // Fresh boundary collection per execution: outcomes reported by

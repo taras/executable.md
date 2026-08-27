@@ -9,7 +9,7 @@
  * that wants an answer without either component.
  */
 
-export { installWebComponents } from "./src/components.ts";
+export { installWebComponents, WEB_REGISTRATIONS } from "./src/components.ts";
 export { installWebElicitation } from "./src/elicitation.ts";
 export { liveForm } from "./src/live-form.ts";
 export type { LiveFormInput } from "./src/live-form.ts";

@@ -121,6 +121,7 @@ import {
 import { installedBundle } from "./components/bundle.ts";
 import { registerComponents } from "./components/registration.ts";
 import {
+  declaredForms,
   formDispatcher,
   installFormSelections,
   installIdentities,
@@ -477,6 +478,9 @@ function* durableImportComponent(
       kind: "function",
       name,
       props,
+      // Read off the same declaration the dispatcher is built from, so what the
+      // component accepts and what it says it accepts come from one value.
+      ...(declared === undefined ? {} : { forms: declaredForms(declared) }),
       fn: declared === undefined ? defaultExport : formDispatcher(declared),
     };
 

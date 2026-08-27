@@ -104,6 +104,9 @@ Existing documents and code get aligned to this section retroactively.
 | recovery tombstone | an ownership record left active because its owner never proved it stopped. A crash releases the kernel lock and not this, and no pid, elapsed time, released lock or empty transcript clears it |
 | provider partition | one complete, independently owned agent-provider state — runtime, store, managed sessions, queues, coordinator, teardown — selected by the one installed factory at each dispatch. Production is the single-partition case of the same path; holding a partition grants work, never permission |
 | `JournalProvenance` | a non-operational, equality-only witness that a live publication stream descends from the exact journal backend a provider selected for one workflow run; it grants no append, read, execution, publication or reconciliation capability, and is meaningful only because the provider retains the witness it established and later requires exact equality |
+| syntax catalog | the complete, versioned description of what a document may write in one directory under one host profile: every structural construct the engine reserves, and the one implementation selection chooses for every other name. It is observation — describing an environment installs no operational state, runs nothing and journals nothing — and it is produced once per request and projected, never rediscovered per format |
+| run profile declarations | the component registrations a first-party package makes, held as plain values apart from the middleware, providers, activation and launchers its installer also arranges. The installer registers exactly those values and inspection reads exactly those values, so what a run installs and what the catalog reports cannot drift |
+| origin-only | the inspectability of a component whose contract could only be learned by loading it: a repository TypeScript module, whose schemas live on its exports and whose top level would run. Such an entry carries name, category, origin and source kind, and no contract field at all — an absent contract is stated, never rendered as an empty one |
 
 ## Three axes
 
@@ -3239,12 +3242,59 @@ durable is written.
   `undefined`, and a replay reconstructs the same validated prop set through
   ordinary expansion.
 
+## The syntax catalog boundary
+
+`xmd syntax` answers what a document may write here, and answering must cost
+nothing. The boundary that makes that true is one operation with no authority.
+
+**One catalog, two projections.** Core produces a `SyntaxCatalog` — version 1, a
+fixed three-category tuple, entries sorted by name — and the CLI's Markdown and
+JSON renderers each take that value. Neither renderer discovers anything, and
+neither parses the other's output, so the two formats cannot describe different
+environments. JSON is the canonical, lossless projection; Markdown is written
+for a person and labels a schema it cannot faithfully summarize rather than
+inventing a type for it.
+
+**Inspection is observation, never authority.** Producing a catalog installs
+only the declarative registration layer selection needs. It does not enter
+`execute()`, construct a durable stream, install a Files, Service, Agent or
+elicitation provider, start testing, reserve the terminal, mint an invocation
+claimant, call an identity component's factory, or expand a body. `<Session>` is
+described from the plain declaration a host would make; the factory that names
+durable work is reached only by a real execution.
+
+**Selection stays where it is.** Enumeration contributes *names* — from the
+structural table, from the effective registrations, and from repository paths
+that invert the dotted-name mapping — and every unique name then goes through
+the same `selectComponent()` decision execution uses. Tiers, include order,
+candidate order, repository override and registered fallback are therefore not
+restated anywhere, and a repository component that overrides a default appears
+once, under user-provided, with its repository origin.
+
+**A partial catalog is never presented as a complete one.** A missing include is
+ordinary absence. An include that exists but cannot be enumerated — a
+non-directory, an unreadable tree, a symbolic link where a directory was named,
+or a link that could have supplied a name and leads to a directory or to
+nothing — fails the whole request. Traversal never follows a link to a
+directory, so refusing is what stops the catalog silently omitting everything
+beneath one. The diagnostic names the configured include and the logical entry,
+never the resolved host path.
+
+**Documentation is descriptive metadata and nothing else.** `description`, `as`
+and `context` take no part in expansion, resolution, validation, authority or
+the journal. For a Markdown component they are ordinary frontmatter: a string is
+copied, and any other value stays in `meta`, fails nothing and documents
+nothing. First-party declarations hold themselves to a stricter rule — every one
+states a description and decides explicitly whether `as` and `context` apply —
+which is a discipline inside those packages, not a requirement on anyone else.
+
 ## Construct inventory
 
 Status is measured against main.
 
 | Construct | Does | Status |
 | --- | --- | --- |
+| `xmd syntax` | describes every structural construct and every selected component the production `run` profile would let a document write in the contextual working directory, as deterministic Markdown or as version-1 JSON, from one catalog. Inspection only: it registers the run profile's declarations in a bounded scope and reads the filesystem for which files exist and, for a selected Markdown component, that file's frontmatter. It runs no body, imports no repository TypeScript module, installs no provider, mints no authority and writes no journal. An include it cannot enumerate fails the whole request rather than printing a healthy subset | built on the #632 stack |
 | `<PrintErrors>` / `printErrors(fn)` | prints failures | built on main |
 | `<Let as="name">` | binds one name in the current environment from exactly one source: the content it renders, or the exact value `value` names, bound by reference and never through the JSON boundary component props cross — the scanner resolves no JSON for that one prop, and expansion projects none. Which source it has is read from what the author wrote, before either one runs, so a construct naming both expands no child and evaluates no expression. It opens no scope, owns no resource, adds no middleware boundary and writes no journal record — replay reconstructs both sources through ordinary expansion | built on the #527 stack |
 | `<Json value={…} />` | renders one supplied value as JSON text where the element was written, from one native two-space `JSON.stringify` call. An ordinary overridable core default whose operand is a capture: the exact evaluation result arrives by reference and is never mutated, cloned, replaced or frozen. It binds nothing, and `as`, content and a missing `value` are all refused before the operand evaluates. A value with no JSON text and a serialization that threw are distinct failures, each positioned at the invocation, emitting no partial output and preserving the original error as its cause. No scope, resource, authority or JSON-specific durable effect: replay reaches it through ordinary expansion, and a surrounding `<Prompt>` or `<File>` keeps its own record of the text it consumed | built on the #452 stack |

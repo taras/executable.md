@@ -17,11 +17,14 @@ import type { Context, Operation } from "effection";
 import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { documentationOf } from "./documentation.ts";
+import type { ComponentDocumentation } from "./documentation.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
   ComponentRegistry,
   FunctionComponent,
   FunctionComponentDefinition,
+  InvocationForm,
   PropsSchema,
   RegistryEntry,
   ReturnsSchema,
@@ -43,7 +46,7 @@ export class ComponentRegistrationError extends Error {
   }
 }
 
-export interface ComponentRegistration {
+export interface ComponentRegistration extends ComponentDocumentation {
   /** The name a document writes. Dots address a subdirectory, as paths do. */
   name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -66,6 +69,16 @@ export interface ComponentRegistration {
    * return binds by reference under `as`, unchecked.
    */
   returns?: ReturnsSchema;
+  /**
+   * The authored forms this component accepts, in canonical order. Omitted
+   * means both, which is what every registration meant before this existed.
+   *
+   * Documentation rather than dispatch. A registration that restricts a form
+   * enforces it with a `formDispatcher()` implementation and declares the same
+   * ordered forms here, so what runs and what is documented come from one
+   * decision.
+   */
+  forms?: readonly InvocationForm[];
   fn: FunctionComponent | TestHarnessComponentDefinition;
 }
 
@@ -206,7 +219,7 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures } = registration;
+    const { name, origin, fn, props, returns, captures, forms } = registration;
     assertUsableName(name);
     if (origin.length === 0) {
       throw new ComponentRegistrationError(
@@ -232,6 +245,8 @@ export function* registerComponents(
       fn,
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
+      ...(forms ? { forms } : {}),
+      ...documentationOf(registration),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });

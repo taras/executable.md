@@ -27,7 +27,9 @@ import Parse, { props as parseProps, returns as parseReturns } from "./Parse.ts"
 import SafeParse, { props as safeParseProps, returns as safeParseReturns } from "./SafeParse.ts";
 import Test, { props as testProps } from "./Test.ts";
 import { parseJsonObject } from "../json.ts";
-import { formDispatcher } from "../invocation-identity.ts";
+import { declaredForms, formDispatcher } from "../invocation-identity.ts";
+import { documented } from "./documentation.ts";
+import type { FirstPartyDocumentation } from "./documentation.ts";
 import type { FormDeclaration, FunctionComponent, PropsSchema, ReturnsSchema } from "../types.ts";
 
 /** The origin every core component reports to inspection. */
@@ -52,13 +54,21 @@ interface CoreOptions {
  * builds the dispatcher — in the copy of core that will perform the execution,
  * which is the whole point (`invocation-identity.ts`). A component that
  * declares nothing is form-insensitive and its function is used as it is.
+ *
+ * The accepted forms are read off that same declaration rather than restated,
+ * so `<File>`'s two bodies and `<File.Delete>`'s one are documented by the value
+ * that dispatches them. Documentation is a parameter rather than an option
+ * because a core default states what it is for, and says explicitly whether
+ * `as` and content apply to it.
  */
 function core(
   name: string,
   implementation: FunctionComponent | FormDeclaration,
   props: PropsSchema,
+  documentation: FirstPartyDocumentation,
   options: CoreOptions = {},
 ): [string, RegistryEntry] {
+  const declaration = typeof implementation === "function" ? undefined : implementation;
   const fn = typeof implementation === "function" ? implementation : formDispatcher(implementation);
   const { returns, captures } = options;
   return [
@@ -71,6 +81,8 @@ function core(
           props,
           ...(returns === undefined ? {} : { returns }),
           ...(captures === undefined ? {} : { captures }),
+          ...(declaration === undefined ? {} : { forms: declaredForms(declaration) }),
+          ...documented(documentation),
           fn,
         },
         origin: CORE_ORIGIN,
@@ -80,20 +92,119 @@ function core(
 }
 
 export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
-  core("Elicit", Elicit, parseJsonObject(elicitProps), {
-    returns: parseJsonObject(elicitReturns),
+  core(
+    "Elicit",
+    Elicit,
+    parseJsonObject(elicitProps),
+    {
+      description:
+        "Asks a person a structured question and binds their validated answer. The document " +
+        "says what it is asking and what shape the answer must have; where the asking happens " +
+        "is the host's decision, and an enclosing `<Answers>` region can supply the answer " +
+        "instead so nobody is asked.",
+      as: "Required. The validated answer, as a structured value.",
+      context: "The request message the person is shown.",
+    },
+    { returns: parseJsonObject(elicitReturns) },
+  ),
+  core("TempDir", TempDir, parseJsonObject(tempDirProps), {
+    description:
+      "Supplies an isolated temporary directory. Written with content it is the contextual " +
+      "working directory everything inside observes, removed when that content finishes; " +
+      "written self-closing it renders the path and is removed with the surrounding scope.",
+    as: "Optional. Captures the rendered directory path instead of emitting it.",
+    context: "Markdown expanded with the temporary directory as its working directory.",
   }),
-  core("TempDir", TempDir, parseJsonObject(tempDirProps)),
-  core("Fetch", Fetch, parseJsonObject(fetchProps)),
-  core("File", fileForm, parseJsonObject(fileProps)),
-  core("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps)),
-  core("Glob", Glob, parseJsonObject(globProps), { returns: parseJsonObject(globReturns) }),
-  core("Json", Json, parseJsonObject(jsonProps), { captures: ["value"] }),
-  core("Parse", Parse, parseJsonObject(parseProps), { returns: parseJsonObject(parseReturns) }),
-  core("SafeParse", SafeParse, parseJsonObject(safeParseProps), {
-    returns: parseJsonObject(safeParseReturns),
+  core("Fetch", Fetch, parseJsonObject(fetchProps), {
+    description:
+      "Performs one authorized HTTP read and retains it. Only GET and HEAD are admitted, " +
+      "because an interruption before the record commits may repeat the request. A captured " +
+      "response is data whatever its status; an uncaptured one succeeds on 2xx and fails " +
+      "otherwise.",
+    as:
+      "Optional. Captures the response, which is what makes a non-2xx status data instead " +
+      "of a failure.",
+    context: null,
   }),
-  core("Test", Test, parseJsonObject(testProps)),
+  core("File", fileForm, parseJsonObject(fileProps), {
+    description:
+      "Reads and writes UTF-8 text inside the contextual working directory. Self-closing it " +
+      "reads the file at `path`; paired it writes what its content rendered there.",
+    as: "Optional. Captures the file's text instead of emitting it, in the reading form.",
+    context: "The text to write, in the writing form.",
+  }),
+  core("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps), {
+    description:
+      "Removes one file inside the contextual working directory. Absence is success, so " +
+      "deleting a path twice succeeds twice. It renders nothing and reports nothing about " +
+      "what was there.",
+    as: "Optional. Captures the empty string this renders, as for any text component.",
+    context: null,
+  }),
+  core(
+    "Glob",
+    Glob,
+    parseJsonObject(globProps),
+    {
+      description:
+        "Binds the regular files under the contextual working directory that a set of patterns " +
+        "selects, as relative POSIX paths, deduplicated and sorted by code point. A symbolic " +
+        "link is never a result and a link to a directory is never descended into.",
+      as: "Required. The matched paths, as a string array.",
+      context: null,
+    },
+    { returns: parseJsonObject(globReturns) },
+  ),
+  core(
+    "Json",
+    Json,
+    parseJsonObject(jsonProps),
+    {
+      description:
+        "Renders a structured value as JSON text at the position it is written. There is no " +
+        "indent, replacer or sorting option: the whole transformation is one value to one " +
+        "piece of text.",
+      as: null,
+      context: null,
+    },
+    { captures: ["value"] },
+  ),
+  core(
+    "Parse",
+    Parse,
+    parseJsonObject(parseProps),
+    {
+      description:
+        "Binds its content as a JSON value validated against a schema. The schema compiles " +
+        "before the content expands, so an unusable schema fails before any work it would " +
+        "judge. Malformed JSON and a rejected instance fail the invocation.",
+      as: "Required. The validated value.",
+      context: "The JSON text to parse.",
+    },
+    { returns: parseJsonObject(parseReturns) },
+  ),
+  core(
+    "SafeParse",
+    SafeParse,
+    parseJsonObject(safeParseProps),
+    {
+      description:
+        "Binds its content as a result a document can inspect. Same compiler and ordering as " +
+        "`<Parse>`; malformed JSON and a rejected instance become a value the document can " +
+        "branch on rather than a failure.",
+      as: "Required. The result: either the validated value or the issues that rejected it.",
+      context: "The JSON text to parse.",
+    },
+    { returns: parseJsonObject(safeParseReturns) },
+  ),
+  core("Test", Test, parseJsonObject(testProps), {
+    description:
+      "One test. Its invocation contains a checked command failure, so a failing command " +
+      "inside it is that test's outcome rather than the document's. What a test does, and " +
+      "whether it may run at all, come from the testing host.",
+    as: null,
+    context: "The body of the test: its assertions and the work they judge.",
+  }),
 ]);
 
 /**

@@ -199,13 +199,20 @@ export type {
   DocumentTargetFailure,
   DocumentTargetInfo,
 } from "./src/document-targets.ts";
-export { inspectComponent, inspectDocument } from "./src/inspect.ts";
+export { inspectComponent, inspectDocument, inspectSyntax } from "./src/inspect.ts";
 export type {
+  CompleteComponentSyntaxEntry,
   ComponentInfo,
+  DescribedContract,
   DocumentInfo,
   InspectComponentOptions,
   InspectOptions,
+  InspectSyntaxOptions,
+  OriginOnlyComponentSyntaxEntry,
+  StructuralSyntaxEntry,
+  SyntaxCatalog,
 } from "./src/inspect.ts";
+export { ComponentIncludeError } from "./src/components/candidates.ts";
 
 // Component registration — scope-local names resolved ahead of package defaults.
 export {
@@ -217,7 +224,13 @@ export type { ComponentRegistration } from "./src/components/registration.ts";
 export { DEFAULT_INCLUDES, selectComponent } from "./src/components/select.ts";
 export type { SelectOptions } from "./src/components/select.ts";
 export { CORE_COMPONENT_NAMES } from "./src/components/registry.ts";
-export { RESERVED_STRUCTURAL } from "./src/structural.ts";
+export { RESERVED_STRUCTURAL, STRUCTURAL_DECLARATIONS } from "./src/structural.ts";
+export type { StructuralDeclaration } from "./src/structural.ts";
+export { documented, documentationOf } from "./src/components/documentation.ts";
+export type {
+  ComponentDocumentation,
+  FirstPartyDocumentation,
+} from "./src/components/documentation.ts";
 export { printErrors } from "./src/component-failures.ts";
 export { parseMarkdownDefinition } from "./src/definition.ts";
 export { compileDataUri, useDataUriCompiler } from "./src/data-uri-compiler.ts";
@@ -240,7 +253,11 @@ export type { NormalizedIssue } from "./src/validate.ts";
 export { validateParsed } from "./src/components/parse-schema.ts";
 
 // Agent components — <Agent>/<Session>/<Prompt> over a provider-factory seam.
-export { agentIdentityComponents, installAgentComponents } from "./src/agent/components.ts";
+export {
+  AGENT_REGISTRATIONS,
+  agentIdentityComponents,
+  installAgentComponents,
+} from "./src/agent/components.ts";
 export type { AgentComponentsOptions } from "./src/agent/components.ts";
 export { Agent } from "./src/agent/agent-api.ts";
 export type {

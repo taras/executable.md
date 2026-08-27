@@ -68,6 +68,7 @@ import type { Context, Operation, Result, Scope } from "effection";
 import { createApi } from "@effectionx/context-api";
 import {
   Component,
+  documented,
   ephemeral,
   DocumentOutput,
   hasBinding,
@@ -703,36 +704,80 @@ function* WorkflowRun(): Operation<Json> {
 }
 
 /** The registrations `installTestingComponents` adds for the harness. */
+/** The origin every component this package registers reports to inspection. */
+export const TESTING_ORIGIN = "@executablemd/testing";
+
 export const HARNESS_REGISTRATIONS = [
   {
     name: "Execution",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: Execution,
     props: EXECUTION_PROPS,
+    ...documented({
+      description:
+        "Runs another document as a real root execution — its own root import, target " +
+        "selection, journal, output stream, scope and teardown — from inside a test. `host` " +
+        'names a host profile the trusted host supplies; `host="run"` takes exactly one of ' +
+        "`target` or `source`, and `props` are the child root's props.",
+      as:
+        "Optional. The child's outcome: a settled result, or a suspension. Without it a " +
+        "settled failure fails the owning test rather than passing vacuously.",
+      context: "The declarations for the child, then the assertions about it.",
+    }),
   },
   {
     name: "WorkflowRun",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: WorkflowRun,
     props: WORKFLOW_RUN_PROPS,
+    ...documented({
+      description:
+        "The scope a workflow-hosted child execution requires. A host that provides no " +
+        "workflow profile refuses it, naming that.",
+      as: null,
+      context: "The workflow-hosted executions this scope owns.",
+    }),
   },
   {
     name: "DiagnosticJournal",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: DiagnosticJournal,
     props: DIAGNOSTIC_JOURNAL_PROPS,
+    ...documented({
+      description:
+        "Selects an isolated diagnostic journal for a `run` child, equivalent to what " +
+        "`xmd run --journal` retains. A declaration: valid only as a direct child of " +
+        "`<Execution>`, and only before assertion content.",
+      as: null,
+      context: null,
+    }),
   },
   {
     name: "CollectOutput",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: CollectOutput,
     props: COLLECT_OUTPUT_PROPS,
+    ...documented({
+      description:
+        "Accumulates the child execution's rendered output for assertions. Passive: the " +
+        "output is displayed progressively either way, and a failed or cancelled child leaves " +
+        "the partial prefix bound.",
+      as: "Required. The child's accumulated output.",
+      context: null,
+    }),
   },
   {
     name: "CollectJournal",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: CollectJournal,
     props: COLLECT_JOURNAL_PROPS,
+    ...documented({
+      description:
+        "Binds a read-only snapshot of a journal the host already selected. It grants no " +
+        "retention, so declaring it without a selected journal is malformed.",
+      as: "Required. The journal snapshot.",
+      context: null,
+    }),
   },
 ] as const;
 

@@ -27,6 +27,8 @@ import { Execution } from "../execute.ts";
 import { registerComponents } from "../components/registration.ts";
 import { CORE_ORIGIN } from "../components/registry.ts";
 import { createReplayStream } from "../replay-stream.ts";
+import { documented } from "../components/documentation.ts";
+import type { ComponentRegistration } from "../components/registration.ts";
 import type { Json } from "../types.ts";
 import { sessionComponent } from "./function-components.ts";
 import type { IdentityComponent } from "../invocation-identity.ts";
@@ -86,10 +88,115 @@ export function agentIdentityComponents(): readonly IdentityComponent[] {
       name: "Session",
       origin: CORE_ORIGIN,
       props: SESSION_PROPS,
+      ...documented({
+        description:
+          "Resolves a named session and pins it onto the prompts and launches inside it. " +
+          "Self-closing it validates the session and renders nothing. It is the one agent word " +
+          "a host declares to the execution rather than registering, because its implementation " +
+          "names durable work after its own invocation.",
+        as: null,
+        context: "Markdown whose prompts and launches run in this session.",
+      }),
       factory: (claim) => sessionComponent(claim),
     },
   ];
 }
+
+/**
+ * The agent words as plain declarations, apart from the middleware and the
+ * completion policy that installing them also arranges.
+ *
+ * One list, consumed by `installAgentComponents()` below and by `xmd syntax`,
+ * so what a run profile registers and what the catalog reports come from the
+ * same value. Reading it installs nothing: these are non-reserved defaults, and
+ * a repository component with one of these names is chosen ahead of them.
+ */
+export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
+  {
+    name: "AgentProvider",
+    origin: CORE_ORIGIN,
+    fn: AgentProvider,
+    props: AGENT_PROVIDER_PROPS,
+    ...documented({
+      description:
+        "Resolves a registered agent provider by name and installs it for its content. " +
+        "`defaultAgent` overrides the inherited default agent there, and `timeout` bounds each " +
+        "prompt inside it. An unknown provider name fails the execution before the content " +
+        "expands.",
+      as: null,
+      context: "Markdown expanded with this provider installed.",
+    }),
+  },
+  {
+    name: "Agent",
+    origin: CORE_ORIGIN,
+    fn: AgentComponent,
+    props: AGENT_PROPS,
+    ...documented({
+      description:
+        "Resolves an agent — the one `name` states, or the current default — and pins it onto " +
+        "the prompts and launches inside it. Self-closing it performs the same resolution and " +
+        "availability check, then renders nothing.",
+      as: null,
+      context: "Markdown whose prompts and launches use this agent.",
+    }),
+  },
+  {
+    name: "Session.Launch",
+    origin: CORE_ORIGIN,
+    fn: SessionLaunch,
+    props: SESSION_LAUNCH_PROPS,
+    ...documented({
+      description:
+        "Prepares one durable session from its rendered content and hands the provider's " +
+        "native interface the terminal for it. It renders nothing itself and returns only " +
+        "after that interface exits.",
+      as: null,
+      context: "The instructions the native session starts from.",
+    }),
+  },
+  {
+    name: "Prompt",
+    origin: CORE_ORIGIN,
+    fn: Prompt,
+    props: PROMPT_PROPS,
+    ...documented({
+      description:
+        "Sends one prompt and renders the reply. Content is the prompt; a self-closing " +
+        '`<Prompt text="…" />` uses the prop instead. `agent`, `session` and `timeout` ' +
+        "override the enclosing scope for this prompt, and `throwOnError` ends the document on " +
+        "failure instead of aggregating it into the completion.",
+      as: "Optional. Captures the reply instead of emitting it.",
+      context: "The prompt text, in the paired form.",
+    }),
+  },
+  {
+    name: "ApproveAll",
+    origin: CORE_ORIGIN,
+    fn: ApproveAll,
+    props: NO_PROPS_SCHEMA,
+    ...documented({
+      description:
+        "Answers each permission request in its content by selecting an allow option, and " +
+        "denies when none is offered. The enclosing policy applies again after the closing tag.",
+      as: null,
+      context: "Markdown whose permission requests are approved.",
+    }),
+  },
+  {
+    name: "AskPermission",
+    origin: CORE_ORIGIN,
+    fn: AskPermission,
+    props: NO_PROPS_SCHEMA,
+    ...documented({
+      description:
+        "Asks for every permission request in its content, and denies without an interactive " +
+        "terminal or a valid choice. The enclosing policy applies again after the closing tag.",
+      as: null,
+      context: "Markdown whose permission requests are asked about.",
+    }),
+  },
+];
 
 export function* installAgentComponents(options?: AgentComponentsOptions): Operation<void> {
   if (options?.defaultAgent !== undefined) {
@@ -101,21 +208,7 @@ export function* installAgentComponents(options?: AgentComponentsOptions): Opera
     yield* AgentInternal.around({ permissionMode: () => permissionMode }, { at: "min" });
   }
 
-  // Non-reserved: a repository component with one of these names is chosen
-  // ahead of them, as it would be ahead of any other package's default.
-  yield* registerComponents([
-    { name: "AgentProvider", origin: CORE_ORIGIN, fn: AgentProvider, props: AGENT_PROVIDER_PROPS },
-    { name: "Agent", origin: CORE_ORIGIN, fn: AgentComponent, props: AGENT_PROPS },
-    {
-      name: "Session.Launch",
-      origin: CORE_ORIGIN,
-      fn: SessionLaunch,
-      props: SESSION_LAUNCH_PROPS,
-    },
-    { name: "Prompt", origin: CORE_ORIGIN, fn: Prompt, props: PROMPT_PROPS },
-    { name: "ApproveAll", origin: CORE_ORIGIN, fn: ApproveAll, props: NO_PROPS_SCHEMA },
-    { name: "AskPermission", origin: CORE_ORIGIN, fn: AskPermission, props: NO_PROPS_SCHEMA },
-  ]);
+  yield* registerComponents(AGENT_REGISTRATIONS);
 
   const rootProvider = options?.rootProvider;
 

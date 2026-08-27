@@ -84,6 +84,39 @@ describe("Tier CH — xmd help", { sanitizeOps: false, sanitizeResources: false 
     expect(stdout).toContain("--include");
   });
 
+  it("CH12: program help lists syntax, and syntax help lists only its two options", function* () {
+    const program = yield* runCli(["--help"]).expect();
+    expect(program.stdout).toContain("syntax");
+
+    const { stdout } = yield* runCli(["syntax", "--help"]).expect();
+    expect(stdout).toContain("Usage: xmd syntax [OPTIONS]");
+    expect(stdout).toContain("--include");
+    expect(stdout).toContain("--json");
+    // Inspection runs nothing, so nothing a run configures belongs here.
+    for (const absent of [
+      "--verbose",
+      "--journal",
+      "--raw",
+      "--timeout",
+      "--agent-provider",
+      "--secret-detection",
+      "--eval",
+      "--pattern",
+    ]) {
+      expect(stdout).not.toContain(absent);
+    }
+  });
+
+  it("CH13: run and test help are unchanged by the syntax command", function* () {
+    const run = yield* runCli(["run", "--help"]).expect();
+    expect(run.stdout).toContain("Usage: xmd run [OPTIONS] [path]");
+    expect(run.stdout).not.toContain("version-1 JSON");
+
+    const test = yield* runCli(["test", "--help"]).expect();
+    expect(test.stdout).toContain("Usage: xmd test [OPTIONS] [path]");
+    expect(test.stdout).not.toContain("version-1 JSON");
+  });
+
   it("CH4: --version prints the version", function* () {
     const { stdout } = yield* runCli(["--version"]).expect();
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);

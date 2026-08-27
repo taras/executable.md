@@ -50,6 +50,8 @@
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
+import { documentationOf } from "./components/documentation.ts";
+import type { ComponentDocumentation } from "./components/documentation.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -133,11 +135,13 @@ export interface IdentityClaimant {
  * may name durable work here has to be fixed before anything can observe or
  * replace it. The factory is called once, with this execution's claimant.
  */
-export interface IdentityComponent {
+export interface IdentityComponent extends ComponentDocumentation {
   readonly name: string;
   readonly props: PropsSchema;
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
+  /** The authored forms this component accepts. Omitted means both. */
+  readonly forms?: readonly InvocationForm[];
   readonly origin: string;
   factory(claim: IdentityClaimant): FunctionComponent;
 }
@@ -380,6 +384,19 @@ export function isFormDispatcher(fn: unknown): boolean {
  * answer, no method on the object handed in, and nothing a handler composed
  * takes part in choosing it.
  */
+/**
+ * The forms a declaration accepts, in canonical order.
+ *
+ * Derived from the same value `formDispatcher()` builds its handlers from, so a
+ * component's documented forms and its executable dispatch cannot disagree.
+ */
+export function declaredForms(declaration: FormDeclaration): readonly InvocationForm[] {
+  if (declaration.forms === "either" || declaration.forms === "both") {
+    return ["self-closing", "paired"];
+  }
+  return [declaration.forms];
+}
+
 export function formDispatcher(declaration: FormDeclaration): FunctionComponent {
   const handlers: Partial<Record<InvocationForm, FunctionComponent>> =
     declaration.forms === "both"
@@ -633,12 +650,13 @@ function mintDomain(component: string): Minted {
 }
 
 /** One built implementation, ready for core's own registration path. */
-export interface IdentityRegistration {
+export interface IdentityRegistration extends ComponentDocumentation {
   readonly name: string;
   readonly origin: string;
   readonly props: PropsSchema;
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
+  readonly forms?: readonly InvocationForm[];
   readonly fn: FunctionComponent;
 }
 
@@ -682,6 +700,8 @@ export function installIdentities(components: readonly IdentityComponent[]): Ide
       props: component.props,
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
+      ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...documentationOf(component),
       fn: implementation,
     });
   }
