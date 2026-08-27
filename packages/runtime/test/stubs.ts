@@ -23,7 +23,7 @@
 import type { Operation } from "effection";
 import { Stdio } from "@effectionx/process";
 import { API } from "../apis.ts";
-import type { StatResult } from "../apis.ts";
+import type { LinkStatResult, StatResult } from "../apis.ts";
 import { SERVICE_HOSTNAME } from "../service.ts";
 import type { ServiceEndpoint } from "../service.ts";
 
@@ -49,6 +49,8 @@ export function* useStubService(endpoint: ServiceEndpoint): Operation<void> {
  *
  * - `readTextFile` returns content from the `files` map; throws ENOENT for missing keys.
  * - `stat` returns `{ exists: true, isFile: true }` for keys in the map.
+ * - `lstat` answers the same, with `isSymbolicLink: false`: an in-memory map
+ *   holds file content, so nothing in it is a link to somewhere else.
  * - `glob` throws (not stubbed). Install `API.Fs.around()` directly if needed.
  * - the writing half — `writeTextFile`, `ensureDir`, `rename`, `remove`, and
  *   `realpath` — is not stubbed and reaches the real filesystem. A test that
@@ -70,6 +72,10 @@ export function* useStubFs(files: Record<string, string>): Operation<void> {
     *stat([path], _next): Operation<StatResult> {
       const exists = path in files;
       return { exists, isFile: exists, isDirectory: false };
+    },
+    *lstat([path], _next): Operation<LinkStatResult> {
+      const exists = path in files;
+      return { exists, isFile: exists, isDirectory: false, isSymbolicLink: false };
     },
     *glob(_args, _next) {
       throw new Error("glob not stubbed");

@@ -8,7 +8,7 @@
 import type { Operation, Result } from "effection";
 import type { Json as DurableJson } from "@executablemd/durable-streams";
 import type { TestHarnessComponentDefinition } from "./test-harness.ts";
-import type { ComponentInvocation } from "./invocation-identity.ts";
+import type { ComponentInvocation, InvocationForm } from "./invocation-identity.ts";
 
 export type Json = DurableJson;
 
@@ -263,6 +263,19 @@ export interface FunctionComponentDefinition {
   props: PropsSchema;
   /** Props the engine leaves unresolved for the component to evaluate itself. */
   captures?: readonly string[];
+  /**
+   * The authored forms this component accepts, in canonical order. Absent means
+   * both — which is what every form-insensitive component is.
+   *
+   * Documentation, not dispatch: a form-sensitive component is dispatched by
+   * the engine-owned body `formDispatcher()` builds, and this is the same
+   * declaration spelled where inspection can read it, so the two cannot drift.
+   */
+  forms?: readonly InvocationForm[];
+  /** Prose about the component, for a reader. Never read by execution. */
+  description?: string;
+  as?: string;
+  context?: string;
   /**
    * Opt-in validation: this return is a validated JSON record, bound under
    * `as` after checking. Without it a return binds by reference, unchecked.

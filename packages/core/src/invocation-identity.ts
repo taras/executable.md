@@ -50,6 +50,8 @@
 import { useScope } from "effection";
 import type { Operation, Scope } from "effection";
 import { printErrors, printsErrors } from "./component-failures.ts";
+import { documentationOf } from "./components/documentation.ts";
+import type { ComponentDocumentation } from "./components/documentation.ts";
 import type {
   FunctionComponent,
   FunctionComponentDefinition,
@@ -133,11 +135,13 @@ export interface IdentityClaimant {
  * may name durable work here has to be fixed before anything can observe or
  * replace it. The factory is called once, with this execution's claimant.
  */
-export interface IdentityComponent {
+export interface IdentityComponent extends ComponentDocumentation {
   readonly name: string;
   readonly props: PropsSchema;
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
+  /** The authored forms this component accepts. Omitted means both. */
+  readonly forms?: readonly InvocationForm[];
   readonly origin: string;
   factory(claim: IdentityClaimant): FunctionComponent;
 }
@@ -380,6 +384,66 @@ export function isFormDispatcher(fn: unknown): boolean {
  * answer, no method on the object handed in, and nothing a handler composed
  * takes part in choosing it.
  */
+/**
+ * The only ways a forms declaration may be written.
+ *
+ * A closed list rather than a set membership test, because the *order* is part
+ * of the declaration: one canonical spelling per meaning means a catalog can be
+ * compared without normalizing, and a reader never has to wonder whether
+ * `["paired", "self-closing"]` said something different.
+ */
+const CANONICAL_FORMS: readonly (readonly InvocationForm[])[] = [
+  ["self-closing"],
+  ["paired"],
+  ["self-closing", "paired"],
+];
+
+/**
+ * Why `forms` is not a canonical declaration, or `undefined` when it is.
+ *
+ * Omission is canonical and means both forms, which is what every declaration
+ * meant before forms could be written. Anything present is held to the list
+ * above, so an empty array, a reversed pair, a repeated member and a form no
+ * invocation has are each refused where the declaration is made rather than
+ * reaching a document as documentation nothing can act on.
+ *
+ * A reason rather than a thrown error, because the two callers raise different
+ * kinds of failure and each owns its own sentence. `unknown` rather than the
+ * declared type, because a host crosses this boundary from JavaScript.
+ */
+export function formsRefusal(forms: unknown): string | undefined {
+  if (forms === undefined) {
+    return undefined;
+  }
+  const canonical =
+    Array.isArray(forms) &&
+    CANONICAL_FORMS.some(
+      (accepted) =>
+        accepted.length === forms.length && accepted.every((form, index) => form === forms[index]),
+    );
+  if (canonical) {
+    return undefined;
+  }
+  return (
+    `declares forms ${JSON.stringify(forms)}: the accepted declarations are ` +
+    `["self-closing"], ["paired"] and ["self-closing", "paired"], or none at all for both. ` +
+    "A form is written once, and a pair is written self-closing first"
+  );
+}
+
+/**
+ * The forms a declaration accepts, in canonical order.
+ *
+ * Derived from the same value `formDispatcher()` builds its handlers from, so a
+ * component's documented forms and its executable dispatch cannot disagree.
+ */
+export function declaredForms(declaration: FormDeclaration): readonly InvocationForm[] {
+  if (declaration.forms === "either" || declaration.forms === "both") {
+    return ["self-closing", "paired"];
+  }
+  return [declaration.forms];
+}
+
 export function formDispatcher(declaration: FormDeclaration): FunctionComponent {
   const handlers: Partial<Record<InvocationForm, FunctionComponent>> =
     declaration.forms === "both"
@@ -632,13 +696,37 @@ function mintDomain(component: string): Minted {
   };
 }
 
+/**
+ * One name per identity component, whoever is reading the declarations.
+ *
+ * A `Map` keyed by name silently keeps the last of two declarations, and which
+ * one that is depends on argument order rather than on anything a host said. So
+ * the set is refused instead — the same refusal for the execution that would
+ * build implementations from it and for the inspection that only reads it, from
+ * this one function so the two cannot come to disagree about what a host may
+ * declare.
+ */
+export function assertDistinctIdentityNames(components: readonly IdentityComponent[]): void {
+  const seen = new Set<string>();
+  for (const component of components) {
+    if (seen.has(component.name)) {
+      throw new ComponentInvocationError(
+        `this execution was given two identity components called "${component.name}", and one ` +
+          "component names its durable work in one domain",
+      );
+    }
+    seen.add(component.name);
+  }
+}
+
 /** One built implementation, ready for core's own registration path. */
-export interface IdentityRegistration {
+export interface IdentityRegistration extends ComponentDocumentation {
   readonly name: string;
   readonly origin: string;
   readonly props: PropsSchema;
   readonly returns?: ReturnsSchema;
   readonly captures?: readonly string[];
+  readonly forms?: readonly InvocationForm[];
   readonly fn: FunctionComponent;
 }
 
@@ -661,15 +749,14 @@ export interface IdentityInstallation {
  * that answers for nothing.
  */
 export function installIdentities(components: readonly IdentityComponent[]): IdentityInstallation {
+  // Before any factory: a set nobody can register is a set nobody may build
+  // implementations from either, and a duplicate that reached a factory would
+  // have minted a claimant for a domain that is about to be discarded.
+  assertDistinctIdentityNames(components);
+
   const minted = new Map<string, Minted>();
   const registrations: IdentityRegistration[] = [];
   for (const component of components) {
-    if (minted.has(component.name)) {
-      throw new ComponentInvocationError(
-        `this execution was given two identity components called "${component.name}", and one ` +
-          "component names its durable work in one domain",
-      );
-    }
     const domain = mintDomain(component.name);
     minted.set(component.name, domain);
     // Built here, and held by identity: this exact function is what canonical
@@ -682,6 +769,8 @@ export function installIdentities(components: readonly IdentityComponent[]): Ide
       props: component.props,
       ...(component.returns === undefined ? {} : { returns: component.returns }),
       ...(component.captures === undefined ? {} : { captures: component.captures }),
+      ...(component.forms === undefined ? {} : { forms: component.forms }),
+      ...documentationOf(component),
       fn: implementation,
     });
   }

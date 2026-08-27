@@ -30,6 +30,7 @@ export {
   readTextFile,
   writeTextFile,
   stat,
+  lstat,
   glob,
   realpath,
   ensureDir,

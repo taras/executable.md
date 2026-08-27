@@ -68,6 +68,7 @@ import type { Context, Operation, Result, Scope } from "effection";
 import { createApi } from "@effectionx/context-api";
 import {
   Component,
+  documented,
   ephemeral,
   DocumentOutput,
   hasBinding,
@@ -703,36 +704,85 @@ function* WorkflowRun(): Operation<Json> {
 }
 
 /** The registrations `installTestingComponents` adds for the harness. */
+/** The origin every component this package registers reports to inspection. */
+export const TESTING_ORIGIN = "@executablemd/testing";
+
 export const HARNESS_REGISTRATIONS = [
   {
     name: "Execution",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: Execution,
     props: EXECUTION_PROPS,
+    ...documented({
+      description:
+        "Run another document from inside a test, and assert on how it finished. " +
+        '`<Execution host="run" target="./setup.md" as="run">…</Execution>` runs it for ' +
+        "real, with its own journal and output. Pass `source` instead of `target` to " +
+        "supply the markdown directly, and `props` for the document's properties.",
+      as:
+        "Optional. The child's outcome: a settled result, or a suspension. Without it a " +
+        "settled failure fails the owning test rather than passing vacuously.",
+      context: "The declarations for the child, then the assertions about it.",
+    }),
   },
   {
     name: "WorkflowRun",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: WorkflowRun,
     props: WORKFLOW_RUN_PROPS,
+    ...documented({
+      description:
+        "Scope a workflow-hosted execution. `<WorkflowRun>…</WorkflowRun>` holds " +
+        '`<Execution host="workflow">` children, and refuses unless the host supplies a ' +
+        "workflow profile.",
+      as: null,
+      context: "The workflow-hosted executions this scope owns.",
+    }),
   },
   {
     name: "DiagnosticJournal",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: DiagnosticJournal,
     props: DIAGNOSTIC_JOURNAL_PROPS,
+    ...documented({
+      description:
+        "Give a child execution a journal of its own. `<DiagnosticJournal />` goes " +
+        "inside `<Execution>`, before the assertions, and is invalid anywhere else. " +
+        "Without it the child keeps no journal — with it, `<CollectJournal>` has one " +
+        "to read.",
+      as: null,
+      context: null,
+    }),
   },
   {
     name: "CollectOutput",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: CollectOutput,
     props: COLLECT_OUTPUT_PROPS,
+    ...documented({
+      description:
+        "Capture a child execution's output so a test can assert on it. " +
+        '`<CollectOutput as="output" />` goes inside `<Execution>`, before the ' +
+        "assertions, and is invalid anywhere else. It changes nothing about the run, " +
+        "and a child that fails partway still leaves what it printed.",
+      as: "Required. The child's accumulated output.",
+      context: null,
+    }),
   },
   {
     name: "CollectJournal",
-    origin: "@executablemd/testing",
+    origin: TESTING_ORIGIN,
     fn: CollectJournal,
     props: COLLECT_JOURNAL_PROPS,
+    ...documented({
+      description:
+        "Capture a child execution's journal so a test can assert on it. " +
+        '`<CollectJournal as="journal" />` goes inside `<Execution>`, beside ' +
+        "`<CollectOutput>`. It reads a journal the run already has — pair it with " +
+        "`<DiagnosticJournal>` to create one.",
+      as: "Required. The journal snapshot.",
+      context: null,
+    }),
   },
 ] as const;
 

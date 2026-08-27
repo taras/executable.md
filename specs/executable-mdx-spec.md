@@ -2109,6 +2109,17 @@ props a caller must supply when `props` is a map.
 produces instead of rendered text (§6.10). A component that omits it returns
 its rendering.
 
+**Documentation** — `description`, `as` and `context` are ordinary meta values
+with one extra reader. They are not reserved, take part in no expansion,
+resolution, validation, authority or journal behavior, and stay reachable as
+`{meta.description}` like any other meta value. What is extra is that
+`xmd syntax` reports them: `description` says what the component does, `as` says
+what `as="name"` binds, and `context` says what applies while the component's
+content expands. Inspection copies a value under one of those names only when it
+is a string; any other value stays ordinary metadata, fails nothing, and
+contributes no documentation. Documentation is optional, and an undocumented
+component is described completely in every other respect.
+
 #### Input definitions
 
 `props` declares the props a component accepts. Most components name a
@@ -2665,6 +2676,27 @@ JSON projection of it. A capture may not also be a schema property — a schema
 cannot describe a value it never sees — nor may it be `as` or `slot`, which the
 engine owns.
 
+`forms` names the authored forms the component accepts. It is documentation,
+never dispatch: what a form-sensitive component actually runs is decided by the
+engine-owned body a form declaration produces (§5.6), or by the component's own
+refusal, and this says the same thing where inspection can read it.
+
+Its spelling is canonical and is checked where the declaration is made. Omitting
+it means both forms — what every registration meant before it existed — and the
+only arrays accepted are `["self-closing"]`, `["paired"]` and
+`["self-closing", "paired"]`. An empty array, a reversed pair, a repeated member
+and a form no invocation has are each refused there, so a catalog can be
+compared without being normalized first and a reader never has to wonder whether
+a different order meant something else. The identity components a host declares
+to an execution (§5.6) are held to the same rule, whether they are registered by
+a run or read by inspection.
+
+A registration may also carry `description`, `as` and `context` — the same three
+descriptive fields Markdown frontmatter carries, with the same meaning and the
+same absence of behavior. Every component a first-party package registers
+declares a description, and decides explicitly whether `as` and `context` apply
+to it rather than leaving an omitted field to mean either.
+
 **A return binds by reference.** `as` binds the value the component returned —
 the object itself, not a rendering of it — so a component can hand its caller
 something a schema could not describe. Such a binding is not durable: nothing is
@@ -2747,11 +2779,117 @@ type ComponentOrigin =
 ```
 
 `inspectComponent(name)` reports the selected kind and origin without running
-anything. A registration and a Markdown file describe themselves fully — both
-are already parsed or already in the module graph. A repository `.ts` component
-reports only where it is: its schemas live on the module's exports, and loading
-the module would run its top-level code. Collision and unresolved printed errors
-name the origins and the searched locations they considered.
+anything, together with the contract that selection describes: accepted forms,
+props, captures, return mode and whatever documentation the component states. A
+registration and a Markdown file describe themselves fully — both are already
+parsed or already in the module graph. A repository `.ts` component reports only
+where it is: its schemas live on the module's exports, and loading the module
+would run its top-level code. Collision and unresolved printed errors name the
+origins and the searched locations they considered.
+
+#### Describing the whole environment: `inspectSyntax()`
+
+`inspectComponent()` answers about one name. `inspectSyntax()` answers about a
+directory — every structural construct, and the one implementation selection
+chooses for every other name — and returns it as a versioned value:
+
+```typescript
+interface SyntaxCatalog {
+  readonly version: 1;
+  readonly categories: readonly [
+    { readonly kind: "structural"; readonly entries: readonly StructuralSyntaxEntry[] },
+    { readonly kind: "built-in"; readonly entries: readonly CompleteComponentSyntaxEntry[] },
+    {
+      readonly kind: "user-provided";
+      readonly entries: readonly (
+        | CompleteComponentSyntaxEntry
+        | OriginOnlyComponentSyntaxEntry
+      )[];
+    },
+  ];
+}
+```
+
+The three categories are a fixed tuple in that order, and entries inside each
+are sorted by name in Unicode code-point order. Declaration order survives
+inside `syntax`, `forms`, `props`, `captures` and `returns`; forms are always
+`self-closing` before `paired`.
+
+A structural entry carries its name, its structural origin, its exact authored
+forms, a description, and `as` or `context` when those concepts apply to it. A
+complete component entry carries its name, selected origin and source kind
+(`registered` or `markdown`), `inspectability: "complete"`, its accepted forms,
+its canonical draft-07 props schema, its captured prop names, an explicit
+`returnMode` of `"text"` or `"value"`, and the effective returns schema —
+`{ type: "string" }` in text mode. The mode stays explicit because a text
+component and a value component declaring `returns: { type: "string" }` have the
+same schema and different invocation contracts, and captures stay explicit
+because they are caller-visible props the schema deliberately excludes.
+
+A repository `.ts` component is `inspectability: "origin-only"` and carries no
+contract field at all — no props, forms, captures, return or documentation.
+Reading its contract would import the module, which describing an environment
+must not do, so the absence is stated rather than rendered as an empty contract.
+
+**Enumeration contributes names; selection decides.** Candidates come from the
+structural table, from the effective registrations, and from repository paths
+that invert the mapping `probeComponentPath()` uses: `Name.md`, `Name.ts`,
+`Name/index.md` and `Name/index.ts`, with nested path segments becoming dotted
+name segments. Each path segment carries exactly one name segment, so a segment
+is held to the single-segment grammar rather than to the dotted one: `File.Delete`
+is probed at `File/Delete.md`, which means a file called `File.Delete.md` and a
+directory called `File.Delete` each describe no name at all and neither is a
+candidate. Names are de-duplicated and
+then each is passed through `selectComponent()`, so the tiers, include order,
+candidate order, repository override and registered fallback above are not
+restated anywhere. A repository component that overrides an ordinary default
+appears once, under user-provided, with its repository origin.
+
+**A partial catalog is never presented as a complete one.** A missing include
+contributes nothing, exactly as it does during execution. An include that exists
+but cannot be enumerated fails the whole request: one that is not a directory,
+one that cannot be read, and one that is itself a symbolic link.
+
+Traversal reports a symbolic link and never follows it. A reported link is
+classified only when its complete logical path could take part in selection:
+the path is one of the candidate spellings, or every segment is a valid
+component-name segment and the link could therefore be an ancestor of one. A
+relevant link to a file is an ordinary candidate that selection reads through
+its repository path; a relevant link to a directory, to nothing, or to a target
+that cannot be classified fails the include. The diagnostic names the configured
+include and the logical entry, never the resolved host path.
+
+A link behind a lower-case, dotted, hidden or otherwise invalid prefix is
+ignored. No component name makes `probeComponentPath()` probe through such a
+prefix, so ignoring the link cannot hide an implementation execution would have
+selected — and refusing it would make `xmd syntax` fail with the default
+`["components", "."]` in any ordinary package repository, whose `node_modules`
+holds directory links.
+
+**A declared component is admitted the way an execution would admit it.** A host
+may hand inspection the identity components it would declare to an execution
+(§5.6). They are read without an execution existing, so the admissibility
+question is asked from the one place that answers it for both: two declarations
+of one name fail, and each declaration's name, origin, props and returns
+schemas, captures and forms are held to the check registration performs. What
+inspection does not do is build anything from them.
+
+**Inspection is observation, never authority.** Building a catalog installs only
+the declarative registration layer selection needs. It enters no execution,
+constructs no durable stream, installs no Files, Service, Agent or elicitation
+provider, starts no testing session, reserves no terminal, mints no invocation
+claimant, calls no identity component's factory, and expands no body. A
+component a host declares to an execution — `<Session>` (§5.6) — is described
+from that plain declaration, and its authority-bearing factory is reached only
+by a real execution.
+
+**`xmd syntax` is the command.** It writes deterministic Markdown by default and
+the catalog above as JSON with `--json`, both from one inspection. Its only
+options are the ordered, repeatable `--include`, which defaults to
+`["components", "."]` and is replaced rather than extended by explicit values,
+and `--json`. It takes no document and no run option, because it runs nothing.
+An inspection failure is reported on stderr with exit status 1 and no partial
+catalog on stdout.
 
 
 Which implementation a name resolves to is an observation of the environment —
@@ -9311,10 +9449,54 @@ Each row names the derivation it kills.
 | CR23 | Broken local component | A file that exists but cannot be used fails; it does not fall back to the default |
 | CR24 | Structural is not shadowed | A file named after a construct never supplies it |
 | CR25–CR29 | Inspection | Inspection agrees with execution, describes structural and unresolved names, and never imports a repository `.ts` |
+| CR-FORM | Canonical forms | Only the three canonical spellings are accepted, and each is carried through to the definition; omission stays omission |
 | CR30 | Defaults are journaled | A core default records an `import_component` entry and replays without re-running |
 | CR31 | Repository replay | The entry holds path and content, and a replay never probes the filesystem |
 | CR32 | Registration replay | A reserved registration records its origin and replays |
 | CR33/CR34 | Origin mismatch | A recorded origin that is missing or replaced fails explicitly rather than invoking another component |
+
+### Tier SY — The syntax catalog
+
+Provider-neutral: the filesystem is stubbed at the contextual `API.Fs` boundary,
+so the include-boundary rows are the same on every host. Defined in §5.3.
+
+| # | Test | Verify |
+|---|------|--------|
+| SY1/SY2 | Versioned shape | `version` is 1, the categories are the fixed tuple, and one structural, one registered and one repository entry appear together |
+| SY3/SY4 | Structural vocabulary | The declarations are exactly the reserved names, each with authored forms and a description; `Let`, `Content`, `Else`, `Break`, `Answers` and `Answer` carry the frozen forms, and `as` applies to `Let` and `Each` alone |
+| SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
+| SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
+| SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
+| SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, and a selection-relevant link to a directory or to nothing each fail the whole request; a relevant link to a file is selected; a link behind a lower-case, dotted or hidden prefix is ignored even beside one that is refused; and the diagnostic names the configured include and the logical entry rather than the resolved target |
+| SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
+| SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
+| SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
+| SY26–SY27 | Declared components | One is described without its factory being called and a repository file still overrides it; two declarations of one name are refused before either factory; and a declaration inspection refuses is refused identically by registration |
+| SY28 | First-party documentation | Every complete built-in in the core and Agent profile states a description |
+| SY29 | Determinism | Two inspections of one environment are equal, and entries are sorted within each category |
+
+### Tier SX — The `xmd syntax` command
+
+| # | Test | Verify |
+|---|------|--------|
+| SX1–SX3 | The run profile | Core, Agent, testing and web defaults and `<Session>` are described from the declarations the runtime installers register, with no execution claimant minted |
+| SX2 | Documentation completeness | Every complete built-in in the profile states a description, and the testing contracts read as they are: `<AssertThrows>` requires `message` and binds the caught error segment, an ordinary assertion binds its diagnostic report, and an assertion that refuses expected children reports one form |
+| SX4–SX6 | Renderers take a value | Both formats render from a supplied catalog with the filesystem refusing every call, twice with identical bytes, under the fixed category headings; every table cell is escaped, a prop name holding a pipe included |
+| SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
+| SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
+| SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`, and no `prompt` command |
+| SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
+
+### Tier SM — `xmd syntax` end to end
+
+One checked-in Markdown suite runs the real command against a fixture directory.
+
+| # | Test | Verify |
+|---|------|--------|
+| SM1/SM2 | Both formats | Both invocations succeed and the three category sections render in their fixed order |
+| SM3–SM5 | Documentation | A documented component renders prose and a props table; an undocumented one stays complete; a non-string value documents nothing |
+| SM6/SM7 | Nothing runs | A `.ts` fixture that throws at top level is origin-only and the command still succeeds; a fixture whose body writes a file leaves no file |
+| SM8–SM11 | Discovery | Direct, dotted and index paths; the two formats agree; repeated includes replace the defaults in caller order; the built-in category holds the run profile including `<Session>` |
 
 ### Tier WB — The workflow component bundle in core
 
@@ -10423,6 +10605,19 @@ Identifiers match `packages/core/tests/loop.test.ts` one to one.
 | RV18 | Schema caches | The same schema object compiles as a return and fails as props, in either order |
 | VR1–VR6 | `xmd run` | JSON alone on stdout, `--verbose` body output on stderr, failures non-zero with empty stdout |
 | VR10 | A command inside a value root | Its stdout is shown on the stream the result leaves free, and recorded as stdout |
+
+### Tier FS — Contextual link classification
+
+Runs against real symbolic links in a temporary directory, because an in-memory
+stub has nothing for a link to point at and so cannot tell the two operations
+apart.
+
+| # | Test | Verify |
+|---|------|--------|
+| FS1 | Absence | A missing path answers from both `stat` and `lstat` without throwing |
+| FS2 | Plain entries | The two agree about a regular file and a directory |
+| FS3/FS4 | Links | `lstat` reports the link itself while `stat` follows it to the file or directory it names |
+| FS5 | A dangling link | `stat` answers as it does for absence; `lstat` reports the link, which is what makes the two distinguishable |
 
 ### Tier FR — The runtime Fetch adapter
 

@@ -17,11 +17,15 @@ import type { Context, Operation } from "effection";
 import { Component } from "../component-api.ts";
 import { updateOwn } from "../scope-local.ts";
 import { RESERVED_STRUCTURAL } from "../structural.ts";
+import { formsRefusal } from "../invocation-identity.ts";
+import { documentationOf } from "./documentation.ts";
+import type { ComponentDocumentation } from "./documentation.ts";
 import { compilePropsSchema, compileReturnsSchema } from "../validate.ts";
 import type {
   ComponentRegistry,
   FunctionComponent,
   FunctionComponentDefinition,
+  InvocationForm,
   PropsSchema,
   RegistryEntry,
   ReturnsSchema,
@@ -43,7 +47,7 @@ export class ComponentRegistrationError extends Error {
   }
 }
 
-export interface ComponentRegistration {
+export interface ComponentRegistration extends ComponentDocumentation {
   /** The name a document writes. Dots address a subdirectory, as paths do. */
   name: string;
   /** Stable, human-readable source identity — reported by inspection. */
@@ -66,6 +70,16 @@ export interface ComponentRegistration {
    * return binds by reference under `as`, unchecked.
    */
   returns?: ReturnsSchema;
+  /**
+   * The authored forms this component accepts, in canonical order. Omitted
+   * means both, which is what every registration meant before this existed.
+   *
+   * Documentation rather than dispatch. A registration that restricts a form
+   * enforces it with a `formDispatcher()` implementation and declares the same
+   * ordered forms here, so what runs and what is documented come from one
+   * decision.
+   */
+  forms?: readonly InvocationForm[];
   fn: FunctionComponent | TestHarnessComponentDefinition;
 }
 
@@ -82,6 +96,21 @@ const OwnContributions: Context<OwnIndex> = createContext<OwnIndex>(
 const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
 
 /**
+ * Whether `segment` is spelled the way one dot-separated part of a component
+ * name is.
+ *
+ * Distinct from the whole-name predicate below, and the distinction matters
+ * wherever a name is taken apart: a path segment carries exactly one part, so
+ * `File.Delete` is a two-part *name* and never a one-part *segment*. A caller
+ * that inverts a path asks this, because `File.Delete` is written at
+ * `File/Delete.md` and a file literally called `File.Delete.md` answers to
+ * nothing.
+ */
+export function isComponentNameSegment(segment: string): boolean {
+  return SEGMENT.test(segment);
+}
+
+/**
  * Whether `name` is spelled the way a document writes a component name.
  *
  * The grammar registration is held to, offered as a predicate so a host
@@ -90,7 +119,7 @@ const SEGMENT = /^[A-Z][A-Za-z0-9_]*$/;
  * registration, or a name nothing supplies.
  */
 export function isComponentName(name: string): boolean {
-  return name.length > 0 && name.split(".").every((segment) => SEGMENT.test(segment));
+  return name.length > 0 && name.split(".").every(isComponentNameSegment);
 }
 
 function kindOf(registration: ComponentRegistration): Kind {
@@ -195,6 +224,50 @@ function assertUsableCaptures(
   }
 }
 
+/**
+ * What a component declaration has to be for this scope to accept it, whoever
+ * is declaring.
+ *
+ * Extracted from the registration loop rather than restated beside it, because
+ * two things declare components: a host registering them, and a host telling an
+ * execution that one of its components names durable work (§5.6). The second
+ * reaches expansion through the first — the execution registers what its
+ * factories built — so anything that reads such a declaration *without*
+ * registering it has to ask the same question here, or a declaration would be
+ * admissible until a document happened to run.
+ *
+ * Every check is on the declaration alone. Nothing here calls an
+ * implementation, so it is usable where there is no implementation yet.
+ */
+export function* admitDeclaration(declaration: ComponentDeclaration): Operation<void> {
+  const { name, origin, props, returns, captures, forms } = declaration;
+  assertUsableName(name);
+  if (origin.length === 0) {
+    throw new ComponentRegistrationError(
+      `the declaration for "${name}" needs an origin naming where it came from`,
+    );
+  }
+  yield* compilePropsSchema(props);
+  if (returns !== undefined) {
+    yield* compileReturnsSchema(returns);
+  }
+  assertUsableCaptures(name, captures, props);
+  const badForms = formsRefusal(forms);
+  if (badForms !== undefined) {
+    throw new ComponentRegistrationError(`the declaration for "${name}" ${badForms}`);
+  }
+}
+
+/** Everything a declaration says about itself, apart from what implements it. */
+export interface ComponentDeclaration extends ComponentDocumentation {
+  readonly name: string;
+  readonly origin: string;
+  readonly props: PropsSchema;
+  readonly returns?: ReturnsSchema;
+  readonly captures?: readonly string[];
+  readonly forms?: readonly InvocationForm[];
+}
+
 export function* registerComponents(
   registrations: readonly ComponentRegistration[],
 ): Operation<void> {
@@ -206,18 +279,8 @@ export function* registerComponents(
   const additions = new Map<string, Partial<Record<Kind, string>>>();
 
   for (const registration of registrations) {
-    const { name, origin, fn, props, returns, captures } = registration;
-    assertUsableName(name);
-    if (origin.length === 0) {
-      throw new ComponentRegistrationError(
-        `the registration for "${name}" needs an origin naming where it came from`,
-      );
-    }
-    yield* compilePropsSchema(props);
-    if (returns !== undefined) {
-      yield* compileReturnsSchema(returns);
-    }
-    assertUsableCaptures(name, registration.captures, props);
+    const { name, origin, fn, props, returns, captures, forms } = registration;
+    yield* admitDeclaration(registration);
 
     const kind = kindOf(registration);
     const already = additions.get(name)?.[kind];
@@ -232,6 +295,8 @@ export function* registerComponents(
       fn,
       ...(returns ? { returns } : {}),
       ...(captures && captures.length > 0 ? { captures } : {}),
+      ...(forms ? { forms } : {}),
+      ...documentationOf(registration),
     };
     batch.set(name, { ...batch.get(name), [kind]: { definition, origin } });
     additions.set(name, { ...additions.get(name), [kind]: origin });

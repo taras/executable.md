@@ -41,7 +41,13 @@ import {
   raise,
   renderSegments,
 } from "@executablemd/core";
-import type { ErrorSegment, FunctionComponent, Json, PropsSchema } from "@executablemd/core";
+import type {
+  ErrorSegment,
+  FunctionComponent,
+  InvocationForm,
+  Json,
+  PropsSchema,
+} from "@executablemd/core";
 import { inTest, testing, verbose } from "./test-api.ts";
 
 export type AssertionKind =
@@ -58,6 +64,8 @@ export interface AssertionEntry {
   /** Runs the underlying assertion operation on the resolved raw values. */
   run(values: ResolvedValues): void;
   allowsExpectedChildren: boolean;
+  /** What this assertion checks, for `xmd syntax`. */
+  description: string;
 }
 
 interface ResolvedValues {
@@ -70,37 +78,122 @@ interface ResolvedValues {
 function entry(
   name: string,
   kind: AssertionKind,
+  description: string,
   run: (values: ResolvedValues) => void,
 ): [string, AssertionEntry] {
   const allowsExpectedChildren = kind === "binary-eq" || kind === "string-includes";
-  return [name, { name, kind, run, allowsExpectedChildren }];
+  return [name, { name, kind, run, allowsExpectedChildren, description }];
 }
 
+/** Whether an assertion of `kind` reads content as its expected value. */
+function readsExpectedChildren(kind: AssertionKind): boolean {
+  return kind === "binary-eq" || kind === "string-includes";
+}
+
+/**
+ * What the content of an assertion means, decided by kind.
+ *
+ * The two kinds that compare against a value read multiline content as that
+ * value; every other kind takes its operands as props alone, so content is a
+ * configuration error rather than an undocumented affordance.
+ */
+export function assertionContext(kind: AssertionKind): string | null {
+  return readsExpectedChildren(kind)
+    ? "The expected value, in place of the `expected` prop."
+    : null;
+}
+
+/**
+ * The forms an assertion of `kind` accepts.
+ *
+ * The same fact `allowsExpectedChildren` already decides, spelled where a
+ * reader is told about it: a kind that does not read expected children refuses
+ * an invocation that was written with any, so it accepts one form and says so.
+ */
+export function assertionForms(kind: AssertionKind): readonly InvocationForm[] {
+  return readsExpectedChildren(kind) ? ["self-closing", "paired"] : ["self-closing"];
+}
+
+/** How an assertion of `kind` is written, as a spelling a reader can copy. */
+const EXAMPLE_PROPS: Record<AssertionKind, string> = {
+  "unary-truthy": "expr={ready}",
+  "unary-exists": "actual={user}",
+  "binary-eq": "actual={count} expected={3}",
+  "string-includes": 'actual={output} expected="created"',
+  match: "actual={version} expected={/^\\d+\\./}",
+  numeric: "actual={score} expected={80}",
+};
+
+/** The prose one assertion reports: what it checks, how to write it, and `msg`. */
+export function assertionDescription(assertion: AssertionEntry): string {
+  return (
+    `${assertion.description} — \`<${assertion.name} ${EXAMPLE_PROPS[assertion.kind]} />\`. ` +
+    "The optional `msg` prop replaces the reported failure message."
+  );
+}
+
+/** What `as` binds on an assertion: the report, not the outcome. */
+export const ASSERTION_BINDING =
+  "Optional. The diagnostic report this assertion rendered, as text — a passing assertion " +
+  "renders one only while testing or verbose output is on, so the binding is empty otherwise. " +
+  "A failing assertion does not return.";
+
 export const ASSERTIONS: Map<string, AssertionEntry> = new Map([
-  entry("Assert", "unary-truthy", (v) => assert(v.expr, v.msg)),
-  entry("AssertFalse", "unary-truthy", (v) => assertFalse(v.expr, v.msg)),
-  entry("AssertExists", "unary-exists", (v) => assertExists(v.actual, v.msg)),
-  entry("AssertEquals", "binary-eq", (v) => assertEquals(v.actual, v.expected, v.msg)),
-  entry("AssertNotEquals", "binary-eq", (v) => assertNotEquals(v.actual, v.expected, v.msg)),
-  entry("AssertStrictEquals", "binary-eq", (v) => assertStrictEquals(v.actual, v.expected, v.msg)),
-  entry("AssertNotStrictEquals", "binary-eq", (v) =>
-    assertNotStrictEquals(v.actual, v.expected, v.msg),
+  entry("Assert", "unary-truthy", "Assert that a value is truthy", (v) => assert(v.expr, v.msg)),
+  entry("AssertFalse", "unary-truthy", "Assert that a value is falsy", (v) =>
+    assertFalse(v.expr, v.msg),
   ),
-  entry("AssertStringIncludes", "string-includes", (v) =>
-    assertStringIncludes(coerceString(v.actual), coerceString(v.expected), v.msg),
+  entry("AssertExists", "unary-exists", "Assert that a value is neither null nor undefined", (v) =>
+    assertExists(v.actual, v.msg),
   ),
-  entry("AssertMatch", "match", (v) =>
+  entry("AssertEquals", "binary-eq", "Assert that two values are deeply equal", (v) =>
+    assertEquals(v.actual, v.expected, v.msg),
+  ),
+  entry("AssertNotEquals", "binary-eq", "Assert that two values are not deeply equal", (v) =>
+    assertNotEquals(v.actual, v.expected, v.msg),
+  ),
+  entry(
+    "AssertStrictEquals",
+    "binary-eq",
+    "Assert that two values are the same, compared with `===`",
+    (v) => assertStrictEquals(v.actual, v.expected, v.msg),
+  ),
+  entry(
+    "AssertNotStrictEquals",
+    "binary-eq",
+    "Assert that two values are not the same, compared with `===`",
+    (v) => assertNotStrictEquals(v.actual, v.expected, v.msg),
+  ),
+  entry(
+    "AssertStringIncludes",
+    "string-includes",
+    "Assert that a string contains a substring",
+    (v) => assertStringIncludes(coerceString(v.actual), coerceString(v.expected), v.msg),
+  ),
+  entry("AssertMatch", "match", "Assert that a string matches a pattern", (v) =>
     assertMatch(coerceString(v.actual), requireRegExp(v.expected), v.msg),
   ),
-  entry("AssertNotMatch", "match", (v) =>
+  entry("AssertNotMatch", "match", "Assert that a string does not match a pattern", (v) =>
     assertNotMatch(coerceString(v.actual), requireRegExp(v.expected), v.msg),
   ),
-  entry("AssertGreater", "numeric", (v) => assertGreater(v.actual, v.expected, v.msg)),
-  entry("AssertGreaterOrEqual", "numeric", (v) =>
-    assertGreaterOrEqual(v.actual, v.expected, v.msg),
+  entry("AssertGreater", "numeric", "Assert that one number is greater than another", (v) =>
+    assertGreater(v.actual, v.expected, v.msg),
   ),
-  entry("AssertLess", "numeric", (v) => assertLess(v.actual, v.expected, v.msg)),
-  entry("AssertLessOrEqual", "numeric", (v) => assertLessOrEqual(v.actual, v.expected, v.msg)),
+  entry(
+    "AssertGreaterOrEqual",
+    "numeric",
+    "Assert that one number is greater than or equal to another",
+    (v) => assertGreaterOrEqual(v.actual, v.expected, v.msg),
+  ),
+  entry("AssertLess", "numeric", "Assert that one number is less than another", (v) =>
+    assertLess(v.actual, v.expected, v.msg),
+  ),
+  entry(
+    "AssertLessOrEqual",
+    "numeric",
+    "Assert that one number is less than or equal to another",
+    (v) => assertLessOrEqual(v.actual, v.expected, v.msg),
+  ),
 ]);
 
 function coerceString(value: unknown): string {

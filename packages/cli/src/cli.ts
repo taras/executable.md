@@ -108,6 +108,7 @@ import {
 } from "./props.ts";
 import type { Binding, Extraction } from "./props.ts";
 import { componentSearchPath, resolveTestTarget } from "./test-target.ts";
+import { renderSyntaxJson, renderSyntaxMarkdown, syntaxCatalog } from "./syntax.ts";
 import { testingExecutionHost } from "./testing-host.ts";
 import { EVAL_ALIAS, EVAL_OPTION, evalGrammarError, readEvalFlags } from "./eval-source.ts";
 import type { EvalFlags } from "./eval-source.ts";
@@ -247,6 +248,25 @@ const testConfig = object({
   secretDetection: SECRET_DETECTION_FIELD,
 });
 
+/**
+ * `xmd syntax` — inspection only, so its grammar is only what selection needs.
+ *
+ * No document, props, agent, timeout, journal, raw, testing, workflow or
+ * secret-detection option: the command runs nothing, so there is nothing for
+ * any of them to configure. `--include` is the same ordered, repeatable field
+ * `run` and `test` declare, and explicit values replace the defaults.
+ */
+const syntaxConfig = object({
+  include: {
+    description: "component search directory",
+    ...field(z.array(z.string()), field.default(["components", "."]), field.array()),
+  },
+  json: {
+    description: "write the catalog as version-1 JSON instead of markdown",
+    ...field(z.boolean(), field.default(false)),
+  },
+});
+
 const testAgentConfig = object({
   connect: {
     description: "opaque controller route (controller-launched workers only)",
@@ -261,6 +281,7 @@ const xmd = program({
     {
       run: runConfig,
       test: testConfig,
+      syntax: syntaxConfig,
       "test-agent": testAgentConfig,
       workflow: workflowConfig,
     },
@@ -1488,7 +1509,7 @@ function workflowPositionals(
   return { action, target, argument, value };
 }
 
-const COMMAND_NAMES = ["run", "test", "test-agent", "workflow"];
+const COMMAND_NAMES = ["run", "test", "syntax", "test-agent", "workflow"];
 
 /**
  * What a caller has to know to write a filename that contains reference
@@ -1766,6 +1787,22 @@ function* dispatch(
         evalFlags.rest,
         installService,
       );
+      break;
+    }
+    case "syntax": {
+      // One inspection per invocation, then one complete document. A failure
+      // writes nothing to stdout: a healthy subset printed as though it were
+      // the catalog would read as complete.
+      let rendered: string;
+      try {
+        const catalog = yield* syntaxCatalog(command.config.include);
+        rendered = command.config.json ? renderSyntaxJson(catalog) : renderSyntaxMarkdown(catalog);
+      } catch (error) {
+        console.error(describeError(error));
+        yield* exit(1);
+        break;
+      }
+      process.stdout.write(rendered);
       break;
     }
     case "test-agent":

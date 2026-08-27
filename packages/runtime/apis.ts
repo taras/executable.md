@@ -765,6 +765,8 @@ export const readTextFile: typeof API.Fs.operations.readTextFile = API.Fs.operat
 
 export const stat: typeof API.Fs.operations.stat = API.Fs.operations.stat;
 
+export const lstat: typeof API.Fs.operations.lstat = API.Fs.operations.lstat;
+
 export const glob: typeof API.Fs.operations.glob = API.Fs.operations.glob;
 
 export const writeTextFile: typeof API.Fs.operations.writeTextFile =
