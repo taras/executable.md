@@ -21,7 +21,8 @@ import type { SerializedPromptFailure } from "./errors.ts";
 import { sourceDescription } from "../source-position.ts";
 import type { SourcePosition } from "../types.ts";
 
-const AGENT_PROMPT = "agent_prompt";
+/** The durable effect type every journaled Agent Prompt is recorded under. */
+export const AGENT_PROMPT = "agent_prompt";
 
 export interface PromptRecord {
   sequence: number;
@@ -149,7 +150,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parsePromptRecord(value: unknown): PromptRecord | undefined {
+/**
+ * One durable `agent_prompt` result, as the record it claims to be.
+ *
+ * Pure and total: it reads a value nobody has authenticated and answers with
+ * the record or with nothing, so a caller that has only retained bytes — a
+ * sealed artifact's verifier, for one — asks the same question a live run
+ * asks rather than spelling the shape a second time.
+ */
+export function parsePromptRecord(value: unknown): PromptRecord | undefined {
   if (!isRecord(value)) {
     return undefined;
   }

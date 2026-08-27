@@ -1,7 +1,7 @@
 /**
  * Opening one XMD artifact, completely, before anybody sees any of it.
  *
- * Ten gates, in order, and no caller receives a lifecycle snapshot, a history
+ * Eleven gates, in order, and no caller receives a lifecycle snapshot, a history
  * row, a Workspace byte or a definition member until the last of them has
  * passed. That totality is the contract: an artifact arrives from somewhere
  * else, and a reader that answered "what is the status" from the first row it
@@ -47,7 +47,13 @@ import {
 } from "../../storage/errors.ts";
 import { reading, readTransaction } from "../reading.ts";
 import { buildXmdArtifactManifest, canonicalJsonText, sha256Hex } from "./manifest.ts";
-import { decodeXmdArtifactInventory, verifyXmdArtifactSemantics } from "./records.ts";
+import {
+  decodeXmdArtifactAgentEvidence,
+  decodeXmdArtifactInventory,
+  partitionXmdArtifactEntries,
+  verifyXmdArtifactAgentEvidence,
+  verifyXmdArtifactSemantics,
+} from "./records.ts";
 import {
   artifactOpenFailure,
   checkXmdArtifactForeignKeys,
@@ -60,6 +66,8 @@ import {
 import {
   XMD_ARTIFACT_CONTENT_KINDS,
   type VerifiedXmdArtifact,
+  type XmdArtifactAgentEvidence,
+  type XmdArtifactAgentPortability,
   type XmdArtifactContentEntry,
   type XmdArtifactContents,
   type XmdArtifactDefinitionClosure,
@@ -199,7 +207,7 @@ function sealedContent(database: DatabaseSync, path: string): SealedContent {
 }
 
 /**
- * Gates 8 through 10, with nothing open.
+ * Gates 8 through 11, with nothing open.
  *
  * Nothing here can reach the file again, which is the point: what is being
  * decided is whether the bytes already in hand describe one snapshot a live
@@ -207,12 +215,16 @@ function sealedContent(database: DatabaseSync, path: string): SealedContent {
  * one stored beside them.
  */
 function* recognized(sealed: SealedContent, path: string): Operation<VerifiedXmdArtifact> {
-  // Gate 8: the records themselves, and every reference between them.
-  const contents = decodeXmdArtifactInventory(sealed.entries, path);
+  // Gate 8: the records themselves, and every reference between them. The two
+  // Agent kinds are set aside rather than decoded here — they are content whose
+  // stored manifest and identity have not been compared yet.
+  const { base, agent } = partitionXmdArtifactEntries(sealed.entries);
+  const contents = decodeXmdArtifactInventory(base, path);
   yield* verifyXmdArtifactSemantics(contents, path);
 
   // Gate 9: the manifest this content produces, against the one stored beside
   // it, and the identity that manifest derives against the stored identity.
+  // Both halves of the inventory take part in it.
   const rebuilt = buildXmdArtifactManifest(sealed.entries, (kind) => {
     throw new XmdArtifactInventoryError(
       path,
@@ -226,8 +238,16 @@ function* recognized(sealed: SealedContent, path: string): Operation<VerifiedXmd
     throw new XmdArtifactIdentityMismatchError(path);
   }
 
-  // Gate 10: one immutable value, without the path it was read from.
-  return immutableArtifact(contents, rebuilt.identity);
+  // Gate 10: which of version 1's two profiles this is, and whether a finalized
+  // one classifies every session that retained a Prompt. Absent evidence is
+  // merged legacy V1 and nothing is synthesized for it.
+  const evidence = decodeXmdArtifactAgentEvidence(agent, path);
+  if (evidence !== undefined) {
+    verifyXmdArtifactAgentEvidence(contents, evidence, path);
+  }
+
+  // Gate 11: one immutable value, without the path it was read from.
+  return immutableArtifact(contents, evidence, rebuilt.identity);
 }
 
 /** The artifact format version the header declares, whatever the schema is. */
@@ -368,7 +388,7 @@ function count(value: unknown, path: string, label: string): number {
 }
 
 /**
- * Gate 10, in full: one value whose every leaf refuses to be edited.
+ * Gate 11, in full: one value whose every leaf refuses to be edited.
  *
  * Built member by member rather than by walking the decoded graph, because the
  * two halves of "immutable" need different mechanisms and a generic walk can
@@ -388,7 +408,11 @@ function count(value: unknown, path: string, label: string): number {
  * than a stable reference. Nothing in this contract promised one, and buying
  * that back would mean handing out the sealed array itself.
  */
-function immutableArtifact(contents: XmdArtifactContents, identity: string): VerifiedXmdArtifact {
+function immutableArtifact(
+  contents: XmdArtifactContents,
+  evidence: XmdArtifactAgentEvidence | undefined,
+  identity: string,
+): VerifiedXmdArtifact {
   return Object.freeze({
     identity,
     frontier: Object.freeze({ ...contents.frontier }),
@@ -403,6 +427,7 @@ function immutableArtifact(contents: XmdArtifactContents, identity: string): Ver
     worktrees: Object.freeze(contents.worktrees.map((each) => Object.freeze({ ...each }))),
     answers: Object.freeze(contents.answers.map(frozenAnswer)),
     agentSessions: Object.freeze(contents.agentSessions.map(frozenAgentSession)),
+    ...(evidence === undefined ? {} : { agentEvidence: frozenAgentEvidence(evidence) }),
     definition: frozenClosure(contents.definition),
   });
 }
@@ -513,6 +538,65 @@ function frozenAnswer(answer: RetainedAnswer): RetainedAnswer {
 
 function frozenAgentSession(session: AgentSessionRecord): AgentSessionRecord {
   return Object.freeze({ ...session, assertion: Object.freeze({ ...session.assertion }) });
+}
+
+/**
+ * The Agent evidence, detached the same two ways the rest of the value is.
+ *
+ * Descriptors and their nested identities and associations are frozen; a
+ * bundle's bytes cannot be, so they go behind the same copy-returning accessor
+ * every other byte leaf uses. A caller holding retained checkpoint evidence
+ * must not be able to edit it into evidence about something else.
+ */
+function frozenAgentEvidence(evidence: XmdArtifactAgentEvidence): XmdArtifactAgentEvidence {
+  return Object.freeze({
+    portability: Object.freeze(evidence.portability.map(frozenPortability)),
+    bundles: Object.freeze(
+      evidence.bundles.map((bundle) => {
+        const bytes = sealedBytes(bundle.bytes);
+        return Object.freeze({
+          sessionKey: bundle.sessionKey,
+          get bytes() {
+            return bytes();
+          },
+        });
+      }),
+    ),
+  });
+}
+
+function frozenPortability(record: XmdArtifactAgentPortability): XmdArtifactAgentPortability {
+  const associations = Object.freeze(
+    record.associations.map((association) => Object.freeze({ ...association })),
+  );
+  if (record.availability === "unavailable") {
+    return Object.freeze({
+      sessionKey: record.sessionKey,
+      sessionIdentity: record.sessionIdentity,
+      provider: record.provider,
+      agentCommand: record.agentCommand,
+      policy: record.policy,
+      associations,
+      availability: record.availability,
+      reason: record.reason,
+    });
+  }
+  return Object.freeze({
+    sessionKey: record.sessionKey,
+    sessionIdentity: record.sessionIdentity,
+    provider: record.provider,
+    agentCommand: record.agentCommand,
+    policy: record.policy,
+    associations,
+    availability: record.availability,
+    bundleKind: record.bundleKind,
+    compatibilityId: record.compatibilityId,
+    sourceProviderSession: Object.freeze({ ...record.sourceProviderSession }),
+    bundledProviderSession: Object.freeze({ ...record.bundledProviderSession }),
+    identityAllocationMode: record.identityAllocationMode,
+    bundleLength: record.bundleLength,
+    bundleSha256: record.bundleSha256,
+  });
 }
 
 function frozenClosure(closure: XmdArtifactDefinitionClosure): XmdArtifactDefinitionClosure {

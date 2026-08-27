@@ -102,6 +102,104 @@ export interface XmdArtifactDefinitionClosure {
   readonly components: readonly XmdArtifactDefinitionComponent[];
 }
 
+/**
+ * One retained Prompt event, and the provider checkpoint token taken at it.
+ *
+ * A token is opaque: it is whatever the provider that issued it can later
+ * present, and nothing here derives, normalizes or infers one. It is retained
+ * evidence rather than authentication authority — it names a place in a
+ * conversation, not permission to reach the host that had it.
+ */
+export interface XmdArtifactAgentCheckpoint {
+  readonly eventId: string;
+  readonly tokenKind: string;
+  readonly token: string;
+}
+
+/**
+ * A durable session identity a provider asserted, and what kind of thing it is.
+ *
+ * Tagged for the same reason the live mapping's assertion is: "an ACP session
+ * id" and "a record id in some store" are different claims that happen to be
+ * strings.
+ */
+export interface XmdArtifactProviderSessionIdentity {
+  readonly kind: string;
+  readonly value: string;
+}
+
+/** What every classification of one logical Agent session states. */
+export interface XmdArtifactAgentPortabilityBase {
+  readonly sessionKey: string;
+  readonly sessionIdentity: string;
+  readonly provider: string;
+  readonly agentCommand: string;
+  readonly policy: string;
+  /** In journal append order, one row per Prompt a token was taken at. */
+  readonly associations: readonly XmdArtifactAgentCheckpoint[];
+}
+
+/**
+ * A session a fork could continue, and the bundle that would continue it.
+ *
+ * The bundled identity is retained separately from the source identity because
+ * detached bytes may name a transported session rather than the live one they
+ * were captured from.
+ */
+export interface XmdArtifactPortableAgentSession extends XmdArtifactAgentPortabilityBase {
+  readonly availability: "portable";
+  readonly bundleKind: string;
+  readonly compatibilityId: string;
+  readonly sourceProviderSession: XmdArtifactProviderSessionIdentity;
+  readonly bundledProviderSession: XmdArtifactProviderSessionIdentity;
+  readonly identityAllocationMode: "provider-allocated" | "caller-allocated";
+  readonly bundleLength: number;
+  readonly bundleSha256: string;
+}
+
+/**
+ * A session no bundle was sealed for, and which of the two reasons applies.
+ *
+ * `checkpoint-token-unavailable` is intrinsic: the run's own retained evidence
+ * is incomplete, and no other host's capability can repair it.
+ * `provider-capability-unavailable` is the export decision — every Prompt was
+ * completed and covered, and nothing declared a way to capture the session.
+ */
+export interface XmdArtifactUnavailableAgentSession extends XmdArtifactAgentPortabilityBase {
+  readonly availability: "unavailable";
+  readonly reason: "checkpoint-token-unavailable" | "provider-capability-unavailable";
+}
+
+/** How one Prompt-contributing Agent session is classified. */
+export type XmdArtifactAgentPortability =
+  | XmdArtifactPortableAgentSession
+  | XmdArtifactUnavailableAgentSession;
+
+/**
+ * The opaque bytes one portable session was captured as.
+ *
+ * Confidential and never inspected: a bundle holds whatever the provider put in
+ * it, which can include transcript text, tool state, secrets a conversation
+ * repeated and the original host's own paths. Nothing scans or scrubs them.
+ */
+export interface XmdArtifactAgentBundle {
+  readonly sessionKey: string;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * Every Agent portability record and bundle one artifact carries.
+ *
+ * An in-memory grouping rather than a stored profile marker. The encoder emits
+ * only the two declared content kinds, and the decoder constructs this member
+ * only when at least one of them is present — so a legacy artifact and a
+ * finalized one holding no Prompt are, deliberately, the same file.
+ */
+export interface XmdArtifactAgentEvidence {
+  readonly portability: readonly XmdArtifactAgentPortability[];
+  readonly bundles: readonly XmdArtifactAgentBundle[];
+}
+
 /** The complete XMD-owned state one artifact seals. */
 export interface XmdArtifactContents {
   readonly frontier: XmdArtifactFrontier;
@@ -117,6 +215,8 @@ export interface XmdArtifactContents {
   readonly worktrees: readonly RetainedWorktree[];
   readonly answers: readonly RetainedAnswer[];
   readonly agentSessions: readonly AgentSessionRecord[];
+  /** Absent unless the artifact classifies its Prompt-contributing sessions. */
+  readonly agentEvidence?: XmdArtifactAgentEvidence;
   readonly definition: XmdArtifactDefinitionClosure;
 }
 
@@ -181,6 +281,8 @@ export type XmdArtifactContentKind =
   | "workspace-worktree"
   | "suspension-answer"
   | "agent-session"
+  | "agent-session-portability"
+  | "agent-session-bundle-bytes"
   | "definition-source-root"
   | "definition-source-root-content"
   | "definition-source-component"
@@ -189,6 +291,8 @@ export type XmdArtifactContentKind =
 /** Every declared kind, for recognition and for exhaustiveness. */
 export const XMD_ARTIFACT_CONTENT_KINDS: readonly XmdArtifactContentKind[] = Object.freeze([
   "agent-session",
+  "agent-session-bundle-bytes",
+  "agent-session-portability",
   "artifact-frontier",
   "definition-source-component",
   "definition-source-component-content",

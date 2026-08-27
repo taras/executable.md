@@ -235,7 +235,10 @@ frontier and attempt a compatible history fork:
 - completed and interrupted external-effect requests, identities and filtered
   outcomes already retained by the workflow contract;
 - workflow Agent session mappings and compatibility attributes already retained
-  in the run database; and
+  in the run database;
+- in a finalized artifact, one portability classification for every logical
+  Agent session that contributed a retained Prompt, and the opaque bundle bytes
+  of each portable one (§2.5); and
 - the workflow definition source closure.
 
 “Complete” is bounded by XMD ownership. The artifact does not claim to capture
@@ -263,11 +266,64 @@ Retrieval metadata, clone paths, remote URLs and credentials do not enter the
 closure. The artifact therefore remains sufficient to inspect and fork the
 original definition when its repository is unavailable.
 
+### 2.5 Agent session portability evidence
+
+Version 1 has two profiles, and a reader recognizes which one it is holding only
+after every container, manifest, content and artifact-identity gate has passed.
+
+**Merged legacy V1** holds neither Agent content kind. Its sessions may have
+contributed retained Prompts and carry no classification at all, and the reader
+preserves that absence: no record, token, bundle or marker is reconstructed for
+it.
+
+**Finalized Agent-aware V1** classifies every logical Agent session that
+contributed a retained Prompt, exactly once, as one of:
+
+- **portable** — the logical session key, session identity, provider, agent
+  command and policy, the bundle kind and compatibility identifier, the source
+  and bundled provider-session identities, the identity-allocation mode, the
+  ordered Prompt-event and checkpoint-token associations, and the bundle's byte
+  length and lowercase SHA-256, beside the opaque bundle bytes themselves; or
+- **unavailable** — the same logical session and associations, and one reason.
+  `checkpoint-token-unavailable` means at least one retained Prompt did not
+  complete or has no retained association; it wins wherever it applies, because
+  missing retained evidence is intrinsic and no other host's capability can
+  repair it. `provider-capability-unavailable` means every retained Prompt
+  completed and the associations cover them exactly, and export had no declared
+  compatible capture capability.
+
+The repeated session members must equal the retained Agent session mapping, and
+a portable record's source provider session must equal that mapping's canonical
+assertion. The bundled identity is retained separately, because detached bytes
+may name a transported session rather than the live one they came from.
+
+Associations are in journal append order and each names one distinct retained
+`agent_prompt` whose Prompt record completed for that exact session. A portable
+record covers every retained Prompt of its session and has exactly one bundle
+under the same key, whose bytes match the declared length and hash. An
+unavailable record has none.
+
+A session that retained no Prompt has no classification and no bundle bytes. An
+artifact holding no Agent Prompt and neither Agent kind is valid, and legacy and
+finalized writers are deliberately indistinguishable for that inventory.
+
+A checkpoint token is opaque retained evidence about where a conversation
+reached, not authority over the host that issued it, and is never derived from
+event position, transcript text, another token or a provider head. A bundle is
+opaque bytes that nothing scans or scrubs, and §3.1 applies to it in full.
+Ordinary status and history presentation renders neither.
+
+Partial, mixed, duplicated, orphaned or internally impossible Agent evidence is
+corruption, and yields no projection.
+
 ## 3. What remains outside
 
 The artifact excludes:
 
-- credentials, tokens, authentication helper output and environment bindings;
+- credentials, authentication tokens, authentication helper output and
+  environment bindings — a provider checkpoint token retained under §2.5 is
+  evidence about a conversation rather than a way to reach a host, and is not
+  one of these;
 - retrieval metadata and provider endpoints;
 - executor locks, recovery-coordination locks and SQLite journals;
 - open transactions, connections, savepoints, leases and process identities;
@@ -304,6 +360,11 @@ an XMD artifact.
 Provider-owned Agent conversation state is not portable merely because its XMD
 mapping is. A checkpoint whose compatible continuation requires that state is
 reported `agent-state-unavailable` by the existing forkability contract.
+
+A finalized artifact may carry §2.5 portability evidence about that same
+session. Intrinsic forkability does not read it: an Agent turn is still
+`agent-state-unavailable`, and whether a destination can consume a particular
+bundle is decided by artifact-backed fork rather than by inspection.
 
 Completed external effects replay from their retained records and do not contact
 their providers. An interrupted or otherwise unsettled external effect is
@@ -407,7 +468,13 @@ groups, and admits nothing else:
   consumed state, and its timestamps;
 - every retained workflow Agent session mapping and its compatibility
   attributes, without any provider-owned conversation store or session
-  directory; and
+  directory;
+- in a finalized artifact, one `agent-session-portability` record as
+  `canonical-json` under the logical session key for every Prompt-contributing
+  session, and one `agent-session-bundle-bytes` entry as `bytes` under the same
+  key for every portable one (§2.5). Both take part in the manifest and the
+  artifact identity; neither is a profile marker, and no other Agent
+  portability kind exists; and
 - the workflow definition source closure: the root descriptor and exact root
   Markdown bytes, plus every declared component's name, canonical path, object
   identity and exact Markdown bytes, including a component the run never
@@ -493,8 +560,10 @@ Publication is the commit point. Cleanup of the one private entry that remains
 after it cannot invalidate or roll back the committed artifact: it is reported
 as a retained leftover beside a successful export.
 
-Inspection refuses without a partial result when recognition or manifest
-verification fails.
+Inspection refuses without a partial result when recognition, manifest
+verification or §2.5 profile recognition fails. Profile recognition runs after
+the stored manifest and the artifact identity have been compared, so a
+descriptor is never interpreted out of content this build has not authenticated.
 
 Fork refuses before creating discoverable run storage when:
 
@@ -530,6 +599,10 @@ Architecture review freezes these invariants before implementation:
    confidential rather than silently scrubbed.
 8. `.xmd` and the semantic version are the public compatibility boundary;
    SQLite schema is not.
+9. Version 1's Agent profile is recognized only after container, manifest and
+   artifact-identity verification, every Prompt-contributing session in a
+   finalized artifact is classified exactly once, and partial or mixed evidence
+   yields no projection.
 
 ## 8. Contract inventory
 
@@ -538,6 +611,7 @@ Architecture review freezes these invariants before implementation:
 | XMD artifact terminology and structural boundary | specified in `architecture.md`; built |
 | `xmd workflow export` | specified; built, Deno provider only. Source retrieval is host-installed rather than caller-supplied |
 | artifact status/history and manifest verification | specified; built, Deno provider only. `inspectArtifact()` and `historyArtifact()` are sibling lifecycle operations, and history answers with an envelope |
+| version 1 Agent session portability evidence | specified; the two content kinds, the closed union and the complete post-identity profile verifier are built. Production export still emits merged-legacy V1, no provider bundle capture exists, and inspection carries none of it |
 | artifact-backed history fork and artifact lineage | specified; unbuilt |
 | SQLite artifact container version 1 | specified as the initial encoding; the sealed container, its canonical manifest and its total read-only verifier are built. The physical schema is private and no raw table, SQL or connection is public API |
 | CI upload, digest attestation and retention policy | host integration; not an XMD execution contract |

@@ -29,6 +29,8 @@ import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import type { Operation } from "effection";
 import { prepareElicitation, validateParsed } from "@executablemd/core";
+import { AGENT_PROMPT, parsePromptRecord } from "@executablemd/core/host";
+import type { PromptRecord } from "@executablemd/core/host";
 import { parseDurableEvent } from "@executablemd/durable-streams";
 import type { DurableEvent, EffectDescription, Json, Result } from "@executablemd/durable-streams";
 import { SUSPENSION_ANSWER } from "../../suspension/answer.ts";
@@ -89,6 +91,9 @@ import type { DofsManifest } from "../workspace/root.ts";
 import { gitBlobIdentity } from "./source.ts";
 import { canonicalJsonBytes, canonicalJsonText, entryKey } from "./manifest.ts";
 import type {
+  XmdArtifactAgentCheckpoint,
+  XmdArtifactAgentEvidence,
+  XmdArtifactAgentPortability,
   XmdArtifactContentEntry,
   XmdArtifactContents,
   XmdArtifactDefinitionClosure,
@@ -97,6 +102,7 @@ import type {
   XmdArtifactForkLineage,
   XmdArtifactFrontier,
   XmdArtifactJournalRow,
+  XmdArtifactProviderSessionIdentity,
 } from "./types.ts";
 
 const encoder = new TextEncoder();
@@ -151,6 +157,46 @@ function stopReasonToJson(reason: WorkflowStopReason): Json {
   return reason.kind === "host"
     ? { kind: "host", code: reason.code }
     : { kind: "journal", eventId: reason.eventId };
+}
+
+/**
+ * One classification, as the exact closed union its content kind declares.
+ *
+ * Written out member by member for the same reason the manifest is: the encoded
+ * shape and the declared shape stay one decision, and a member the union never
+ * named cannot reach a sealed file by being spread into it.
+ */
+function portabilityToJson(record: XmdArtifactAgentPortability): Json {
+  const base = {
+    sessionKey: record.sessionKey,
+    sessionIdentity: record.sessionIdentity,
+    provider: record.provider,
+    agentCommand: record.agentCommand,
+    policy: record.policy,
+    associations: record.associations.map((association: XmdArtifactAgentCheckpoint) => ({
+      eventId: association.eventId,
+      tokenKind: association.tokenKind,
+      token: association.token,
+    })),
+  };
+  if (record.availability === "unavailable") {
+    return { ...base, availability: record.availability, reason: record.reason };
+  }
+  return {
+    ...base,
+    availability: record.availability,
+    bundleKind: record.bundleKind,
+    compatibilityId: record.compatibilityId,
+    sourceProviderSession: providerSessionToJson(record.sourceProviderSession),
+    bundledProviderSession: providerSessionToJson(record.bundledProviderSession),
+    identityAllocationMode: record.identityAllocationMode,
+    bundleLength: record.bundleLength,
+    bundleSha256: record.bundleSha256,
+  };
+}
+
+function providerSessionToJson(identity: XmdArtifactProviderSessionIdentity): Json {
+  return { kind: identity.kind, value: identity.value };
 }
 
 /** Every entry one snapshot produces, in no particular order. */
@@ -308,6 +354,16 @@ export function encodeXmdArtifactInventory(
         createdAt: session.createdAt,
       }),
     );
+  }
+
+  const evidence = contents.agentEvidence;
+  if (evidence !== undefined) {
+    for (const record of evidence.portability) {
+      entries.push(json(AGENT_PORTABILITY, record.sessionKey, portabilityToJson(record)));
+    }
+    for (const bundle of evidence.bundles) {
+      entries.push(raw(AGENT_BUNDLE_BYTES, bundle.sessionKey, bundle.bytes));
+    }
   }
 
   const root = contents.definition.root;
@@ -1722,4 +1778,437 @@ function verifyDefinitionClosure(contents: XmdArtifactContents, reject: Reject):
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+const AGENT_PORTABILITY = "agent-session-portability";
+const AGENT_BUNDLE_BYTES = "agent-session-bundle-bytes";
+
+const AGENT_EVIDENCE_KINDS: ReadonlySet<string> = new Set([AGENT_PORTABILITY, AGENT_BUNDLE_BYTES]);
+
+const PORTABILITY_MEMBERS = [
+  "sessionKey",
+  "sessionIdentity",
+  "provider",
+  "agentCommand",
+  "policy",
+  "associations",
+  "availability",
+];
+
+const PORTABLE_MEMBERS = [
+  ...PORTABILITY_MEMBERS,
+  "bundleKind",
+  "compatibilityId",
+  "sourceProviderSession",
+  "bundledProviderSession",
+  "identityAllocationMode",
+  "bundleLength",
+  "bundleSha256",
+];
+
+const UNAVAILABLE_MEMBERS = [...PORTABILITY_MEMBERS, "reason"];
+
+const UNAVAILABLE_REASONS = ["checkpoint-token-unavailable", "provider-capability-unavailable"];
+
+const ALLOCATION_MODES = ["provider-allocated", "caller-allocated"];
+
+/** One inventory, split into the records V1 always held and the Agent evidence. */
+export interface XmdArtifactEntryPartition {
+  readonly base: readonly XmdArtifactContentEntry[];
+  readonly agent: readonly XmdArtifactContentEntry[];
+}
+
+/**
+ * The two Agent kinds, held apart from everything else the inventory declares.
+ *
+ * Both halves take part in one manifest and one artifact identity. What is
+ * separated is *when* they are interpreted: a portability descriptor decides
+ * which conversations a fork could continue, and reading one out of a file
+ * whose stored manifest and identity have not been compared yet would be acting
+ * on content nothing has authenticated.
+ */
+export function partitionXmdArtifactEntries(
+  entries: readonly XmdArtifactContentEntry[],
+): XmdArtifactEntryPartition {
+  const base: XmdArtifactContentEntry[] = [];
+  const agent: XmdArtifactContentEntry[] = [];
+  for (const entry of entries) {
+    if (AGENT_EVIDENCE_KINDS.has(entry.kind)) {
+      agent.push(entry);
+    } else {
+      base.push(entry);
+    }
+  }
+  return Object.freeze({ base: Object.freeze(base), agent: Object.freeze(agent) });
+}
+
+/**
+ * The Agent evidence an inventory holds, or nothing at all.
+ *
+ * Nothing at all is merged legacy V1. No marker was ever stored for it and none
+ * is invented here: a Prompt-contributing session that carries no
+ * classification is preserved exactly as it was retained, and a caller receives
+ * no member rather than an empty one it could mistake for a decision.
+ */
+export function decodeXmdArtifactAgentEvidence(
+  entries: readonly XmdArtifactContentEntry[],
+  path: string,
+): XmdArtifactAgentEvidence | undefined {
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const inventory = new Inventory(path, entries);
+  const portability = inventory
+    .identities(AGENT_PORTABILITY)
+    .map((identity) => decodePortability(inventory, identity, path));
+  const bundles = inventory.identities(AGENT_BUNDLE_BYTES).map((identity) => {
+    const entry = inventory.take(AGENT_BUNDLE_BYTES, identity);
+    return Object.freeze({
+      sessionKey: sessionKeyOf(identity, path, AGENT_BUNDLE_BYTES),
+      bytes: bytesOf(entry, path),
+    });
+  });
+  inventory.requireNothingLeftOver();
+  return Object.freeze({
+    portability: Object.freeze(portability),
+    bundles: Object.freeze(bundles),
+  });
+}
+
+/** The logical session key an Agent entry is stored under. */
+function sessionKeyOf(identity: Json, path: string, kind: string): string {
+  if (typeof identity !== "string" || identity === "") {
+    throw new XmdArtifactInventoryError(
+      path,
+      `a ${kind} entry is not stored under a logical session key`,
+    );
+  }
+  return identity;
+}
+
+function decodePortability(
+  inventory: Inventory,
+  identity: Json,
+  path: string,
+): XmdArtifactAgentPortability {
+  const kind = AGENT_PORTABILITY;
+  const fail = failing(path, kind);
+  const value = structured(inventory.take(kind, identity), path);
+  const parsed = parseMembers(value, "$", fail);
+  const availability = parsed.get("availability");
+  if (availability !== "portable" && availability !== "unavailable") {
+    throw new XmdArtifactRecordError(
+      path,
+      kind,
+      `expected availability to be portable or unavailable, found ${describe(availability)}`,
+    );
+  }
+  requireMemberNames(
+    parsed,
+    availability === "portable" ? PORTABLE_MEMBERS : UNAVAILABLE_MEMBERS,
+    "$",
+    fail,
+  );
+
+  const sessionKey = required(parsed, "sessionKey", path, kind);
+  if (sessionKey !== sessionKeyOf(identity, path, kind)) {
+    throw new XmdArtifactInventoryError(
+      path,
+      "an Agent portability record is stored under an identity it does not carry",
+    );
+  }
+  const base = {
+    sessionKey,
+    sessionIdentity: required(parsed, "sessionIdentity", path, kind),
+    provider: required(parsed, "provider", path, kind),
+    agentCommand: required(parsed, "agentCommand", path, kind),
+    policy: required(parsed, "policy", path, kind),
+    associations: decodeAssociations(parsed, path, kind),
+  };
+
+  if (availability === "unavailable") {
+    const reason = required(parsed, "reason", path, kind);
+    if (!UNAVAILABLE_REASONS.includes(reason)) {
+      throw new XmdArtifactRecordError(
+        path,
+        kind,
+        `expected reason to be one of ${UNAVAILABLE_REASONS.join(", ")}`,
+      );
+    }
+    return Object.freeze({
+      ...base,
+      availability,
+      reason:
+        reason === "checkpoint-token-unavailable"
+          ? "checkpoint-token-unavailable"
+          : "provider-capability-unavailable",
+    });
+  }
+
+  const mode = required(parsed, "identityAllocationMode", path, kind);
+  if (!ALLOCATION_MODES.includes(mode)) {
+    throw new XmdArtifactRecordError(
+      path,
+      kind,
+      `expected identityAllocationMode to be one of ${ALLOCATION_MODES.join(", ")}`,
+    );
+  }
+  const bundleSha256 = required(parsed, "bundleSha256", path, kind);
+  if (!SHA256.test(bundleSha256)) {
+    throw new XmdArtifactRecordError(
+      path,
+      kind,
+      "bundleSha256 is not a lowercase SHA-256 identity",
+    );
+  }
+  return Object.freeze({
+    ...base,
+    availability,
+    bundleKind: required(parsed, "bundleKind", path, kind),
+    compatibilityId: required(parsed, "compatibilityId", path, kind),
+    sourceProviderSession: providerSession(parsed, "sourceProviderSession", path, kind),
+    bundledProviderSession: providerSession(parsed, "bundledProviderSession", path, kind),
+    identityAllocationMode:
+      mode === "provider-allocated" ? "provider-allocated" : "caller-allocated",
+    bundleLength: whole(parsed, "bundleLength", path, kind),
+    bundleSha256,
+  });
+}
+
+function providerSession(
+  parsed: Map<string, unknown>,
+  key: string,
+  path: string,
+  kind: string,
+): XmdArtifactProviderSessionIdentity {
+  const member = members(
+    parseJsonValue(parsed.get(key), `$.${key}`, failing(path, kind)),
+    ["kind", "value"],
+    path,
+    kind,
+  );
+  return Object.freeze({
+    kind: required(member, "kind", path, kind),
+    value: required(member, "value", path, kind),
+  });
+}
+
+function decodeAssociations(
+  parsed: Map<string, unknown>,
+  path: string,
+  kind: string,
+): readonly XmdArtifactAgentCheckpoint[] {
+  const value = parseJsonValue(parsed.get("associations"), "$.associations", failing(path, kind));
+  if (!Array.isArray(value)) {
+    throw new XmdArtifactRecordError(
+      path,
+      kind,
+      `expected associations to be an array, found ${describe(value)}`,
+    );
+  }
+  return Object.freeze(
+    value.map((each) => {
+      const member = members(each, ["eventId", "tokenKind", "token"], path, kind);
+      return Object.freeze({
+        eventId: required(member, "eventId", path, kind),
+        tokenKind: required(member, "tokenKind", path, kind),
+        token: required(member, "token", path, kind),
+      });
+    }),
+  );
+}
+
+/** One retained Prompt, as the journal holds it and the live parser reads it. */
+interface RetainedPrompt {
+  readonly eventId: string;
+  readonly record: PromptRecord;
+}
+
+/**
+ * Whether this artifact classifies every Agent session it retained a Prompt for.
+ *
+ * Asked only of a finalized artifact, and only once the stored manifest and the
+ * artifact identity have already been compared — so what is being interpreted
+ * here is content this build has authenticated rather than content a file
+ * offered. Legacy V1 never reaches it and gains nothing from it.
+ *
+ * Every question is asked with the live contracts: the durable event parser
+ * admits the journal row, and the Agent package's own Prompt parser reads the
+ * result. A second reading of either would be a second answer to something a
+ * live run has already settled.
+ */
+export function verifyXmdArtifactAgentEvidence(
+  contents: XmdArtifactContents,
+  evidence: XmdArtifactAgentEvidence,
+  path: string,
+): void {
+  const reject: Reject = inventoryFailure(path);
+  const sessions = new Map(contents.agentSessions.map((session) => [session.sessionKey, session]));
+
+  const prompts = new Map<string, RetainedPrompt[]>();
+  for (const prompt of retainedPrompts(contents, path, reject)) {
+    if (!sessions.has(prompt.record.sessionKey)) {
+      reject("a retained Agent Prompt names a session mapping this artifact does not hold");
+    }
+    const group = prompts.get(prompt.record.sessionKey) ?? [];
+    group.push(prompt);
+    prompts.set(prompt.record.sessionKey, group);
+  }
+
+  const bundles = new Map<string, Uint8Array>();
+  for (const bundle of evidence.bundles) {
+    if (bundles.has(bundle.sessionKey)) {
+      reject("it holds one Agent session bundle twice");
+    }
+    bundles.set(bundle.sessionKey, bundle.bytes);
+  }
+
+  const classified = new Set<string>();
+  for (const record of evidence.portability) {
+    if (classified.has(record.sessionKey)) {
+      reject("it classifies one Agent session twice");
+    }
+    classified.add(record.sessionKey);
+
+    const session = sessions.get(record.sessionKey);
+    if (session === undefined) {
+      reject("an Agent portability record names a session mapping this artifact does not hold");
+      return;
+    }
+    if (
+      record.sessionIdentity !== session.sessionIdentity ||
+      record.provider !== session.provider ||
+      record.agentCommand !== session.agentCommand ||
+      record.policy !== session.policy
+    ) {
+      reject("an Agent portability record disagrees with the session mapping it classifies");
+    }
+
+    const retained = prompts.get(record.sessionKey);
+    if (retained === undefined) {
+      reject("an Agent portability record classifies a session that retained no Prompt");
+      return;
+    }
+    verifyAssociations(record, retained, reject);
+
+    const covered = record.associations.map((association) => association.eventId);
+    const exactCoverage =
+      retained.every((prompt) => prompt.record.status === "completed") &&
+      sameStrings(
+        covered,
+        retained.map((prompt) => prompt.eventId),
+      );
+    const bundle = bundles.get(record.sessionKey);
+
+    if (record.availability === "portable") {
+      if (
+        record.sourceProviderSession.kind !== session.assertion.kind ||
+        record.sourceProviderSession.value !== session.assertion.value
+      ) {
+        reject("a portable Agent session names a source session the mapping never asserted");
+      }
+      if (!exactCoverage) {
+        reject("a portable Agent session does not associate every Prompt it retained");
+      }
+      if (bundle === undefined) {
+        reject("a portable Agent session carries no bundle");
+        return;
+      }
+      if (
+        bundle.byteLength !== record.bundleLength ||
+        toHex(sha256(bundle)) !== record.bundleSha256
+      ) {
+        reject("a portable Agent session's bundle is not the length or content it declares");
+      }
+      continue;
+    }
+
+    if (bundle !== undefined) {
+      reject("an unavailable Agent session carries bundle bytes");
+    }
+    if (record.reason === "provider-capability-unavailable" && !exactCoverage) {
+      reject("an Agent session with incomplete retained Prompt evidence claims the wrong reason");
+    }
+    if (record.reason === "checkpoint-token-unavailable" && exactCoverage) {
+      reject(
+        "an Agent session whose retained Prompts are complete and covered claims the wrong reason",
+      );
+    }
+  }
+
+  for (const sessionKey of prompts.keys()) {
+    if (!classified.has(sessionKey)) {
+      reject("a session that retained a Prompt carries no Agent portability record");
+    }
+  }
+  for (const sessionKey of bundles.keys()) {
+    if (!classified.has(sessionKey)) {
+      reject("it holds Agent session bundle bytes nothing in it classifies");
+    }
+  }
+}
+
+/**
+ * The associations one record names, held to the Prompts the session retained.
+ *
+ * Distinct, in journal append order, each naming a Prompt of *this* session
+ * that completed. A dangling, foreign, reordered, repeated, non-Prompt or
+ * unfinished event fails here rather than being read as a checkpoint a fork
+ * could resume from.
+ */
+function verifyAssociations(
+  record: XmdArtifactAgentPortability,
+  retained: readonly RetainedPrompt[],
+  reject: Reject,
+): void {
+  const positions = new Map(retained.map((prompt, index) => [prompt.eventId, index]));
+  const seen = new Set<string>();
+  let previous = -1;
+  for (const association of record.associations) {
+    if (seen.has(association.eventId)) {
+      reject("an Agent portability record names one retained Prompt twice");
+    }
+    seen.add(association.eventId);
+    const at = positions.get(association.eventId);
+    if (at === undefined) {
+      reject("an Agent portability record names an event that is not a Prompt of its own session");
+      return;
+    }
+    if (at <= previous) {
+      reject("an Agent portability record's associations are not in journal append order");
+    }
+    previous = at;
+    if (retained[at]?.record.status !== "completed") {
+      reject("an Agent portability record associates a Prompt that did not complete");
+    }
+  }
+}
+
+/**
+ * Every retained Prompt, in journal append order.
+ *
+ * A finalized artifact classifies what its Prompts say, so a Prompt whose
+ * durable result is a failure or is not a Prompt record at all is damage rather
+ * than a session with nothing to classify.
+ */
+function retainedPrompts(
+  contents: XmdArtifactContents,
+  path: string,
+  reject: Reject,
+): readonly RetainedPrompt[] {
+  const prompts: RetainedPrompt[] = [];
+  for (const row of contents.journal) {
+    const event = parseJournalEvent(row.record, path);
+    if (event.type !== "yield" || event.description.type !== AGENT_PROMPT) {
+      continue;
+    }
+    const result = event.result;
+    const record = result.status === "ok" ? parsePromptRecord(result.value) : undefined;
+    if (record === undefined) {
+      reject("a retained Agent Prompt holds no Prompt record");
+      return prompts;
+    }
+    prompts.push(Object.freeze({ eventId: row.eventId, record }));
+  }
+  return Object.freeze(prompts);
 }

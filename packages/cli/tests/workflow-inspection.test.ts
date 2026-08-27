@@ -28,6 +28,13 @@ import { tmpdir } from "node:os";
 import { runCli } from "@executablemd/test-support/launch";
 import { workflowRunPath } from "@executablemd/workflow/deno";
 import { when } from "@effectionx/converge";
+import { writeXmdArtifact } from "../../workflow/src/deno/artifact/mod.ts";
+import {
+  BUNDLE_PATH_CANARY,
+  BUNDLE_SECRET_CANARY,
+  CHECKPOINT_TOKENS,
+  finalizedArtifact,
+} from "../../workflow/tests/support/artifact-fixture.ts";
 
 interface Fixture {
   readonly repository: string;
@@ -924,6 +931,65 @@ describe("Tier WFI — xmd workflow status and history over a sealed artifact", 
       ]).join();
       expect(cancel.code).toBe(1);
       expect(cancel.stderr).toContain("--artifact");
+    });
+  });
+
+  it("I6: a finalized artifact's checkpoint and bundle evidence reaches no output", function* () {
+    yield* useFixture({ "flows/release.md": RELEASE }, function* (fixture) {
+      // Written through the private writer rather than exported, because
+      // production export still emits merged-legacy V1 — what is under test is
+      // the presentation, and it has to be given something to present.
+      const artifact = join(fixture.repository, "finalized.xmd");
+      const written = yield* writeXmdArtifact(artifact, finalizedArtifact());
+      if (!written.ok) {
+        throw written.error;
+      }
+
+      const outputs = [];
+      for (const args of [
+        ["workflow", "status", `--artifact=${artifact}`],
+        ["workflow", "status", `--artifact=${artifact}`, "--json"],
+        ["workflow", "history", `--artifact=${artifact}`],
+        ["workflow", "history", `--artifact=${artifact}`, "--json"],
+        ["workflow", "history", `--artifact=${artifact}`, "--forkable"],
+        ["workflow", "history", `--artifact=${artifact}`, "--forkable", "--json"],
+      ]) {
+        outputs.push(yield* xmd(fixture, args).expect());
+      }
+
+      // Each command really answered about this artifact, so "the canary is
+      // absent" is a fact about output that exists.
+      const [human, structured, , historyJson, forkableHuman, forkableJson] = outputs;
+      expect(heading(human?.stdout ?? "", "artifact identity")).toBe(written.value.identity);
+      const projected = JSON.parse(structured?.stdout ?? "{}");
+      expect(projected.artifact.identity).toBe(written.value.identity);
+      expect(projected.record.runId).toBe("release-1.4");
+      const entries = JSON.parse(historyJson?.stdout ?? "{}").entries;
+      expect(entries.length).toBe(finalizedArtifact().journal.length);
+      // The intrinsic classification is the one already delivered: an Agent
+      // turn is unforkable, and retained portability evidence does not change
+      // that here.
+      expect(forkableHuman?.stdout).toContain("agent-state-unavailable");
+      expect(JSON.parse(forkableJson?.stdout ?? "{}").entries.length).toBe(entries.length);
+
+      const canaries = [
+        CHECKPOINT_TOKENS.portableFirst,
+        CHECKPOINT_TOKENS.portableSecond,
+        CHECKPOINT_TOKENS.incomplete,
+        CHECKPOINT_TOKENS.uncaptured,
+        BUNDLE_SECRET_CANARY,
+        BUNDLE_PATH_CANARY,
+      ];
+      for (const output of outputs) {
+        for (const canary of canaries) {
+          expect(output?.stdout ?? "").not.toContain(canary);
+          expect(output?.stderr ?? "").not.toContain(canary);
+        }
+        // Nor the vocabulary that would carry them.
+        expect(output?.stdout ?? "").not.toContain("agent-session-portability");
+        expect(output?.stdout ?? "").not.toContain("agentEvidence");
+        expect(output?.stdout ?? "").not.toContain("bundleSha256");
+      }
     });
   });
 });
