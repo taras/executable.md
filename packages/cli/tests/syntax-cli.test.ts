@@ -13,10 +13,11 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { runCli } from "@executablemd/test-support/launch";
 import { ensureDir, rm, writeTextFile } from "@effectionx/fs";
-import { ensure, scoped } from "effection";
+import { ensure, scoped, until } from "effection";
 import type { Operation } from "effection";
+import { symlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { API } from "@executablemd/runtime";
 import { CORE_COMPONENT_NAMES } from "@executablemd/core";
@@ -37,6 +38,17 @@ function* useWorkspace<T>(
     }
     return yield* body(dir);
   });
+}
+
+/**
+ * A directory symlink, spelled the way the running platform accepts one. A
+ * junction is what Windows gives an unprivileged process; everywhere else it is
+ * an ordinary directory symlink.
+ */
+const DIRECTORY_LINK = platform() === "win32" ? "junction" : "dir";
+
+function linkDirectory(target: string, path: string): Operation<void> {
+  return until(symlink(target, path, DIRECTORY_LINK));
 }
 
 /** A workspace whose default include path holds a component of its own. */
@@ -339,6 +351,37 @@ describe("Tier SX — the command line", { sanitizeOps: false, sanitizeResources
       expect(catalog.version).toBe(1);
       expect(names(catalog.categories[2].entries)).toEqual(["Shared"]);
     });
+  });
+
+  it("SX12: succeeds with the defaults in a package tree full of directory links", function* () {
+    yield* useWorkspace(
+      {
+        "components/Widget.md": "---\ndescription: a repository widget.\n---\n\nwidget\n",
+        // A pnpm-shaped tree: real packages under a store, and the links into
+        // it that every install creates.
+        "node_modules/.pnpm/effection@4.0.0/node_modules/effection/mod.js": "export {};\n",
+        "node_modules/.pnpm/zod@3.0.0/node_modules/zod/mod.js": "export {};\n",
+      },
+      function* (cwd) {
+        yield* linkDirectory(
+          join(cwd, "node_modules/.pnpm/effection@4.0.0/node_modules/effection"),
+          join(cwd, "node_modules/effection"),
+        );
+        yield* linkDirectory(
+          join(cwd, "node_modules/.pnpm/zod@3.0.0/node_modules/zod"),
+          join(cwd, "node_modules/zod"),
+        );
+
+        // No `--include`: the defaults are `["components", "."]`, so `.` walks
+        // the whole tree and reaches both links.
+        const { code, stdout, stderr } = yield* runCli(["syntax", "--json"], { cwd }).join();
+
+        expect(stderr).toBe("");
+        expect(code).toBe(0);
+        const catalog = parseCatalog(stdout);
+        expect(names(catalog.categories[2].entries)).toEqual(["Widget"]);
+      },
+    );
   });
 
   it("SX11: adds no prompt command", function* () {

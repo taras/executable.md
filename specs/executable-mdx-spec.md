@@ -2850,18 +2850,21 @@ contributes nothing, exactly as it does during execution. An include that exists
 but cannot be enumerated fails the whole request: one that is not a directory,
 one that cannot be read, and one that is itself a symbolic link.
 
-Traversal reports a symbolic link and never follows it, so every link it reports
-is classified by what it leads to. One leading to a file is an ordinary
-candidate that selection reads through its repository path. Any other — a
-directory, or nothing — fails the include, whatever the link is called. A
-lower-case or dotted name could not itself have described a component, but what
-the link holds is unknown precisely because it was not walked, so its spelling
-says nothing about the names inside it. The diagnostic names the configured
+Traversal reports a symbolic link and never follows it. A reported link is
+classified only when its complete logical path could take part in selection:
+the path is one of the candidate spellings, or every segment is a valid
+component-name segment and the link could therefore be an ancestor of one. A
+relevant link to a file is an ordinary candidate that selection reads through
+its repository path; a relevant link to a directory, to nothing, or to a target
+that cannot be classified fails the include. The diagnostic names the configured
 include and the logical entry, never the resolved host path.
 
-The consequence is a caller's to manage: a directory holding a package tree of
-symbolic links cannot be listed, and `.` reaches one in most repositories. The
-refusal names a spelling that works.
+A link behind a lower-case, dotted, hidden or otherwise invalid prefix is
+ignored. No component name makes `probeComponentPath()` probe through such a
+prefix, so ignoring the link cannot hide an implementation execution would have
+selected — and refusing it would make `xmd syntax` fail with the default
+`["components", "."]` in any ordinary package repository, whose `node_modules`
+holds directory links.
 
 **A declared component is admitted the way an execution would admit it.** A host
 may hand inspection the identity components it would declare to an execution
@@ -9464,7 +9467,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SY5 | Structural stays structural | A repository file named after a construct never moves it out of the structural category |
 | SY6/SY7 | Repository mapping | Direct `.md`/`.ts`, direct `index`, nested dotted and nested index paths describe names; a lowercase segment, an empty stem, a dotted stem and a dotted directory describe none, and the inversion is held to the single-segment grammar directly |
 | SY8–SY11 | Selection decides | Include order, `.md` before `.ts`, direct before index, registered fallback, and a repository override appearing once as user-provided |
-| SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, a linked directory and a link leading nowhere each fail the whole request; a link to a file is selected; a linked directory is refused however it is spelled, and the diagnostic names the configured include and the logical entry rather than the resolved target |
+| SY12–SY18c | Include boundaries | An absent include contributes nothing; a non-directory root, a symbolic-link root, and a selection-relevant link to a directory or to nothing each fail the whole request; a relevant link to a file is selected; a link behind a lower-case, dotted or hidden prefix is ignored even beside one that is refused; and the diagnostic names the configured include and the logical entry rather than the resolved target |
 | SY19–SY22 | Markdown documentation | String `description`/`as`/`context` reach the catalog; a non-string value documents nothing; an undocumented component stays complete; a declared `returns` reports `value` mode with its schema |
 | SY23 | Opaque TypeScript | A repository `.ts` entry is origin-only and carries no contract field |
 | SY24/SY25 | Complete contracts | `<File>`'s two forms, `<File.Delete>`'s one, `<Json>`'s one and its capture, and text and value return modes; declaration order of captures and forms survives, each canonical forms spelling is accepted, and every other one is refused |
@@ -9482,6 +9485,7 @@ so the include-boundary rows are the same on every host. Defined in §5.3.
 | SX7/SX8 | Includes | Repeated values select in caller order and replace the defaults; absent, the defaults apply |
 | SX9 | Failure | An unusable include exits 1, reports on stderr and prints no catalog |
 | SX10/SX11 | Formats | Markdown by default, version-1 JSON with `--json`, and no `prompt` command |
+| SX12 | A package tree | Bare `xmd syntax` succeeds with the default includes in a repository whose `node_modules` holds directory links |
 
 ### Tier SM — `xmd syntax` end to end
 

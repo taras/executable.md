@@ -488,35 +488,40 @@ describe("Tier SY: include boundaries", () => {
     expect(failure.message).toContain("nothing");
   });
 
-  it("SY18: refuses a linked directory however it is spelled", function* () {
-    // What a linked directory holds is unknown precisely because it was not
-    // walked, so the link's own spelling says nothing about the names inside
-    // it. Each of these is refused for the same reason `Widget` is.
-    for (const spelling of ["node_modules", "helpers", "File.Delete", ".hidden"]) {
-      const failure = yield* raised(
-        catalogFor(
-          {
-            components: { kind: "directory" },
-            [`components/${spelling}`]: { kind: "link", to: "directory" },
-            "components/Kept.md": markdown("kept\n"),
-          },
-          ["components"],
-        ),
-      );
+  it("SY18: ignores a link behind a prefix no component name reaches", function* () {
+    // `probeComponentPath()` walks a candidate path and nothing else, so a link
+    // no candidate path runs through cannot hide an implementation execution
+    // would have selected. Refusing it would fail every package repository,
+    // whose `node_modules` is full of directory links.
+    const catalog = yield* catalogFor(
+      {
+        components: { kind: "directory" },
+        "components/node_modules": { kind: "link", to: "directory" },
+        "components/.hidden": { kind: "link", to: "directory" },
+        "components/File.Delete": { kind: "link", to: "directory" },
+        "components/readme.md": { kind: "link", to: "nothing" },
+        "components/vendor": { kind: "directory" },
+        "components/vendor/Widget": { kind: "link", to: "directory" },
+        "components/Kept.md": markdown("kept\n"),
+      },
+      ["components"],
+    );
 
-      expect(failure.name).toBe("ComponentIncludeError");
-      expect(failure.message).toContain('--include "components"');
-      expect(failure.message).toContain(JSON.stringify(spelling));
-      expect(failure.message).toContain("a directory");
-    }
+    expect(names(userProvided(catalog))).toEqual(["Kept"]);
+    expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    });
   });
 
-  it("SY18b: refuses a link that leads nowhere however it is spelled", function* () {
+  it("SY18b: refuses a relevant link even where an ignored one sits beside it", function* () {
     const failure = yield* raised(
       catalogFor(
         {
           components: { kind: "directory" },
-          "components/readme.md": { kind: "link", to: "nothing" },
+          "components/node_modules": { kind: "link", to: "directory" },
+          "components/Widget": { kind: "link", to: "directory" },
           "components/Kept.md": markdown("kept\n"),
         },
         ["components"],
@@ -524,8 +529,8 @@ describe("Tier SY: include boundaries", () => {
     );
 
     expect(failure.name).toBe("ComponentIncludeError");
-    expect(failure.message).toContain('"readme.md"');
-    expect(failure.message).toContain("nothing");
+    expect(failure.message).toContain('"Widget"');
+    expect(failure.message).not.toContain("node_modules");
   });
 
   it("SY18c: names the include and the logical entry, never the resolved target", function* () {
