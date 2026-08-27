@@ -1358,6 +1358,39 @@ describe("Tier WAP — strict workflow Agent profile", () => {
  * delivers to an installed factory, which is the only way this provider can
  * state a checkpoint at all.
  */
+describe("Tier APR — preparing an agent before it is probed", () => {
+  it("APR1: prepareAgent runs before the availability probe, and only when an agent is resolved", function* () {
+    const harness = createFakeRuntime();
+    const order: string[] = [];
+    yield* useFlatWorld(CWD);
+    const factory = createAcpxProvider({
+      createRuntime: (options) => {
+        order.push(options.probeAgent === undefined ? "runtime" : "probe");
+        return harness.create(options);
+      },
+      sessionStore: makeStore(),
+      agentRegistry: makeRegistry({ codex: "codex-cmd" }),
+      *prepareAgent(agentName: string) {
+        order.push(`prepare:${agentName}`);
+      },
+    });
+    yield* factory({ defaultAgent: "codex", permissionMode: "deny-all" }, stubAuthority());
+
+    // Nothing yet: installing a provider resolves no agent.
+    expect(order).toEqual([]);
+
+    yield* Agent.operations.agent("codex");
+
+    // Preparation first. The probe spawns the agent's command, so a host that
+    // has to put that command on disk must have done so by now — otherwise the
+    // probe reports the agent unavailable for a reason that names the wrong
+    // cause, and no amount of later preparation is reached.
+    expect(order[0]).toBe("prepare:codex");
+    expect(order).toContain("probe");
+    expect(order.indexOf("prepare:codex")).toBeLessThan(order.indexOf("probe"));
+  });
+});
+
 describe("Tier APC — Prompt checkpoint metadata", () => {
   function* run(
     result: AcpRuntimeTurnResult,

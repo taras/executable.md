@@ -50,8 +50,17 @@
  * first is a decision that goes stale: another attempt may publish a valid tree
  * between the observation and the removal, and deleting that would pull the
  * files out from under an adapter already running. So recovery is serialized on
- * an exclusive lock — `mkdir` is atomic, and exactly one attempt gets it — and
- * the holder re-checks under the lock before removing anything.
+ * an exclusive claim, and the holder re-checks under it before removing
+ * anything.
+ *
+ * The claim says who holds it. A lock that only recorded *that* it was held
+ * would replace the wedge this exists to remove: a process killed mid-recovery
+ * would leave a claim nothing could distinguish from a live one, and every
+ * later attempt would wait for an owner that is never coming back. So the claim
+ * is written atomically with its owner's identity, and an attempt that finds
+ * one belonging to a dead process on this same host reclaims it — by renaming
+ * it aside, which exactly one reclaimer can win. A claim whose owner is alive,
+ * or which belongs to another host, is never taken.
  *
  * ## It refuses; it never falls back
  *
@@ -63,14 +72,15 @@
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import { mkdir, readdir, readFile, rmdir } from "node:fs/promises";
+import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import { ensure, type Operation, scoped, sleep } from "effection";
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { join } from "node:path";
-import { rename, writeFile } from "node:fs/promises";
+import process from "node:process";
 import { until } from "effection";
 import {
   EMBEDDED_ADAPTER_SNAPSHOTS,
@@ -98,6 +108,47 @@ const MARKER = ".xmd-adapter";
 /** How long an attempt waits on somebody else's recovery, and how often. */
 const RECOVERY_POLL_MS = 25;
 const RECOVERY_ATTEMPTS = 400;
+
+/** How many times an attempt may find the claim taken, reclaim it, and retry. */
+const RECOVERY_ROUNDS = 3;
+
+/** Who holds a recovery claim, so a later attempt can tell live from dead. */
+interface RecoveryOwner {
+  readonly pid: number;
+  readonly host: string;
+  readonly at: number;
+}
+
+function parseOwner(raw: string): RecoveryOwner | undefined {
+  try {
+    const value: unknown = JSON.parse(raw);
+    const pid = Reflect.get(Object(value), "pid");
+    const host = Reflect.get(Object(value), "host");
+    if (typeof pid !== "number" || typeof host !== "string") {
+      return undefined;
+    }
+    return { pid, host, at: 0 };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a process still exists on this host.
+ *
+ * Signal 0 asks without delivering anything. `EPERM` means it exists and
+ * belongs to somebody else, which is still alive; only `ESRCH` means gone. An
+ * answer this cannot interpret is treated as alive, so an unreadable state
+ * never becomes a reason to take somebody's claim.
+ */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Reflect.get(Object(error), "code") !== "ESRCH";
+  }
+}
 
 /** What one materialized directory recorded about itself. */
 interface Published {
@@ -355,6 +406,57 @@ export function createEmbeddedAdapters(
   }
 
   /**
+   * Take the recovery claim, or report that somebody else has it.
+   *
+   * `wx` creates the file exclusively and writes its contents in the same call,
+   * so a claim never exists without saying who made it — which is what a
+   * reclaimer needs, and what a bare directory could not offer.
+   */
+  function* claim(lock: string): Operation<boolean> {
+    const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
+    try {
+      yield* until(writeFile(lock, `${JSON.stringify(owner)}\n`, { flag: "wx" }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Take back a claim whose owner is gone, if that is what this is.
+   *
+   * Only for an owner on this host whose process no longer exists: a live
+   * owner, an owner on another machine, and a claim this cannot read are all
+   * left exactly alone, because stealing one would be the very thing the claim
+   * prevents.
+   *
+   * The reclaim itself is a rename, so when several attempts notice the same
+   * dead owner at once exactly one of them moves it and the rest simply find it
+   * gone.
+   */
+  function* reclaimIfOrphaned(lock: string): Operation<boolean> {
+    let owner: RecoveryOwner | undefined;
+    try {
+      owner = parseOwner(yield* readTextFile(lock));
+    } catch {
+      // Vanished between the failed claim and this read: it is already free.
+      return true;
+    }
+    if (owner === undefined || owner.host !== hostname() || alive(owner.pid)) {
+      return false;
+    }
+    const aside = `${lock}.orphaned-${randomUUID()}`;
+    try {
+      yield* until(renamePath(lock, aside));
+    } catch {
+      // Another attempt reclaimed it first. Theirs is as good as ours.
+      return true;
+    }
+    yield* until(rmPath(aside, { force: true }).catch(() => {}));
+    return true;
+  }
+
+  /**
    * Replace an abandoned tree at the target, under an exclusive lock.
    *
    * Reached only when the rename failed and what is there does not verify.
@@ -373,29 +475,32 @@ export function createEmbeddedAdapters(
     failure: unknown,
   ): Operation<void> {
     const lock = `${target}.recovering`;
-    let held = false;
-    try {
-      // Atomic across processes: exactly one `mkdir` of a given name wins.
-      yield* until(mkdir(lock));
-      held = true;
-    } catch {
-      held = false;
-    }
 
-    if (!held) {
-      // Somebody else is recovering. Wait for them rather than racing, and
-      // take whatever they published.
+    for (let round = 0; round < RECOVERY_ROUNDS; round += 1) {
+      if (yield* claim(lock)) {
+        break;
+      }
+      // Somebody else holds it. If they are gone, take it back; otherwise wait
+      // for them and answer from what they publish.
+      if (yield* reclaimIfOrphaned(lock)) {
+        continue;
+      }
       for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
         yield* sleep(RECOVERY_POLL_MS);
         if (yield* published(snapshot)) {
           return;
         }
+        if (yield* reclaimIfOrphaned(lock)) {
+          break;
+        }
       }
-      throw failure;
+      if (round + 1 === RECOVERY_ROUNDS) {
+        throw failure;
+      }
     }
 
     yield* scoped(function* () {
-      yield* ensure(() => until(rmdir(lock).catch(() => {})));
+      yield* ensure(() => until(rmPath(lock, { force: true }).catch(() => {})));
       const observe = observers.beforeRecoveryCleanup;
       if (observe !== undefined) {
         yield* observe();
@@ -406,7 +511,7 @@ export function createEmbeddedAdapters(
         return;
       }
       yield* rm(target, { recursive: true, force: true });
-      yield* until(rename(staging, target));
+      yield* until(renamePath(staging, target));
     });
   }
 
@@ -461,7 +566,7 @@ export function createEmbeddedAdapters(
         try {
           // The ordinary path, and lock-free: one rename publishes every byte at
           // once, and it simply fails if anything is already there.
-          yield* until(rename(staging, target));
+          yield* until(renamePath(staging, target));
           return;
         } catch (error) {
           if (yield* published(snapshot)) {

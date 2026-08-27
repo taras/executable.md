@@ -188,6 +188,18 @@ export interface AcpxProviderDependencies {
   sessionStore?: AcpSessionStore;
   agentRegistry?: AcpAgentRegistry;
   /**
+   * Make one agent's command runnable, before anything tries to run it.
+   *
+   * Called with the resolved agent name at the first point this provider would
+   * spawn that agent — the availability probe — and again is harmless. A host
+   * whose agent command names something it has to put on disk first hooks here;
+   * the default does nothing, because an ordinary command is already there.
+   *
+   * It runs only when an agent is actually resolved, so a document that never
+   * asks for one prepares nothing.
+   */
+  prepareAgent?: (agentName: string) => Operation<void>;
+  /**
    * The native adapters this host has proven and is therefore willing to hand
    * a session to. Absent means none: knowing an adapter's command shape is not
    * evidence that its native UI resumes the session ACP created.
@@ -782,6 +794,7 @@ function* useAcpxProviderState(
   const routeStore = dependencies?.routeStore;
   const executableObserver = dependencies?.executableObserver;
   const agentCwd = dependencies?.agentCwd ?? cwd;
+  const prepareAgent = dependencies?.prepareAgent;
   const mcpServers = dependencies?.mcpServers;
   const newSessionOptions = dependencies?.newSessionOptions;
   const sessions = dependencies?.sessions;
@@ -1126,6 +1139,13 @@ function* useAcpxProviderState(
 
   function* resolveAgent(name: string | undefined): Operation<string> {
     const selected = name ?? providerOptions.defaultAgent;
+    // Before the probe, because the probe spawns this agent's command: a host
+    // that materializes its own adapter has to have done so by now, and a
+    // failure here refuses the agent rather than reporting it unavailable for a
+    // reason that names the wrong cause.
+    if (prepareAgent !== undefined) {
+      yield* prepareAgent(selected);
+    }
     // Resolution is read-only for an agent whose sessions XMD names. Probing
     // spawns an ACP child, and that is provider work on a session whose
     // construction has not been settled yet — it would run before the route is

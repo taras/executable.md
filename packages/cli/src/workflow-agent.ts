@@ -289,12 +289,6 @@ function sessionPolicy(
             "engine derives. Nothing else names a session this run can retain.",
         );
       }
-      // Before anything else this placement does, and before ACPX is contacted:
-      // the adapter that will answer has to be on disk and prove it is the
-      // snapshot this build records. A refusal here costs the run a Prompt it
-      // never sent, which is the cheap direction.
-      yield* adapters.materialize(context.agentName);
-
       const identity = identityOf({
         agentName: context.agentName,
         sessionIdentity: context.sessionIdentity,
@@ -390,6 +384,11 @@ export function* useWorkflowAgentProfile(options: WorkflowAgentProfileOptions): 
     // Closed, and this host's own: an agent it carries no snapshot for is
     // refused rather than resolved to whatever `npx` would fetch.
     agentRegistry: embeddedAdapterRegistry(adapters),
+    // At the first point the provider would run that command, which is its
+    // availability probe — earlier than a `<Session>` placement, and earlier
+    // than any turn. A snapshot that cannot prove itself refuses the agent here
+    // rather than surfacing later as an adapter that would not start.
+    prepareAgent: (agentName) => adapters.materialize(agentName),
     ...(options.createRuntime === undefined ? {} : { createRuntime: options.createRuntime }),
     // ACP-only, stated rather than inherited. A workflow session belongs to a
     // run, not to this machine: it is named by a row in the run's own database,

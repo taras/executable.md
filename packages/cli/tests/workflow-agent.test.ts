@@ -17,7 +17,7 @@ import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
 import { scoped, spawn } from "effection";
 import type { Operation } from "effection";
-import { exists, readTextFile } from "@effectionx/fs";
+import { ensureDir, exists, readTextFile } from "@effectionx/fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collect, execute, retainedSource } from "@executablemd/core";
@@ -25,17 +25,20 @@ import type { Json } from "@executablemd/durable-streams";
 import type { RuntimeFetchResponse } from "@executablemd/runtime";
 import type { DurableEvent } from "@executablemd/durable-streams";
 import { API, useHostFiles } from "@executablemd/runtime";
+import { DatabaseSync } from "node:sqlite";
 import type { WorkflowRunDatabase } from "@executablemd/workflow";
 import {
   evaluationComponents,
   transactAgentPromptCheckpoints,
   withWorkflowWorkspace,
+  workflowRunPath,
   workflowProviderSessions,
 } from "@executablemd/workflow/deno";
 import { executeInstalled } from "@executablemd/core/host";
 import { agentIdentityComponents } from "@executablemd/core";
 import { useWorkflowAgentProfile, WORKFLOW_SESSION_INSTRUCTIONS } from "../src/workflow-agent.ts";
 import type { EmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
+import { createEmbeddedAdapters } from "@executablemd/acp/embedded-adapters";
 import type { WorkflowAgentProfileOptions as AgentProfileOptions } from "../src/workflow-agent.ts";
 import { createFakeAcp, makeStore, tripwireAcp } from "./support/fake-acp.ts";
 import type { FakeAcp, ScriptedTurn } from "./support/fake-acp.ts";
@@ -94,6 +97,16 @@ function stubAdapters(): EmbeddedAdapters & { readonly materialized: string[] } 
       materialized.push(provider);
     },
   };
+}
+
+/** Every Agent session one run retained, as its database holds it. */
+function retainedSessions(path: string): Record<string, unknown>[] {
+  const database = new DatabaseSync(path);
+  try {
+    return database.prepare("SELECT * FROM agent_sessions ORDER BY session_key").all();
+  } finally {
+    database.close();
+  }
 }
 
 /** A turn identity that exists nowhere else in this repository. */
@@ -713,6 +726,81 @@ describe("Tier WAL — the workflow Agent observation loop", () => {
       // would have resolved.
       expect(adapters.materialized).toContain("codex");
     });
+  });
+
+  it("WAL12: two hosts retain and serialize identical Agent identity, launching their own adapters", function* () {
+    const source = yield* documentWithNote();
+
+    /**
+     * One complete run under its own materialization root.
+     *
+     * Real embedded adapters, because the claim is about what a real
+     * materialization retains — a stub would be asserting on a value this test
+     * had chosen.
+     */
+    function* runUnder(root: string): Operation<{
+      sessions: Record<string, unknown>[];
+      launch: string;
+      identity: string;
+    }> {
+      yield* ensureDir(root);
+      const adapters = createEmbeddedAdapters(join(root, "adapters"));
+      return yield* withStorage(root, function* () {
+        const database = yield* createRun();
+        const fake = createFakeAcp();
+        fake.script({ ...proposal("nothing to change"), turnId: "turn-shared" });
+        const attempt = yield* runFixture(root, database, source, {
+          createRuntime: fake.create,
+          adapters,
+        });
+        expect(attempt.failure).toBe(undefined);
+
+        return {
+          // Read straight out of the file, because the durable row is the claim
+          // — it is what a later attachment compares and what the artifact
+          // encoder writes `agentCommand` from.
+          sessions: retainedSessions(workflowRunPath(root, "observation-run")),
+          launch: adapters.executablePath("codex"),
+          identity: adapters.identity("codex"),
+        };
+      });
+    }
+
+    const plainRoot = join(yield* useStorageRoot(), "plain");
+    // A spaced canary, because an unquoted path would split here and a path
+    // that leaked into identity would differ between the two.
+    const spacedRoot = join(yield* useStorageRoot(), "Application Support", "xmd runs");
+
+    const here = yield* runUnder(plainRoot);
+    const there = yield* runUnder(spacedRoot);
+
+    // What the run retains, and therefore what a sealed artifact serializes:
+    // `encodeXmdArtifactInventory` writes `agentCommand` straight out of this
+    // row, so identical rows are identical artifact semantics.
+    //
+    // Everything except when it happened. `created_at` is a timestamp rather
+    // than identity, and it is named here so that the equality below is a claim
+    // about every other column rather than a comparison that quietly skips
+    // whichever ones happened to differ.
+    const semantics = (rows: Record<string, unknown>[]) =>
+      JSON.stringify(rows.map(({ created_at: _when, ...rest }) => rest));
+    expect(semantics(there.sessions)).toBe(semantics(here.sessions));
+    expect(there.identity).toBe(here.identity);
+    // The identity column specifically, since that is the one an artifact
+    // carries and the one that used to be a path.
+    expect(here.sessions[0]?.["agent_command"]).toBe(here.identity);
+    expect(there.sessions[0]?.["agent_command"]).toBe(here.identity);
+
+    // Neither host's path is anywhere in what was retained.
+    const retained = JSON.stringify(here.sessions) + JSON.stringify(there.sessions);
+    expect(retained).not.toContain(plainRoot);
+    expect(retained).not.toContain(spacedRoot);
+    expect(retained).not.toContain("adapters/");
+
+    // And each host still launches its own local executable.
+    expect(there.launch).not.toBe(here.launch);
+    expect(here.launch).toContain(plainRoot);
+    expect(there.launch).toContain(spacedRoot);
   });
 
   it("WAL7: a workflow with no Agent starts no provider and allocates no sidecar", function* () {

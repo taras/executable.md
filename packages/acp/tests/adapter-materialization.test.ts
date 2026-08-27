@@ -19,6 +19,7 @@ import { ensureDir, exists, rm, writeTextFile } from "@effectionx/fs";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import {
   AdapterSnapshotError,
   createEmbeddedAdapters,
@@ -26,6 +27,8 @@ import {
   embeddedAdapterRegistry,
 } from "../src/adapter-snapshots.ts";
 import { cp, readFile, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
+import { spawnSync } from "node:child_process";
 import { sleep, withResolvers } from "effection";
 
 function* useRoot(): Operation<string> {
@@ -230,6 +233,90 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(true);
     expect(yield* exists(stale)).toBe(false);
     expect(yield* exists(other.executablePath("codex"))).toBe(true);
+  });
+
+  it("AM12: a recovery claim left by a dead process is reclaimed, not waited on", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const adapters = createEmbeddedAdapters(root);
+
+    // An invalid target, so recovery is required at all.
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    // A claim whose owner is genuinely gone: a real process, run to completion,
+    // whose pid is therefore dead. Inventing a number could collide with a
+    // live process and make this test lie.
+    const finished = spawnSync(process.execPath, ["eval", "0"]);
+    expect(finished.status).toBe(0);
+    const deadPid = finished.pid;
+    yield* writeTextFile(
+      `${target}.recovering`,
+      `${JSON.stringify({ pid: deadPid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    yield* adapters.materialize("codex");
+
+    // Reclaimed and published, rather than waiting out an owner that is never
+    // coming back. Without this, one process killed mid-recovery would wedge
+    // the adapter permanently — the exact abandoned-state failure the recovery
+    // path exists to remove.
+    expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(true);
+    expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
+    // The claim is not left lying around for the next attempt to puzzle over.
+    expect(yield* exists(`${target}.recovering`)).toBe(false);
+  });
+
+  it("AM13: a claim held by a live process on this host is never taken", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const adapters = createEmbeddedAdapters(root);
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    // This very process: alive by construction.
+    const lock = `${target}.recovering`;
+    yield* writeTextFile(
+      lock,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    const attempt = yield* spawn(() => adapters.materialize("codex"));
+    yield* sleep(300);
+
+    // It waits. The claim is untouched and nothing has been removed or
+    // published, because the owner is alive and may be mid-recovery.
+    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+    yield* attempt.halt();
+  });
+
+  it("AM14: a claim owned by another host is never taken", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const adapters = createEmbeddedAdapters(root);
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    // A dead pid, but on a machine this host cannot ask about. Liveness is only
+    // knowable locally, so this must be left alone rather than assumed gone.
+    const finished = spawnSync(process.execPath, ["eval", "0"]);
+    const lock = `${target}.recovering`;
+    yield* writeTextFile(
+      lock,
+      `${JSON.stringify({ pid: finished.pid, host: `not-${hostname()}`, at: Date.now() })}\n`,
+    );
+
+    const attempt = yield* spawn(() => adapters.materialize("codex"));
+    yield* sleep(300);
+
+    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+    yield* attempt.halt();
   });
 
   it("AM9: edited adapter bytes are refused rather than executed", function* () {
