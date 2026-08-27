@@ -59,26 +59,49 @@ function normalizePath(path: string): string {
 }
 
 /**
- * The include as a path prefix: no leading `./`, no trailing separator, and `.`
- * for the working directory itself.
+ * The include as a path prefix, so that joining a relative entry to it cannot
+ * change what kind of path it is.
  *
- * Every path this module builds is the prefix joined to a relative entry, so
- * the prefix decides whether that join stays relative. `./` names the working
- * directory, and joining to it directly produces `.//Ns` — which reads back as
- * `/Ns`, the filesystem root's, once the leading `./` is stripped.
+ * Read segment by segment rather than by trimming spellings: `.` segments and
+ * empty ones between separators carry no meaning, so `.`, `./` and `.//` all
+ * name the working directory and reduce to `.`. Whether the result is absolute
+ * is decided once, by the include's own leading separator, which is why no
+ * relative spelling can produce an absolute read and `/abs` stays `/abs`.
+ *
+ * A `..` segment is kept rather than resolved. Resolving it would take the
+ * working directory this deliberately never reads, and keeping it lexical is
+ * what a relative include already meant.
  */
 function includePrefix(include: string): string {
-  const relative = normalizePath(include);
-  if (relative === "") {
-    return ".";
+  const absolute = include.startsWith("/");
+  const segments = include.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (absolute) {
+    return `/${segments.join("/")}`;
   }
-  return relative.replace(/(.)\/+$/, "$1");
+  return segments.length === 0 ? "." : segments.join("/");
 }
 
-/** The path an entry has relative to the working directory, not to its root. */
+/** Where a directory read is issued, for an entry `prefix` below the include. */
+function readPath(include: string, prefix: string): string {
+  const root = includePrefix(include);
+  if (prefix === "") {
+    return root;
+  }
+  if (root === ".") {
+    return prefix;
+  }
+  return root.endsWith("/") ? `${root}${prefix}` : `${root}/${prefix}`;
+}
+
+/**
+ * The path an entry has relative to the working directory, not to its root.
+ *
+ * Spelled as `probeComponentPath()` spells a candidate, because this is what
+ * the link classification asks `stat` about and the two have to agree about
+ * what a link under a given include leads to.
+ */
 function within(include: string, path: string): string {
-  const prefix = includePrefix(include);
-  return prefix === "." ? path : `${prefix}/${path}`;
+  return normalizePath(include === "." ? path : `${include}/${path}`);
 }
 
 /**
@@ -170,7 +193,7 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
  * never the host path the read is issued against.
  */
 function* collect(include: string, prefix: string, names: Set<string>): Operation<void> {
-  const directory = prefix === "" ? includePrefix(include) : within(include, prefix);
+  const directory = readPath(include, prefix);
 
   for (const entry of yield* readDirectory(directory)) {
     const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;

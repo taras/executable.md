@@ -60,13 +60,20 @@ type Tree = Record<string, Node>;
 const MISSING: StatResult = { exists: false, isFile: false, isDirectory: false };
 
 /**
- * The tree is keyed by working-directory-relative paths, so a spelling a host
- * would answer for — `./`, a trailing separator — is resolved before lookup
- * rather than missing from the map.
+ * The tree is keyed by working-directory-relative paths, so a path is resolved
+ * the way a host resolves one before it is looked up: `.` and empty segments
+ * carry no meaning, and a leading separator is what makes a path absolute.
+ *
+ * An absolute path stays absolute and so matches nothing in this tree, which is
+ * what makes a read that escapes the include observable here at all.
  */
 function resolve(path: string): string {
-  const trimmed = path.replace(/^\.\//, "").replace(/\/+$/, "");
-  return trimmed === "" ? "." : trimmed;
+  const absolute = path.startsWith("/");
+  const segments = path.split("/").filter((segment) => segment !== "" && segment !== ".");
+  if (absolute) {
+    return `/${segments.join("/")}`;
+  }
+  return segments.length === 0 ? "." : segments.join("/");
 }
 
 function stat(tree: Tree, path: string): StatResult {
@@ -158,7 +165,7 @@ function* useTree(tree: Tree, enumeration: Enumeration = {}): Operation<void> {
     // deno-lint-ignore require-yield
     *readDirectory([path]) {
       enumeration.reads?.push(path);
-      if (enumeration.unreadable?.includes(path) === true) {
+      if (enumeration.unreadable?.includes(resolve(path)) === true) {
         throw new Error(`EACCES: permission denied, scandir '${path}'`);
       }
       return children(tree, path);
@@ -542,34 +549,45 @@ describe("Tier SY: include boundaries", () => {
   });
 
   it("SY13c: keeps every read beneath an include however it is spelled", function* () {
-    // `./` names the working directory, so joining an entry to it has to stay
-    // relative: a read of `/Ns` is the filesystem root's, not this include's.
-    // What each spelling *selects* is `selectComponent()`'s and is untouched —
-    // `./` resolves nothing here, exactly as it resolves nothing on `main`.
+    // A `.` segment and an empty one carry no meaning, so `.`, `./` and `.//`
+    // all name the working directory. Joining an entry to the include as
+    // written turns the last two into the filesystem root's `/Ns`.
+    //
+    // What each spelling *selects* is `selectComponent()`'s and is untouched:
+    // `probeComponentPath()` spells its candidates as it always has, so the
+    // spellings that resolve nothing here resolve nothing on `main` too. Each
+    // row is the base binary's own answer for that include.
     const tree: Tree = {
       ".": { kind: "directory" },
       Ns: { kind: "directory" },
       "Ns/Widget.md": markdown("nested\n"),
       "Ns/Deep": { kind: "directory" },
       "Ns/Deep/index.md": markdown("deep\n"),
+      "Ns/vendor": { kind: "directory" },
+      "Ns/vendor/Widget.md": markdown("out of reach\n"),
       "Direct.md": markdown("direct\n"),
       node_modules: { kind: "directory" },
       "node_modules/Widget.md": markdown("out of reach\n"),
     };
 
-    for (const [include, selected] of [
-      [".", ["Direct", "Ns.Deep", "Ns.Widget"]],
-      ["./", []],
-    ] as const) {
+    const spellings = [
+      { include: ".", reads: [".", "Ns", "Ns/Deep"], selects: ["Direct", "Ns.Deep", "Ns.Widget"] },
+      { include: "./", reads: [".", "Ns", "Ns/Deep"], selects: [] },
+      { include: ".//", reads: [".", "Ns", "Ns/Deep"], selects: [] },
+      { include: "./Ns", reads: ["Ns", "Ns/Deep"], selects: ["Deep", "Widget"] },
+      { include: ".//Ns", reads: ["Ns", "Ns/Deep"], selects: [] },
+    ];
+
+    for (const spelling of spellings) {
       const reads: string[] = [];
-      const catalog = yield* catalogFor(tree, [include], {
-        unreadable: ["node_modules"],
+      const catalog = yield* catalogFor(tree, [spelling.include], {
+        unreadable: ["node_modules", "Ns/vendor"],
         reads,
       });
 
       expect(reads.filter((read) => read.startsWith("/"))).toEqual([]);
-      expect([...reads].sort()).toEqual([".", "Ns", "Ns/Deep"]);
-      expect(names(userProvided(catalog))).toEqual([...selected]);
+      expect([...reads].sort()).toEqual([...spelling.reads]);
+      expect(names(userProvided(catalog))).toEqual([...spelling.selects]);
     }
   });
 
