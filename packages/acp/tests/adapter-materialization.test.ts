@@ -238,6 +238,7 @@ describe("Tier AM — embedded adapter materialization", () => {
   it("AM12: a recovery claim left by a dead process is reclaimed, not waited on", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
     const adapters = createEmbeddedAdapters(root);
 
     // An invalid target, so recovery is required at all.
@@ -250,8 +251,9 @@ describe("Tier AM — embedded adapter materialization", () => {
     const finished = spawnSync(process.execPath, ["eval", "0"]);
     expect(finished.status).toBe(0);
     const deadPid = finished.pid;
+    yield* ensureDir(claims);
     yield* writeTextFile(
-      `${target}.recovering`,
+      join(claims, "000000000-planted"),
       `${JSON.stringify({ pid: deadPid, host: hostname(), at: Date.now() })}\n`,
     );
 
@@ -264,8 +266,9 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(adapters.executablePath("codex"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(true);
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
-    // The claim is not left lying around for the next attempt to puzzle over.
-    expect(yield* exists(`${target}.recovering`)).toBe(false);
+    // The dead owner's claim is pruned rather than left for the next attempt to
+    // puzzle over.
+    expect(yield* exists(join(claims, "000000000-planted"))).toBe(false);
   });
 
   it("AM13: a claim held by a live process on this host is never taken", function* () {
@@ -277,9 +280,10 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
 
     // This very process: alive by construction.
-    const lock = `${target}.recovering`;
+    const claims = `${target}.claims`;
+    yield* ensureDir(claims);
     yield* writeTextFile(
-      lock,
+      join(claims, "000000000-planted"),
       `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
     );
 
@@ -288,7 +292,7 @@ describe("Tier AM — embedded adapter materialization", () => {
 
     // It waits. The claim is untouched and nothing has been removed or
     // published, because the owner is alive and may be mid-recovery.
-    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
     expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
     yield* attempt.halt();
@@ -305,16 +309,17 @@ describe("Tier AM — embedded adapter materialization", () => {
     // A dead pid, but on a machine this host cannot ask about. Liveness is only
     // knowable locally, so this must be left alone rather than assumed gone.
     const finished = spawnSync(process.execPath, ["eval", "0"]);
-    const lock = `${target}.recovering`;
+    const claims = `${target}.claims`;
+    yield* ensureDir(claims);
     yield* writeTextFile(
-      lock,
+      join(claims, "000000000-planted"),
       `${JSON.stringify({ pid: finished.pid, host: `not-${hostname()}`, at: Date.now() })}\n`,
     );
 
     const attempt = yield* spawn(() => adapters.materialize("codex"));
     yield* sleep(300);
 
-    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
     yield* attempt.halt();
   });
@@ -323,7 +328,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const stale = join(target, "node_modules", "stale.txt");
-    const lock = `${target}.recovering`;
+    const claims = `${target}.claims`;
 
     let cleanups = 0;
     const adapters = createEmbeddedAdapters(root, {
@@ -337,7 +342,8 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(stale, "half an install\n");
     // Exactly what a process killed between creating a claim and writing it
     // would leave: the name exists and says nothing.
-    yield* writeTextFile(lock, "");
+    yield* ensureDir(claims);
+    yield* writeTextFile(join(claims, "000000000-planted"), "");
 
     const refused = yield* refusal(() => adapters.materialize("codex"));
 
@@ -349,14 +355,14 @@ describe("Tier AM — embedded adapter materialization", () => {
     // Nothing was entered and nothing was moved.
     expect(cleanups).toBe(0);
     expect(yield* exists(stale)).toBe(true);
-    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
   });
 
   it("AM16: a claim holding a foreign record is left alone for the same reason", function* () {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
-    const lock = `${target}.recovering`;
+    const claims = `${target}.claims`;
 
     let cleanups = 0;
     const adapters = createEmbeddedAdapters(root, {
@@ -370,13 +376,17 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
     // Readable, but not a record this build wrote — so its owner is unknown,
     // which is not the same as absent.
-    yield* writeTextFile(lock, `${JSON.stringify({ something: "else" })}\n`);
+    yield* ensureDir(claims);
+    yield* writeTextFile(
+      join(claims, "000000000-planted"),
+      `${JSON.stringify({ something: "else" })}\n`,
+    );
 
     const refused = yield* refusal(() => adapters.materialize("codex"));
 
     expect(refused).toBeInstanceOf(AdapterSnapshotError);
     expect(cleanups).toBe(0);
-    expect(yield* exists(lock)).toBe(true);
+    expect(yield* exists(join(claims, "000000000-planted"))).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
   });
 
@@ -384,7 +394,7 @@ describe("Tier AM — embedded adapter materialization", () => {
     const root = yield* useRoot();
     const target = join(root, digestOf("codex"));
     const stale = join(target, "node_modules", "stale.txt");
-    const lock = `${target}.recovering`;
+    const claims = `${target}.claims`;
 
     let cleanups = 0;
     const adapters = createEmbeddedAdapters(root, {
@@ -398,8 +408,9 @@ describe("Tier AM — embedded adapter materialization", () => {
     yield* writeTextFile(stale, "half an install\n");
     // This process: alive for the whole test, so the claim is never reclaimable
     // and the attempt can only wait.
+    yield* ensureDir(claims);
     yield* writeTextFile(
-      lock,
+      join(claims, "000000000-planted"),
       `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
     );
 
@@ -412,6 +423,91 @@ describe("Tier AM — embedded adapter materialization", () => {
     expect(yield* exists(stale)).toBe(true);
     expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
     yield* attempt.halt();
+  });
+
+  it("AM18: a delayed prune cannot take a claim that replaced the one it inspected", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
+    const adapters = createEmbeddedAdapters(root);
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    // The ABA ordering, staged by hand. An attempt inspects a claim, finds it
+    // abandoned, and its removal is delayed. In the gap the abandoned claim is
+    // taken away and a *live* one appears — and the delayed removal must not be
+    // able to touch that live claim.
+    const dead = spawnSync(process.execPath, ["eval", "0"]);
+    expect(dead.status).toBe(0);
+    yield* ensureDir(claims);
+    const abandoned = join(claims, "000000000-abandoned");
+    yield* writeTextFile(
+      abandoned,
+      `${JSON.stringify({ pid: dead.pid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    // What the delayed attempt decided to remove: that exact name. Simulate the
+    // gap by replacing the abandoned claim with a live one under a *different*
+    // name, the way a real reclaim-then-re-claim does.
+    yield* rm(abandoned, { force: true });
+    const live = join(claims, "000000001-live");
+    yield* writeTextFile(
+      live,
+      `${JSON.stringify({ pid: process.pid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    // The delayed removal now fires. Under a single fixed lock name it would
+    // have moved whatever occupies that path — which is the live claim. Under
+    // one-use names it can only name the entry it inspected, which is gone.
+    yield* rm(abandoned, { force: true });
+
+    const attempt = yield* spawn(() => adapters.materialize("codex"));
+    yield* sleep(300);
+
+    // The live claim is untouched and still exclusive: the attempt is waiting
+    // behind it, having removed and published nothing.
+    expect(yield* exists(live)).toBe(true);
+    expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(true);
+    expect(yield* exists(join(target, ".xmd-adapter"))).toBe(false);
+    yield* attempt.halt();
+  });
+
+  it("AM19: two attempts racing one abandoned claim leave exactly one holder", function* () {
+    const root = yield* useRoot();
+    const target = join(root, digestOf("codex"));
+    const claims = `${target}.claims`;
+
+    yield* ensureDir(join(target, "node_modules"));
+    yield* writeTextFile(join(target, "node_modules", "stale.txt"), "half an install\n");
+
+    const dead = spawnSync(process.execPath, ["eval", "0"]);
+    yield* ensureDir(claims);
+    yield* writeTextFile(
+      join(claims, "000000000-abandoned"),
+      `${JSON.stringify({ pid: dead.pid, host: hostname(), at: Date.now() })}\n`,
+    );
+
+    // Both see the same abandoned claim and both prune it. Only one can then be
+    // the earliest live entry, so only one enters the cleanup — which is what a
+    // reclaim keyed on a reusable name could not guarantee.
+    let cleanups = 0;
+    const observers = {
+      *beforeRecoveryCleanup(): Operation<void> {
+        cleanups += 1;
+        yield* sleep(50);
+      },
+    };
+    const first = createEmbeddedAdapters(root, observers);
+    const second = createEmbeddedAdapters(root, observers);
+
+    const a = yield* spawn(() => first.materialize("codex"));
+    const b = yield* spawn(() => second.materialize("codex"));
+    yield* all([a, b]);
+
+    expect(cleanups).toBe(1);
+    expect(yield* exists(first.executablePath("codex"))).toBe(true);
+    expect(yield* exists(join(target, "node_modules", "stale.txt"))).toBe(false);
   });
 
   it("AM9: edited adapter bytes are refused rather than executed", function* () {

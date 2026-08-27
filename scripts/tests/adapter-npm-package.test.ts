@@ -18,9 +18,9 @@
  */
 import { describe, it } from "@executablemd/test-support/bdd";
 import { expect } from "@executablemd/test-support/expect";
-import { scoped, until } from "effection";
+import { ensure, resource, scoped, until } from "effection";
 import type { Operation } from "effection";
-import { exists } from "@effectionx/fs";
+import { exists, rm } from "@effectionx/fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -41,10 +41,25 @@ function inheritedEnvironment(): Record<string, string> {
   return environment;
 }
 
-/** Build the npm artifact, unless a previous run in this checkout already did. */
-function* built(): Operation<string> {
-  if (!(yield* exists(join(PACKAGE, "esm", "embedded-adapters.js")))) {
-    const result = yield* scoped(function* () {
+/**
+ * Build the npm artifact from this checkout, and remove it afterwards.
+ *
+ * Forced, never reused. `packages/acp/npm` is shared generated output, so an
+ * artifact left by another revision would otherwise be the thing under test —
+ * a regression that passes because somebody built the package before the bug
+ * was introduced proves nothing. The build happens here so the provenance is
+ * this test's, not a preceding command's.
+ *
+ * Removed through `ensure`, so a failure partway leaves nothing behind for the
+ * next run to mistake for its own.
+ */
+function useBuiltPackage(): Operation<string> {
+  return resource(function* (provide) {
+    const path = resolve(PACKAGE);
+    yield* rm(path, { recursive: true, force: true });
+    yield* ensure(() => rm(path, { recursive: true, force: true }));
+
+    const built = yield* scoped(function* () {
       yield* useQuietProcessOutput();
       return yield* exec({
         command: [process.execPath, "run", "-A", "scripts/build-npm.ts", "packages/acp"],
@@ -57,16 +72,18 @@ function* built(): Operation<string> {
         },
       });
     });
-    if (result.exitCode !== 0) {
-      throw new Error(`building the npm package failed: ${result.stderr.trim()}`);
+    if (built.exitCode !== 0) {
+      throw new Error(`building the npm package failed: ${built.stderr.trim()}`);
     }
-  }
-  return resolve(PACKAGE);
+
+    yield* provide(path);
+  });
 }
 
 describe("Tier ANP — the produced npm package", () => {
-  it("ANP1: the built package exposes the embedded-adapters entrypoint", function* () {
-    const path = yield* built();
+  it("ANP1: Node materializes and launches the snapshot from the built package", function* () {
+    // One build, and everything below is about that exact artifact.
+    const path = yield* useBuiltPackage();
 
     const manifest: unknown = JSON.parse(
       yield* until(readFile(join(path, "package.json"), "utf8")),
@@ -81,16 +98,10 @@ describe("Tier ANP — the produced npm package", () => {
     expect(
       yield* exists(join(path, "esm", "vendor", "adapters", "generated", "snapshots.js")),
     ).toBe(true);
-  });
-
-  it("ANP2: Node materializes and launches the snapshot from the built package", function* () {
-    const path = yield* built();
 
     const driven = yield* scoped(function* () {
       yield* useQuietProcessOutput();
-      return yield* exec({
-        command: ["node", DRIVER, path, resolve(FAKE_CODEX)],
-      });
+      return yield* exec({ command: ["node", DRIVER, path, resolve(FAKE_CODEX)] });
     });
     if (driven.exitCode !== 0) {
       throw new Error(`the npm package driver failed: ${driven.stderr.trim()}`);

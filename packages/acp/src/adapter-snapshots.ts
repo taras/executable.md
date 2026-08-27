@@ -53,14 +53,14 @@
  * an exclusive claim, and the holder re-checks under it before removing
  * anything.
  *
- * The claim says who holds it. A lock that only recorded *that* it was held
- * would replace the wedge this exists to remove: a process killed mid-recovery
- * would leave a claim nothing could distinguish from a live one, and every
- * later attempt would wait for an owner that is never coming back. So the claim
- * is written atomically with its owner's identity, and an attempt that finds
- * one belonging to a dead process on this same host reclaims it — by renaming
- * it aside, which exactly one reclaimer can win. A claim whose owner is alive,
- * or which belongs to another host, is never taken.
+ * The claim is an entry in a directory, and every entry's name is used once and
+ * never again. That is what makes pruning a dead owner safe: removing
+ * `claims/<id>` can only ever remove the exact claim that was inspected.
+ *
+ * Holding is decided by order rather than by creation — an attempt holds the
+ * claim when its own entry is the earliest still-live one — so releasing is
+ * removing that one entry, and a process killed mid-recovery leaves an entry a
+ * later attempt can identify as dead and prune.
  *
  * ## It refuses; it never falls back
  *
@@ -72,14 +72,7 @@
  */
 
 import { ensureDir, exists, readTextFile, rm, writeTextFile } from "@effectionx/fs";
-import {
-  link,
-  readdir,
-  readFile,
-  rename as renamePath,
-  rm as rmPath,
-  writeFile,
-} from "node:fs/promises";
+import { readdir, readFile, rename as renamePath, rm as rmPath, writeFile } from "node:fs/promises";
 import { exec, useQuietProcessOutput } from "@executablemd/runtime";
 import type { AcpAgentRegistry } from "./acpx-runtime.ts";
 import { ensure, type Operation, scoped, sleep } from "effection";
@@ -115,9 +108,6 @@ const MARKER = ".xmd-adapter";
 /** How long an attempt waits on somebody else's recovery, and how often. */
 const RECOVERY_POLL_MS = 25;
 const RECOVERY_ATTEMPTS = 400;
-
-/** How many times an attempt may find the claim taken, reclaim it, and retry. */
-const RECOVERY_ROUNDS = 3;
 
 /** Who holds a recovery claim, so a later attempt can tell live from dead. */
 interface RecoveryOwner {
@@ -413,89 +403,85 @@ export function createEmbeddedAdapters(
   }
 
   /**
-   * Take the recovery claim, or report that somebody else has it.
+   * Put this attempt's claim into the directory, and answer with its path.
    *
-   * Written whole, then linked into place. `wx` would have been simpler and
-   * wrong: it creates the file and *then* writes it, so a process killed in
-   * between leaves a claim that exists and says nothing — the same
-   * indistinguishable-owner state a bare directory left, which is what this
-   * record exists to remove. `link` publishes a name for a file that is already
-   * complete, and fails if the name is taken, so a claim is never observed
-   * half-written and exactly one attempt wins.
+   * The name is used once: a timestamp so ordering is roughly arrival order,
+   * and a uuid so it is unique regardless. Written whole and then renamed in,
+   * because a reader must never see a half-written record — and a rename onto a
+   * name nothing else will ever choose cannot collide.
    */
-  function claim(lock: string): Operation<boolean> {
-    return scoped(function* () {
-      const staging = `${lock}.claim-${randomUUID()}`;
-      yield* ensure(() => until(rmPath(staging, { force: true }).catch(() => {})));
-      const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
-      yield* until(writeFile(staging, `${JSON.stringify(owner)}\n`));
-      try {
-        yield* until(link(staging, lock));
-        return true;
-      } catch {
-        return false;
-      }
-    });
+  function* enterClaims(claims: string): Operation<string> {
+    yield* ensureDir(claims);
+    const name = `${Date.now().toString(36).padStart(9, "0")}-${randomUUID()}`;
+    const mine = join(claims, name);
+    const staging = `${mine}.writing`;
+    const owner: RecoveryOwner = { pid: process.pid, host: hostname(), at: Date.now() };
+    yield* until(writeFile(staging, `${JSON.stringify(owner)}\n`));
+    yield* until(renamePath(staging, mine));
+    return mine;
   }
 
   /**
-   * What is at the claim, as far as this host can tell.
+   * Whether this attempt now holds the claim.
    *
-   * The three answers are different decisions, and collapsing them was a
-   * defect: `absent` means try again, `orphaned` means take it back, and
-   * `held` means leave it alone. A claim that cannot be read — a permission
-   * error, damage, a record from something else — is `held`, because refusing
-   * to act on what it cannot understand is the only safe reading of somebody
-   * else's lock.
-   */
-  function* inspectClaim(lock: string): Operation<"absent" | "orphaned" | "held" | "unreadable"> {
-    let raw: string;
-    try {
-      raw = yield* readTextFile(lock);
-    } catch (error) {
-      // Only a missing file means free. Every other failure is this host being
-      // unable to tell, which is not permission to remove anything.
-      return Reflect.get(Object(error), "code") === "ENOENT" ? "absent" : "unreadable";
-    }
-    const owner = parseOwner(raw);
-    if (owner === undefined) {
-      return "unreadable";
-    }
-    if (owner.host !== hostname() || alive(owner.pid)) {
-      return "held";
-    }
-    return "orphaned";
-  }
-
-  /**
-   * Take back a claim whose owner is gone.
+   * Prunes entries whose owner is a dead process on this host, then elects the
+   * earliest surviving name. Pruning is by exact entry name, and a name is used
+   * once and never again — so a prune can only ever remove the claim it just
+   * inspected. A single fixed lock name could not offer that: two attempts can
+   * both read it as abandoned, one takes it and re-claims, and the other's
+   * delayed removal then throws away a claim that is now live and somebody
+   * else's.
    *
-   * Only ever called for an `orphaned` claim. The reclaim is a rename, so when
-   * several attempts notice the same dead owner at once exactly one of them
-   * moves it and the rest simply find it gone.
+   * A live owner, an owner on another machine, and an entry that cannot be read
+   * are each left exactly alone. The last one blocks and says so, because
+   * refusing to act on what it cannot understand is the only safe reading of
+   * somebody else's claim.
    */
-  function* reclaim(lock: string): Operation<void> {
-    const aside = `${lock}.orphaned-${randomUUID()}`;
+  function* electClaim(claims: string, mine: string): Operation<"held" | "waiting" | "unreadable"> {
+    let names: string[];
     try {
-      yield* until(renamePath(lock, aside));
+      names = (yield* until(readdir(claims))).filter((name) => !name.endsWith(".writing")).sort();
     } catch {
-      // Another attempt reclaimed it first. Theirs is as good as ours.
-      return;
+      return "waiting";
     }
-    yield* until(rmPath(aside, { force: true }).catch(() => {}));
+
+    for (const name of names) {
+      const entry = join(claims, name);
+      if (entry === mine) {
+        return "held";
+      }
+      let owner: RecoveryOwner | undefined;
+      try {
+        owner = parseOwner(yield* readTextFile(entry));
+      } catch (error) {
+        if (Reflect.get(Object(error), "code") === "ENOENT") {
+          // Released while this was reading. The next name decides.
+          continue;
+        }
+        return "unreadable";
+      }
+      if (owner === undefined) {
+        return "unreadable";
+      }
+      if (owner.host !== hostname() || alive(owner.pid)) {
+        return "waiting";
+      }
+      yield* until(rmPath(entry, { force: true }).catch(() => {}));
+    }
+    return "waiting";
   }
 
   /**
-   * Replace an abandoned tree at the target, under an exclusive lock.
+   * Replace an abandoned tree at the target, holding an exclusive claim.
    *
-   * Reached only when the rename failed and what is there does not verify.
-   * The lock makes "check, then remove" one decision instead of two: without
-   * it, a second attempt could publish a valid tree in the gap and this one
-   * would delete it, taking the files out from under an adapter that had
-   * already resolved and might already be running.
+   * Reached only when the rename failed and what is there does not verify. The
+   * claim makes "check, then remove" one decision instead of two: without it, a
+   * second attempt could publish a valid tree in the gap and this one would
+   * delete it, taking the files out from under an adapter that had already
+   * resolved and might already be running.
    *
-   * An attempt that does not get the lock never removes anything. It waits
-   * for the holder and then answers from what the holder published.
+   * An attempt that does not hold the claim never removes anything. It waits
+   * and answers from what the holder published.
    */
   function* recover(
     snapshot: EmbeddedAdapterSnapshot,
@@ -503,63 +489,60 @@ export function createEmbeddedAdapters(
     target: string,
     failure: unknown,
   ): Operation<void> {
-    const lock = `${target}.recovering`;
-
-    // Explicit, because everything below it is the critical section. A loop
-    // that could fall out of its rounds and carry on would be removing a
-    // directory it never owned.
+    const claims = `${target}.claims`;
+    // Explicit, because the cleanup below is unreachable without it.
     let held = false;
-    for (let round = 0; round < RECOVERY_ROUNDS && !held; round += 1) {
-      if (yield* claim(lock)) {
-        held = true;
-        break;
-      }
-      const state = yield* inspectClaim(lock);
-      if (state === "unreadable") {
-        throw new AdapterSnapshotError(
-          `the recovery claim at ${lock} cannot be read, so this host cannot tell whether ` +
-            "another process is still using it. Remove it by hand once nothing is.",
-        );
-      }
-      if (state === "absent") {
-        continue;
-      }
-      if (state === "orphaned") {
-        yield* reclaim(lock);
-        continue;
-      }
-      // Somebody live holds it. Wait for what they publish rather than racing.
-      for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
-        yield* sleep(RECOVERY_POLL_MS);
-        if (yield* published(snapshot)) {
-          return;
-        }
-        if ((yield* inspectClaim(lock)) === "orphaned") {
-          yield* reclaim(lock);
-          break;
-        }
-      }
-    }
-
-    if (!held) {
-      // Never the critical section without the claim.
-      throw failure;
-    }
+    let settled = false;
 
     yield* scoped(function* () {
-      yield* ensure(() => until(rmPath(lock, { force: true }).catch(() => {})));
-      const observe = observers.beforeRecoveryCleanup;
-      if (observe !== undefined) {
-        yield* observe();
+      const mine = yield* enterClaims(claims);
+      // Registered before the wait it guards, so a halt anywhere below still
+      // takes this attempt out of the election.
+      yield* ensure(() => until(rmPath(mine, { force: true }).catch(() => {})));
+
+      for (let attempt = 0; attempt < RECOVERY_ATTEMPTS; attempt += 1) {
+        const status = yield* electClaim(claims, mine);
+        if (status === "unreadable") {
+          throw new AdapterSnapshotError(
+            `a recovery claim under ${claims} cannot be read, so this host cannot tell whether ` +
+              "another process is still using it. Remove it by hand once nothing is.",
+          );
+        }
+        if (status === "held") {
+          held = true;
+          break;
+        }
+        yield* sleep(RECOVERY_POLL_MS);
+        if (yield* published(snapshot)) {
+          settled = true;
+          return;
+        }
       }
-      // Asked again under the lock, because the answer from before it may
-      // have gone stale in exactly the window this lock closes.
-      if (yield* published(snapshot)) {
+
+      if (!held) {
         return;
       }
-      yield* rm(target, { recursive: true, force: true });
-      yield* until(renamePath(staging, target));
+
+      yield* scoped(function* () {
+        const observe = observers.beforeRecoveryCleanup;
+        if (observe !== undefined) {
+          yield* observe();
+        }
+        // Asked again while holding the claim, because the answer from before
+        // it may have gone stale in exactly the window this claim closes.
+        if (yield* published(snapshot)) {
+          settled = true;
+          return;
+        }
+        yield* rm(target, { recursive: true, force: true });
+        yield* until(renamePath(staging, target));
+        settled = true;
+      });
     });
+
+    if (!held && !settled) {
+      throw failure;
+    }
   }
 
   return {
