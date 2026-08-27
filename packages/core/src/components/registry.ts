@@ -187,7 +187,9 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     Parse,
     parseJsonObject(parseProps),
     {
-      description: "Parse a value using a JSON schema. Errors on invalid content.",
+      description:
+        'Parse a value using a JSON schema. `<Parse schema={plan} as="plan">…</Parse>` parses ' +
+        "its content. Errors on invalid content.",
       as: "Required. The validated value.",
       context: "The JSON text to parse.",
     },
@@ -198,7 +200,10 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     SafeParse,
     parseJsonObject(safeParseProps),
     {
-      description: "Parse a value using a JSON schema. Binds a result object instead of erroring.",
+      description:
+        "Parse a value using a JSON schema. " +
+        '`<SafeParse schema={plan} as="plan">…</SafeParse>` parses its content. Binds a ' +
+        "result object instead of erroring.",
       as: "Required. The result: either the validated value or the issues that rejected it.",
       context: "The JSON text to parse.",
     },
