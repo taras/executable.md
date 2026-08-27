@@ -37,8 +37,9 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Content",
     syntax: ["<Content />", '<Content slot="name" />'],
     description:
-      "Renders the content the caller wrote at the invocation site. Without a slot it renders " +
-      "everything the caller passed; `slot` selects one named partition of it.",
+      "Render what the caller wrote inside this component. `<Content />` renders all of " +
+      'it; `<Content slot="footer" />` renders just the part the caller marked ' +
+      '`slot="footer"`.',
     as: null,
     context: null,
   },
@@ -46,8 +47,8 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Output",
     syntax: ["<Output>…</Output>"],
     description:
-      "Declares the region a document or component presents as its output. Everything outside " +
-      "the region is working detail the reader of a run never sees.",
+      "Restrict what a document or component renders. `<Output>…</Output>` becomes its " +
+      "entire output; anything outside the region is not rendered.",
     as: null,
     context: "The rendered output the run presents.",
   },
@@ -55,8 +56,8 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Return",
     syntax: ["<Return value={value} />"],
     description:
-      "Returns a value from a component that declares a `returns` schema, instead of returning " +
-      "its rendered markdown. The value is validated against that schema.",
+      "Return a value instead of rendered markdown. `<Return value={result} />` hands the " +
+      "value to the caller, checked against the component's declared `returns` schema.",
     as: null,
     context: null,
   },
@@ -64,18 +65,18 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Let",
     syntax: ['<Let as="name">…</Let>', '<Let as="name" value={value} />'],
     description:
-      "Binds a name for the rest of the enclosing region. The paired form binds what its " +
-      "content rendered; `value` binds the exact value its expression produced, by reference. " +
-      "An optional `select` prop narrows rendered content to one CSS selection.",
+      'Bind a name for the rest of the region. `<Let as="plan">…</Let>` binds what its ' +
+      'content rendered; `<Let as="plan" value={result} />` binds the value. `select` ' +
+      "narrows the rendered content to one CSS selection.",
     as: "Required. The binding name the value is available under.",
     context: "Markdown whose rendered text becomes the binding, in the paired form.",
   },
   {
     name: "Each",
-    syntax: ['<Each in={items} let="item">…</Each>'],
+    syntax: ['<Each in={list} let="item">…</Each>'],
     description:
-      "Renders its content once per element of an array, with the element bound to the name " +
-      "`let` states.",
+      "Repeat content for each item in an array. " +
+      '`<Each in={list} let="item">…</Each>` binds each one to `item` inside.',
     as: "Optional. Captures the whole rendered loop instead of emitting it.",
     context: "Markdown rendered once per element.",
   },
@@ -83,8 +84,9 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "If",
     syntax: ["<If condition={condition}>…</If>"],
     description:
-      "Expands one branch of a document. Only the selected branch expands, so the other runs " +
-      "nothing at all.",
+      "Expand content only when a condition is true. " +
+      "`<If condition={ready}>…</If>` expands its content, or the `<Else>` branch " +
+      "instead. The branch not taken never runs.",
     as: null,
     context: "The branch taken when the condition holds, up to an `<Else>`.",
   },
@@ -92,8 +94,8 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Else",
     syntax: ["<Else>…</Else>"],
     description:
-      "The alternative branch of the `<If>` it is written directly inside. Written anywhere " +
-      "else it names no component and is a printed error.",
+      "The branch `<If>` takes when its condition is false. `<Else>…</Else>` is written " +
+      "directly inside an `<If>`, and is an error anywhere else.",
     as: null,
     context: "The branch taken when the enclosing condition does not hold.",
   },
@@ -101,9 +103,9 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Loop",
     syntax: ["<Loop max={count}>…</Loop>"],
     description:
-      "Expands its content more than once, under the bound `max` states. The bound is required " +
-      "and must be a positive integer — there is no unbounded form. An optional `name` prop " +
-      "labels the loop diagnostically.",
+      "Repeat content up to `max` times. `<Loop max={5}>…</Loop>` expands its content " +
+      "again and again until a `<Break>` inside it, or until `max` is reached. `max` is " +
+      "required.",
     as: null,
     context: "Markdown expanded once per iteration.",
   },
@@ -111,8 +113,8 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Break",
     syntax: ["<Break />"],
     description:
-      "Ends the nearest enclosing `<Loop>`. The rest of the current iteration does not expand, " +
-      "so it imports nothing, runs no block and writes no journal entry.",
+      "Exit the nearest enclosing `<Loop>`. `<Break />` stops the current iteration " +
+      "where it is; nothing after it in that iteration runs.",
     as: null,
     context: null,
   },
@@ -120,8 +122,9 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "PrintErrors",
     syntax: ["<PrintErrors>…</PrintErrors>"],
     description:
-      "Prints the failures its content produces as error segments instead of failing the " +
-      "document, so a region can report what went wrong and carry on.",
+      "Convert thrown errors into output without failing. " +
+      "`<PrintErrors>…</PrintErrors>` renders any failure inside it as part of the " +
+      "output.",
     as: null,
     context: "The region whose failures are printed rather than raised.",
   },
@@ -129,9 +132,10 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Answers",
     syntax: ["<Answers>…</Answers>"],
     description:
-      "Answers the elicitations its content performs from the `<Answer>` matchers declared " +
-      "inside it, so a region never stops for a person. An optional `delegate` boolean passes " +
-      "an unmatched elicitation outward instead of failing it.",
+      "Answer any `<Elicit>` in its content without asking a person. " +
+      "`<Answers>…</Answers>` replies from the `<Answer>` matchers declared inside it, " +
+      "reaching elicitations from nested components too. `delegate` passes an unmatched " +
+      "one outward instead of failing.",
     as: null,
     context: "`<Answer>` matchers, and the body they answer for.",
   },
@@ -139,9 +143,10 @@ export const STRUCTURAL_DECLARATIONS: readonly StructuralDeclaration[] = [
     name: "Answer",
     syntax: ['<Answer template="text" value={value} />', "<Answer value={value}>…</Answer>"],
     description:
-      "One matcher inside an `<Answers>` region. `template` matches the whole rendered message " +
-      "— literal text constrains it, `{?name}` matches any text — and `value` is the answer. " +
-      "The first declared matching answer wins, and a matcher answers as often as it matches.",
+      "Supply one answer inside `<Answers>`. " +
+      '`<Answer template="Approve {?what}?" value={{ ok: true }} />` answers any ' +
+      "elicitation its template matches — `{?name}` matches any text. The first " +
+      "matching `<Answer>` wins.",
     as: null,
     context: "A multiline template, in place of the single-line `template` prop.",
   },

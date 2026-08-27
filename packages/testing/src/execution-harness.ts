@@ -715,10 +715,10 @@ export const HARNESS_REGISTRATIONS = [
     props: EXECUTION_PROPS,
     ...documented({
       description:
-        "Runs another document as a real root execution — its own root import, target " +
-        "selection, journal, output stream, scope and teardown — from inside a test. `host` " +
-        'names a host profile the trusted host supplies; `host="run"` takes exactly one of ' +
-        "`target` or `source`, and `props` are the child root's props.",
+        "Run another document from inside a test, and assert on how it finished. " +
+        '`<Execution host="run" target="./setup.md" as="run">…</Execution>` runs it for ' +
+        "real, with its own journal and output. Pass `source` instead of `target` to " +
+        "supply the markdown directly, and `props` for the document's properties.",
       as:
         "Optional. The child's outcome: a settled result, or a suspension. Without it a " +
         "settled failure fails the owning test rather than passing vacuously.",
@@ -732,8 +732,9 @@ export const HARNESS_REGISTRATIONS = [
     props: WORKFLOW_RUN_PROPS,
     ...documented({
       description:
-        "The scope a workflow-hosted child execution requires. A host that provides no " +
-        "workflow profile refuses it, naming that.",
+        "Scope a workflow-hosted execution. `<WorkflowRun>…</WorkflowRun>` holds " +
+        '`<Execution host="workflow">` children, and refuses unless the host supplies a ' +
+        "workflow profile.",
       as: null,
       context: "The workflow-hosted executions this scope owns.",
     }),
@@ -745,9 +746,10 @@ export const HARNESS_REGISTRATIONS = [
     props: DIAGNOSTIC_JOURNAL_PROPS,
     ...documented({
       description:
-        "Selects an isolated diagnostic journal for a `run` child, equivalent to what " +
-        "`xmd run --journal` retains. A declaration: valid only as a direct child of " +
-        "`<Execution>`, and only before assertion content.",
+        "Give a child execution a journal of its own. `<DiagnosticJournal />` goes " +
+        "inside `<Execution>`, before the assertions, and is invalid anywhere else. " +
+        "Without it the child keeps no journal — with it, `<CollectJournal>` has one " +
+        "to read.",
       as: null,
       context: null,
     }),
@@ -759,9 +761,10 @@ export const HARNESS_REGISTRATIONS = [
     props: COLLECT_OUTPUT_PROPS,
     ...documented({
       description:
-        "Accumulates the child execution's rendered output for assertions. Passive: the " +
-        "output is displayed progressively either way, and a failed or cancelled child leaves " +
-        "the partial prefix bound.",
+        "Capture a child execution's output so a test can assert on it. " +
+        '`<CollectOutput as="output" />` goes inside `<Execution>`, before the ' +
+        "assertions, and is invalid anywhere else. It changes nothing about the run, " +
+        "and a child that fails partway still leaves what it printed.",
       as: "Required. The child's accumulated output.",
       context: null,
     }),
@@ -773,8 +776,10 @@ export const HARNESS_REGISTRATIONS = [
     props: COLLECT_JOURNAL_PROPS,
     ...documented({
       description:
-        "Binds a read-only snapshot of a journal the host already selected. It grants no " +
-        "retention, so declaring it without a selected journal is malformed.",
+        "Capture a child execution's journal so a test can assert on it. " +
+        '`<CollectJournal as="journal" />` goes inside `<Execution>`, beside ' +
+        "`<CollectOutput>`. It reads a journal the run already has — pair it with " +
+        "`<DiagnosticJournal>` to create one.",
       as: "Required. The journal snapshot.",
       context: null,
     }),

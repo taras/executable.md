@@ -90,10 +90,9 @@ export function agentIdentityComponents(): readonly IdentityComponent[] {
       props: SESSION_PROPS,
       ...documented({
         description:
-          "Resolves a named session and pins it onto the prompts and launches inside it. " +
-          "Self-closing it validates the session and renders nothing. It is the one agent word " +
-          "a host declares to the execution rather than registering, because its implementation " +
-          "names durable work after its own invocation.",
+          "Set the default session for every prompt in its content. " +
+          '`<Session name="review">…</Session>` reaches prompts sent from nested components ' +
+          'too. `<Session name="review" />` checks the session is usable.',
         as: null,
         context: "Markdown whose prompts and launches run in this session.",
       }),
@@ -119,10 +118,10 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: AGENT_PROVIDER_PROPS,
     ...documented({
       description:
-        "Resolves a registered agent provider by name and installs it for its content. " +
-        "`defaultAgent` overrides the inherited default agent there, and `timeout` bounds each " +
-        "prompt inside it. An unknown provider name fails the execution before the content " +
-        "expands.",
+        'Set the agent provider for its content. `<AgentProvider name="acpx">…</AgentProvider>` ' +
+        "applies to everything inside, where `defaultAgent` sets the agent to use when none is " +
+        "named and `timeout` bounds each prompt. An unknown provider fails before the content " +
+        "runs.",
       as: null,
       context: "Markdown expanded with this provider installed.",
     }),
@@ -134,9 +133,9 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: AGENT_PROPS,
     ...documented({
       description:
-        "Resolves an agent — the one `name` states, or the current default — and pins it onto " +
-        "the prompts and launches inside it. Self-closing it performs the same resolution and " +
-        "availability check, then renders nothing.",
+        'Set the agent for every prompt in its content. `<Agent name="codex">…</Agent>` ' +
+        'reaches prompts sent from nested components too. `<Agent name="codex" />` checks the ' +
+        "agent is available.",
       as: null,
       context: "Markdown whose prompts and launches use this agent.",
     }),
@@ -148,9 +147,10 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: SESSION_LAUNCH_PROPS,
     ...documented({
       description:
-        "Prepares one durable session from its rendered content and hands the provider's " +
-        "native interface the terminal for it. It renders nothing itself and returns only " +
-        "after that interface exits.",
+        "Launch a coding agent with prepared context. " +
+        "`<Session.Launch>…</Session.Launch>` makes its content the agent's starting " +
+        "context, hands the agent's own interface the terminal, and continues when you " +
+        "exit it.",
       as: null,
       context: "The instructions the native session starts from.",
     }),
@@ -162,10 +162,10 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: PROMPT_PROPS,
     ...documented({
       description:
-        "Sends one prompt and renders the reply. Content is the prompt; a self-closing " +
-        '`<Prompt text="…" />` uses the prop instead. `agent`, `session` and `timeout` ' +
-        "override the enclosing scope for this prompt, and `throwOnError` ends the document on " +
-        "failure instead of aggregating it into the completion.",
+        "Send a prompt and render the reply. `<Prompt>…</Prompt>` sends its content; " +
+        '`<Prompt text="Review this" />` sends the prop. `agent`, `session` and `timeout` ' +
+        "override the surrounding scope. A failed prompt renders what it got and the document " +
+        "continues — `throwOnError` stops it instead.",
       as: "Optional. Captures the reply instead of emitting it.",
       context: "The prompt text, in the paired form.",
     }),
@@ -177,8 +177,9 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: NO_PROPS_SCHEMA,
     ...documented({
       description:
-        "Answers each permission request in its content by selecting an allow option, and " +
-        "denies when none is offered. The enclosing policy applies again after the closing tag.",
+        "Approve every permission request in its content. `<ApproveAll>…</ApproveAll>` " +
+        "answers for the agent so it never stops to ask you; requests offering no allow " +
+        "option are denied.",
       as: null,
       context: "Markdown whose permission requests are approved.",
     }),
@@ -190,8 +191,9 @@ export const AGENT_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: NO_PROPS_SCHEMA,
     ...documented({
       description:
-        "Asks for every permission request in its content, and denies without an interactive " +
-        "terminal or a valid choice. The enclosing policy applies again after the closing tag.",
+        "Ask about every permission request in its content. " +
+        "`<AskPermission>…</AskPermission>` puts each request to you; with no " +
+        "interactive terminal, or no valid answer, it denies.",
       as: null,
       context: "Markdown whose permission requests are asked about.",
     }),

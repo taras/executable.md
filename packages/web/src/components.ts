@@ -28,9 +28,10 @@ export const WEB_REGISTRATIONS: readonly ComponentRegistration[] = [
     returns: WEB_FORM_RETURNS,
     ...documented({
       description:
-        "Asks a person a structured question in a browser form built from a JSON Schema, and " +
-        "binds their validated answer. `uiSchema` carries RJSF presentation options. A " +
-        "document that wants the question asked without saying where writes `<Elicit>` instead.",
+        "Ask a person a question in a browser form. " +
+        '`<WebForm schema={review} as="answer">…</WebForm>` builds the form from the ' +
+        "schema and shows its content above it. `uiSchema` sets presentation options. " +
+        "`<Elicit>` asks the same question without choosing the browser.",
       as: "Required. The validated response.",
       context: "The Markdown shown above the form.",
     }),

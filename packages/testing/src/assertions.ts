@@ -114,20 +114,20 @@ export function assertionForms(kind: AssertionKind): readonly InvocationForm[] {
   return readsExpectedChildren(kind) ? ["self-closing", "paired"] : ["self-closing"];
 }
 
-/** The operands an assertion of `kind` takes, spelled for a reader. */
-const OPERANDS: Record<AssertionKind, string> = {
-  "unary-truthy": "Takes one `expr` operand.",
-  "unary-exists": "Takes one `actual` operand.",
-  "binary-eq": "Takes `actual` and `expected` operands.",
-  "string-includes": "Takes `actual` and `expected` string operands.",
-  match: "Takes an `actual` string and an `expected` RegExp, written `expected={/pattern/}`.",
-  numeric: "Takes `actual` and `expected` operands, compared as numbers.",
+/** How an assertion of `kind` is written, as a spelling a reader can copy. */
+const EXAMPLE_PROPS: Record<AssertionKind, string> = {
+  "unary-truthy": "expr={ready}",
+  "unary-exists": "actual={user}",
+  "binary-eq": "actual={count} expected={3}",
+  "string-includes": 'actual={output} expected="created"',
+  match: "actual={version} expected={/^\\d+\\./}",
+  numeric: "actual={score} expected={80}",
 };
 
-/** The prose one assertion reports, with its operands and `msg` stated once. */
+/** The prose one assertion reports: what it checks, how to write it, and `msg`. */
 export function assertionDescription(assertion: AssertionEntry): string {
   return (
-    `${assertion.description} ${OPERANDS[assertion.kind]} ` +
+    `${assertion.description} — \`<${assertion.name} ${EXAMPLE_PROPS[assertion.kind]} />\`. ` +
     "The optional `msg` prop replaces the reported failure message."
   );
 }
@@ -139,67 +139,59 @@ export const ASSERTION_BINDING =
   "A failing assertion does not return.";
 
 export const ASSERTIONS: Map<string, AssertionEntry> = new Map([
-  entry("Assert", "unary-truthy", "Passes when the operand is truthy.", (v) =>
-    assert(v.expr, v.msg),
-  ),
-  entry("AssertFalse", "unary-truthy", "Passes when the operand is falsy.", (v) =>
+  entry("Assert", "unary-truthy", "Assert that a value is truthy", (v) => assert(v.expr, v.msg)),
+  entry("AssertFalse", "unary-truthy", "Assert that a value is falsy", (v) =>
     assertFalse(v.expr, v.msg),
   ),
-  entry(
-    "AssertExists",
-    "unary-exists",
-    "Passes when the operand is neither null nor undefined.",
-    (v) => assertExists(v.actual, v.msg),
+  entry("AssertExists", "unary-exists", "Assert that a value is neither null nor undefined", (v) =>
+    assertExists(v.actual, v.msg),
   ),
-  entry("AssertEquals", "binary-eq", "Passes when the two operands are deeply equal.", (v) =>
+  entry("AssertEquals", "binary-eq", "Assert that two values are deeply equal", (v) =>
     assertEquals(v.actual, v.expected, v.msg),
   ),
-  entry("AssertNotEquals", "binary-eq", "Passes when the two operands are not deeply equal.", (v) =>
+  entry("AssertNotEquals", "binary-eq", "Assert that two values are not deeply equal", (v) =>
     assertNotEquals(v.actual, v.expected, v.msg),
   ),
   entry(
     "AssertStrictEquals",
     "binary-eq",
-    "Passes when the two operands are the same value, compared by identity.",
+    "Assert that two values are the same, compared with `===`",
     (v) => assertStrictEquals(v.actual, v.expected, v.msg),
   ),
   entry(
     "AssertNotStrictEquals",
     "binary-eq",
-    "Passes when the two operands are not the same value, compared by identity.",
+    "Assert that two values are not the same, compared with `===`",
     (v) => assertNotStrictEquals(v.actual, v.expected, v.msg),
   ),
   entry(
     "AssertStringIncludes",
     "string-includes",
-    "Passes when the actual string contains the expected substring.",
+    "Assert that a string contains a substring",
     (v) => assertStringIncludes(coerceString(v.actual), coerceString(v.expected), v.msg),
   ),
-  entry("AssertMatch", "match", "Passes when the actual string matches the pattern.", (v) =>
+  entry("AssertMatch", "match", "Assert that a string matches a pattern", (v) =>
     assertMatch(coerceString(v.actual), requireRegExp(v.expected), v.msg),
   ),
-  entry(
-    "AssertNotMatch",
-    "match",
-    "Passes when the actual string does not match the pattern.",
-    (v) => assertNotMatch(coerceString(v.actual), requireRegExp(v.expected), v.msg),
+  entry("AssertNotMatch", "match", "Assert that a string does not match a pattern", (v) =>
+    assertNotMatch(coerceString(v.actual), requireRegExp(v.expected), v.msg),
   ),
-  entry("AssertGreater", "numeric", "Passes when actual is greater than expected.", (v) =>
+  entry("AssertGreater", "numeric", "Assert that one number is greater than another", (v) =>
     assertGreater(v.actual, v.expected, v.msg),
   ),
   entry(
     "AssertGreaterOrEqual",
     "numeric",
-    "Passes when actual is greater than or equal to expected.",
+    "Assert that one number is greater than or equal to another",
     (v) => assertGreaterOrEqual(v.actual, v.expected, v.msg),
   ),
-  entry("AssertLess", "numeric", "Passes when actual is less than expected.", (v) =>
+  entry("AssertLess", "numeric", "Assert that one number is less than another", (v) =>
     assertLess(v.actual, v.expected, v.msg),
   ),
   entry(
     "AssertLessOrEqual",
     "numeric",
-    "Passes when actual is less than or equal to expected.",
+    "Assert that one number is less than or equal to another",
     (v) => assertLessOrEqual(v.actual, v.expected, v.msg),
   ),
 ]);

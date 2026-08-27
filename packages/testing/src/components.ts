@@ -108,9 +108,9 @@ export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
     props: TESTING_PROPS,
     ...documented({
       description:
-        "Enables testing mode for its expanded subtree and reports the tests discovered " +
-        "inside it. A boundary that discovers no test fails, and a failing test inside one " +
-        "fails the execution.",
+        "Turn on testing for its content. `<Testing>…</Testing>` runs the `<Test>` " +
+        "elements inside and reports them; a failing test fails the document, and so " +
+        "does finding no tests at all.",
       as: null,
       context: "The Markdown expanded in testing mode.",
     }),
@@ -123,9 +123,10 @@ export const TESTING_REGISTRATIONS: readonly ComponentRegistration[] = [
     captures: ["message"],
     ...documented({
       description:
-        "Passes when expanding its content fails with a message the required `message` operand " +
-        "matches. `message` is a capture and takes a string or a RegExp; an invocation that " +
-        "writes none is a configuration error.",
+        "Assert that its content fails. " +
+        "`<AssertThrows message={/not found/}>…</AssertThrows>` passes only if the " +
+        "content fails with a matching message. `message` is required and takes a " +
+        "string or a regular expression.",
       as:
         "Optional. The complete caught error segment, bound by reference — its `message`, " +
         "`source` and structured `cause` as they were raised, not a description of them.",

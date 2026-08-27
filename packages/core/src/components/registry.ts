@@ -115,10 +115,8 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     parseJsonObject(elicitProps),
     {
       description:
-        "Asks a person a structured question and binds their validated answer. The document " +
-        "says what it is asking and what shape the answer must have; where the asking happens " +
-        "is the host's decision, and an enclosing `<Answers>` region can supply the answer " +
-        "instead so nobody is asked.",
+        'Ask a person a structured question. `<Elicit schema={decision} as="answer">…</Elicit>` ' +
+        "shows the content as the request.",
       as: "Required. The validated answer, as a structured value.",
       context: "The request message the person is shown.",
     },
@@ -126,18 +124,17 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   ),
   core("TempDir", TempDir, parseJsonObject(tempDirProps), {
     description:
-      "Supplies an isolated temporary directory. Written with content it is the contextual " +
-      "working directory everything inside observes, removed when that content finishes; " +
-      "written self-closing it renders the path and is removed with the surrounding scope.",
+      "Run work in a temporary working directory. `<TempDir>…</TempDir>` expands its content " +
+      "with the temporary directory as the working directory, so `<File>` and commands inside " +
+      "write there rather than in the current one. `<TempDir />` renders the path instead.",
     as: "Optional. Captures the rendered directory path instead of emitting it.",
     context: "Markdown expanded with the temporary directory as its working directory.",
   }),
   core("Fetch", Fetch, parseJsonObject(fetchProps), {
     description:
-      "Performs one authorized HTTP read and retains it. Only GET and HEAD are admitted, " +
-      "because an interruption before the record commits may repeat the request. A captured " +
-      "response is data whatever its status; an uncaptured one succeeds on 2xx and fails " +
-      "otherwise.",
+      'Fetch a URL. `<Fetch url="https://example.com/status" as="response" />` binds the ' +
+      "response, and any status is data you can branch on. Without `as`, a non-2xx status " +
+      "fails. Only GET and HEAD methods currently supported.",
     as:
       "Optional. Captures the response, which is what makes a non-2xx status data instead " +
       "of a failure.",
@@ -145,16 +142,16 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   }),
   core("File", fileForm, parseJsonObject(fileProps), {
     description:
-      "Reads and writes UTF-8 text inside the contextual working directory. Self-closing it " +
-      "reads the file at `path`; paired it writes what its content rendered there.",
+      'Read or write a file. `<File path="notes.md" />` reads the content; ' +
+      '`<File path="notes.md">…</File>` writes the content. The path is relative to the ' +
+      "working directory.",
     as: "Optional. Captures the file's text instead of emitting it, in the reading form.",
     context: "The text to write, in the writing form.",
   }),
   core("File.Delete", fileDeleteForm, parseJsonObject(fileDeleteProps), {
     description:
-      "Removes one file inside the contextual working directory. Absence is success, so " +
-      "deleting a path twice succeeds twice. It renders nothing and reports nothing about " +
-      "what was there.",
+      'Delete a file. `<File.Delete path="notes.md" />` removes it. It does not error if the ' +
+      "file doesn't exist, and produces no output.",
     as: "Optional. Captures the empty string this renders, as for any text component.",
     context: null,
   }),
@@ -164,9 +161,9 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     parseJsonObject(globProps),
     {
       description:
-        "Binds the regular files under the contextual working directory that a set of patterns " +
-        "selects, as relative POSIX paths, deduplicated and sorted by code point. A symbolic " +
-        "link is never a result and a link to a directory is never descended into.",
+        'List files by pattern. `<Glob include={["**/*.md"]} as="docs" />` matches paths ' +
+        "relative to the working directory. The list is sorted. Directories and symbolic " +
+        "links are never results.",
       as: "Required. The matched paths, as a string array.",
       context: null,
     },
@@ -178,10 +175,8 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     parseJsonObject(jsonProps),
     {
       description:
-        "Renders a structured value as JSON text at the position it is written. There is no " +
-        "indent, replacer or sorting option: the whole transformation is one value to one " +
-        "piece of text. It renders the value it is given rather than content, so the paired " +
-        "form is refused.",
+        "Render a value as JSON text. `<Json value={config} />` writes the JSON where you " +
+        "put it.",
       as: null,
       context: null,
     },
@@ -192,10 +187,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     Parse,
     parseJsonObject(parseProps),
     {
-      description:
-        "Binds its content as a JSON value validated against a schema. The schema compiles " +
-        "before the content expands, so an unusable schema fails before any work it would " +
-        "judge. Malformed JSON and a rejected instance fail the invocation.",
+      description: "Parse a value using a JSON schema. Errors on invalid content.",
       as: "Required. The validated value.",
       context: "The JSON text to parse.",
     },
@@ -206,10 +198,7 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
     SafeParse,
     parseJsonObject(safeParseProps),
     {
-      description:
-        "Binds its content as a result a document can inspect. Same compiler and ordering as " +
-        "`<Parse>`; malformed JSON and a rejected instance become a value the document can " +
-        "branch on rather than a failure.",
+      description: "Parse a value using a JSON schema. Binds a result object instead of erroring.",
       as: "Required. The result: either the validated value or the issues that rejected it.",
       context: "The JSON text to parse.",
     },
@@ -217,9 +206,9 @@ export const CORE_REGISTRY: ComponentRegistry = new Map<string, RegistryEntry>([
   ),
   core("Test", Test, parseJsonObject(testProps), {
     description:
-      "One test. Its invocation contains a checked command failure, so a failing command " +
-      "inside it is that test's outcome rather than the document's. What a test does, and " +
-      "whether it may run at all, come from the testing host.",
+      'Define a test. `<Test name="parses a manifest">…</Test>` runs under `xmd test`, or ' +
+      "inside a `<Testing>` region; elsewhere it is skipped. A failing command or assertion " +
+      "inside fails the test rather than the document.",
     as: null,
     context: "The body of the test: its assertions and the work they judge.",
   }),
