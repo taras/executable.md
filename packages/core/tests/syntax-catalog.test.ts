@@ -59,8 +59,18 @@ type Tree = Record<string, Node>;
 
 const MISSING: StatResult = { exists: false, isFile: false, isDirectory: false };
 
+/**
+ * The tree is keyed by working-directory-relative paths, so a spelling a host
+ * would answer for — `./`, a trailing separator — is resolved before lookup
+ * rather than missing from the map.
+ */
+function resolve(path: string): string {
+  const trimmed = path.replace(/^\.\//, "").replace(/\/+$/, "");
+  return trimmed === "" ? "." : trimmed;
+}
+
 function stat(tree: Tree, path: string): StatResult {
-  const node = tree[path];
+  const node = tree[resolve(path)];
   if (node === undefined) {
     return MISSING;
   }
@@ -74,7 +84,7 @@ function stat(tree: Tree, path: string): StatResult {
 }
 
 function lstat(tree: Tree, path: string): LinkStatResult {
-  const node = tree[path];
+  const node = tree[resolve(path)];
   if (node === undefined) {
     return { ...MISSING, isSymbolicLink: false };
   }
@@ -102,10 +112,11 @@ function read(tree: Tree, path: string): string {
  * what not following one produces.
  */
 function children(tree: Tree, directory: string): DirectoryEntry[] {
-  const prefix = directory === "." ? "" : `${directory}/`;
+  const root = resolve(directory);
+  const prefix = root === "." ? "" : `${root}/`;
   const found: DirectoryEntry[] = [];
   for (const [path, node] of Object.entries(tree)) {
-    if (!path.startsWith(prefix)) {
+    if (!path.startsWith(prefix) || path === root) {
       continue;
     }
     const name = path.slice(prefix.length);
@@ -528,6 +539,38 @@ describe("Tier SY: include boundaries", () => {
       catalogFor(tree, ["components"], { unreadable: ["components/Ns"] }),
     );
     expect(beneath.message).toContain("components/Ns");
+  });
+
+  it("SY13c: keeps every read beneath an include however it is spelled", function* () {
+    // `./` names the working directory, so joining an entry to it has to stay
+    // relative: a read of `/Ns` is the filesystem root's, not this include's.
+    // What each spelling *selects* is `selectComponent()`'s and is untouched —
+    // `./` resolves nothing here, exactly as it resolves nothing on `main`.
+    const tree: Tree = {
+      ".": { kind: "directory" },
+      Ns: { kind: "directory" },
+      "Ns/Widget.md": markdown("nested\n"),
+      "Ns/Deep": { kind: "directory" },
+      "Ns/Deep/index.md": markdown("deep\n"),
+      "Direct.md": markdown("direct\n"),
+      node_modules: { kind: "directory" },
+      "node_modules/Widget.md": markdown("out of reach\n"),
+    };
+
+    for (const [include, selected] of [
+      [".", ["Direct", "Ns.Deep", "Ns.Widget"]],
+      ["./", []],
+    ] as const) {
+      const reads: string[] = [];
+      const catalog = yield* catalogFor(tree, [include], {
+        unreadable: ["node_modules"],
+        reads,
+      });
+
+      expect(reads.filter((read) => read.startsWith("/"))).toEqual([]);
+      expect([...reads].sort()).toEqual([".", "Ns", "Ns/Deep"]);
+      expect(names(userProvided(catalog))).toEqual([...selected]);
+    }
   });
 
   it("SY14: fails the whole request when an include root is a symbolic link", function* () {

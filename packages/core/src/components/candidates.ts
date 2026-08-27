@@ -58,9 +58,27 @@ function normalizePath(path: string): string {
   return path.replace(/^\.\//, "");
 }
 
+/**
+ * The include as a path prefix: no leading `./`, no trailing separator, and `.`
+ * for the working directory itself.
+ *
+ * Every path this module builds is the prefix joined to a relative entry, so
+ * the prefix decides whether that join stays relative. `./` names the working
+ * directory, and joining to it directly produces `.//Ns` — which reads back as
+ * `/Ns`, the filesystem root's, once the leading `./` is stripped.
+ */
+function includePrefix(include: string): string {
+  const relative = normalizePath(include);
+  if (relative === "") {
+    return ".";
+  }
+  return relative.replace(/(.)\/+$/, "$1");
+}
+
 /** The path an entry has relative to the working directory, not to its root. */
 function within(include: string, path: string): string {
-  return normalizePath(include === "." ? path : `${include}/${path}`);
+  const prefix = includePrefix(include);
+  return prefix === "." ? path : `${prefix}/${path}`;
 }
 
 /**
@@ -152,7 +170,7 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
  * never the host path the read is issued against.
  */
 function* collect(include: string, prefix: string, names: Set<string>): Operation<void> {
-  const directory = prefix === "" ? include : within(include, prefix);
+  const directory = prefix === "" ? includePrefix(include) : within(include, prefix);
 
   for (const entry of yield* readDirectory(directory)) {
     const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
