@@ -8,7 +8,8 @@
  * Seven domain APIs:
  * - `API.Process` — subprocess execution (`exec`)
  * - `API.Fs` — the low-level host filesystem (`readTextFile`, `writeTextFile`,
- *   `stat`, `lstat`, `glob`, `realpath`, `ensureDir`, `rename`, `remove`)
+ *   `stat`, `lstat`, `readDirectory`, `glob`, `realpath`, `ensureDir`, `rename`,
+ *   `remove`)
  * - `API.Files` — document filesystem access as whole semantic operations,
  *   with no host default. `useHostFiles()` installs the host provider.
  * - `API.Fetch` — HTTP requests (`fetch`)
@@ -31,6 +32,7 @@ export {
   writeTextFile,
   stat,
   lstat,
+  readDirectory,
   glob,
   realpath,
   ensureDir,
@@ -45,6 +47,7 @@ export {
   useQuietProcessOutput,
 } from "./apis.ts";
 export type {
+  DirectoryEntry,
   EvalBlock,
   FetchInit,
   FetchOperation,

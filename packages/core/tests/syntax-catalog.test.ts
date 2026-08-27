@@ -4,9 +4,13 @@
  * What a document may write in a directory, answered without running any of it.
  * The filesystem is stubbed at the contextual `API.Fs` boundary rather than
  * with `useStubFs`, because these rows are about the three operations that
- * disagree — `lstat` on the include root, `glob` over its logical entries, and
- * `stat` through a symbolic link — and the shared stub answers only two of
- * them.
+ * disagree — `lstat` on the include root, `readDirectory` over one level of its
+ * entries, and `stat` through a symbolic link — and the shared stub answers
+ * none of the enumerating ones.
+ *
+ * The stub reads one level at a time, the way the walk does, so a directory it
+ * is told is unreadable is a real trap: reaching it throws, and the recorded
+ * reads say exactly which directories were entered.
  *
  * Selection is deliberately not re-proved here. Every name enumerated goes back
  * through `selectComponent()`, so what these rows check is that enumeration
@@ -19,7 +23,7 @@ import { expect } from "@executablemd/test-support/expect";
 import { scoped } from "effection";
 import type { Operation } from "effection";
 import { API } from "@executablemd/runtime";
-import type { LinkStatResult, StatResult } from "@executablemd/runtime";
+import type { DirectoryEntry, LinkStatResult, StatResult } from "@executablemd/runtime";
 import { repositoryComponentName } from "../src/components/candidates.ts";
 import {
   AGENT_REGISTRATIONS,
@@ -92,24 +96,41 @@ function read(tree: Tree, path: string): string {
 }
 
 /**
- * The entries beneath one root, the way `glob` reports them: files and symbolic
- * links by their own relative path, directories never, and nothing beneath a
- * link — a linked directory holds no entries in this tree, which is exactly
+ * The entries one directory holds directly, the way `readDirectory` reports
+ * them: names rather than paths, one level rather than a subtree, and a link by
+ * itself — a linked directory holds no entries in this tree, which is exactly
  * what not following one produces.
  */
-function walk(tree: Tree, root: string): Array<{ path: string; isFile: boolean }> {
-  const prefix = root === "." ? "" : `${root}/`;
-  const found: Array<{ path: string; isFile: boolean }> = [];
+function children(tree: Tree, directory: string): DirectoryEntry[] {
+  const prefix = directory === "." ? "" : `${directory}/`;
+  const found: DirectoryEntry[] = [];
   for (const [path, node] of Object.entries(tree)) {
-    if (!path.startsWith(prefix) || path === root || node.kind === "directory") {
+    if (!path.startsWith(prefix)) {
       continue;
     }
-    found.push({ path: path.slice(prefix.length), isFile: node.kind === "file" });
+    const name = path.slice(prefix.length);
+    if (name === "" || name.includes("/")) {
+      continue;
+    }
+    found.push({
+      name,
+      isFile: node.kind === "file",
+      isDirectory: node.kind === "directory",
+      isSymbolicLink: node.kind === "link",
+    });
   }
   return found;
 }
 
-function* useTree(tree: Tree): Operation<void> {
+/** What a walk is allowed to reach, and what it actually reached. */
+interface Enumeration {
+  /** Directories the walk must never enter. Reading one throws. */
+  unreadable?: readonly string[];
+  /** Every directory read, appended in read order. */
+  reads?: string[];
+}
+
+function* useTree(tree: Tree, enumeration: Enumeration = {}): Operation<void> {
   yield* API.Fs.around({
     // deno-lint-ignore require-yield
     *readTextFile([path]) {
@@ -124,8 +145,16 @@ function* useTree(tree: Tree): Operation<void> {
       return lstat(tree, path);
     },
     // deno-lint-ignore require-yield
+    *readDirectory([path]) {
+      enumeration.reads?.push(path);
+      if (enumeration.unreadable?.includes(path) === true) {
+        throw new Error(`EACCES: permission denied, scandir '${path}'`);
+      }
+      return children(tree, path);
+    },
+    // deno-lint-ignore require-yield
     *glob([options]) {
-      return walk(tree, options.root);
+      throw new Error(`enumeration globbed ${JSON.stringify(options.root)}`);
     },
   });
 }
@@ -134,9 +163,13 @@ function markdown(body: string): Node {
   return { kind: "file", content: body };
 }
 
-function catalogFor(tree: Tree, includes: readonly string[]): Operation<SyntaxCatalog> {
+function catalogFor(
+  tree: Tree,
+  includes: readonly string[],
+  enumeration: Enumeration = {},
+): Operation<SyntaxCatalog> {
   return scoped(function* () {
-    yield* useTree(tree);
+    yield* useTree(tree, enumeration);
     return yield* inspectSyntax({ includes });
   });
 }
@@ -331,6 +364,52 @@ describe("Tier SY: repository mapping", () => {
     });
   });
 
+  it("SY7c: never reads a subtree no component name can reach", function* () {
+    // Every directory named here as unreadable throws when it is read, so the
+    // catalog being built at all is the proof that none of them was entered.
+    const reads: string[] = [];
+    const catalog = yield* catalogFor(
+      {
+        components: { kind: "directory" },
+        "components/Direct.md": markdown("direct\n"),
+        "components/Ns": { kind: "directory" },
+        "components/Ns/Nested.md": markdown("nested\n"),
+        "components/Ns/Indexed": { kind: "directory" },
+        "components/Ns/Indexed/index.md": markdown("indexed\n"),
+        "components/node_modules": { kind: "directory" },
+        "components/node_modules/Widget.md": markdown("out of reach\n"),
+        "components/.hidden": { kind: "directory" },
+        "components/.hidden/Widget.md": markdown("out of reach\n"),
+        "components/File.Delete": { kind: "directory" },
+        "components/File.Delete/index.md": markdown("out of reach\n"),
+        "components/Ns/vendor": { kind: "directory" },
+        "components/Ns/vendor/Widget.md": markdown("out of reach\n"),
+      },
+      ["components"],
+      {
+        unreadable: [
+          "components/node_modules",
+          "components/.hidden",
+          "components/File.Delete",
+          "components/Ns/vendor",
+        ],
+        reads,
+      },
+    );
+
+    expect(names(userProvided(catalog))).toEqual(["Direct", "Ns.Indexed", "Ns.Nested"]);
+    // Sorted, because which directories were read is the contract and the
+    // order they were read in is not.
+    expect([...reads].sort()).toEqual(["components", "components/Ns", "components/Ns/Indexed"]);
+    // A dotted directory reaches no name even though the name exists: the
+    // built-in keeps it.
+    expect(find(builtIn(catalog), "File.Delete").origin).toEqual({
+      kind: "registered",
+      origin: "@executablemd/core",
+      reserved: false,
+    });
+  });
+
   it("SY7b: inverts a path only through single-segment names", function* () {
     for (const path of [
       "File.Delete.md",
@@ -430,6 +509,25 @@ describe("Tier SY: include boundaries", () => {
 
     expect(failure.message).toContain('--include "components"');
     expect(failure.message).toContain("not a directory");
+  });
+
+  it("SY13b: fails the whole request when a directory a name reaches cannot be read", function* () {
+    // Pruning skips what no name reaches; it must not turn a reachable
+    // directory that refuses into a quietly shorter catalog.
+    const tree: Tree = {
+      components: { kind: "directory" },
+      "components/Kept.md": markdown("kept\n"),
+      "components/Ns": { kind: "directory" },
+      "components/Ns/Nested.md": markdown("nested\n"),
+    };
+
+    const atRoot = yield* raised(catalogFor(tree, ["components"], { unreadable: ["components"] }));
+    expect(atRoot.message).toContain("components");
+
+    const beneath = yield* raised(
+      catalogFor(tree, ["components"], { unreadable: ["components/Ns"] }),
+    );
+    expect(beneath.message).toContain("components/Ns");
   });
 
   it("SY14: fails the whole request when an include root is a symbolic link", function* () {

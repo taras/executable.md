@@ -25,7 +25,12 @@ Installs an in-memory filesystem.
 
 - `readTextFile(path)` returns `files[path]`
 - `stat(path)` reports `exists/isFile` based on whether `path` is a key
+- `readDirectory()` throws with `"readDirectory not stubbed"`
 - `glob()` throws with `"glob not stubbed"`
+
+Neither enumeration operation is answered from the map: a flat set of file paths
+holds no directory structure, so a stub built on it would invent one. A test
+that enumerates installs `API.Fs.around()` itself.
 
 This is the right default for `execute()` tests that want to supply a small
 virtual document tree inline.
@@ -146,7 +151,7 @@ Use raw runtime middleware when you need behavior beyond the shared defaults.
 
 Common examples:
 
-- custom `glob()` results
+- custom `readDirectory()` or `glob()` results
 - process stubs for `ls`, `cat`, `python`, or daemon flows
 - env/platform overrides through `API.Env.around()`
 - fetch-specific mocking through `API.Fetch.around()`

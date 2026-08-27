@@ -28,9 +28,17 @@
  * implementation execution would have selected. Refusing it anyway would fail
  * `xmd syntax` in any ordinary package repository, whose `node_modules` is full
  * of directory links no name reaches.
+ *
+ * That same relevance decides where the walk goes, not just what it reports.
+ * `probeComponentPath()` enters a directory only through a valid name segment,
+ * so a directory whose own segment is not one holds nothing any name reaches,
+ * and its whole subtree is skipped without being read. The default includes are
+ * `["components", "."]`, and reading a repository's `node_modules`, `.git` and
+ * build output to discard every path in them is what made `xmd syntax` take
+ * thirteen seconds where the walk it actually needs takes well under one.
  */
 
-import { glob, lstat, stat } from "@executablemd/runtime";
+import { lstat, readDirectory, stat } from "@executablemd/runtime";
 import type { Operation } from "effection";
 import { isComponentName, isComponentNameSegment } from "./registration.ts";
 
@@ -129,36 +137,62 @@ export function* repositoryCandidateNames(includes: readonly string[]): Operatio
       throw includeFailure(include, "it is not a directory.");
     }
 
-    for (const entry of yield* glob({ patterns: ["**/*"], root: include })) {
-      if (entry.isFile) {
-        add(names, entry.path);
-        continue;
-      }
-
-      // Reported and not a file: `glob` reports a symbolic link by its own path
-      // and never follows it, so this is the one shape left.
-      if (!selectionRelevant(entry.path)) {
-        continue;
-      }
-      // `stat` follows the link, which is the only thing asked of it here — what
-      // the link leads to, never where. The resolved host path stays out of the
-      // classification and out of every message below.
-      const target = yield* stat(within(include, entry.path));
-      if (target.exists && target.isFile) {
-        add(names, entry.path);
-        continue;
-      }
-      throw includeFailure(
-        include,
-        `${JSON.stringify(entry.path)} is a symbolic link to ${
-          target.exists ? "a directory" : "nothing"
-        }, and a link is never followed — so the components it could have supplied ` +
-          "cannot be listed.",
-      );
-    }
+    yield* collect(include, "", names);
   }
 
   return names;
+}
+
+/**
+ * Every name one directory contributes, and every name the directories worth
+ * entering beneath it contribute.
+ *
+ * `prefix` is the directory's path relative to the include, so what the
+ * grammar is applied to is the logical path a name would have to produce —
+ * never the host path the read is issued against.
+ */
+function* collect(include: string, prefix: string, names: Set<string>): Operation<void> {
+  const directory = prefix === "" ? include : within(include, prefix);
+
+  for (const entry of yield* readDirectory(directory)) {
+    const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+
+    if (entry.isFile) {
+      add(names, path);
+      continue;
+    }
+
+    if (entry.isDirectory) {
+      // Every segment above this one was admitted by the same test, so the
+      // segment alone decides whether any component name reaches inside.
+      if (isComponentNameSegment(entry.name)) {
+        yield* collect(include, path, names);
+      }
+      continue;
+    }
+
+    if (!entry.isSymbolicLink) {
+      continue;
+    }
+    if (!selectionRelevant(path)) {
+      continue;
+    }
+    // `stat` follows the link, which is the only thing asked of it here — what
+    // the link leads to, never where. The resolved host path stays out of the
+    // classification and out of every message below.
+    const target = yield* stat(within(include, path));
+    if (target.exists && target.isFile) {
+      add(names, path);
+      continue;
+    }
+    throw includeFailure(
+      include,
+      `${JSON.stringify(path)} is a symbolic link to ${
+        target.exists ? "a directory" : "nothing"
+      }, and a link is never followed — so the components it could have supplied ` +
+        "cannot be listed.",
+    );
+  }
 }
 
 function add(names: Set<string>, path: string): void {

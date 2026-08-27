@@ -51,7 +51,10 @@ export function* useStubService(endpoint: ServiceEndpoint): Operation<void> {
  * - `stat` returns `{ exists: true, isFile: true }` for keys in the map.
  * - `lstat` answers the same, with `isSymbolicLink: false`: an in-memory map
  *   holds file content, so nothing in it is a link to somewhere else.
- * - `glob` throws (not stubbed). Install `API.Fs.around()` directly if needed.
+ * - `readDirectory` and `glob` throw (not stubbed). An in-memory map of file
+ *   paths holds no directory structure, so answering either from it would
+ *   invent one; install `API.Fs.around()` directly when a test needs to
+ *   enumerate.
  * - the writing half — `writeTextFile`, `ensureDir`, `rename`, `remove`, and
  *   `realpath` — is not stubbed and reaches the real filesystem. A test that
  *   exercises a document writing files wants a real temporary directory.
@@ -76,6 +79,9 @@ export function* useStubFs(files: Record<string, string>): Operation<void> {
     *lstat([path], _next): Operation<LinkStatResult> {
       const exists = path in files;
       return { exists, isFile: exists, isDirectory: false, isSymbolicLink: false };
+    },
+    *readDirectory(_args, _next) {
+      throw new Error("readDirectory not stubbed");
     },
     *glob(_args, _next) {
       throw new Error("glob not stubbed");
