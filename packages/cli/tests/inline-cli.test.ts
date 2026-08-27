@@ -274,6 +274,32 @@ describe(
       expect(stdout).toContain("from the default path");
     });
 
+    /**
+     * A token's spelling does not make it an option. This directory is named
+     * exactly like the retired flag, and naming a directory is what `--include`
+     * is for — so the refusal reads what the parser did not consume rather than
+     * argv, which would reject the one caller using the new option correctly.
+     */
+    it("IE28: a directory named like the retired flag is a usable include", function* () {
+      const root = yield* useWorkspace({});
+      yield* ensureDir(join(root, RETIRED_FLAG));
+      yield* writeTextFile(
+        join(root, RETIRED_FLAG, "Greeting.md"),
+        "from a strangely named directory\n",
+      );
+
+      // Both ways of writing the value: separated, where the parser consumes
+      // the next token, and the `=` form, where it never becomes one.
+      for (const written of [["--include", RETIRED_FLAG], [`--include=${RETIRED_FLAG}`]]) {
+        const { code, stdout } = yield* runCli(["-e", "<Greeting />\n", ...written, "--raw"], {
+          cwd: root,
+        }).join();
+
+        expect(code).toBe(0);
+        expect(stdout).toContain("from a strangely named directory");
+      }
+    });
+
     it("IE18: running an inline document leaves the directory as it was", function* () {
       // The distinct fault this retained row catches: inline execution must
       // not add any top-level filesystem entry — a file, a directory, or a

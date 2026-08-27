@@ -422,6 +422,12 @@ const RETIRED_INCLUDE_OPTION = ["--component", "dir"].join("-");
  * watch the run search the defaults instead — failing somewhere unrelated, or
  * succeeding while ignoring what they asked for.
  *
+ * Read from what the parser did *not* consume, never from raw argv. A token's
+ * spelling does not make it an option: a caller may name a directory after the
+ * retired flag itself, and `--include` has already taken that token as its
+ * value by the time this runs. Scanning argv would refuse the one caller who is
+ * using the new option correctly.
+ *
  * Both spellings are refused, the separated value and the `=` form. Tokens
  * after `--` belong to the document, not to xmd.
  */
@@ -1714,7 +1720,7 @@ function* dispatch(
   // the two commands that take includes answer for the retired spelling here,
   // rather than each deciding later what to do about a directory it never got.
   if (command.name === "run" || command.name === "test") {
-    const retired = findRetiredIncludeFlag(evalFlags.rest);
+    const retired = findRetiredIncludeFlag(parsed.remainder.args ?? []);
     if (retired) {
       console.error(
         `unrecognized option for xmd ${command.name}: ${retired} — ` +
